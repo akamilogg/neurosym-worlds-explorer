@@ -100,3 +100,16 @@ export function readPicture(picture: string): GridPercept {
   const move = Number(/move (\d+)$/.exec(legend)?.[1] ?? 0);
   return Object.freeze({ picture, cells: Object.freeze(cells), width, height: cells.length, you, toMove, move });
 }
+
+/** What an observation over the grid sense receives, described for a reader who knows nothing else. */
+export const GRID_PERCEPT_DOC = [
+  'An observation is a JavaScript function `(p) => number`. `p` is the picture you perceive, already read for you:',
+  '  p.picture  the picture exactly as shown (a string)',
+  '  p.cells    the grid as drawn: p.cells[row][col] is one character (row 0 is the top line, col 0 the left column);',
+  '             "." is an empty square, " " is not part of the board, any other symbol is a piece',
+  '  p.width, p.height   the grid size as drawn',
+  '  p.you      the symbol of YOUR pieces',
+  '  p.toMove   the symbol of the side about to move',
+  '  p.move     how many turns have been played',
+  'Nothing else is available: no rules, no list of possible moves.'
+].join('\n');

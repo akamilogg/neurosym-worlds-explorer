@@ -99,7 +99,9 @@ export function replayOnEvidence<S>(observer: ObserverLike<S>, observations: Rea
     const measured = observer.observe(entry.state, observations);
     const twice = ids.filter((id) => checkTwice(observations[id]));
     if (twice.length) {
+      /* The senses travel with the subset: a measure computed from what is perceived needs the percept. */
       const subset: Record<string, MeasureDecl> = {};
+      for (const id of ids) if ((observations[id]?.spec as { kind?: string } | undefined)?.kind === 'sense') subset[id] = observations[id];
       for (const id of twice) subset[id] = observations[id];
       const again = observer.observe(entry.state, subset);
       for (const id of twice) {
