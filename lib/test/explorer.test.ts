@@ -89,3 +89,26 @@ test('episodes: a noisy opponent replays exactly per seed, and positions are lab
   assert.ok(labelled.every((p) => world.toMove(p.state) === 'A' && (p.label === 'win' || p.label === 'loss')));
   assert.equal(labelled[0].label, 'win', 'the start is a forced win for A (the generator guarantees it)');
 });
+
+test('ablation: the same observations read linearly, no Judge - the sign is fitted on labelled positions', async () => {
+  const { fitCodeOnly, codeOnlyFormula, codeOnlyJudge, CODE_ONLY_RULE } = await import('../src/learn/ablation.ts');
+  const { Evaluator } = await import('../src/core/evaluate.ts');
+  const clock = { spec: { kind: 'code', lang: 'js', source: '(p) => p.move' }, range: [0, 40] } as const;
+  const f = parseExplorerProposal(JSON.stringify({ ...answer, observations: { ...answer.observations, clock: { source: clock.spec.source, range: [0, 40] } },
+    rules: { r: { type: 'noul', instructions: '{{mine}} {{clock}}', criteria: { yes: 'y', no: 'n' } } }, weights: { r: 1 }, probes: [] }),
+  { world: world.id, senses: SENSES });
+  assert.ok(f.ok);
+  if (!f.ok) return;
+  const ep = await playEpisode(world, (s) => world.actions(s)[0]);
+  /* Early positions labelled won, late ones lost: "later is worse" must come out as a negative clock weight. */
+  const states = ep.states.filter((s) => world.toMove(s) === 'A' && !world.outcome(s).over);
+  const labelled = states.map((state, i) => ({ state, label: (i < states.length / 2 ? 'win' : 'loss') as 'win' | 'loss' }));
+  const fit = fitCodeOnly(observer, f.proposal.formula, labelled);
+  assert.ok(fit.weights.clock < 0, JSON.stringify(fit));
+  assert.equal(fit.weights.mine, 0, 'a constant observation separates nothing');
+  const ev = new Evaluator<GridState>(observer, codeOnlyJudge(fit), { maximizer: 'A' });
+  const early = await ev.eval(codeOnlyFormula(f.proposal.formula), labelled[0].state);
+  const late = await ev.eval(codeOnlyFormula(f.proposal.formula), labelled[labelled.length - 1].state);
+  assert.ok(early.value > late.value);
+  assert.ok(early.answers[CODE_ONLY_RULE]);
+});

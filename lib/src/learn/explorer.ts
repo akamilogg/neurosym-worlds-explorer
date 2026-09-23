@@ -40,7 +40,7 @@ export const EXPLORER_SYSTEM = [
   '  - RULES: questions a semantic judge answers about a position. The judge sees the picture AND the values of your observations (cite an observation inside a rule as {{observation_id}}). A rule\'s answer, 0..1, means "good for my side" when high.',
   '  - WEIGHTS over the rules (they are normalised to sum 1).',
   'Work as a scientist: infer from the pictures how things change, form hypotheses about what leads to winning, and TEST them with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question; it is measured on positions whose final outcome is known, and reported as supported, inverted (true the other way round), unsupported or inconclusive. Do not repeat a probe already reported; build on what was learned.',
-  'Prefer rules in plain words that a human could follow: the judge, not the code, should carry the judgement. Observations should measure facts, not decide the game.',
+  'Both carriers of judgement are welcome: code is deterministic and readable, the judge understands plain words. Put each part of your understanding where it is clearest; a rule in plain words is preferred when it explains a judgement better than a formula would.',
   'Answer with ONE JSON object and nothing else:',
   '{',
   '  "rationale": "what you believe now and why, citing the evidence",',

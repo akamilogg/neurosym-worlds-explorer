@@ -585,6 +585,7 @@ var Neurosym = (() => {
   var browser_exports = {};
   __export(browser_exports, {
     ApiError: () => ApiError,
+    CODE_ONLY_RULE: () => CODE_ONLY_RULE,
     CONSENSUS_QUORUM: () => CONSENSUS_QUORUM,
     CONSENSUS_VOTES: () => CONSENSUS_VOTES,
     CORE_DIALECT_ID: () => CORE_DIALECT_ID,
@@ -626,6 +627,8 @@ var Neurosym = (() => {
     classify: () => classify,
     classifyTrigger: () => classifyTrigger,
     cloneJson: () => cloneJson,
+    codeOnlyFormula: () => codeOnlyFormula,
+    codeOnlyJudge: () => codeOnlyJudge,
     compose: () => compose,
     consensusPayload: () => consensusPayload,
     coreDialect: () => coreDialect,
@@ -642,6 +645,7 @@ var Neurosym = (() => {
     evaluatorHooks: () => evaluatorHooks,
     explorerPayload: () => explorerPayload,
     fetchJson: () => fetchJson,
+    fitCodeOnly: () => fitCodeOnly,
     foldAtomStat: () => foldAtomStat,
     formulaHash: () => formulaHash,
     foxhounds: () => foxhounds_exports,
@@ -3112,7 +3116,7 @@ var Neurosym = (() => {
     `  - RULES: questions a semantic judge answers about a position. The judge sees the picture AND the values of your observations (cite an observation inside a rule as {{observation_id}}). A rule's answer, 0..1, means "good for my side" when high.`,
     "  - WEIGHTS over the rules (they are normalised to sum 1).",
     "Work as a scientist: infer from the pictures how things change, form hypotheses about what leads to winning, and TEST them with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question; it is measured on positions whose final outcome is known, and reported as supported, inverted (true the other way round), unsupported or inconclusive. Do not repeat a probe already reported; build on what was learned.",
-    "Prefer rules in plain words that a human could follow: the judge, not the code, should carry the judgement. Observations should measure facts, not decide the game.",
+    "Both carriers of judgement are welcome: code is deterministic and readable, the judge understands plain words. Put each part of your understanding where it is clearest; a rule in plain words is preferred when it explains a judgement better than a formula would.",
     "Answer with ONE JSON object and nothing else:",
     "{",
     '  "rationale": "what you believe now and why, citing the evidence",',
@@ -3339,6 +3343,61 @@ var Neurosym = (() => {
       out.push({ state, label: verdict.winner === maximizer ? "win" : "loss" });
     }
     return out;
+  }
+
+  // src/learn/ablation.ts
+  var CODE_ONLY_RULE = "code_only";
+  function fitCodeOnly(observer, formula, positions) {
+    const ranges = {};
+    for (const [id, d] of Object.entries(formula.observations)) {
+      if (d.range && d.range[1] > d.range[0]) ranges[id] = d.range;
+    }
+    const sums = Object.fromEntries(Object.keys(ranges).map((id) => [id, { win: [], loss: [] }]));
+    let win = 0, loss = 0;
+    for (const p of positions) {
+      const o = observer.observe(p.state, formula.observations);
+      if (p.label === "win") win++;
+      else loss++;
+      for (const [id, [lo, hi]] of Object.entries(ranges)) {
+        const v = o.values[id];
+        if (Number.isFinite(v)) sums[id][p.label].push(clamp((v - lo) / (hi - lo), 0, 1));
+      }
+    }
+    const mean2 = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
+    const weights = {};
+    for (const id of Object.keys(ranges)) {
+      const sep = mean2(sums[id].win) - mean2(sums[id].loss);
+      weights[id] = Number.isFinite(sep) ? round(sep, 4) : 0;
+    }
+    return { weights, ranges, samples: { win, loss } };
+  }
+  function codeOnlyFormula(formula) {
+    return makeFormula({
+      world: formula.world,
+      observations: formula.observations,
+      rules: { [CODE_ONLY_RULE]: { type: "noul", used_as: "value", instructions: "linear reading of the observations (ablation)", criteria: { yes: "", no: "" } } },
+      weights: { [CODE_ONLY_RULE]: 1 },
+      meta: { source: "ablation:code-only" }
+    });
+  }
+  function codeOnlyJudge(fit) {
+    const total = Object.values(fit.weights).reduce((a, w) => a + Math.abs(w), 0);
+    return {
+      id: "ablation:code-only",
+      async judge(request) {
+        let v = 0.5;
+        if (total > 0) {
+          let acc = 0;
+          for (const [id, w] of Object.entries(fit.weights)) {
+            const x = request.measurements[id];
+            const [lo, hi] = fit.ranges[id];
+            if (Number.isFinite(x)) acc += w * (clamp((x - lo) / (hi - lo), 0, 1) - 0.5);
+          }
+          v = clamp(0.5 + acc / total, 0, 1);
+        }
+        return { [CODE_ONLY_RULE]: { value: round(v, 4), confidence: null } };
+      }
+    };
   }
 
   // src/worlds/foxhounds/index.ts

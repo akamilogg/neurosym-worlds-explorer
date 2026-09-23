@@ -9,3 +9,4 @@ export * from './loop.ts';
 export * from './experiments.ts';
 export * from './explorer.ts';
 export * from './episodes.ts';
+export * from './ablation.ts';

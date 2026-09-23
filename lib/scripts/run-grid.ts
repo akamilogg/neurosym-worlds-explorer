@@ -14,6 +14,7 @@
      --levels a,b,c      the opponent's planner depths, the curriculum (default 2,4)
      --epsilon X         the opponent errs with this probability, seeded per game (default 0.15)
      --probe-positions N labelled positions a probe is measured on, at most (default 40)
+     --no-ablation       skip the code-only ablation (same observations, no Judge; information only)
      --flat              CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted
      --out FILE          the journal (default runs/grid-s<seed>-<time>.json)
 
@@ -31,6 +32,7 @@ import { replayOnEvidence } from '../src/learn/gates.ts';
 import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loop.ts';
 import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
 import { EXPLORER_SYSTEM, explorerPayload, parseExplorerProposal, type ExplorerProposal, type Trajectory } from '../src/learn/explorer.ts';
+import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
 import { labelPositions, noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
   type GridMove, type GridState } from '../src/worlds/grid/index.ts';
@@ -52,6 +54,7 @@ const cfg = {
   epsilon: Number(arg('epsilon', '0.15')),
   probePositions: Number(arg('probe-positions', '40')),
   flat: flag('flat'),
+  ablation: !flag('no-ablation'),
   experienceKept: 6
 };
 const env = process.env;
@@ -151,7 +154,7 @@ async function explore(): Promise<void> {
 
 interface Measured extends AttemptScore<Formula> { readonly trajectories: Trajectory[]; readonly samples: ActionSample[] }
 
-async function trial(formula: Formula, attempt: number): Promise<Measured> {
+async function trial(formula: Formula, attempt: number, using: Evaluator<GridState> = evaluator, tag = ''): Promise<Measured> {
   const games: TrialGame[] = [];
   const trajectories: Trajectory[] = [];
   const samples: ActionSample[] = [];
@@ -161,7 +164,7 @@ async function trial(formula: Formula, attempt: number): Promise<Measured> {
     const t0 = Date.now();
     const ep = await playEpisode(world, async (s, actor) => {
       if (actor === 'B') return opponent(s);
-      const r = await searchBestMove<GridState, GridMove>(evaluator, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
+      const r = await searchBestMove<GridState, GridMove>(using, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
       const chosen = r.best.bestMove ?? world.actions(s)[0];
       const winners = winningMoves(world, s, 'A', (x) => planner.respond(x), 40000);
       if (winners) {
@@ -173,11 +176,23 @@ async function trial(formula: Formula, attempt: number): Promise<Measured> {
     pool.push(...ep.states);
     games.push({ outcome: ep.outcome.winner === 'A' ? 'win' : ep.outcome.winner === 'B' ? 'loss' : 'draw', plies: ep.states.length - 1 });
     trajectories.push(trajectoryOf('a' + attempt + 'g' + g, 'trial: your formula chose your moves', ep.states, ep.outcome.winner));
-    say('attempt ' + attempt + ' game ' + g + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
+    say(tag + 'attempt ' + attempt + ' game ' + g + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
       ' turns (' + Math.round((Date.now() - t0) / 1000) + ' s, Jev calls ' + judge.stats.calls + ')');
   }
   const wins = games.filter((g) => g.outcome === 'win').length;
   return { formula, wins, total: games.length, perfect: wins === games.length, games, trajectories, samples };
+}
+
+/* Information, not a verdict: the same observations read linearly, no Judge, the same games. Never shown to System 2. */
+async function ablate(formula: Formula, attempt: number, score: Measured): Promise<void> {
+  const fit = fitCodeOnly(observer, formula, await probeSet());
+  const plain = new Evaluator<GridState>(observer, codeOnlyJudge(fit), { maximizer: 'A' });
+  const ablated = await trial(codeOnlyFormula(formula), attempt, plain, '  [code-only] ');
+  const carrier = ablated.wins >= score.wins ? (score.wins ? 'the observations carry it' : 'neither wins')
+    : 'the rules of the Judge add ' + (score.wins - ablated.wins) + ' win(s)';
+  log('ablation_code_only', { attempt, level: cfg.levels[level], fit, formula_wins: score.wins, code_only_wins: ablated.wins, total: score.total,
+    code_only_action_accuracy: actionAccuracy(ablated.samples), reading: carrier });
+  say('  ablation: formula ' + score.wins + '/' + score.total + ', observations alone ' + ablated.wins + '/' + ablated.total + ' -> ' + carrier);
 }
 
 /* --- Proposing and experimenting ---------------------------------------------------- */
@@ -271,6 +286,7 @@ const result = await runAttempts<Formula, Measured, never>(first, {
     experience.push(...score.trajectories);
     log('trial', { attempt, level: cfg.levels[level], wins: score.wins, total: score.total, games: score.games,
       action_accuracy: actionAccuracy(score.samples), jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+    if (cfg.ablation) await ablate(candidate, attempt, score);
     return score;
   },
   verifyClean: async (candidate) => lastScore!,
