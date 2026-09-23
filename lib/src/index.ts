@@ -8,3 +8,7 @@ export * from './core/code-runner.ts';
 export * from './core/observer.ts';
 export * from './core/formula.ts';
 export * from './core/evaluate.ts';
+export * from './core/net.ts';
+export * from './core/jev.ts';
+export * from './core/policy.ts';
+export * from './core/search.ts';

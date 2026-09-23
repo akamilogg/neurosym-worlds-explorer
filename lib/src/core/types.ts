@@ -50,9 +50,15 @@ export interface World<S = unknown, A = unknown> {
   /** Canonical identity of a state (transpositions, caches). */
   key(state: S): string;
   view(state: S): View;
+  /** Value of a finished state for `maximizer`: 1 won, 0 lost, 0.5 otherwise. Default derives it from outcome(). */
+  terminalValue?(outcome: Outcome, maximizer: string): number;
   /** Human-language rules: what the Judge and System 2 read. */
   describeRules(): string;
+  /** Canonical identity of an action: the option key of a policy question, the PV hint key. */
+  actionKey(action: A): string;
   describeAction?(action: A): string;
+  /** The full position as the Judge may read it (only sent when a question needs the board itself). */
+  describeState?(state: S): Record<string, unknown>;
 }
 
 /* --- Measures ------------------------------------------------------------ */
@@ -135,6 +141,10 @@ export interface Rule {
   readonly option?: string;
   readonly instructions: string;
   readonly criteria: Readonly<Record<string, string | null>> | readonly string[];
+  /** Policy rules: whose actions are the options ("side_to_move" or an actor id). */
+  readonly subject?: string;
+  /** Policy rules: how several policy rules merge ("single" | "weighted_mean"). */
+  readonly aggregate?: string;
   readonly [extra: string]: unknown;
 }
 
@@ -143,15 +153,21 @@ export interface JudgeRequest {
   readonly rulesOfTheWorld: string;
   readonly sideToMove: string;
   readonly measurements: Readonly<Record<string, number>>;
-  /** The rules with every {{id}} already replaced by its measured value. */
+  /** The rules with every {{id}} already replaced by its measured value. Policy rules arrive
+      materialised: one criterion per legal action key, each with a null rubric. */
   readonly questions: Readonly<Record<string, Rule>>;
+  /** Present only when a question denotes concrete actions: the Judge then needs the position itself.
+      Value-only requests are judged from the measurements alone (that is what makes the vector cache valid). */
+  readonly position?: Readonly<Record<string, unknown>>;
   readonly context?: Readonly<Record<string, unknown>>;
 }
 
 export interface JudgeAnswer {
-  /** The rule's value in [0,1]. */
+  /** The rule's value in [0,1]. For a policy rule: the probability of its argmax. */
   readonly value: number;
   readonly confidence: number | null;
+  /** Policy rules: probability per action key. */
+  readonly distribution?: Readonly<Record<string, number>>;
   readonly raw?: unknown;
 }
 

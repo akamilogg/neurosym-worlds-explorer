@@ -125,6 +125,42 @@ export function stateKey(state: FoxState): string {
   return 'C[' + cats + ']M' + state.mouse[0] + ',' + state.mouse[1] + 'T' + state.turn;
 }
 
+/** Canonical action identity (identical to the harness's moveKey): policy option keys, PV hints. */
+export function moveKey(move: FoxMove): string {
+  return move.piece + ':' + move.catIndex + ':' + move.from[0] + ',' + move.from[1] + '>' + move.to[0] + ',' + move.to[1];
+}
+
+export function renderBoardAscii(state: FoxState): string {
+  const occ = occupancy(state);
+  const lines: string[] = [];
+  for (let y = 0; y < BOARD_SIZE; y++) {
+    let line = 'y=' + y + ' ';
+    for (let x = 0; x < BOARD_SIZE; x++) {
+      if (!isDarkSquare(x, y)) line += '  ';
+      else if (occ.has(occKey(x, y))) line += occ.get(occKey(x, y)) === SIDE_CATS ? ' C' : ' M';
+      else line += ' .';
+    }
+    lines.push(line);
+  }
+  lines.push('     x=0 1 2 3 4 5 6 7');
+  return lines.join('\n');
+}
+
+/** The position as the harness sends it to Jev when a question needs the board (toWireState). */
+export function describeFoxState(state: FoxState): Record<string, unknown> {
+  const o = outcome(state);
+  return {
+    rules_of_the_game: RULES_OF_THE_GAME,
+    board_ascii: renderBoardAscii(state),
+    cats: state.cats.map((c) => [c[0], c[1]]),
+    mouse: [state.mouse[0], state.mouse[1]],
+    side_to_move: state.turn,
+    ply: state.ply,
+    rearmost_cat_row: minCatRow(state),
+    rules_engine_says: o.over ? 'the game is already over: ' + o.winner + ' wins (' + o.reason + ')' : 'the game is in progress'
+  };
+}
+
 /** The plain-data view: the harness's position array, with `type` naming the entity group. */
 export function foxView(state: FoxState): View {
   const entities: Entity[] = state.cats.map((c, index) => ({ type: 'cat', id: index, index, x: c[0], y: c[1] }));
@@ -148,6 +184,8 @@ export const foxhounds: World<FoxState, FoxMove> = {
   key: stateKey,
   view: foxView,
   describeRules: () => RULES_OF_THE_GAME,
+  actionKey: moveKey,
+  describeState: describeFoxState,
   describeAction(move) {
     const actor = move.piece === SIDE_CATS ? 'cat#' + (move.catIndex + 1) : 'mouse';
     return actor + ' (' + move.from.join(',') + ')->(' + move.to.join(',') + ')';

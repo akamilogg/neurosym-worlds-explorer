@@ -2,13 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { foxhounds, type FoxMove, type FoxState } from '../src/worlds/foxhounds/world.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(here, '..', '..');
 
-/* The ORIGINAL harness, loaded from fox-hounds-harness.html exactly as its own selftest does: the
-   parity tests compare the library against the code that produced the 21/09 run, not against a copy. */
+/* The REFERENCE harness: fox-hounds-harness.html as committed in the baseline (the code that produced the
+   21/09 run), read from git and loaded exactly as its own selftest does. The working copy now delegates
+   to this library, so comparing against it would compare the library with itself. */
+export const BASELINE_COMMIT = '3deded1';
+export function baselineHarnessHtml(): string {
+  return execFileSync('git', ['show', BASELINE_COMMIT + ':fox-hounds-harness.html'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+}
 export interface HarnessApi {
   createInitialState(col: number): FoxState;
   legalMovesForSide(state: FoxState, side: string): FoxMove[];
@@ -18,24 +24,42 @@ export interface HarnessApi {
   stateKey(state: FoxState): string;
   computeObservations(state: FoxState, observations: unknown): { values: Record<string, number>; errors: unknown[]; vector: string };
   OBSERVATION_OPS: Record<string, unknown>;
+  planMouseMove(state: FoxState, depth: number): FoxMove | null;
+  solveAgainstModel(state: FoxState, depth: number, options?: { budget?: number }): { winner: string | null; plies: number | null; reason: string | null; exhausted: boolean };
+  searchBestMove(state: FoxState, rules: unknown, options: Record<string, unknown>): Promise<{ result: any; ctx: any }>;
+  normalizeRules(raw: unknown, options?: unknown): { rules: any; warnings: string[] };
+  rulesFromFormula(formula: unknown): unknown;
+  moveKey(move: FoxMove): string;
+  config: Record<string, any>;
+  resetCaches(): void;
+  /** PLAY mode with a human Mouse, as the page sets it (only `humanSide` is read by the opponent model). */
+  setHumanMouse(on: boolean): void;
 }
+
+/** The harness's fetch is routed here, so a test can install the same Jev stub on both sides. */
+export const harnessNet: { fetch: (url: string, init: any) => Promise<any> } = {
+  fetch: () => Promise.reject(new Error('network disabled in parity tests'))
+};
 
 let cached: HarnessApi | null = null;
 export function loadHarness(): HarnessApi {
   if (cached) return cached;
-  const html = fs.readFileSync(path.join(ROOT, 'fox-hounds-harness.html'), 'utf8');
+  const html = baselineHarnessHtml();
   const match = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!match) throw new Error('no inline <script> in the harness');
   const sandbox: Record<string, unknown> = {
     console: { log() {}, warn() {}, error() {} },
     setTimeout, clearTimeout, setInterval, clearInterval,
     performance: { now: () => Date.now() }, AbortController,
-    fetch: () => Promise.reject(new Error('network disabled in parity tests'))
+    fetch: (url: string, init: any) => harnessNet.fetch(url, init)
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(match[1] + ';globalThis.__api = { createInitialState, legalMovesForSide, applyMove, passTurn, isTerminal, ' +
-    'stateKey, computeObservations, OBSERVATION_OPS };', sandbox, { filename: 'harness-inline.js' });
+    'stateKey, computeObservations, OBSERVATION_OPS, planMouseMove, solveAgainstModel, searchBestMove, normalizeRules, ' +
+    'rulesFromFormula, moveKey, config, resetCaches: function () { [jevAnswerCache, jevVectorCache, jevValueCache, mousePlanCache, ' +
+    'oracleCache, jevBeliefBaseline].forEach(function (m) { m.clear(); }); }, ' +
+    'setHumanMouse: function (on) { match.play = on ? { humanSide: SIDE_MOUSE } : null; } };', sandbox, { filename: 'harness-inline.js' });
   cached = sandbox.__api as HarnessApi;
   return cached;
 }

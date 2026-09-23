@@ -47,7 +47,7 @@ test('Eval: O(s) -> Judge -> SUM w*r, with the judge reading measured FACTS (no 
   }
   assert.match(req.questions.mouse_containment.instructions, new RegExp('given ' + result.observation.values.mouse_mobility + ', '));
   const expected = Object.entries(accepted.weights).reduce((sum, [id, w]) => sum + w * result.answers[id].value, 0);
-  assert.equal(result.value, Math.min(1, Math.max(0, expected)));
+  assert.equal(result.value, Math.round(Math.min(1, Math.max(0, expected)) * 1e4) / 1e4);
   assert.deepEqual(result.fallbacks, []);
 });
 
