@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.log
+
+# local launcher with API keys
+lib/run-grid.sh
