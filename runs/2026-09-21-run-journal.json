@@ -1,0 +1,111 @@
+{
+  "engine": "fox-hounds-exploratory-harness/2.0",
+  "exported_at": "2026-09-21T08:02:01.554Z",
+  "accepted": {
+    "version": 1,
+    "rationale": "Test whether explicitly valuing an intact advancing Cat formation and zero escape routes separates genuinely winning traps from positions that merely look contained.",
+    "confidence_floor": 0.45,
+    "weights": {
+      "cats_win_forecast": 0.45,
+      "mouse_containment": 0.35,
+      "cat_formation": 0.2
+    },
+    "policy_weights": {},
+    "battery": {
+      "cats_win_forecast": {
+        "type": "choice",
+        "used_as": "value",
+        "option": "cats_win",
+        "instructions": "Who wins with correct play, using the measured Cat formation {{cat_front_row}}, {{cat_rear_row}}, {{cat_row_spread}}, {{cat_count_left_behind}}, {{front_row_gap}}, {{cat_adjacent_pairs}}, Mouse position {{mouse_row}}, current mobility {{mouse_mobility}}, covered exits {{covered_mouse_moves}}, and safe monotone routes {{mouse_routes}}?",
+        "criteria": {
+          "cats_win": "The Cats can force a trap before the Mouse reaches row 0 or gets above every Cat; the conclusion remains valid despite any current free move.",
+          "mouse_win": "The Mouse has a forced route to row 0 or above all Cats, or the Cat formation leaves an unavoidable escape lane that prevents a forced trap.",
+          "draw": "Neither side has a demonstrated forced result from this position."
+        }
+      },
+      "mouse_containment": {
+        "type": "choice",
+        "used_as": "value",
+        "option": "cats_win",
+        "instructions": "Is the Mouse actually contained rather than merely having few current moves, given {{mouse_mobility}}, {{covered_mouse_moves}}, {{mouse_routes}}, {{mouse_row}}, and the Cat front-to-rear structure {{cat_row_spread}}?",
+        "criteria": {
+          "cats_win": "All relevant paths toward row 0 are blocked or can be closed while the Cats retain a connected formation; safe monotone routes are zero and no persistent escape lane remains.",
+          "mouse_win": "The Mouse owns a safe route or can use an uncovered diagonal to pass the Cats before they can close it; current mobility or route count reveals a durable escape.",
+          "draw": "The Mouse is restricted but the available evidence does not establish either a forced trap or a forced escape."
+        }
+      },
+      "cat_formation": {
+        "type": "score",
+        "used_as": "value",
+        "instructions": "How strategically strong is the Cats' own formation for blocking the Mouse, using front row {{cat_front_row}}, rear row {{cat_rear_row}}, row spread {{cat_row_spread}}, Cats left behind {{cat_count_left_behind}}, front-row gap {{front_row_gap}}, and adjacent pairs {{cat_adjacent_pairs}}?",
+        "criteria": [
+          "The Cats are fragmented: large row spread, stranded or left-behind Cats, major front-row gaps, and little useful adjacency; the Mouse can exploit the broken formation.",
+          "The Cats have substantial fragmentation or a dangerous gap, with only partial adjacency and weak coverage of the Mouse side.",
+          "The formation is mixed: some Cats cooperate, but spacing, gaps, or a rear Cat leave an uncertain blocking structure.",
+          "The Cats are mostly connected and advance with limited spread or gaps; any rear Cat still contributes to closing the Mouse.",
+          "The Cats form a compact advancing barrier: nearly all Cats share the front line, no Cat is stranded, gaps are closed, and diagonal adjacency preserves coverage."
+        ]
+      }
+    },
+    "observations": {
+      "cat_front_row": { "name": "front row", "definition": "the row of the most advanced Cat", "spec": { "kind": "op", "op": "cat_front_row", "args": {} }, "range": [0, 7], "kind": "op", "spec_hash": "6pply9" },
+      "cat_rear_row": { "name": "rear row", "definition": "the row of the least advanced Cat", "spec": { "kind": "op", "op": "cat_rear_row", "args": {} }, "range": [0, 7], "kind": "op", "spec_hash": "1q8gfao" },
+      "cat_row_spread": { "name": "row spread", "definition": "max(cat row) minus min(cat row): how far the line has stretched lengthwise", "spec": { "kind": "op", "op": "cat_row_spread", "args": {} }, "range": [0, 7], "kind": "op", "spec_hash": "yjrytf" },
+      "cat_count_left_behind": { "name": "cats left behind", "definition": "how many Cats are NOT on the front row (4 minus cats_on_front_row)", "spec": { "kind": "op", "op": "cat_count_left_behind", "args": {} }, "range": [0, 3], "kind": "op", "spec_hash": "krsppb" },
+      "front_row_gap": { "name": "gap in the front row", "definition": "the longest run of empty dark squares between two Cats of the front row (0 when fewer than two Cats are there); dark squares on one row are two columns apart", "spec": { "kind": "op", "op": "front_row_gap", "args": {} }, "range": [0, 6], "kind": "op", "spec_hash": "19bnrvp" },
+      "cat_adjacent_pairs": { "name": "adjacent Cat pairs", "definition": "how many pairs of Cats touch diagonally (a chain of four has three, a tight block more)", "spec": { "kind": "op", "op": "cat_adjacent_pairs", "args": {} }, "range": [0, 6], "kind": "op", "spec_hash": "dh1o6p" },
+      "mouse_row": { "name": "Mouse row", "definition": "the Mouse row: 0 is its goal, 7 is its start", "spec": { "kind": "op", "op": "mouse_row", "args": {} }, "range": [0, 7], "kind": "op", "spec_hash": "1652gc2" },
+      "mouse_mobility": { "name": "Mouse mobility", "definition": "how many legal moves the Mouse has right now", "spec": { "kind": "op", "op": "mouse_mobility", "args": {} }, "range": [0, 4], "kind": "op", "spec_hash": "79msst" },
+      "covered_mouse_moves": { "name": "covered Mouse exits", "definition": "how many of the Mouse legal moves land on a square the Cats attack", "spec": { "kind": "op", "op": "covered_mouse_moves", "args": {} }, "range": [0, 4], "kind": "op", "spec_hash": "f0d06p" },
+      "mouse_routes": { "name": "Mouse routes", "definition": "how many distinct monotone paths the Mouse has from its square to row 0 (one row up per step, dark squares only) that avoid every square the Cats attack; the count stops at `cap`", "spec": { "kind": "op", "op": "mouse_routes", "args": { "cap": 8 } }, "range": [0, 8], "kind": "op", "spec_hash": "18ckvao" }
+    },
+    "formula_kind": "weighted_jev_rules",
+    "measure_spec_version": 2,
+    "formula_hash": "1yhxhvm",
+    "source": "llm-compile"
+  },
+  "accepted_provenance": {
+    "version": 1,
+    "source": "llm-compile",
+    "reason": "won every game (3/3 at mouse depth 5)",
+    "at": "2026-09-21T07:50:39.540Z"
+  },
+  "curriculum": { "cats_depth": 5, "mouse_depth": 5, "escalations": 0, "incumbent": null },
+  "rule_set_history": [
+    { "version": 0, "source": "default", "weights": { "cats_win_forecast": 0.5, "mouse_containment": 0.5 }, "policy_weights": {}, "battery_ids": ["cats_win_forecast", "mouse_containment"], "rationale": "Neutral prior: Jev judges the position through the default battery, every answer carries equal weight." },
+    { "version": 1, "source": "llm-compile", "weights": { "cats_win_forecast": 0.45, "mouse_containment": 0.35, "cat_formation": 0.2 }, "policy_weights": {}, "battery_ids": ["cats_win_forecast", "mouse_containment", "cat_formation"], "rationale": "Test whether explicitly valuing an intact advancing Cat formation and zero escape routes separates genuinely winning traps from positions that merely look contained." },
+    { "version": 2, "source": "llm-mutation", "weights": { "cats_win_forecast": 0.35, "mouse_containment": 0.5, "cat_formation": 0.15 }, "policy_weights": {}, "battery_ids": ["cats_win_forecast", "mouse_containment", "cat_formation"], "rationale": "Separate the losing fragmented line from the winning line by making immediate covered exits and Cat advancement decisive, rather than treating zero monotone routes or low mobility as sufficient containment." },
+    { "version": 3, "source": "llm-mutation", "weights": { "cats_win_forecast": 0.2, "mouse_containment": 0.5, "cat_formation": 0.3 }, "policy_weights": {}, "battery_ids": ["cats_win_forecast", "mouse_containment", "cat_formation"], "rationale": "Test whether horizontal Cat placement and leftward fragmentation distinguish the good closing line from the bad line despite identical Mouse-route and vertical-formation measurements." },
+    { "version": 4, "source": "llm-mutation", "weights": { "cats_win_forecast": 0.25, "mouse_containment": 0.6, "cat_formation": 0.15 }, "policy_weights": {}, "battery_ids": ["cats_win_forecast", "mouse_containment", "cat_formation"], "rationale": "Rewrite mouse containment to treat zero safe monotone routes plus preservable local coverage as strong Cat control, while distinguishing the bad lines with surviving routes and an advancing Mouse." },
+    { "version": 1, "source": "llm-compile", "weights": { "cats_win_forecast": 0.45, "mouse_containment": 0.35, "cat_formation": 0.2 }, "policy_weights": {}, "battery_ids": ["cats_win_forecast", "mouse_containment", "cat_formation"], "rationale": "Test whether explicitly valuing an intact advancing Cat formation and zero escape routes separates genuinely winning traps from positions that merely look contained." }
+  ],
+  "attempts": [],
+  "attempts_note": "no completed attempt record: no attempt finished, or a Reset / New game cleared the run record (match.tuning) after the run ended - rule_set_history above is cumulative and still complete",
+  "operator_interventions": 0,
+  "judges": { "approved": 3, "rejected": 0, "narrowed": 0, "quorum_miss": 0, "unsupported": 2, "course_corrections_applied": 3, "dropped_questions": 0 },
+  "value_vs_truth": { "mae": 0.2258, "samples": 21, "contradictions": 0 },
+  "revision_digest_summary": {
+    "note": "moved_states rows omitted from this fixture; see the original export",
+    "threshold": 0.05, "revisions": 200, "states": 200,
+    "labels": { "known": 7, "toward_truth": 3, "against_truth": 4, "unknown": 193 }
+  },
+  "telemetry": {
+    "nodes": 17135, "leaf_evals": 10567, "searches": 45, "jev_calls": 2989, "jev_cache_hits": 7615,
+    "jev_recompositions": 302, "jev_value_cache_hits": 8898, "jev_errors": 0, "transposition_hits": 433,
+    "prunes": 0, "llm_calls": 6, "llm_errors": 0, "policy_calls": 0, "path_leaf_cases": 5483,
+    "course_correction_calls": 5, "course_corrections_applied": 3, "course_corrections_idle": 2,
+    "revisions_recorded": 497, "revisions_toward_truth": 7, "revisions_against_truth": 8,
+    "trigger_classes": { "contradiction": 0, "coin_flip": 1, "no_belief": 4 },
+    "escalations": 0, "mouse_depth": 5, "mouse_plan_calls": 280255, "mouse_plan_cache_hits": 363476,
+    "unsupported_proposals": 2, "measure_computations": 121186, "measure_errors": 0, "dropped_observations": 4,
+    "vector_cache_hits": 186, "formula_compilations": 5, "formula_cache_hits": 10599, "environment_evals": 10604,
+    "formula_evidence_replays": 3, "value_mae": 0.2258, "value_truth_samples": 21, "oracle_calls": 41,
+    "atom_accuracy": [
+      { "id": "cats_win_forecast", "mean_when_cats_win": 0.6669, "mean_when_mouse_wins": 0.5212, "samples_cat_wins": 16, "samples_mouse_wins": 26, "separation": 0.1457, "informative": true },
+      { "id": "mouse_containment", "mean_when_cats_win": 0.4181, "mean_when_mouse_wins": 0.2592, "samples_cat_wins": 16, "samples_mouse_wins": 26, "separation": 0.1589, "informative": true },
+      { "id": "cat_formation", "mean_when_cats_win": 0.3616, "mean_when_mouse_wins": 0.3146, "samples_cat_wins": 16, "samples_mouse_wins": 26, "separation": 0.0469, "informative": false }
+    ],
+    "jev_confidence_mean": 0.4049, "jev_confidence_min": 0.21, "jev_confidence_max": 0.93, "leaves_below_floor": 6816,
+    "hypotheses": 1, "trial_games": 6, "trial_wins": 6, "jev_avg_ms": 2906, "jev_p95_ms": 8044, "llm_avg_ms": 16175
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "neurosym",
+  "version": "0.1.0",
+  "description": "Portable core of the neuro-symbolic exploratory harness: World, Observer (code | dsl), Formula, Judge, Eval.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./foxhounds": "./src/worlds/foxhounds/index.ts",
+    "./node": "./src/runtime/node-vm.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --experimental-strip-types --no-warnings=ExperimentalWarning --test \"test/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "5.9"
+  }
+}
