@@ -4,3 +4,4 @@ dist/
 
 # local launcher with API keys
 lib/run-grid.sh
+lib/run-grid.ps1
