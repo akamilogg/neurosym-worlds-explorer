@@ -2,8 +2,24 @@ import { round } from './hash.ts';
 import { checkFormula, compose, formulaHash, judgmentHash, materializeRules, policyRuleIds, valueRuleIds } from './formula.ts';
 import { evaluationConfidence } from './jev.ts';
 import { mergePolicyDistributions, type PolicyMerge } from './policy.ts';
-import type { Observation, Observer } from './observer.ts';
-import type { Formula, Judge, JudgeAnswer, Outcome, Rule, World } from './types.ts';
+import type { Observation } from './observer.ts';
+import type { Formula, Judge, JudgeAnswer, JudgeRequest, MeasureDecl, Outcome, Rule, World } from './types.ts';
+
+/** Anything that can measure O(s) in a world: the library's Observer, or a host's own measuring code. */
+export interface ObserverLike<S> {
+  readonly world: World<S>;
+  observe(state: S, observations: Readonly<Record<string, MeasureDecl>>): Observation;
+}
+
+/** A live judgment the Evaluator just paid for (for host telemetry and logs). */
+export interface JudgedEvent<S> {
+  readonly kind: 'value' | 'policy';
+  readonly key: string;
+  readonly state: S;
+  readonly request: JudgeRequest;
+  readonly answers: Readonly<Record<string, JudgeAnswer>>;
+  readonly latencyMs: number;
+}
 
 /* ============================================================================
  * Eval(formula, s): the one pipeline every consumer uses.
@@ -29,6 +45,8 @@ export interface Evaluation {
   readonly judgmentHash: string;
   readonly provenance: Provenance;
   readonly outcome: Outcome | null;
+  /** The cache identity of the judgment (null for a finished state): hosts key their own memos on it. */
+  readonly judgmentKey: string | null;
 }
 
 export interface EvaluatorOptions<S> {
@@ -40,6 +58,11 @@ export interface EvaluatorOptions<S> {
   readonly cacheLimit?: number;
   /** Measures that fail make the evaluation fail (default). `false` lets the Judge see the gap. */
   readonly strictMeasures?: boolean;
+  /** Where judgments are kept (default: a private Map). A host passes its own to clear or inspect it. */
+  readonly cache?: Map<string, Record<string, JudgeAnswer>>;
+  /** Where merged policy priors are kept (default: a private Map). */
+  readonly priorCache?: Map<string, PolicyMerge | null>;
+  readonly onJudged?: (event: JudgedEvent<S>) => void;
 }
 
 export interface EvaluatorStats {
@@ -66,20 +89,24 @@ export function defaultTerminalValue(world: World<any, any>, outcome: Outcome, m
   return 0.5;
 }
 
+const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
 export class Evaluator<S = unknown> {
-  readonly observer: Observer<S>;
+  readonly observer: ObserverLike<S>;
   readonly judge: Judge;
   readonly maximizer: string;
   readonly stats: EvaluatorStats = { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0 };
-  private readonly cache = new Map<string, Record<string, JudgeAnswer>>();
+  private readonly cache: Map<string, Record<string, JudgeAnswer>>;
   private readonly inflight = new Map<string, Promise<Record<string, JudgeAnswer>>>();
-  private readonly priors = new Map<string, PolicyMerge | null>();
+  private readonly priors: Map<string, PolicyMerge | null>;
   private readonly options: EvaluatorOptions<S>;
 
-  constructor(observer: Observer<S>, judge: Judge, options: EvaluatorOptions<S> = {}) {
+  constructor(observer: ObserverLike<S>, judge: Judge, options: EvaluatorOptions<S> = {}) {
     this.observer = observer;
     this.judge = judge;
     this.options = options;
+    this.cache = options.cache ?? new Map();
+    this.priors = options.priorCache ?? new Map();
     this.maximizer = options.maximizer ?? observer.world.actors[0];
   }
 
@@ -105,13 +132,17 @@ export class Evaluator<S = unknown> {
     this.cache.set(key, answers);
   }
 
-  private async ask(key: string, make: () => Promise<Record<string, JudgeAnswer>>): Promise<{ answers: Record<string, JudgeAnswer>; live: boolean }> {
+  private async ask(key: string, kind: 'value' | 'policy', state: S, request: JudgeRequest, signal?: AbortSignal): Promise<{ answers: Record<string, JudgeAnswer>; live: boolean }> {
     const cached = this.cache.get(key);
     if (cached) { this.stats.vectorHits++; return { answers: cached, live: false }; }
     let pending = this.inflight.get(key);
     const live = !pending;
     if (!pending) {
-      pending = make();
+      const started = clock();
+      pending = this.judge.judge(request, signal).then((answers) => {
+        this.options.onJudged?.({ kind, key, state, request, answers, latencyMs: Math.round(clock() - started) });
+        return answers;
+      });
       this.inflight.set(key, pending);
       this.stats.judgeCalls++;
     } else this.stats.vectorHits++;
@@ -135,28 +166,30 @@ export class Evaluator<S = unknown> {
     if (outcome.over) {
       this.stats.terminal++;
       return { value: defaultTerminalValue(world, outcome, this.maximizer), confidence: 1, observation, answers: {}, fallbacks: [],
-        formulaHash: fHash, judgmentHash: jHash, provenance: 'rules', outcome };
+        formulaHash: fHash, judgmentHash: jHash, provenance: 'rules', outcome, judgmentKey: null };
     }
     if (observation.errors.length && this.options.strictMeasures !== false) throw new MeasurementError(observation.errors);
     const side = world.toMove(state);
     const context = this.options.context ? this.options.context(state) : { id: '', facts: {} };
     const ids = valueRuleIds(formula);
     const key = jHash + '|' + side + '|' + context.id + '|' + observation.vector;
-    const { answers, live } = await this.ask(key, () => this.judge.judge({
+    const { answers, live } = await this.ask(key, 'value', state, {
       world: world.id,
       rulesOfTheWorld: world.describeRules(),
       sideToMove: side,
       measurements: observation.values,
       questions: materializeRules(formula.rules, observation.values, ids),
+      ...(observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ': ' + e.error) } : {}),
       context: { ...context.facts, judgment_hash: jHash }
-    }, signal));
+    }, signal);
     const scalar: Record<string, number | undefined> = {};
     for (const id of Object.keys(answers)) scalar[id] = answers[id]?.value;
     const composition = compose(scalar, formula.weights);
     this.stats.fallbacks += composition.fallbacks.length;
     return {
       value: round(composition.value, 4), confidence: evaluationConfidence(answers, formula.rules), observation, answers,
-      fallbacks: composition.fallbacks, formulaHash: fHash, judgmentHash: jHash, provenance: live ? 'live' : 'cached-vector', outcome: null
+      fallbacks: composition.fallbacks, formulaHash: fHash, judgmentHash: jHash, provenance: live ? 'live' : 'cached-vector', outcome: null,
+      judgmentKey: key
     };
   }
 
@@ -188,12 +221,13 @@ export class Evaluator<S = unknown> {
     }
     if (!Object.keys(questions).some((id) => policyIds.includes(id))) { this.priors.set(memo, null); return null; }
     this.stats.priorCalls++;
-    const { answers } = await this.ask(memo + '|policy', () => this.judge.judge({
+    const { answers } = await this.ask(memo + '|policy', 'policy', state, {
       world: world.id, rulesOfTheWorld: world.describeRules(), sideToMove: side,
       measurements: observation.values, questions,
-      position: world.describeState ? world.describeState(state) : { view: observation.view },
+      ...(observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ': ' + e.error) } : {}),
+      position: world.describeState ? world.describeState(state, context.facts) : { view: observation.view },
       context: { ...context.facts, judgment_hash: jHash }
-    }, signal));
+    }, signal);
     const weighted = policyIds.some((id) => formula.rules[id].aggregate === 'weighted_mean');
     const merge = mergePolicyDistributions(policyIds.map((id) => answers[id]?.distribution ? { id, distribution: answers[id].distribution! } : null),
       weighted ? 'weighted_mean' : 'single', formula.policy_weights);

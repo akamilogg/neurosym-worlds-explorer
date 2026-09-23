@@ -1,4 +1,4 @@
-import { clamp, deepFreeze, round, specHash } from './hash.ts';
+import { clamp, cloneJson, deepFreeze, round, specHash } from './hash.ts';
 import { coreDialect } from './core-dialect.ts';
 import { jsFunctionRunner } from './code-runner.ts';
 import type {
@@ -147,7 +147,7 @@ export class Observer<S = unknown> {
 
   /** Measure one state. Pure: no network, no judge. A measure that fails is REPORTED and left out. */
   observe(state: S, observations: Readonly<Record<string, MeasureDecl>>): Observation {
-    const frozen = deepFreeze(structuredClone(state));
+    const frozen = deepFreeze(cloneJson(state));
     const view = deepFreeze(this.world.view(frozen));
     const ctx: MeasureContext<S> = Object.freeze({ view, state: frozen, world: this.world });
     const values: Record<string, number> = {};

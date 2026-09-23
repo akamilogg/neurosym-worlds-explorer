@@ -83,12 +83,20 @@ new Observer(world, { dialects: [foxhoundsDialect] })                 // ambos (
 (global `Neurosym`) y lo incrusta al principio de su único `<script>`, entre dos marcadores
 (`npm run bundle:check` falla si el bundle incrustado está desfasado; un test lo vigila).
 
-Hoy el harness delega en la biblioteca **el mundo y el vocabulario**: reglas (`legalMovesForSide`,
-`applyMove`, `passTurn`, `isTerminal`, `stateKey`, `moveKey`, ataques, tablero ASCII), el catálogo
-`OBSERVATION_OPS` (= dialecto `foxhounds@1`) y el planner del ratón (`solveLookahead`, greedy). Su
-orquestación (bucle de aprendizaje, jueces, journal, telemetría, UI, búsqueda y llamada a Jev con
-sus contadores) sigue en el HTML: la biblioteca tiene ya sus equivalentes con paridad demostrada, y
-se sustituirán cuando la orquestación se extraiga.
+El harness delega en la biblioteca:
+
+- **el mundo y el vocabulario**: reglas, `OBSERVATION_OPS` (= dialecto `foxhounds@1`), planner del ratón;
+- **System 1**: `evaluateRuleFormula` es un adaptador sobre `Evaluator` + `JevJudge` (transporte, reintentos,
+  lectura de respuestas, caché por vector `O(s)`, **agrupación de preguntas en vuelo**, prior de política);
+- **la búsqueda**: `minimax` es `Neurosym.minimax` con ganchos (`harnessSearchHooks`): la hoja la valora el
+  `leafEvaluate` del harness (con sus diarios de caminos y revisiones), el prior es su `policyPriorFor`, el
+  oponente su `predictedMouseMove`, y la telemetría llega por eventos. Transposiciones, anchura de lotes,
+  orden de jugadas y fusión de políticas son las de la biblioteca.
+
+Lo que sigue en el HTML es lo que todavía no es biblioteca: **el aprendiz** (bucle de intentos, System 2,
+jueces, consolidación, journal, currículum), la telemetría y la UI. El harness todavía mide `O(s)` con su
+propio `computeObservations` (formatos `op`/`expr`), conectado al `Evaluator` como `ObserverLike`; pasarlo al
+`Observer` de la biblioteca es lo que abre las medidas `code` (P1).
 
 ## Validación
 
@@ -121,7 +129,7 @@ real la proporción dependerá de cuántas hojas comparten vector.)
 |---|---|---|
 | **P0** | Núcleo: World, Observer (code/dsl), Formula, Evaluator; `foxhounds@1` con paridad | **hecho** |
 | **P0b** | Juez Jev, búsqueda (fan-out / PV-αβ), modelo del ratón y oráculo con paridad; el harness incrusta la biblioteca y le delega mundo, vocabulario y planner | **hecho** |
-| P0c | Extraer la orquestación: el harness usa `Evaluator`/`searchBestMove`/`JevJudge` de la biblioteca (y hereda la agrupación de peticiones en vuelo) | pendiente |
-| P1 | System 2 escribe medidas `code`: prompt, replay sobre la evidencia, chequeo de determinismo, telemetría "la medida absorbe el juicio" | pendiente |
+| **P0c** | El harness evalúa y busca con la biblioteca (`Evaluator`, `JevJudge`, `minimax` con ganchos); hereda la agrupación de preguntas en vuelo | **hecho** |
+| P1 | El harness mide con el `Observer` de la biblioteca; System 2 escribe medidas `code`: prompt, replay sobre la evidencia, chequeo de determinismo, telemetría "la medida absorbe el juicio" | pendiente |
 | P2 | Ablaciones con las mismas semillas: catálogo vs code vs ambos; juez lineal sólo como línea base | pendiente |
 | P3 | Un segundo World, pequeño y distinto: sin él no hay biblioteca | pendiente |

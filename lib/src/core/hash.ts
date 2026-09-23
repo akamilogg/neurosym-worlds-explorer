@@ -25,6 +25,11 @@ export function specHash(spec: unknown): string {
   return hashString(stableStringify(spec === undefined ? null : spec));
 }
 
+/** A copy of plain JSON data. Deliberately not structuredClone: some hosts (sandboxes, older runtimes) lack it. */
+export function cloneJson<T>(value: T): T {
+  return value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
 export function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);

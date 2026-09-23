@@ -58,7 +58,7 @@ export interface World<S = unknown, A = unknown> {
   actionKey(action: A): string;
   describeAction?(action: A): string;
   /** The full position as the Judge may read it (only sent when a question needs the board itself). */
-  describeState?(state: S): Record<string, unknown>;
+  describeState?(state: S, context?: Readonly<Record<string, unknown>>): Record<string, unknown>;
 }
 
 /* --- Measures ------------------------------------------------------------ */
@@ -159,6 +159,8 @@ export interface JudgeRequest {
   /** Present only when a question denotes concrete actions: the Judge then needs the position itself.
       Value-only requests are judged from the measurements alone (that is what makes the vector cache valid). */
   readonly position?: Readonly<Record<string, unknown>>;
+  /** Declared measures that could not be computed on this state ("id: reason"): the Judge sees the gap. */
+  readonly measurementErrors?: readonly string[];
   readonly context?: Readonly<Record<string, unknown>>;
 }
 

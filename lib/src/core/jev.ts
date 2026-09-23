@@ -1,4 +1,4 @@
-import { clamp, round } from './hash.ts';
+import { clamp, cloneJson, round } from './hash.ts';
 import { ApiError, fetchJson, type FetchLike } from './net.ts';
 import type { Judge, JudgeAnswer, JudgeRequest, Rule } from './types.ts';
 
@@ -30,6 +30,10 @@ export interface JevJudgeOptions {
   readonly concurrency?: number;
   readonly fetch?: FetchLike;
   readonly sleep?: (ms: number) => Promise<void>;
+  /** Host-managed concurrency: resolves to a release function (replaces the built-in semaphore). */
+  readonly acquire?: (signal?: AbortSignal) => Promise<() => void>;
+  /** Every successful response, parsed (host logs: model, usage, parse warnings, unused ids). */
+  readonly onResponse?: (info: { request: JudgeRequest; data: unknown; parsed: ParsedAnswers; latencyMs: number }) => void;
 }
 
 export interface JevStats {
@@ -130,15 +134,16 @@ export function jevWireQuestions(questions: Readonly<Record<string, Rule>>): Rec
   const out: Record<string, { type: string; instructions: string; criteria: unknown }> = {};
   for (const id of Object.keys(questions)) {
     const q = questions[id];
-    out[id] = { type: q.used_as === 'policy' ? 'choice' : q.type, instructions: q.instructions, criteria: structuredClone(q.criteria) };
+    out[id] = { type: q.used_as === 'policy' ? 'choice' : q.type, instructions: q.instructions, criteria: cloneJson(q.criteria) };
   }
   return out;
 }
 
 export function jevWireState(request: JudgeRequest): Record<string, unknown> {
   const ctx = request.context ?? {};
+  const errors = request.measurementErrors && request.measurementErrors.length ? { measurement_errors: request.measurementErrors.slice() } : {};
   if (request.position) {
-    return { ...request.position, measurements: { ...request.measurements } };
+    return { ...request.position, measurements: { ...request.measurements }, ...errors };
   }
   const wire: Record<string, unknown> = {
     rules_of_the_game: request.rulesOfTheWorld,
@@ -147,7 +152,8 @@ export function jevWireState(request: JudgeRequest): Record<string, unknown> {
     side_to_move: request.sideToMove,
     opponent: ctx.opponent ?? null,
     rules_engine_says: 'the game is in progress',
-    judgment_formula_hash: ctx.judgment_hash ?? null
+    judgment_formula_hash: ctx.judgment_hash ?? null,
+    ...errors
   };
   return wire;
 }
@@ -178,7 +184,9 @@ export class JevJudge implements Judge {
   }
 
   async judge(request: JudgeRequest, signal?: AbortSignal): Promise<Record<string, JudgeAnswer>> {
-    await this.acquire(signal);
+    let release: () => void = () => this.release();
+    if (this.options.acquire) release = await this.options.acquire(signal);
+    else await this.acquire(signal);
     this.stats.calls++;
     try {
       const response = await fetchJson(this.options.url ?? JEV_DEFAULT_URL, {
@@ -191,12 +199,14 @@ export class JevJudge implements Judge {
         sleep: this.options.sleep
       });
       this.stats.latenciesMs.push(response.latencyMs);
-      return parseJevAnswers(response.data, request.questions).answers;
+      const parsed = parseJevAnswers(response.data, request.questions);
+      this.options.onResponse?.({ request, data: response.data, parsed, latencyMs: response.latencyMs });
+      return parsed.answers;
     } catch (error) {
       this.stats.errors++;
       throw error;
     } finally {
-      this.release();
+      release();
     }
   }
 }

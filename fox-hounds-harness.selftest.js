@@ -60,9 +60,11 @@ FORBIDDEN_CODE.forEach(function (needle) {
 });
 /* The documented contract must be present instead. */
 gate('calls POST /v1/systemone', html.indexOf('api.typesafe.ai/v1/systemone') >= 0);
-gate('sends the required `model` field', html.indexOf('model: config.jevModel') >= 0);
+gate('sends the required `model` field',
+  html.indexOf('get model() { return config.jevModel; }') >= 0 && html.indexOf('model: this.options.model') >= 0);
 gate('sends a materialised `questions` map (the battery + the policy options)',
-  html.indexOf('questions: wire.questions') >= 0 && html.indexOf('function materializeQuestions(battery, state, options)') >= 0);
+  html.indexOf('questions: jevWireQuestions(request.questions)') >= 0 && html.indexOf('function materializeQuestions(battery, state, options)') >= 0 &&
+  html.indexOf('for (const a of actions) criteria[world.actionKey(a)] = null;') >= 0);
 gate('reads answers.<id> through the declared type, never a fixed id',
   html.indexOf('answer.type !== spec.type') >= 0 && html.indexOf("atomRole(spec) === 'policy'") >= 0 &&
   html.indexOf("spec.type === 'score'") >= 0);
@@ -131,25 +133,27 @@ gate('the policy depth control is the only policy knob, and it is advanced',
   html.indexOf("{ id: 'cfg-policy-depth', key: 'policyDepth', type: 'number' }") >= 0);
 gate('the search uses every legal move: the prior only orders',
   source.indexOf('function policyPriorFor(state, rules, ctx)') >= 0 &&
-  source.indexOf('const moves = orderMoves(state, legal, ctx, prior);') >= 0 &&
+  source.indexOf('const moves = orderMoves(state, legal, ctx, prior, hooks);') >= 0 &&
+  source.indexOf('prior: function (state, ctx) { return policyPriorFor(state, rules, ctx); },') >= 0 &&
   source.indexOf('function narrowMoves') < 0 && source.indexOf('policyWidth') < 0);
 gate('learning keeps full root fan-out while PLAY uses principal-child-first bounded speculation',
-  source.indexOf('function siblingBatchWidth(state, depth, moves, ctx)') >= 0 &&
-  source.indexOf('if (ctx.searchProfile === SEARCH_PLAY_PV_AB)') >= 0 &&
-  source.indexOf('if (state.turn === SIDE_CATS && depth === ctx.rootDepth) return count;') >= 0 &&
-  source.indexOf('const batchWidth = siblingBatchWidth(state, depth, moves, ctx);') >= 0 &&
-  source.indexOf('const width = pruningSearch && i === 0 ? 1 : batchWidth;') >= 0 &&
-  source.indexOf('const children = await Promise.all(batch.map(function (move) {') >= 0 &&
-  source.indexOf('Telemetry.rootFanoutBranches += moves.length;') >= 0 &&
-  source.indexOf('await acquireJevSlot(Math.max(1, config.parallelLeaves), opts.signal);') >= 0);
+  source.indexOf('function siblingBatchWidth(state, depth, moves, ctx) { return Neurosym.siblingBatchWidth(') >= 0 &&
+  source.indexOf('if (ctx.searchProfile === PLAY_PV_ALPHA_BETA)') >= 0 &&
+  source.indexOf('if (hooks.world.toMove(state) === hooks.maximizer && depth === ctx.rootDepth) return count;') >= 0 &&
+  source.indexOf('const batchWidth = siblingBatchWidth(state, depth, moves, ctx, hooks);') >= 0 &&
+  source.indexOf('const width = pruning && i === 0 ? 1 : batchWidth;') >= 0 &&
+  source.indexOf('const children = await Promise.all(batch.map((move) => {') >= 0 &&
+  source.indexOf('rootFanout: function (width) { Telemetry.rootFanoutPasses++; Telemetry.rootFanoutBranches += width; },') >= 0 &&
+  source.indexOf('await acquireJevSlot(Math.max(1, config.parallelLeaves), signal);') >= 0);
 gate('PLAY alpha-beta cuts on frozen Eval(R,s), never on a confidence threshold',
-  source.indexOf('if (pruningSearch && windowClosed && remaining > 0 && best)') >= 0 &&
-  source.indexOf('windowClosed && remaining > 0 && best && best.calibrated') < 0 &&
+  source.indexOf('if (pruning && a >= b && remaining > 0 && best)') >= 0 &&
+  source.indexOf('remaining > 0 && best && best.calibrated') < 0 &&
   source.indexOf("const SEARCH_PLAY_PV_AB = 'play-pv-alpha-beta';") >= 0);
 gate('transposition entries distinguish exact values from lower and upper bounds',
   source.indexOf("const TT_EXACT = 'exact';") >= 0 && source.indexOf("const TT_LOWER = 'lower';") >= 0 &&
   source.indexOf("const TT_UPPER = 'upper';") >= 0 && source.indexOf('function probeTransposition(ctx, key, alpha, beta)') >= 0 &&
-  source.indexOf('ttBound: cutoffReached ? (maximizing ? TT_LOWER : TT_UPPER) : TT_EXACT') >= 0);
+  source.indexOf('ttBound: cut ? maximizing ? TT_LOWER : TT_UPPER : TT_EXACT') >= 0 &&
+  source.indexOf('function probeTransposition(ctx, key, alpha, beta) { return Neurosym.probeTransposition(') >= 0);
 gate('the policy merge is a DECLARED operation with one implementation, never a maximum',
   source.indexOf("const POLICY_AGGREGATES = ['single', 'weighted_mean'];") >= 0 &&
   source.indexOf('function policyAggregateMode(battery) {') >= 0 &&
@@ -161,7 +165,8 @@ gate('the policy merge is a DECLARED operation with one implementation, never a 
   source.indexOf('changes.policy_weights = true') >= 0 &&
   source.indexOf('kinds.push("policy_weights");') >= 0 &&
   source.indexOf('"subject", "aggregate"];') >= 0 &&
-  source.indexOf('const merge = mergePolicyDistributions(entries, agg.mode, rules.policyWeights);') >= 0 &&
+  source.indexOf('function mergePolicyDistributions(entries, mode, policyWeights) { return Neurosym.mergePolicyDistributions(') >= 0 &&
+  source.indexOf('const merge = mergePolicyDistributions(') >= 0 && source.indexOf("weighted ? \"weighted_mean\" : \"single\"") >= 0 &&
   /* The old merge took the HIGHEST probability per move, which is not a distribution at all. */
   source.indexOf('= Math.max(merged[moveKeyName]') < 0);
 gate('the removed surface is gone from the page and the engine',
@@ -258,7 +263,7 @@ gate('the path brief carries the BOARDS of the line, the Jev answers and the con
   source.indexOf('function buildPathBrief(ply, rules, cases, trigger)') >= 0 &&
   source.indexOf('function pathBoards(entries, rules)') >= 0 &&
   source.indexOf('function recordLeafCase(ctx, state, jev, confidence, path)') >= 0 &&
-  source.indexOf('line.concat([{ state: child, move: move }])') >= 0 &&
+  source.indexOf('path.concat([{ state: child, move }])') >= 0 &&
   source.indexOf('board_ascii: renderBoardAscii(record.leafState)') >= 0 &&
   source.indexOf('position_array: boardPositionArray(record.leafState)') >= 0 &&
   source.indexOf('what_to_change') >= 0 &&
@@ -274,8 +279,9 @@ gate('the search plays against the ACTUAL opponent, not against a phantom minima
   source.indexOf("return mouseModelDepth() > 0 ? 'planner' : 'greedy';") >= 0 &&
   source.indexOf('const opponentModel = opts.opponentModel || defaultOpponentModel();') >= 0 &&
   source.indexOf('opponentModel: opponentModel,') >= 0 &&
-  source.indexOf('if (!maximizing && ctx.opponentModel !== \'adversarial\' && legal.length > 1) {') >= 0 &&
-  source.indexOf('const predicted = predictedMouseMove(state);') >= 0 &&
+  source.indexOf('if (!maximizing && hooks.respond && legal.length > 1) {') >= 0 &&
+  source.indexOf("respond: function (state, ctx) { return ctx.opponentModel !== 'adversarial' ? predictedMouseMove(state) : null; },") >= 0 &&
+  source.indexOf('const predicted = hooks.respond(state, ctx);') >= 0 &&
   source.indexOf('if (predicted) legal = [predicted];') >= 0 &&
   source.indexOf('rootDepth: depth, opponentModel: opts.opponentModel, searchProfile: opts.searchProfile });') >= 0 &&
   source.indexOf("', opponent ' + ctx.opponentModel") >= 0);
@@ -393,7 +399,7 @@ gate('every question gets an ACCURACY figure, not only a dispersion',
   source.indexOf('const ATOM_ACCURACY_MIN_SAMPLES = 20;') >= 0);
 gate('a repeated note is counted, not printed (the log stays readable)',
   source.indexOf('function logNoteOnce(key, channel, level, message, payload) {') >= 0 &&
-  source.indexOf("logNoteOnce('jev-answer-note:' + parsed.warnings.join('|')") >= 0 &&
+  source.indexOf("logNoteOnce('jev-answer-note:' + meta.warnings.join('|')") >= 0 &&
   source.indexOf("logNoteOnce('policy-not-materialised:'") >= 0 &&
   source.indexOf('logState.suppressedNotes') >= 0 &&
   source.indexOf('warnedOnce: {}, suppressedNotes: 0') >= 0);
@@ -462,7 +468,7 @@ gate('play mode exists, uses the accepted rule set and never calls System 2',
   source.indexOf("{ id: 'cfg-human-side', key: 'humanSide', type: 'string' }") >= 0 &&
   source.indexOf('play: null,') >= 0);
 gate('the cache key separates policy from non-policy requests',
-  source.indexOf("'|p' + (opts.includePolicy === true ? 1 : 0)") >= 0);
+  source.indexOf('memo + "|policy"') >= 0 && source.indexOf('const key = jHash + "|" + side + "|" + context.id + "|" + observation.vector;') >= 0);
 const idsInHtml = (html.match(/id='([a-zA-Z0-9_-]+)'/g) || []).map(function (s) { return s.slice(4, -1); });
 const duplicateIds = idsInHtml.filter(function (id, index) { return idsInHtml.indexOf(id) !== index; });
 gate('every markup id is unique (' + idsInHtml.length + ' ids, no duplicate silently shadowed by byId)',
@@ -863,9 +869,15 @@ function createSandbox(stub, quiet, withDom) {
   stub.state.mode = 'http-422';
   await api.runHarness({});
   push('A rejected request stops the harness (422 is not retried)', api.match.status === 'error', api.match.status);
-  push('A 422 costs exactly one root fan-out wave: one call per Cat move and no retries',
-    stub.state.calls.length - callsBeforeFailure === failureFanoutWidth,
-    (stub.state.calls.length - callsBeforeFailure) + ' calls for ' + failureFanoutWidth + ' root moves');
+  push('A 422 costs at most one root fan-out wave: one call per DISTINCT question, never a retry',
+    (function () {
+      const wave = stub.state.calls.slice(callsBeforeFailure);
+      const distinct = new Set(wave.map(function (call) { return JSON.stringify(call.body); })).size;
+      /* P0c: identical questions launched together are coalesced by the library Evaluator, so the wave can be
+         smaller than the fan-out; what must hold is no duplicate (= no retry) and no more than one per branch. */
+      return wave.length >= 1 && wave.length <= failureFanoutWidth && distinct === wave.length;
+    })(),
+    (stub.state.calls.length - callsBeforeFailure) + ' call(s) for ' + failureFanoutWidth + ' root moves')
   push('No move is played without System 1', api.match.moveLog.length === 0, api.match.moveLog.length);
   stub.state.mode = 'ok';
 

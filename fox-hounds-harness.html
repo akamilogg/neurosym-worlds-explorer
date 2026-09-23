@@ -582,14 +582,21 @@ var Neurosym = (() => {
     MeasurementError: () => MeasurementError,
     Observer: () => Observer,
     PLAY_PV_ALPHA_BETA: () => PLAY_PV_ALPHA_BETA,
+    TT_EXACT: () => TT_EXACT,
+    TT_LOWER: () => TT_LOWER,
+    TT_UPPER: () => TT_UPPER,
     calibrateConfidence: () => calibrateConfidence,
     checkFormula: () => checkFormula,
     clamp: () => clamp,
+    cloneJson: () => cloneJson,
     compose: () => compose,
     coreDialect: () => coreDialect,
+    createSearchContext: () => createSearchContext,
     deepFreeze: () => deepFreeze,
+    deepen: () => deepen,
     defaultTerminalValue: () => defaultTerminalValue,
     evaluationConfidence: () => evaluationConfidence,
+    evaluatorHooks: () => evaluatorHooks,
     fetchJson: () => fetchJson,
     formulaHash: () => formulaHash,
     foxhounds: () => foxhounds_exports,
@@ -601,18 +608,23 @@ var Neurosym = (() => {
     makeFormula: () => makeFormula,
     materializeRules: () => materializeRules,
     mergePolicyDistributions: () => mergePolicyDistributions,
+    minimax: () => minimax,
     normaliseDistribution: () => normaliseDistribution,
     normalizeWeights: () => normalizeWeights,
     opDialect: () => opDialect,
+    orderMoves: () => orderMoves,
     parseJevAnswers: () => parseJevAnswers,
     parseJsonLoose: () => parseJsonLoose,
     pickNumber: () => pickNumber,
     placeholdersOf: () => placeholdersOf,
     policyRuleIds: () => policyRuleIds,
+    probeTransposition: () => probeTransposition,
     round: () => round,
     searchBestMove: () => searchBestMove,
+    siblingBatchWidth: () => siblingBatchWidth,
     specHash: () => specHash,
     stableStringify: () => stableStringify,
+    storeTransposition: () => storeTransposition,
     substitute: () => substitute,
     valueOption: () => valueOption,
     valueRuleIds: () => valueRuleIds
@@ -641,6 +653,9 @@ var Neurosym = (() => {
   }
   function specHash(spec) {
     return hashString(stableStringify(spec === void 0 ? null : spec));
+  }
+  function cloneJson(value) {
+    return value === void 0 ? value : JSON.parse(JSON.stringify(value));
   }
   function deepFreeze(value) {
     if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -992,7 +1007,7 @@ var Neurosym = (() => {
     }
     /** Measure one state. Pure: no network, no judge. A measure that fails is REPORTED and left out. */
     observe(state, observations) {
-      const frozen = deepFreeze(structuredClone(state));
+      const frozen = deepFreeze(cloneJson(state));
       const view = deepFreeze(this.world.view(frozen));
       const ctx = Object.freeze({ view, state: frozen, world: this.world });
       const values = {};
@@ -1342,14 +1357,15 @@ var Neurosym = (() => {
     const out = {};
     for (const id of Object.keys(questions)) {
       const q = questions[id];
-      out[id] = { type: q.used_as === "policy" ? "choice" : q.type, instructions: q.instructions, criteria: structuredClone(q.criteria) };
+      out[id] = { type: q.used_as === "policy" ? "choice" : q.type, instructions: q.instructions, criteria: cloneJson(q.criteria) };
     }
     return out;
   }
   function jevWireState(request) {
     const ctx = request.context ?? {};
+    const errors = request.measurementErrors && request.measurementErrors.length ? { measurement_errors: request.measurementErrors.slice() } : {};
     if (request.position) {
-      return { ...request.position, measurements: { ...request.measurements } };
+      return { ...request.position, measurements: { ...request.measurements }, ...errors };
     }
     const wire = {
       rules_of_the_game: request.rulesOfTheWorld,
@@ -1358,7 +1374,8 @@ var Neurosym = (() => {
       side_to_move: request.sideToMove,
       opponent: ctx.opponent ?? null,
       rules_engine_says: "the game is in progress",
-      judgment_formula_hash: ctx.judgment_hash ?? null
+      judgment_formula_hash: ctx.judgment_hash ?? null,
+      ...errors
     };
     return wire;
   }
@@ -1384,7 +1401,9 @@ var Neurosym = (() => {
       this.waiters.shift()?.();
     }
     async judge(request, signal) {
-      await this.acquire(signal);
+      let release = () => this.release();
+      if (this.options.acquire) release = await this.options.acquire(signal);
+      else await this.acquire(signal);
       this.stats.calls++;
       try {
         const response = await fetchJson(this.options.url ?? JEV_DEFAULT_URL, {
@@ -1397,12 +1416,14 @@ var Neurosym = (() => {
           sleep: this.options.sleep
         });
         this.stats.latenciesMs.push(response.latencyMs);
-        return parseJevAnswers(response.data, request.questions).answers;
+        const parsed = parseJevAnswers(response.data, request.questions);
+        this.options.onResponse?.({ request, data: response.data, parsed, latencyMs: response.latencyMs });
+        return parsed.answers;
       } catch (error) {
         this.stats.errors++;
         throw error;
       } finally {
-        this.release();
+        release();
       }
     }
   };
@@ -1456,19 +1477,22 @@ var Neurosym = (() => {
     if (outcome2.winner !== null && world.actors.includes(outcome2.winner)) return 0;
     return 0.5;
   }
+  var clock2 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
   var Evaluator = class {
     constructor(observer, judge, options = {}) {
       __publicField(this, "observer");
       __publicField(this, "judge");
       __publicField(this, "maximizer");
       __publicField(this, "stats", { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0 });
-      __publicField(this, "cache", /* @__PURE__ */ new Map());
+      __publicField(this, "cache");
       __publicField(this, "inflight", /* @__PURE__ */ new Map());
-      __publicField(this, "priors", /* @__PURE__ */ new Map());
+      __publicField(this, "priors");
       __publicField(this, "options");
       this.observer = observer;
       this.judge = judge;
       this.options = options;
+      this.cache = options.cache ?? /* @__PURE__ */ new Map();
+      this.priors = options.priorCache ?? /* @__PURE__ */ new Map();
       this.maximizer = options.maximizer ?? observer.world.actors[0];
     }
     get world() {
@@ -1491,7 +1515,7 @@ var Neurosym = (() => {
       }
       this.cache.set(key, answers);
     }
-    async ask(key, make) {
+    async ask(key, kind, state, request, signal) {
       const cached = this.cache.get(key);
       if (cached) {
         this.stats.vectorHits++;
@@ -1500,7 +1524,11 @@ var Neurosym = (() => {
       let pending = this.inflight.get(key);
       const live = !pending;
       if (!pending) {
-        pending = make();
+        const started = clock2();
+        pending = this.judge.judge(request, signal).then((answers) => {
+          this.options.onJudged?.({ kind, key, state, request, answers, latencyMs: Math.round(clock2() - started) });
+          return answers;
+        });
         this.inflight.set(key, pending);
         this.stats.judgeCalls++;
       } else this.stats.vectorHits++;
@@ -1531,7 +1559,8 @@ var Neurosym = (() => {
           formulaHash: fHash,
           judgmentHash: jHash,
           provenance: "rules",
-          outcome: outcome2
+          outcome: outcome2,
+          judgmentKey: null
         };
       }
       if (observation.errors.length && this.options.strictMeasures !== false) throw new MeasurementError(observation.errors);
@@ -1539,14 +1568,15 @@ var Neurosym = (() => {
       const context = this.options.context ? this.options.context(state) : { id: "", facts: {} };
       const ids = valueRuleIds(formula);
       const key = jHash + "|" + side + "|" + context.id + "|" + observation.vector;
-      const { answers, live } = await this.ask(key, () => this.judge.judge({
+      const { answers, live } = await this.ask(key, "value", state, {
         world: world.id,
         rulesOfTheWorld: world.describeRules(),
         sideToMove: side,
         measurements: observation.values,
         questions: materializeRules(formula.rules, observation.values, ids),
+        ...observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ": " + e.error) } : {},
         context: { ...context.facts, judgment_hash: jHash }
-      }, signal));
+      }, signal);
       const scalar = {};
       for (const id of Object.keys(answers)) scalar[id] = answers[id]?.value;
       const composition = compose(scalar, formula.weights);
@@ -1560,7 +1590,8 @@ var Neurosym = (() => {
         formulaHash: fHash,
         judgmentHash: jHash,
         provenance: live ? "live" : "cached-vector",
-        outcome: null
+        outcome: null,
+        judgmentKey: key
       };
     }
     /** The Judge's merged distribution over the legal actions of `state`, or null when the formula declares
@@ -1597,15 +1628,16 @@ var Neurosym = (() => {
         return null;
       }
       this.stats.priorCalls++;
-      const { answers } = await this.ask(memo + "|policy", () => this.judge.judge({
+      const { answers } = await this.ask(memo + "|policy", "policy", state, {
         world: world.id,
         rulesOfTheWorld: world.describeRules(),
         sideToMove: side,
         measurements: observation.values,
         questions,
-        position: world.describeState ? world.describeState(state) : { view: observation.view },
+        ...observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ": " + e.error) } : {},
+        position: world.describeState ? world.describeState(state, context.facts) : { view: observation.view },
         context: { ...context.facts, judgment_hash: jHash }
-      }, signal));
+      }, signal);
       const weighted = policyIds.some((id) => formula.rules[id].aggregate === "weighted_mean");
       const merge = mergePolicyDistributions(
         policyIds.map((id) => answers[id]?.distribution ? { id, distribution: answers[id].distribution } : null),
@@ -1620,243 +1652,317 @@ var Neurosym = (() => {
   // src/core/search.ts
   var LEARNING_FANOUT = "learning-fanout";
   var PLAY_PV_ALPHA_BETA = "play-pv-alpha-beta";
-  var EXACT = "exact";
-  var LOWER = "lower";
-  var UPPER = "upper";
-  var clock2 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
+  var TT_EXACT = "exact";
+  var TT_LOWER = "lower";
+  var TT_UPPER = "upper";
+  var clock3 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
+  function createSearchContext(options) {
+    return {
+      depth: options.depth,
+      rootDepth: options.rootDepth ?? options.depth,
+      searchProfile: options.searchProfile ?? LEARNING_FANOUT,
+      parallelBatch: Math.max(1, options.parallelBatch ?? 8),
+      pruningBatch: Math.max(1, options.pruningBatch ?? 2),
+      policyDepth: clamp(options.policyDepth ?? 1, 0, 3),
+      signal: options.signal ?? null,
+      tt: /* @__PURE__ */ new Map(),
+      valueHints: /* @__PURE__ */ new Map(),
+      hintLine: options.hintLine ? options.hintLine.slice() : [],
+      nodes: 0,
+      leafEvals: 0,
+      prunes: 0,
+      rootFanoutWidth: 0,
+      startedAt: clock3()
+    };
+  }
   function calibrateConfidence(samples, depthRemaining) {
-    const usable = samples.filter((v) => typeof v === "number" && Number.isFinite(v));
+    const usable = (samples || []).filter((v) => typeof v === "number" && Number.isFinite(v));
     if (!usable.length) return null;
     const floor = Math.min(...usable);
     const avg = usable.reduce((a, b) => a + b, 0) / usable.length;
     const penalty = 1 - 0.02 * Math.max(0, depthRemaining || 0);
     return round(clamp((0.65 * floor + 0.35 * avg) * penalty, 0, 1), 4);
   }
-  var Pass = class {
-    constructor(ev, opts, rootDepth, hintLine, profile) {
-      __publicField(this, "tt", /* @__PURE__ */ new Map());
-      __publicField(this, "valueHints", /* @__PURE__ */ new Map());
-      __publicField(this, "stats", { nodes: 0, leaves: 0, prunes: 0, skipped: 0, ttHits: 0, ttBoundHits: 0, rootFanout: 0, priorCalls: 0 });
-      __publicField(this, "ev");
-      __publicField(this, "opts");
-      __publicField(this, "rootDepth");
-      __publicField(this, "hintLine");
-      __publicField(this, "profile");
-      this.ev = ev;
-      this.opts = opts;
-      this.rootDepth = rootDepth;
-      this.hintLine = hintLine;
-      this.profile = profile;
+  function storeTransposition(ctx, key, node) {
+    const previous = ctx.tt.get(key);
+    if (previous) {
+      if (previous.ttBound === TT_EXACT && node.ttBound !== TT_EXACT) return previous;
+      if (previous.ttBound === node.ttBound && node.ttBound === TT_LOWER && previous.value >= node.value) return previous;
+      if (previous.ttBound === node.ttBound && node.ttBound === TT_UPPER && previous.value <= node.value) return previous;
     }
-    get world() {
-      return this.ev.world;
-    }
-    store(key, node) {
-      const previous = this.tt.get(key);
-      if (previous) {
-        if (previous.bound === EXACT && node.bound !== EXACT) return;
-        if (previous.bound === node.bound && node.bound === LOWER && previous.value >= node.value) return;
-        if (previous.bound === node.bound && node.bound === UPPER && previous.value <= node.value) return;
-      }
-      this.tt.set(key, node);
-    }
-    probe(key, alpha, beta) {
-      const cached = this.tt.get(key);
-      if (!cached) return { alpha, beta, result: null };
-      this.stats.ttHits++;
-      if (cached.bound === EXACT) return { alpha, beta, result: cached };
-      if (cached.bound === LOWER) alpha = Math.max(alpha, cached.value);
-      else beta = Math.min(beta, cached.value);
-      this.stats.ttBoundHits++;
-      return { alpha, beta, result: alpha >= beta ? cached : null };
-    }
-    order(state, moves, prior) {
-      const world = this.world;
-      const hintRank = /* @__PURE__ */ new Map();
-      this.hintLine.forEach((m, i) => hintRank.set(world.actionKey(m), i));
-      const maximizing = world.toMove(state) === this.ev.maximizer;
-      const scored = moves.map((move, index) => {
-        const child = world.step(state, move);
-        const key = world.actionKey(move);
-        const known = this.valueHints.get(world.key(child));
-        const p = prior ? prior[key] : void 0;
-        return {
-          move,
-          index,
-          policy: typeof p === "number" ? p : null,
-          hint: hintRank.get(key) ?? Number.MAX_SAFE_INTEGER,
-          terminalFirst: world.outcome(child).over ? 1 : 0,
-          value: typeof known === "number" ? known : null
-        };
-      });
-      scored.sort((a, b) => {
-        if (a.policy !== null && b.policy !== null && a.policy !== b.policy) return b.policy - a.policy;
-        if (a.policy === null !== (b.policy === null)) return a.policy === null ? 1 : -1;
-        if (a.hint !== b.hint) return a.hint - b.hint;
-        if (a.terminalFirst !== b.terminalFirst) return b.terminalFirst - a.terminalFirst;
-        if (a.value !== null && b.value !== null && a.value !== b.value) return maximizing ? b.value - a.value : a.value - b.value;
-        return a.index - b.index;
-      });
-      return scored.map((s) => s.move);
-    }
-    async leaf(state, path) {
-      this.stats.leaves++;
-      const evaluation = await this.ev.eval(this.opts.formula, state, this.opts.signal);
-      this.opts.onLeaf?.({ state, path, evaluation });
-      const confidence = evaluation.confidence === null ? null : round(clamp(evaluation.confidence, 0, 1), 4);
+    ctx.tt.set(key, node);
+    return node;
+  }
+  function probeTransposition(ctx, key, alpha, beta, events) {
+    const cached = ctx.tt.get(key);
+    if (!cached) return { hit: false, alpha, beta, result: null };
+    events?.transpositionHit?.();
+    if (cached.ttBound === TT_EXACT || cached.exact === true) return { hit: true, alpha, beta, result: cached };
+    if (cached.ttBound === TT_LOWER) alpha = Math.max(alpha, cached.value);
+    else if (cached.ttBound === TT_UPPER) beta = Math.min(beta, cached.value);
+    events?.transpositionBoundHit?.();
+    return { hit: true, alpha, beta, result: alpha >= beta ? cached : null };
+  }
+  function siblingBatchWidth(state, depth, moves, ctx, hooks) {
+    const count = Math.max(1, (moves || []).length);
+    if (ctx.searchProfile === PLAY_PV_ALPHA_BETA) return Math.max(1, Math.min(count, ctx.pruningBatch));
+    if (hooks.world.toMove(state) === hooks.maximizer && depth === ctx.rootDepth) return count;
+    return Math.max(1, Math.min(count, ctx.parallelBatch));
+  }
+  function orderMoves(state, moves, ctx, prior, hooks) {
+    const world = hooks.world;
+    const hintRank = /* @__PURE__ */ new Map();
+    (ctx.hintLine || []).forEach((m, i) => hintRank.set(world.actionKey(m), i));
+    const maximizing = world.toMove(state) === hooks.maximizer;
+    const scored = moves.map((move, index) => {
+      const child = world.step(state, move);
+      const key = world.actionKey(move);
+      const known = ctx.valueHints ? ctx.valueHints.get(world.key(child)) : void 0;
+      const p = prior ? prior[key] : void 0;
       return {
-        value: round(clamp(evaluation.value, 0, 1), 4),
-        confidence,
-        calibrated: confidence,
+        move,
+        index,
+        policy: typeof p === "number" ? p : null,
+        hint: hintRank.get(key) ?? Number.MAX_SAFE_INTEGER,
+        terminalFirst: world.outcome(child).over ? 1 : 0,
+        value: typeof known === "number" ? known : null
+      };
+    });
+    scored.sort((a, b) => {
+      if (a.policy !== null && b.policy !== null && a.policy !== b.policy) return b.policy - a.policy;
+      if (a.policy === null !== (b.policy === null)) return a.policy === null ? 1 : -1;
+      if (a.hint !== b.hint) return a.hint - b.hint;
+      if (a.terminalFirst !== b.terminalFirst) return b.terminalFirst - a.terminalFirst;
+      if (a.value !== null && b.value !== null && a.value !== b.value) return maximizing ? b.value - a.value : a.value - b.value;
+      return a.index - b.index;
+    });
+    return scored.map((s) => s.move);
+  }
+  async function minimax(hooks, ctx, state, depth, alpha, beta, path) {
+    const world = hooks.world;
+    const events = hooks.events;
+    ctx.nodes++;
+    events?.node?.();
+    if (ctx.signal?.aborted) throw new ApiError("aborted", "Search aborted.");
+    const stateId = world.key(state);
+    const key = hooks.keyOf ? hooks.keyOf(state, depth, ctx) : stateId + "|d" + depth;
+    const outcome2 = world.outcome(state);
+    if (outcome2.over) {
+      const sunk = {
+        value: defaultTerminalValue(world, outcome2, hooks.maximizer),
+        pvConfidence: 1,
+        calibrated: 1,
         bestMove: null,
         line: [],
-        samples: confidence === null ? [] : [confidence],
-        certain: false,
-        terminal: false,
+        samples: [1],
+        certain: true,
+        terminal: true,
         depth: 0,
         exact: true,
-        bound: EXACT,
-        source: "leaf"
+        ttBound: TT_EXACT,
+        source: "terminal"
       };
+      storeTransposition(ctx, key, sunk);
+      ctx.valueHints.set(stateId, sunk.value);
+      return sunk;
     }
-    async minimax(state, depth, alpha, beta, path) {
-      const world = this.world;
-      this.stats.nodes++;
-      if (this.opts.signal?.aborted) throw new Error("search aborted");
-      const stateId = world.key(state);
-      const key = stateId + "|d" + depth;
-      const outcome2 = world.outcome(state);
-      if (outcome2.over) {
-        const sunk = {
-          value: defaultTerminalValue(world, outcome2, this.ev.maximizer),
-          confidence: 1,
-          calibrated: 1,
-          bestMove: null,
-          line: [],
-          samples: [1],
-          certain: true,
-          terminal: true,
-          depth: 0,
-          exact: true,
-          bound: EXACT,
-          source: "terminal"
-        };
-        this.store(key, sunk);
-        this.valueHints.set(stateId, sunk.value);
-        return sunk;
-      }
-      const probe = this.probe(key, alpha, beta);
-      alpha = probe.alpha;
-      beta = probe.beta;
-      if (probe.result) return probe.result;
-      if (depth <= 0) {
-        const leaf = await this.leaf(state, path);
-        this.store(key, leaf);
-        return leaf;
-      }
-      const maximizing = world.toMove(state) === this.ev.maximizer;
-      const policyDepth = clamp(this.opts.policyDepth ?? 1, 0, 3);
-      let prior = null;
-      if (policyDepth > 0 && this.rootDepth - depth < policyDepth) {
-        const merge = await this.ev.prior(this.opts.formula, state, this.opts.signal);
-        if (merge) {
-          prior = merge.prior;
-          this.stats.priorCalls++;
+    const probe = probeTransposition(ctx, key, alpha, beta, events);
+    alpha = probe.alpha;
+    beta = probe.beta;
+    if (probe.result) return probe.result;
+    if (depth <= 0) {
+      ctx.leafEvals++;
+      const leaf = await hooks.leaf(state, ctx, path);
+      leaf.ttBound = TT_EXACT;
+      storeTransposition(ctx, key, leaf);
+      return leaf;
+    }
+    const maximizing = world.toMove(state) === hooks.maximizer;
+    const withinPolicy = ctx.policyDepth > 0 && ctx.rootDepth - depth < ctx.policyDepth;
+    const prior = withinPolicy && hooks.prior ? await hooks.prior(state, ctx) : null;
+    let legal = world.actions(state);
+    if (!maximizing && hooks.respond && legal.length > 1) {
+      const predicted = hooks.respond(state, ctx);
+      if (predicted) legal = [predicted];
+    }
+    const moves = orderMoves(state, legal, ctx, prior, hooks);
+    const pruning = ctx.searchProfile === PLAY_PV_ALPHA_BETA;
+    const batchWidth = siblingBatchWidth(state, depth, moves, ctx, hooks);
+    if (!pruning && maximizing && depth === ctx.rootDepth && moves.length > 1) {
+      ctx.rootFanoutWidth = moves.length;
+      events?.rootFanout?.(moves.length);
+    }
+    if (pruning && depth === ctx.rootDepth) events?.pvPass?.();
+    let best = null;
+    let a = alpha, b = beta, cut = false;
+    for (let i = 0; i < moves.length; ) {
+      if (ctx.signal?.aborted) throw new ApiError("aborted", "Search aborted.");
+      const width = pruning && i === 0 ? 1 : batchWidth;
+      const batch = moves.slice(i, i + width);
+      if (pruning && i === 0 && moves.length > 1) events?.pvFirstBranch?.();
+      const children = await Promise.all(batch.map((move) => {
+        const child = world.step(state, move);
+        return minimax(hooks, ctx, child, depth - 1, a, b, path.concat([{ state: child, move }]));
+      }));
+      children.forEach((child, j) => {
+        if (best === null || (maximizing ? child.value > best.value : child.value < best.value)) {
+          best = {
+            value: child.value,
+            pvConfidence: child.pvConfidence,
+            calibrated: child.calibrated,
+            certain: child.certain === true,
+            source: child.source,
+            depth: child.depth,
+            bestMove: batch[j],
+            line: [batch[j], ...child.line],
+            samples: child.samples.slice(),
+            terminal: false,
+            exact: true
+          };
         }
+        if (maximizing) a = Math.max(a, best.value);
+        else b = Math.min(b, best.value);
+      });
+      i += batch.length;
+      const remaining = moves.length - i;
+      if (pruning && a >= b && remaining > 0 && best) {
+        ctx.prunes++;
+        events?.prune?.(remaining, best.certain === true);
+        cut = true;
+        break;
       }
-      let legal = world.actions(state);
-      if (!maximizing && this.opts.respond && legal.length > 1) {
-        const predicted = this.opts.respond(state);
-        if (predicted) legal = [predicted];
-      }
-      const moves = this.order(state, legal, prior);
-      const pruning = this.profile === PLAY_PV_ALPHA_BETA;
-      const count = Math.max(1, moves.length);
-      const batchWidth = pruning ? Math.max(1, Math.min(count, this.opts.pruningBatch ?? 2)) : maximizing && depth === this.rootDepth ? count : Math.max(1, Math.min(count, this.opts.parallelBatch ?? 8));
-      if (!pruning && maximizing && depth === this.rootDepth && moves.length > 1) this.stats.rootFanout = moves.length;
-      let best = null;
-      let a = alpha, b = beta, cut = false;
-      for (let i = 0; i < moves.length; ) {
-        if (this.opts.signal?.aborted) throw new Error("search aborted");
-        const width = pruning && i === 0 ? 1 : batchWidth;
-        const batch = moves.slice(i, i + width);
-        const children = await Promise.all(batch.map((move) => {
-          const child = world.step(state, move);
-          return this.minimax(child, depth - 1, a, b, path.concat([{ state: child, move }]));
-        }));
-        children.forEach((child, j) => {
-          if (best === null || (maximizing ? child.value > best.value : child.value < best.value)) {
-            best = {
-              ...child,
-              bestMove: batch[j],
-              line: [batch[j], ...child.line],
-              samples: child.samples.slice(),
-              certain: child.certain === true
-            };
-          }
-          if (maximizing) a = Math.max(a, best.value);
-          else b = Math.min(b, best.value);
-        });
-        i += batch.length;
-        const remaining = moves.length - i;
-        if (pruning && a >= b && remaining > 0 && best) {
-          this.stats.prunes++;
-          this.stats.skipped += remaining;
-          cut = true;
-          break;
-        }
-      }
-      if (best === null) {
-        const stalled = {
-          value: 0.5,
-          confidence: 0.5,
-          calibrated: 0.5,
-          bestMove: null,
-          line: [],
-          samples: [0.5],
-          certain: true,
-          terminal: false,
-          depth,
-          exact: true,
-          bound: EXACT,
-          source: "stalemate"
-        };
-        this.store(key, stalled);
-        return stalled;
-      }
-      const chosen = best;
-      const node = {
-        value: round(chosen.value, 4),
-        confidence: chosen.confidence === null ? null : round(chosen.confidence, 4),
-        calibrated: calibrateConfidence(chosen.samples, this.opts.depth - depth + 1),
-        bestMove: chosen.bestMove,
-        line: chosen.line,
-        samples: chosen.samples,
-        certain: chosen.certain === true,
+    }
+    if (best === null) {
+      const stalled = {
+        value: 0.5,
+        pvConfidence: 0.5,
+        calibrated: 0.5,
+        bestMove: null,
+        line: [],
+        samples: [0.5],
+        certain: true,
         terminal: false,
         depth,
-        exact: !cut,
-        bound: cut ? maximizing ? LOWER : UPPER : EXACT,
-        source: "search"
+        exact: true,
+        ttBound: TT_EXACT,
+        source: "stalemate"
       };
-      this.store(key, node);
-      this.valueHints.set(stateId, node.value);
-      return node;
+      storeTransposition(ctx, key, stalled);
+      return stalled;
     }
-  };
-  async function searchBestMove(evaluator, state, options) {
+    const chosen = best;
+    const node = {
+      value: round(chosen.value, 4),
+      pvConfidence: chosen.pvConfidence === null ? null : round(chosen.pvConfidence, 4),
+      calibrated: calibrateConfidence(chosen.samples, ctx.depth - depth + 1),
+      bestMove: chosen.bestMove,
+      line: chosen.line,
+      samples: chosen.samples,
+      certain: chosen.certain === true,
+      terminal: false,
+      depth,
+      exact: !cut,
+      ttBound: cut ? maximizing ? TT_LOWER : TT_UPPER : TT_EXACT,
+      source: "search"
+    };
+    storeTransposition(ctx, key, node);
+    ctx.valueHints.set(stateId, node.value);
+    return node;
+  }
+  function evaluatorHooks(evaluator, options, stats) {
+    const world = evaluator.world;
+    const user = options.events;
+    return {
+      world,
+      maximizer: evaluator.maximizer,
+      async leaf(state, ctx, path) {
+        stats.current.leaves++;
+        const evaluation = await evaluator.eval(options.formula, state, ctx.signal ?? void 0);
+        options.onLeaf?.({ state, path, evaluation });
+        const confidence = evaluation.confidence === null ? null : round(clamp(evaluation.confidence, 0, 1), 4);
+        return {
+          value: round(clamp(evaluation.value, 0, 1), 4),
+          pvConfidence: confidence,
+          calibrated: confidence,
+          bestMove: null,
+          line: [],
+          samples: confidence === null ? [] : [confidence],
+          certain: false,
+          terminal: false,
+          depth: 0,
+          exact: true,
+          source: evaluation.provenance
+        };
+      },
+      async prior(state, ctx) {
+        const merge = await evaluator.prior(options.formula, state, ctx.signal ?? void 0);
+        if (merge) stats.current.priorCalls++;
+        return merge ? merge.prior : null;
+      },
+      respond: options.respond ? (state) => options.respond(state) : void 0,
+      events: {
+        node: () => {
+          stats.current.nodes++;
+          user?.node?.();
+        },
+        transpositionHit: () => {
+          stats.current.ttHits++;
+          user?.transpositionHit?.();
+        },
+        transpositionBoundHit: () => {
+          stats.current.ttBoundHits++;
+          user?.transpositionBoundHit?.();
+        },
+        rootFanout: (w) => {
+          stats.current.rootFanout = w;
+          user?.rootFanout?.(w);
+        },
+        pvPass: () => user?.pvPass?.(),
+        pvFirstBranch: () => user?.pvFirstBranch?.(),
+        prune: (remaining, certain) => {
+          stats.current.prunes++;
+          stats.current.skipped += remaining;
+          user?.prune?.(remaining, certain);
+        }
+      }
+    };
+  }
+  async function deepen(hooks, state, options) {
     const maxDepth = clamp(Math.round(options.depth), 1, 12);
-    const profile = options.profile ?? (options.respond ? LEARNING_FANOUT : PLAY_PV_ALPHA_BETA);
-    const passes = [];
+    let outcome2 = null;
     let hintLine = [];
     for (let depth = 1; depth <= maxDepth; depth++) {
-      const started = clock2();
-      const pass = new Pass(evaluator, { ...options, depth }, depth, hintLine, profile);
-      const result = await pass.minimax(state, depth, -Infinity, Infinity, []);
-      passes.push({ depth, result, stats: pass.stats, elapsedMs: Math.round(clock2() - started) });
+      const ctx = options.makeContext(depth, hintLine);
+      const result = await minimax(hooks, ctx, state, depth, -Infinity, Infinity, []);
+      outcome2 = { result, ctx };
+      options.onPass?.({ depth, result, ctx });
       hintLine = result.line.slice();
-      if (options.signal?.aborted) break;
+      if (ctx.signal?.aborted) break;
     }
+    return outcome2;
+  }
+  var newStats = () => ({ nodes: 0, leaves: 0, prunes: 0, skipped: 0, ttHits: 0, ttBoundHits: 0, rootFanout: 0, priorCalls: 0 });
+  async function searchBestMove(evaluator, state, options) {
+    const profile = options.profile ?? (options.respond ? LEARNING_FANOUT : PLAY_PV_ALPHA_BETA);
+    const passes = [];
+    const stats = { current: newStats() };
+    await deepen(evaluatorHooks(evaluator, options, stats), state, {
+      depth: options.depth,
+      makeContext: (depth, hintLine) => {
+        stats.current = newStats();
+        return createSearchContext({
+          depth,
+          rootDepth: depth,
+          searchProfile: profile,
+          parallelBatch: options.parallelBatch,
+          pruningBatch: options.pruningBatch,
+          policyDepth: options.policyDepth,
+          signal: options.signal ?? null,
+          hintLine
+        });
+      },
+      onPass: ({ depth, result, ctx }) => passes.push({ depth, result, ctx, stats: stats.current, elapsedMs: Math.round(clock3() - ctx.startedAt) })
+    });
     return { best: passes[passes.length - 1].result, passes };
   }
 
@@ -2019,7 +2125,7 @@ var Neurosym = (() => {
     lines.push("     x=0 1 2 3 4 5 6 7");
     return lines.join("\n");
   }
-  function describeFoxState(state) {
+  function describeFoxState(state, context) {
     const o = outcome(state);
     return {
       rules_of_the_game: RULES_OF_THE_GAME,
@@ -2029,6 +2135,7 @@ var Neurosym = (() => {
       side_to_move: state.turn,
       ply: state.ply,
       rearmost_cat_row: minCatRow(state),
+      opponent: context?.opponent ?? null,
       rules_engine_says: o.over ? "the game is already over: " + o.winner + " wins (" + o.reason + ")" : "the game is in progress"
     };
   }
@@ -3083,7 +3190,7 @@ function authHeaders(apiKey) {
 }
 function summarizeError(error) {
   if (!error) return 'unknown error';
-  if (error instanceof ApiError) {
+  if (error instanceof ApiError || (error.name === 'ApiError' && typeof error.kind === 'string')) {
     let text = error.kind + ': ' + error.message;
     /* Surface the endpoint's own message: a wrong model name or an unsupported
        response_format is only diagnosable from the response body. */
@@ -4581,31 +4688,12 @@ function threatenedSquares(state) {
    in composeLeafValue; nothing else scores a board.) */
 /* --- Jev caches, answer adapter and the mandated evaluateWithJev() --------- *//* The wire state plus the MEASURED facts. `measurements` is data, exactly like `rearmost_cat_row`:
    the harness sends the facts it can compute so a text model never has to compute them. */
-function wireStateWithMeasures(state, measured) {
-  const wire = toWireState(state);
-  if (measured && measured.count) {
-    wire.measurements = Object.assign({}, measured.values);
-    if (measured.errors.length) wire.measurement_errors = measured.errors.map(function (e) { return e.id + ": " + e.error; });
-  }
-  return wire;
-}
+/* wireStateWithMeasures: the wire state is built by the library (Neurosym.jevWireState). */
 /* A value formula that declares O(s) is judged FROM O(s). Omitting raw coordinates here is what
    makes a vector-cache hit logically valid: two boards with the same declared observations present
    the same state to Jev. Policy questions still receive the full board because their legal-move
    options denote concrete transitions; those requests are never shared across different boards. */
-function wireObservedState(state, measured, judgmentHash) {
-  const wire = {
-    rules_of_the_game: RULES_OF_THE_GAME,
-    evaluation_contract: 'Judge only the declared measurements. The board coordinates are intentionally absent; System 2 chose O(s).',
-    measurements: Object.assign({}, measured.values),
-    side_to_move: state.turn,
-    opponent: opponentDescription(),
-    rules_engine_says: 'the game is in progress',
-    judgment_formula_hash: judgmentHash
-  };
-  if (measured.errors.length) wire.measurement_errors = measured.errors.map(function (entry) { return entry.id + ': ' + entry.error; });
-  return wire;
-}
+/* wireObservedState: the wire state is built by the library (Neurosym.jevWireState). */
 /* The text Jev reads: {{id}} becomes the MEASURED number, in the instructions and in every criterion. */
 function substituteQuestionObservations(questions, values) {
   const out = {};
@@ -5034,7 +5122,10 @@ function enforceObservationPlaceholders(battery, observations, warnings) {
 const jevAnswerCache = new Map();
 /* VECTOR cache: raw answers keyed by the MEASURED vector plus the questions actually asked. This is
    the "cached formula": a stabilized rule set can navigate on judgements already paid for. */
-const jevVectorCache = new Map();
+/* The library Evaluator keys every judgment by the MEASURED vector, so the answer cache and the vector cache are
+   one store; the name is kept because the operator, the journal and the tests speak of both. */
+const jevVectorCache = jevAnswerCache;
+const jevPriorCache = new Map();          // merged policy priors per (judgment, state, opponent)
 const jevValueCache = new Map();
 /* Compiled System-2 formulas are reusable programs. Eval accepts either a normalized rule set or the
    canonical `weighted_jev_rules` object and pays compilation only once per semantic formula hash. */
@@ -5295,193 +5386,208 @@ function materializeQuestions(battery, state, options) {
 async function evaluateWithJev(state, currentRules, options) {
   return createBoardEnvironment(state).Eval(currentRules || DEFAULT_RULES, options || {});
 }
+/* System 1 runs through the library: Neurosym.Evaluator (observe -> judge -> compose, judgments cached by the
+   MEASURED vector, identical in-flight questions coalesced) over Neurosym.JevJudge (POST /v1/systemone with
+   retries and Retry-After). This file keeps what is its own: the measuring code (computeObservations), the
+   slot gate, the telemetry, the logs, the composition memo and the error doctrine. Two evaluators share the
+   caches; the self-test probe uses the one that never touches telemetry or the health chip. */
+function libraryFormulaOf(plan) {
+  if (plan.libraryFormula) return plan.libraryFormula;
+  const rules = plan.rules;
+  return Neurosym.makeFormula({
+    world: FOX.FOXHOUNDS_ID,
+    observations: observationsOf(rules),
+    rules: rules.battery || DEFAULT_BATTERY,
+    weights: rules.weights || {},
+    policy_weights: rules.policyWeights || {},
+    confidence_floor: rules.confidenceFloor
+  });
+}
+const jevResponseMeta = new WeakMap();
+const HARNESS_OBSERVER = {
+  world: FOX.foxhounds,
+  observe: function (state, observations) {
+    const measured = computeObservations(state, observations);
+    return { values: measured.values, errors: measured.errors, vector: measured.vector, count: measured.count,
+      view: FOX.foxView(state), timings: {} };
+  }
+};
+function judgeContext() {
+  return { id: '|o' + opponentModelId(), facts: { opponent: opponentDescription() } };
+}
+const system1 = { live: null, probe: null };
+function system1Evaluator(isProbe) {
+  const slot = isProbe ? 'probe' : 'live';
+  if (system1[slot]) return system1[slot];
+  const judge = new Neurosym.JevJudge({
+    get url() { return config.typesafeUrl; },
+    get apiKey() { return config.typesafeKey; },
+    get model() { return config.jevModel; },
+    get timeoutMs() { return config.typesafeTimeoutMs; },
+    get retries() { return config.typesafeRetries; },
+    fetch: function (url, init) { return fetch(url, init); },
+    /* The harness slot gate, so the queue and the peak concurrency stay measured. Every live call is
+       counted here, before it can fail: a failed call is a call. */
+    acquire: async function (signal) {
+      if (!isProbe) Telemetry.jevCalls++;
+      const queuedAt = now();
+      await acquireJevSlot(Math.max(1, config.parallelLeaves), signal);
+      if (!isProbe) {
+        const queueMs = Math.round(now() - queuedAt);
+        Telemetry.jevQueueLatencies.push(queueMs);
+        Telemetry.jevQueueMs += queueMs;
+      }
+      return releaseJevSlot;
+    },
+    onResponse: function (info) {
+      jevResponseMeta.set(info.parsed.answers, {
+        latencyMs: info.latencyMs, warnings: info.parsed.warnings, unusedIds: info.parsed.unusedIds,
+        model: (info.data && info.data.model) || null, usage: (info.data && info.data.usage) || null
+      });
+      if (!isProbe) {
+        Telemetry.jevLatencies.push(info.latencyMs);
+        Telemetry.jevServiceMs += info.latencyMs;
+      }
+    }
+  });
+  system1[slot] = new Neurosym.Evaluator(HARNESS_OBSERVER, judge, {
+    maximizer: SIDE_CATS,
+    context: judgeContext,
+    strictMeasures: false,
+    cache: jevAnswerCache,
+    priorCache: jevPriorCache,
+    cacheLimit: JEV_CACHE_LIMIT,
+    onJudged: function (event) {
+      if (!isProbe && event.kind === 'policy') Telemetry.policyCalls++;
+    }
+  });
+  return system1[slot];
+}
+function atomsOf(answers, battery) {
+  const atoms = {};
+  valueAtoms(battery).forEach(function (id) {
+    const answer = answers[id];
+    atoms[id] = (answer && Number.isFinite(answer.value)) ? answer.value : 0.5;
+  });
+  return atoms;
+}
+function answerTypes(answers) {
+  const observed = {};
+  Object.keys(answers).forEach(function (id) {
+    const raw = answers[id] && answers[id].raw;
+    if (raw && raw.type) observed[id] = raw.type;
+  });
+  return observed;
+}
+/* The one failure doctrine: no Jev, no value. The error is classified and reported, never masked. */
+function system1Failure(error, isProbe, stateHash) {
+  if (error && error.kind === 'aborted') return error;
+  if (!isProbe) Telemetry.jevErrors++;
+  const reason = summarizeError(error);
+  const diagnosis = networkFailureKind(error);
+  if (diagnosis) {
+    const hint = networkFailureHint(diagnosis);
+    if (!isProbe) jevHealth.lastError = networkFailureLabel(diagnosis);
+    log('NET', isProbe ? 'info' : 'error',
+      (isProbe ? '[self-test] deliberate failure, proving the doctrine: ' : 'Jev call did not complete: ') + hint,
+      { url: config.typesafeUrl, state_key: stateHash, reason: reason });
+    const blocked = new ApiError('network', 'System 1 (Jev) unreachable: ' + hint +
+      ' The harness will not invent leaf values.');
+    blocked.networkDiagnosis = diagnosis;
+    return blocked;
+  }
+  log('NET', 'error', 'Jev call failed (' + reason + '). No local evaluator exists by design: the run cannot continue without System 1.',
+    { url: config.typesafeUrl, state_key: stateHash });
+  return new ApiError((error && error.kind) ? error.kind : 'network',
+    'System 1 (Jev) unavailable: ' + reason + ' - fix the endpoint, API key or model; the harness will not invent leaf values.');
+}
 async function evaluateRuleFormula(state, compiledFormula, options) {
   const opts = options || {};
   const plan = compileRuleFormula(compiledFormula || DEFAULT_RULES);
   const rules = plan.rules;
   const battery = rules.battery || DEFAULT_BATTERY;
-  /* The cache key carries the policy flag AND the opponent model: the same (battery, state)
-     produces a DIFFERENT request when the policy questions are materialised (so an entry built
-     for a leaf must never satisfy a call that needs a prior) and a different ANSWER when the
-     Mouse described in the state changes - an entry built against a weaker Mouse is a stale
-     answer about a different game, and an escalation must never inherit it. */
   const stateHash = stateKey(state);
-  /* O(s): the measures the rule set DECLARES, computed by code before anything is asked. Jev then
-     receives these numbers as FACTS, so its questions stop being arithmetic problems. */
-  const measured = computeObservations(state, rules.observations);
-  /* The questions are materialised BEFORE any cache decision: they are code (the legal moves of the
-     subject), they are cheap, and their text must carry the measured numbers. */
-  const wire = materializeQuestions(battery, state, { includePolicy: opts.includePolicy === true });
-  wire.questions = substituteQuestionObservations(wire.questions, measured.values);
-  const questionHash = hashString(questionsFingerprint(wire.questions));
-  /* Exact cache: same board, same observation definitions and same rules-as-asked. Including the
-     judgment hash fixes the stale-answer bug where a re-specified observation reused an old result. */
-  const inferenceKey = plan.judgmentHash + '|' + stateHash + '|q' + questionHash +
-    '|p' + (opts.includePolicy === true ? 1 : 0) + '|o' + opponentModelId();
-  /* THE CACHED FORMULA: an answer depends on the battery, the measured VECTOR (not the whole board),
-     the questions as asked and the Mouse model. Two boards that measure the same reuse the judgement
-     already paid for - and only then: a different vector never reuses anything. */
-  const vectorKey = (measured.count && opts.includePolicy !== true)
-    ? (plan.judgmentHash + '|v' + hashString(measured.vector) + '|side' + state.turn + '|q' + questionHash + '|o' + opponentModelId())
-    : null;
-  /* The page self-test drives an intentional failure to prove the "no Jev, no game"
-     doctrine: that probe must not touch telemetry or the health chip, or running the
-     self-test would look exactly like a real System-1 outage. */
   const isProbe = opts.selfTest === true;
 
   /* Terminal states are decided by the rules engine, not by a model. */
   const terminal = isTerminal(state);
   if (terminal.over) {
-    const catsWin = terminal.winner === SIDE_CATS;
+    const measuredEnd = computeObservations(state, rules.observations);
     return {
-      winProbability: catsWin ? 1 : (terminal.winner === SIDE_MOUSE ? 0 : 0.5),
+      winProbability: terminal.winner === SIDE_CATS ? 1 : (terminal.winner === SIDE_MOUSE ? 0 : 0.5),
       confidence: 1, source: 'rules', atoms: null, policy: null, cached: false,
       reason: terminal.reason, latencyMs: 0, model: null,
-      measured: measured.values, measuredDeclared: measured.count,
+      measured: measuredEnd.values, measuredDeclared: measuredEnd.count,
       formulaHash: plan.hash, judgmentFormulaHash: plan.judgmentHash,
       formulaWarnings: plan.warnings
     };
   }
 
-  let inference = jevAnswerCache.get(inferenceKey);
-
-  let vectorReused = false;
-  if (!inference && vectorKey) {
-    const reused = jevVectorCache.get(vectorKey);
-    if (reused) {
-      Telemetry.jevVectorCacheHits++;
-      cacheSet(jevAnswerCache, inferenceKey, reused);
-      inference = reused;
-      vectorReused = true;
-    }
+  let evaluation = null;
+  try {
+    evaluation = await system1Evaluator(isProbe).eval(libraryFormulaOf(plan), state, opts.signal || undefined);
+  } catch (error) {
+    throw system1Failure(error, isProbe, stateHash);
   }
-  const inferenceFromCache = !!inference;
-  if (inference) {
-    Telemetry.jevCacheHits++;
-  } else {
-    if (!isProbe) Telemetry.jevCalls++;
-    if (!isProbe && opts.includePolicy === true) Telemetry.policyCalls++;
-    /* Two clocks because they answer two questions: queuedAt starts BEFORE the slot is acquired (the
-       wait is harness pressure), startedAt starts AFTER it (the call is the model's). */
-    const queuedAt = now();
-    let slotHeld = false;
-    try {
-      await acquireJevSlot(Math.max(1, config.parallelLeaves), opts.signal);
-      slotHeld = true;
-      const startedAt = now();
-      const queueMs = Math.round(startedAt - queuedAt);
-      const response = await fetchJSON(config.typesafeUrl, {
-        body: {
-          state: (vectorKey ? wireObservedState(state, measured, plan.judgmentHash) : wireStateWithMeasures(state, measured)),
-          model: config.jevModel,
-          questions: wire.questions
-        },
-        headers: authHeaders(config.typesafeKey),
-        timeoutMs: config.typesafeTimeoutMs,
-        retries: config.typesafeRetries,
-        signal: opts.signal || null
-      });
-      const latency = Math.round(now() - startedAt);
-      if (!isProbe) {
-        Telemetry.jevLatencies.push(latency);
-        Telemetry.jevQueueLatencies.push(queueMs);
-        Telemetry.jevServiceMs += latency;
-        Telemetry.jevQueueMs += queueMs;
-      }
-      const parsed = parseJevAnswers(response.data, battery);
-      if (!parsed.ok) {
-        throw new ApiError('parse', 'Jev answered unusably: ' + parsed.reason, { body: JSON.stringify(response.data).slice(0, 400) });
-      }
-      inference = {
-        atoms: parsed.atoms, observed: parsed.observed, policy: parsed.policy, confidence: parsed.confidence,
-        model: parsed.model, usage: parsed.usage, latencyMs: latency, warnings: parsed.warnings,
-        wireNotes: wire.notes, unusedAnswerIds: parsed.unusedAnswerIds
-      };
-      cacheSet(jevAnswerCache, inferenceKey, inference);
-      if (vectorKey) cacheSet(jevVectorCache, vectorKey, inference);
-      const band = confidenceBand(parsed.confidence);
-      const policyIds = Object.keys(parsed.policy);
-      log('JEV', confidenceLevelFor(parsed.confidence),
-        (band === 'low' ? 'LOW CONFIDENCE (below the ' + round(rules.confidenceFloor, 2) +
-          ' evidence floor; it counts as uncertain evidence for the learner and never changes PLAY pruning): ' : '') +
-        'Jev answers ' + stateHash + ' -> ' + valueAtoms(battery).map(function (key) { return key + ' ' + round(parsed.atoms[key], 3); }).join(', ') +
-        ' | confidence ' + (parsed.confidence === null ? 'not reported' : parsed.confidence) +
-        (policyIds.length ? ' | policy: ' + policyIds.map(function (id) { return id + ' argmax ' + parsed.policy[id].argmax; }).join(', ') : '') +
-        ' | ' + latency + ' ms' + (parsed.model ? ' | ' + parsed.model : ''),
-        { confidence: parsed.confidence, state_key: stateHash, atoms: parsed.atoms, types: parsed.observed, policy: parsed.policy, usage: parsed.usage });
-      /* A policy question we expected but could not materialise is not an error: it is silence the
-         operator should see (the subject was not on move, or had no legal move). */
-      if (wire.notes.omitted.length && policyIds.length === 0) {
-        logNoteOnce('policy-not-materialised:' + wire.notes.omitted.join(','), 'JEV', 'info',
-          'Policy questions not materialised: ' + wire.notes.omitted.join(', ') +
-          '. They are omitted rather than asked about a side that is not on move.', { state_key: stateHash });
-      }
-      if (parsed.unusedAnswerIds.length) {
-        log('JEV', 'warn', 'Jev answered ids this battery does not declare: ' + parsed.unusedAnswerIds.join(', ') +
-          '. They are recorded and ignored.', { state_key: stateHash });
-      }
-      /* Recovery must be visible: a working answer clears any earlier outage flag. */
-      if (jevHealth.lastError) jevHealth.lastError = null;
-      if (parsed.warnings.length) {
-        logNoteOnce('jev-answer-note:' + parsed.warnings.join('|'), 'JEV', 'warn',
-          'Jev answer notes: ' + parsed.warnings.join(' '), { state_key: stateHash, atoms: parsed.atoms });
-      }
-    } catch (error) {
-      if (error && error.kind === 'aborted') throw error;
-      if (!isProbe) Telemetry.jevErrors++;
-      const reason = summarizeError(error);
-      const diagnosis = networkFailureKind(error);
-      if (diagnosis) {
-        const hint = networkFailureHint(diagnosis);
-        if (!isProbe) jevHealth.lastError = networkFailureLabel(diagnosis);
-        log('NET', isProbe ? 'info' : 'error',
-          (isProbe ? '[self-test] deliberate failure, proving the doctrine: ' : 'Jev call did not complete: ') + hint,
-          { url: config.typesafeUrl, state_key: stateHash, reason: reason });
-        const blocked = new ApiError('network', 'System 1 (Jev) unreachable: ' + hint +
-          ' The harness will not invent leaf values.');
-        blocked.networkDiagnosis = diagnosis;
-        throw blocked;
-      }
-      log('NET', 'error', 'Jev call failed (' + reason + '). No local evaluator exists by design: the run cannot continue without System 1.',
-        { url: config.typesafeUrl, state_key: stateHash });
-      throw new ApiError((error && error.kind) ? error.kind : 'network',
-        'System 1 (Jev) unavailable: ' + reason + ' - fix the endpoint, API key or model; the harness will not invent leaf values.');
-    } finally {
-      if (slotHeld) releaseJevSlot();
+  const live = evaluation.provenance === 'live';
+  const meta = jevResponseMeta.get(evaluation.answers) || {};
+  const atoms = atomsOf(evaluation.answers, battery);
+  if (live) {
+    const band = confidenceBand(evaluation.confidence);
+    log('JEV', confidenceLevelFor(evaluation.confidence),
+      (band === 'low' ? 'LOW CONFIDENCE (below the ' + round(rules.confidenceFloor, 2) +
+        ' evidence floor; it counts as uncertain evidence for the learner and never changes PLAY pruning): ' : '') +
+      'Jev answers ' + stateHash + ' -> ' + valueAtoms(battery).map(function (key) { return key + ' ' + round(atoms[key], 3); }).join(', ') +
+      ' | confidence ' + (evaluation.confidence === null ? 'not reported' : evaluation.confidence) +
+      ' | ' + (meta.latencyMs || 0) + ' ms' + (meta.model ? ' | ' + meta.model : ''),
+      { confidence: evaluation.confidence, state_key: stateHash, atoms: atoms, types: answerTypes(evaluation.answers), usage: meta.usage || null });
+    if (meta.unusedIds && meta.unusedIds.length) {
+      log('JEV', 'warn', 'Jev answered ids this battery does not declare: ' + meta.unusedIds.join(', ') +
+        '. They are recorded and ignored.', { state_key: stateHash });
     }
+    /* Recovery must be visible: a working answer clears any earlier outage flag. */
+    if (jevHealth.lastError) jevHealth.lastError = null;
+    if (meta.warnings && meta.warnings.length) {
+      logNoteOnce('jev-answer-note:' + meta.warnings.join('|'), 'JEV', 'warn',
+        'Jev answer notes: ' + meta.warnings.join(' ') + ' (the neutral 0.5 composes in their place).', { state_key: stateHash, atoms: atoms });
+    }
+  } else {
+    /* A reused judgment: the same measured vector (or the same question already in flight) was paid for once. */
+    Telemetry.jevCacheHits++;
+    Telemetry.jevVectorCacheHits++;
   }
 
   /* Composition level: recomputed per rule set, in code, with no network call. */
-  const valueKey = inferenceKey + '|' + weightsHash(rules.weights);
+  /* Per STATE, as before: a second board that reuses a judgment through its vector is still reported as a
+     vector reuse (cached-vector), never as this board's own composed value. */
+  const valueKey = stateHash + '|' + evaluation.judgmentKey + '|' + weightsHash(rules.weights);
   const cachedValue = jevValueCache.get(valueKey);
   if (cachedValue) {
     Telemetry.jevValueCacheHits++;
     return Object.assign({}, cachedValue, { source: 'cached-value', cached: true });
   }
   const result = {
-    winProbability: round(composeLeafValue(inference.atoms, rules.weights), 4),
-    confidence: inference.confidence,
-    source: vectorReused ? 'cached-vector' : (inferenceFromCache ? 'cached-answer' : 'live'),
-    atoms: inference.atoms,
+    winProbability: evaluation.value,
+    confidence: evaluation.confidence,
+    source: live ? 'live' : 'cached-vector',
+    atoms: atoms,
     /* The measured facts that produced this judgement: the evidence a later formula reuses. */
-    measured: measured.values,
-    measuredDeclared: measured.count,
+    measured: evaluation.observation.values,
+    measuredDeclared: evaluation.observation.count,
     formulaHash: plan.hash,
     judgmentFormulaHash: plan.judgmentHash,
     formulaWarnings: plan.warnings,
-    observed: inference.observed,
-    policy: inference.policy || null,
-    model: inference.model,
-    usage: inference.usage,
+    observed: answerTypes(evaluation.answers),
+    policy: null,
+    model: meta.model || null,
+    usage: meta.usage || null,
     cached: false,
-    latencyMs: inference.latencyMs || 0
+    latencyMs: meta.latencyMs || 0
   };
   cacheSet(jevValueCache, valueKey, result);
-  if (inferenceFromCache) {
-    /* The sanctioned case: new weights composed over answers Jev already produced, with
-       no extra inference (docs: "changing a weight ... need not rerun inference"). */
-    Telemetry.jevRecompositions++;
-  }
+  /* The sanctioned case: new weights composed over answers Jev already produced, with no extra inference
+     (docs: "changing a weight ... need not rerun inference"). */
+  if (!live) Telemetry.jevRecompositions++;
   return result;
 }
 /* ============================================================================
@@ -5591,49 +5697,12 @@ function toWireState(state) {
    2. the most recent Jev value seen for the child state (transposition value hints).
    Ties fall back to stable order so searches stay deterministic. */
 function moveKey(move) { return FOX.moveKey(move); }
-function orderMoves(state, moves, ctx, prior) {
-  const hintRank = {};
-  const hintLine = (ctx && ctx.hintLine) ? ctx.hintLine : [];
-  hintLine.forEach(function (hint, index) { hintRank[moveKey(hint)] = index; });
-  const maximizing = state.turn === SIDE_CATS;
-  const policy = prior || null;
-  const scored = moves.map(function (move, index) {
-    const child = applyMove(state, move);
-    const hint = hintRank[moveKey(move)];
-    const known = ctx && ctx.valueHints ? ctx.valueHints.get(stateKey(child)) : undefined;
-    const p = policy ? policy[moveKey(move)] : undefined;
-    return {
-      move: move,
-      index: index,
-      policy: (typeof p === 'number') ? p : null,
-      hint: (hint === undefined) ? Number.MAX_SAFE_INTEGER : hint,
-      terminalFirst: isTerminal(child).over ? 1 : 0,
-      value: (typeof known === 'number') ? known : null
-    };
-  });
-  scored.sort(function (a, b) {
-    /* Jev's own ranking comes first: it is the only opinion about moves that exists here. */
-    if (a.policy !== null && b.policy !== null && a.policy !== b.policy) return b.policy - a.policy;
-    if ((a.policy === null) !== (b.policy === null)) return a.policy === null ? 1 : -1;
-    if (a.hint !== b.hint) return a.hint - b.hint;
-    if (a.terminalFirst !== b.terminalFirst) return b.terminalFirst - a.terminalFirst;
-    if (a.value !== null && b.value !== null && a.value !== b.value) return maximizing ? (b.value - a.value) : (a.value - b.value);
-    return a.index - b.index;
-  });
-  return scored.map(function (entry) { return entry.move; });
-}
+function orderMoves(state, moves, ctx, prior) { return Neurosym.orderMoves(state, moves, ctx, prior, SEARCH_WORLD); }
 /* The value is only as good as the least trustworthy leaf on its principal
    variation, so confidence propagates as the worst-case (Pareto) sample. */
 /* Confidence now comes from Jev only, and it can be absent (Noul answers carry none).
    A null confidence means "no uncertainty signal": no escalation and no invented number. */
-function calibrateConfidence(samples, depthRemaining) {
-  const usable = (samples || []).filter(function (value) { return typeof value === 'number' && Number.isFinite(value); });
-  if (!usable.length) return null;
-  const floor = Math.min.apply(null, usable);
-  const blended = 0.65 * floor + 0.35 * mean(usable);
-  const depthPenalty = 1 - 0.02 * Math.max(0, depthRemaining || 0);
-  return round(clamp(blended * depthPenalty, 0, 1), 4);
-}
+function calibrateConfidence(samples, depthRemaining) { return Neurosym.calibrateConfidence(samples, depthRemaining); }
 function createSearchContext(options) {
   const opts = options || {};
   const rules = opts.rules || DEFAULT_RULES;
@@ -5694,52 +5763,17 @@ function policyAggregateMode(battery) {
 }
 /* A Jev distribution normalised to a probability vector. An empty or all-zero distribution yields an
    empty map, never a fabricated uniform one: silence is not a uniform opinion. */
-function normaliseDistribution(distribution) {
-  const out = {};
-  let sum = 0;
-  Object.keys(distribution || {}).forEach(function (key) {
-    const value = distribution[key];
-    if (typeof value === 'number' && Number.isFinite(value) && value > 0) { out[key] = value; sum += value; }
-  });
-  if (sum <= 0) return out;
-  Object.keys(out).forEach(function (key) { out[key] = round(out[key] / sum, 6); });
-  return out;
-}
+function normaliseDistribution(distribution) { return Neurosym.normaliseDistribution(distribution); }
 /* The merge is a DECLARED operation and lives in one pure function:
      single        - the first declared policy question decides; the others are reported as ignored.
      weighted_mean - every normalised distribution is averaged with the policy weights (a move only one
                      question mentions keeps only its share), then renormalised. An average, never a
                      maximum: no single question can dictate the ordering with one bull claim. */
-function mergePolicyDistributions(entries, mode, policyWeights) {
-  const list = (entries || []).filter(function (entry) { return entry && entry.distribution; });
-  if (!list.length) return null;
-  if (mode !== 'weighted_mean') {
-    return {
-      mode: 'single',
-      prior: normaliseDistribution(list[0].distribution),
-      used: [list[0].id],
-      ignored: list.slice(1).map(function (entry) { return entry.id; })
-    };
-  }
-  const weights = policyWeights || {};
-  const merged = {};
-  let sum = 0;
-  list.forEach(function (entry) {
-    const weight = Number.isFinite(weights[entry.id]) ? weights[entry.id] : round(1 / list.length, 4);
-    sum += weight;
-    const normalised = normaliseDistribution(entry.distribution);
-    Object.keys(normalised).forEach(function (key) {
-      merged[key] = (merged[key] || 0) + weight * normalised[key];
-    });
-  });
-  if (sum <= 0) return null;
-  Object.keys(merged).forEach(function (key) { merged[key] = round(merged[key] / sum, 6); });
-  return { mode: 'weighted_mean', prior: merged, used: list.map(function (entry) { return entry.id; }), ignored: [] };
-}
+function mergePolicyDistributions(entries, mode, policyWeights) { return Neurosym.mergePolicyDistributions(entries || [], mode, policyWeights); }
 /* The search uses EVERY legal move. The only thing Jev's policy prior does is order them, which
    is free of correctness risk: ordering cannot change what minimax returns, only how fast the
-   alpha-beta bounds close. A width cut would trade correctness for speed, and a game is the test,
-   so the harness does not cut. */
+   alpha-beta bounds close. The request (the legal moves of the subject as options, the board, the
+   declared merge) is the library's Evaluator.prior; the bookkeeping is this file's. */
 async function policyPriorFor(state, rules, ctx) {
   if (!ctx.policyDepth) return null;
   const battery = rules.battery || DEFAULT_BATTERY;
@@ -5748,14 +5782,14 @@ async function policyPriorFor(state, rules, ctx) {
   const key = stateKey(state);
   if (ctx.priors.has(key)) return ctx.priors.get(key);
   if (isTerminal(state).over) { ctx.priors.set(key, null); return null; }
-  const jev = await evaluateWithJev(state, rules, { signal: ctx.signal, includePolicy: true });
-  const entries = [];
-  agg.ids.forEach(function (id) {
-    const entry = jev.policy ? jev.policy[id] : null;
-    if (!entry) { Telemetry.policyMisses++; return; }
-    entries.push({ id: id, distribution: entry.distribution });
-  });
-  const merge = mergePolicyDistributions(entries, agg.mode, rules.policyWeights);
+  let merge = null;
+  try {
+    merge = await system1Evaluator(false).prior(libraryFormulaOf(compileRuleFormula(rules)), state, ctx.signal || undefined);
+  } catch (error) {
+    throw system1Failure(error, false, key);
+  }
+  const answered = merge ? merge.used.concat(merge.ignored) : [];
+  agg.ids.forEach(function (id) { if (answered.indexOf(id) < 0) Telemetry.policyMisses++; });
   if (merge) {
     ctx.policyMerges = (ctx.policyMerges || 0) + 1;
     ctx.policyMergeMode = merge.mode;
@@ -5764,6 +5798,13 @@ async function policyPriorFor(state, rules, ctx) {
         'Policy merge is "single": ' + merge.used[0] + ' decides the ordering and ' + merge.ignored.join(', ') +
         ' is ignored. Declare aggregate "weighted_mean" on the policy questions to average them with policyWeights instead.');
     }
+  }
+  else {
+    /* A policy question that could not be materialised is not an error: it is silence the operator should see
+       (its subject was not on move, or had no legal move). */
+    logNoteOnce('policy-not-materialised:' + agg.ids.join(','), 'JEV', 'info',
+      'Policy questions not materialised: ' + agg.ids.join(', ') +
+      '. They are omitted rather than asked about a side that is not on move.', { state_key: key });
   }
   const prior = merge ? merge.prior : null;
   ctx.priors.set(key, prior);
@@ -5794,7 +5835,6 @@ function registerLowConfidence(ctx, state, jev, confidence) {
   }
 }
 async function leafEvaluate(state, rules, ctx, move, path) {
-  ctx.leafEvals++;
   Telemetry.leafNodes++;
   const jev = await evaluateWithJev(state, rules, { signal: ctx.signal });
   /* The line that produced this leaf is evidence about the EXPLORATION, not only about the leaf, and
@@ -7100,6 +7140,7 @@ function resetMeasurementWorld() {
   jevAnswerCache.clear();
   jevVectorCache.clear();
   jevValueCache.clear();
+  jevPriorCache.clear();
   jevBeliefBaseline.clear();
 }
 /* THE CURRICULUM: a rule set that wins consistently has not "finished" - the bar rises. The
@@ -7145,190 +7186,43 @@ function escalateMouseNow(score) {
 /* Bound-aware transpositions. A cut node is not an evaluated value: it is only a proof that the
    value lies above or below one edge of the current window. Keeping that distinction is mandatory
    once PLAY starts pruning often; returning a LOWER/UPPER entry as exact can change the chosen move. */
-function storeTransposition(ctx, key, node) {
-  const previous = ctx.tt.get(key);
-  if (previous) {
-    if (previous.ttBound === TT_EXACT && node.ttBound !== TT_EXACT) return previous;
-    if (previous.ttBound === node.ttBound && node.ttBound === TT_LOWER && previous.value >= node.value) return previous;
-    if (previous.ttBound === node.ttBound && node.ttBound === TT_UPPER && previous.value <= node.value) return previous;
+/* The search engine is the library's (Neurosym.minimax: learning fan-out / PLAY PV alpha-beta, bound-aware
+   transpositions, prior-only ordering). This file owns the context (createSearchContext extends the library's
+   with the learner's bookkeeping), the leaf (leafEvaluate: Eval plus the path and revision journals), the
+   policy prior, the Mouse model and the telemetry, and hands them over as hooks. */
+const SEARCH_WORLD = { world: FOX.foxhounds, maximizer: SIDE_CATS };
+const HARNESS_SEARCH_EVENTS = {
+  node: function () { Telemetry.nodes++; },
+  transpositionHit: function () { Telemetry.transpositionHits++; },
+  transpositionBoundHit: function () { Telemetry.ttBoundHits++; },
+  rootFanout: function (width) { Telemetry.rootFanoutPasses++; Telemetry.rootFanoutBranches += width; },
+  pvPass: function () { Telemetry.pvSearchPasses++; },
+  pvFirstBranch: function () { Telemetry.pvFirstBranches++; },
+  prune: function (remaining, certain) {
+    Telemetry.prunes++;
+    if (certain) Telemetry.certainPrunes++;
+    else Telemetry.jevPrunes++;
+    Telemetry.skippedNodes += remaining;
   }
-  ctx.tt.set(key, node);
-  return node;
-}
-function probeTransposition(ctx, key, alpha, beta) {
-  const cached = ctx.tt.get(key);
-  if (!cached) return { hit: false, alpha: alpha, beta: beta, result: null };
-  Telemetry.transpositionHits++;
-  if (cached.ttBound === TT_EXACT || cached.exact === true) {
-    return { hit: true, alpha: alpha, beta: beta, result: cached };
-  }
-  let nextAlpha = alpha;
-  let nextBeta = beta;
-  if (cached.ttBound === TT_LOWER) nextAlpha = Math.max(nextAlpha, cached.value);
-  else if (cached.ttBound === TT_UPPER) nextBeta = Math.min(nextBeta, cached.value);
-  Telemetry.ttBoundHits++;
+};
+function harnessSearchHooks(rules) {
   return {
-    hit: true, alpha: nextAlpha, beta: nextBeta,
-    result: nextAlpha >= nextBeta ? cached : null
+    world: FOX.foxhounds,
+    maximizer: SIDE_CATS,
+    leaf: function (state, ctx, path) { return leafEvaluate(state, rules, ctx, null, path); },
+    prior: function (state, ctx) { return policyPriorFor(state, rules, ctx); },
+    /* Against the fixed MODEL the Mouse plays ONE move, so its node has one child: the line that will actually
+       be played. Only a HUMAN Mouse is unpredictable, and there the worst case is the game. */
+    respond: function (state, ctx) { return ctx.opponentModel !== 'adversarial' ? predictedMouseMove(state) : null; },
+    keyOf: function (state, depth, ctx) { return stateKey(state) + '|d' + depth + '|r' + ctx.rulesHash; },
+    events: HARNESS_SEARCH_EVENTS
   };
 }
-/* Async minimax. Returns { value, pvConfidence, calibrated, bestMove, line }.
-   PLAY uses principal-child-first parallel alpha-beta. LEARNING deliberately evaluates every leaf
-   because its product is the interpretable rule set and its positive/negative evidence. */
-function siblingBatchWidth(state, depth, moves, ctx) {
-  const count = Math.max(1, (moves || []).length);
-  if (ctx.searchProfile === SEARCH_PLAY_PV_AB) return Math.max(1, Math.min(count, ctx.pruningBatch));
-  if (state.turn === SIDE_CATS && depth === ctx.rootDepth) return count;
-  return Math.max(1, Math.min(count, ctx.parallelBatch));
-}
+function storeTransposition(ctx, key, node) { return Neurosym.storeTransposition(ctx, key, node); }
+function probeTransposition(ctx, key, alpha, beta) { return Neurosym.probeTransposition(ctx, key, alpha, beta, HARNESS_SEARCH_EVENTS); }
+function siblingBatchWidth(state, depth, moves, ctx) { return Neurosym.siblingBatchWidth(state, depth, moves, ctx, SEARCH_WORLD); }
 async function minimax(state, depth, alpha, beta, rules, ctx, path) {
-  ctx.nodes++;
-  const line = Array.isArray(path) ? path : [];
-  Telemetry.nodes++;
-  if (ctx.signal && ctx.signal.aborted) throw new ApiError('aborted', 'Search aborted by the harness.');
-
-  const cacheKey = stateKey(state) + '|d' + depth + '|r' + ctx.rulesHash;
-  const terminal = isTerminal(state);
-  if (terminal.over) {
-    const value = terminal.winner === SIDE_CATS ? 1 : (terminal.winner === SIDE_MOUSE ? 0 : 0.5);
-    const sunk = {
-      value: value, pvConfidence: 1, calibrated: 1, bestMove: null, line: [],
-      samples: [1], terminal: true, depth: 0, exact: true, source: 'terminal',
-      certain: true                    // the rules decide this value, so it is safe to cut on
-    };
-    sunk.ttBound = TT_EXACT;
-    storeTransposition(ctx, cacheKey, sunk);
-    ctx.valueHints.set(stateKey(state), sunk.value);
-    return sunk;
-  }
-
-  const probe = probeTransposition(ctx, cacheKey, alpha, beta);
-  alpha = probe.alpha;
-  beta = probe.beta;
-  if (probe.result) return probe.result;
-
-  if (depth <= 0) {
-    const leaf = await leafEvaluate(state, rules, ctx, null, line);
-    leaf.ttBound = TT_EXACT;
-    storeTransposition(ctx, cacheKey, leaf);
-    return leaf;
-  }
-
-  const maximizing = state.turn === SIDE_CATS;
-  /* A prior is only asked for near the root, where it can order the frontier that actually
-     decides the move. Jev's ranking comes first, this file owns no move opinion. */
-  const withinPolicy = ctx.policyDepth > 0 && (ctx.rootDepth - depth) < ctx.policyDepth;
-  const prior = withinPolicy ? await policyPriorFor(state, rules, ctx) : null;
-  let legal = legalMovesForSide(state, state.turn);
-  /* Against the fixed MODEL the Mouse plays ONE move (see the Mouse model), so expanding every legal
-     Mouse move solves a different (and much harder) game than the one being scored. Both the tree
-     and the meaning of V(s) change here: V(s) becomes the value of the line that will actually be
-     played. A HUMAN Mouse is the only unpredictable one, and there the worst case is the game. */
-  if (!maximizing && ctx.opponentModel !== 'adversarial' && legal.length > 1) {
-    const predicted = predictedMouseMove(state);
-    if (predicted) legal = [predicted];
-  }
-  const moves = orderMoves(state, legal, ctx, prior);
-  let best = null;
-  let workingAlpha = alpha;
-  let workingBeta = beta;
-  let cutoffReached = false;
-  const batchWidth = siblingBatchWidth(state, depth, moves, ctx);
-  const pruningSearch = ctx.searchProfile === SEARCH_PLAY_PV_AB;
-  const fullRootFanout = !pruningSearch && maximizing && depth === ctx.rootDepth && moves.length > 1;
-  if (fullRootFanout) {
-    Telemetry.rootFanoutPasses++;
-    Telemetry.rootFanoutBranches += moves.length;
-    ctx.rootFanoutWidth = moves.length;
-  }
-
-  if (pruningSearch && depth === ctx.rootDepth) Telemetry.pvSearchPasses++;
-  let i = 0;
-  while (i < moves.length) {
-    if (ctx.signal && ctx.signal.aborted) throw new ApiError('aborted', 'Search aborted.');
-    /* The first child is the bound setter. Only after its exact result is known may siblings profit
-       from the new window. Later children retain bounded parallelism so Jev slots do not sit idle. */
-    const width = pruningSearch && i === 0 ? 1 : batchWidth;
-    const batch = moves.slice(i, i + width);
-    if (pruningSearch && i === 0 && moves.length > 1) Telemetry.pvFirstBranches++;
-    /* The path is built PER BRANCH: siblings must never see each other line, which is exactly what
-       makes "the boards of the path down to this leaf" true rather than approximated. */
-    const children = await Promise.all(batch.map(function (move) {
-      const child = applyMove(state, move);
-      return minimax(child, depth - 1, workingAlpha, workingBeta, rules, ctx,
-        line.concat([{ state: child, move: move }]));
-    }));
-    for (let j = 0; j < children.length; j++) {
-      const child = children[j];
-      const better = (best === null) || (maximizing ? child.value > best.value : child.value < best.value);
-      if (better) {
-        best = {
-          value: child.value,
-          pvConfidence: child.pvConfidence,
-          calibrated: child.calibrated,
-          /* `best` is a shallow copy, so it must carry the child's certainty and provenance:
-             without them a cut on a forced-trap line looks like a cut on a Jev judgment. */
-          certain: child.certain === true,
-          source: child.source,
-          depth: child.depth,
-          bestMove: batch[j],
-          line: [batch[j]].concat(child.line),
-          samples: child.samples.slice(0)
-        };
-      }
-      if (maximizing) workingAlpha = Math.max(workingAlpha, best.value);
-      else workingBeta = Math.min(workingBeta, best.value);
-    }
-    i += batch.length;
-    const windowClosed = maximizing ? (workingAlpha >= workingBeta) : (workingBeta <= workingAlpha);
-    const remaining = moves.length - i;
-    /* Alpha-beta is exact relative to the frozen Eval(R,s) scalar even when Jev reports low
-       confidence. Confidence is evidence for learning, not an interval bound. LEARNING never enters
-       this branch; PLAY may cut only after a Jev/rules-derived window is actually closed. */
-    if (pruningSearch && windowClosed && remaining > 0 && best) {
-      Telemetry.prunes++;
-      if (best.certain === true) Telemetry.certainPrunes++;
-      else Telemetry.jevPrunes++;
-      Telemetry.skippedNodes += remaining;
-      ctx.prunes = (ctx.prunes || 0) + 1;
-      cutoffReached = true;
-      break;
-    }
-  }
-
-  if (best === null) {
-    /* Defensive: a node whose side has no legal move returns a neutral, untrusted
-       value instead of crashing the search. The rules layer resolves the actual
-       turn pass (see passTurn). */
-    const stalled = {
-      value: 0.5, pvConfidence: 0.5, calibrated: 0.5, bestMove: null, line: [],
-      samples: [0.5], terminal: false, depth: depth, exact: true, source: 'stalemate',
-      certain: true                    // fixed by the rules (no legal move), not a Jev judgment
-    };
-    stalled.ttBound = TT_EXACT;
-    storeTransposition(ctx, cacheKey, stalled);
-    return stalled;
-  }
-
-  const node = {
-    value: round(best.value, 4),
-    pvConfidence: round(best.pvConfidence, 4),
-    calibrated: calibrateConfidence(best.samples, ctx.depth - depth + 1),
-    bestMove: best.bestMove,
-    line: best.line,
-    samples: best.samples,
-    /* The value IS the best child's value, so its certainty is inherited: a line that ends in a
-       forced trap is certain even when the leaves around it were judged with low confidence. */
-    certain: best.certain === true,
-    terminal: false,
-    depth: depth,
-    exact: !cutoffReached,
-    ttBound: cutoffReached ? (maximizing ? TT_LOWER : TT_UPPER) : TT_EXACT,
-    source: 'search'
-  };
-  storeTransposition(ctx, cacheKey, node);
-  ctx.valueHints.set(stateKey(state), node.value);   // ordering hint for the next pass
-  return node;
+  return Neurosym.minimax(harnessSearchHooks(rules), ctx, state, depth, alpha, beta, Array.isArray(path) ? path : []);
 }
 /* Iterative deepening: every pass is a full Jev-evaluated search, and each pass orders
    the next one by its own principal variation. All ordering evidence still comes from
@@ -7815,6 +7709,7 @@ function resetHarness(keepScore) {
   jevAnswerCache.clear();
   jevVectorCache.clear();
   jevValueCache.clear();
+  jevPriorCache.clear();
   ruleFormulaCache.clear();
   compiledMeasureCache.clear();
   Telemetry.reset();
@@ -9676,6 +9571,7 @@ async function runAsyncSelfTest(checks) {
      chip: a self-test must never look like a real outage. */
     jevAnswerCache.clear();
   jevValueCache.clear();
+  jevPriorCache.clear();
   /* Vector cache too: a rule set with observations can hand back a measured judgement
      even when the inference cache is cold, so a self-test "unreachable" probe must not
      be answered by a leftover vector entry. */

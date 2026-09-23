@@ -147,7 +147,7 @@ export function renderBoardAscii(state: FoxState): string {
 }
 
 /** The position as the harness sends it to Jev when a question needs the board (toWireState). */
-export function describeFoxState(state: FoxState): Record<string, unknown> {
+export function describeFoxState(state: FoxState, context?: Readonly<Record<string, unknown>>): Record<string, unknown> {
   const o = outcome(state);
   return {
     rules_of_the_game: RULES_OF_THE_GAME,
@@ -157,6 +157,7 @@ export function describeFoxState(state: FoxState): Record<string, unknown> {
     side_to_move: state.turn,
     ply: state.ply,
     rearmost_cat_row: minCatRow(state),
+    opponent: context?.opponent ?? null,
     rules_engine_says: o.over ? 'the game is already over: ' + o.winner + ' wins (' + o.reason + ')' : 'the game is in progress'
   };
 }
