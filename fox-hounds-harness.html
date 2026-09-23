@@ -578,64 +578,112 @@ var Neurosym = (() => {
   var browser_exports = {};
   __export(browser_exports, {
     ApiError: () => ApiError,
+    CONSENSUS_QUORUM: () => CONSENSUS_QUORUM,
+    CONSENSUS_VOTES: () => CONSENSUS_VOTES,
     CORE_DIALECT_ID: () => CORE_DIALECT_ID,
     CORE_REDUCERS: () => CORE_REDUCERS,
+    EVALUATED_RULE_FIELDS: () => EVALUATED_RULE_FIELDS,
     Evaluator: () => Evaluator,
     FORMULA_FORMAT: () => FORMULA_FORMAT,
     FORMULA_FORMAT_VERSION: () => FORMULA_FORMAT_VERSION,
     JEV_DEFAULT_URL: () => JEV_DEFAULT_URL,
     JEV_EVALUATION_CONTRACT: () => JEV_EVALUATION_CONTRACT,
+    JUDGE_CONSENSUS: () => JUDGE_CONSENSUS,
+    JUDGE_MEASURED: () => JUDGE_MEASURED,
     JevJudge: () => JevJudge,
     LEARNING_FANOUT: () => LEARNING_FANOUT,
     MeasurementError: () => MeasurementError,
+    NARROWABLE_KINDS: () => NARROWABLE_KINDS,
     Observer: () => Observer,
+    PATH_COINFLIP_MARGIN: () => PATH_COINFLIP_MARGIN,
+    PATH_EXTREME_MARGIN: () => PATH_EXTREME_MARGIN,
+    PATH_TIE_MARGIN: () => PATH_TIE_MARGIN,
     PLAY_PV_ALPHA_BETA: () => PLAY_PV_ALPHA_BETA,
+    PREFILTER_TOLERANCE: () => PREFILTER_TOLERANCE,
+    REVISION_MIN_DELTA: () => REVISION_MIN_DELTA,
+    TRIGGER_CLASSES: () => TRIGGER_CLASSES,
     TT_EXACT: () => TT_EXACT,
     TT_LOWER: () => TT_LOWER,
     TT_UPPER: () => TT_UPPER,
+    appendReflection: () => appendReflection,
+    beliefOf: () => beliefOf,
     calibrateConfidence: () => calibrateConfidence,
+    changeKinds: () => changeKinds,
+    chatRequestBody: () => chatRequestBody,
     checkFormula: () => checkFormula,
     clamp: () => clamp,
+    classifyTrigger: () => classifyTrigger,
     cloneJson: () => cloneJson,
     compose: () => compose,
+    consensusPayload: () => consensusPayload,
     coreDialect: () => coreDialect,
     createSearchContext: () => createSearchContext,
+    decisiveness: () => decisiveness,
     deepFreeze: () => deepFreeze,
     deepen: () => deepen,
     defaultTerminalValue: () => defaultTerminalValue,
+    describeChange: () => describeChange,
+    describeWeightsDelta: () => describeWeightsDelta,
+    diffFormulas: () => diffFormulas,
     evaluationConfidence: () => evaluationConfidence,
     evaluatorHooks: () => evaluatorHooks,
     fetchJson: () => fetchJson,
+    foldAtomStat: () => foldAtomStat,
     formulaHash: () => formulaHash,
     foxhounds: () => foxhounds_exports,
+    hasEvaluableChange: () => hasEvaluableChange,
     hashString: () => hashString,
     jevWireQuestions: () => jevWireQuestions,
     jevWireState: () => jevWireState,
     jsFunctionRunner: () => jsFunctionRunner,
+    judgeConsensus: () => judgeConsensus,
+    judgeMeasured: () => judgeMeasured,
     judgmentHash: () => judgmentHash,
     makeFormula: () => makeFormula,
     materializeRules: () => materializeRules,
     mergePolicyDistributions: () => mergePolicyDistributions,
     minimax: () => minimax,
+    narrowFormula: () => narrowFormula,
+    nextVersion: () => nextVersion,
     normaliseDistribution: () => normaliseDistribution,
     normalizeWeights: () => normalizeWeights,
     opDialect: () => opDialect,
+    openAiChatClient: () => openAiChatClient,
     orderMoves: () => orderMoves,
     parseJevAnswers: () => parseJevAnswers,
     parseJsonLoose: () => parseJsonLoose,
+    parseVote: () => parseVote,
     pickNumber: () => pickNumber,
     placeholdersOf: () => placeholdersOf,
     policyRuleIds: () => policyRuleIds,
+    prefilter: () => prefilter,
     probeTransposition: () => probeTransposition,
+    reflectionWindow: () => reflectionWindow,
+    replayOnEvidence: () => replayOnEvidence,
+    reviseBelief: () => reviseBelief,
+    revisionsByState: () => revisionsByState,
     round: () => round,
+    runAttempts: () => runAttempts,
     searchBestMove: () => searchBestMove,
+    selectCases: () => selectCases,
+    settlePolicyWeights: () => settlePolicyWeights,
+    settleWeights: () => settleWeights,
+    shortenText: () => shortenText,
     siblingBatchWidth: () => siblingBatchWidth,
     specHash: () => specHash,
     stableStringify: () => stableStringify,
     storeTransposition: () => storeTransposition,
     substitute: () => substitute,
+    toFormulaDiff: () => toFormulaDiff,
+    trigger: () => trigger,
+    truthLabelCounts: () => truthLabelCounts,
+    usableCases: () => usableCases,
+    validateEvidenceRef: () => validateEvidenceRef,
     valueOption: () => valueOption,
-    valueRuleIds: () => valueRuleIds
+    valueRuleIds: () => valueRuleIds,
+    versionOf: () => versionOf,
+    witness: () => witness,
+    witnessRow: () => witnessRow
   });
 
   // src/core/types.ts
@@ -673,8 +721,8 @@ var Neurosym = (() => {
     return value;
   }
   function round(value, digits) {
-    const f = Math.pow(10, digits);
-    return Math.round(value * f) / f;
+    const f = Math.pow(10, Number.isFinite(digits) ? digits : 4);
+    return Math.round((Number(value) + Number.EPSILON) * f) / f;
   }
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -1972,6 +2020,750 @@ var Neurosym = (() => {
       onPass: ({ depth, result, ctx }) => passes.push({ depth, result, ctx, stats: stats.current, elapsedMs: Math.round(clock3() - ctx.startedAt) })
     });
     return { best: passes[passes.length - 1].result, passes };
+  }
+
+  // src/learn/diff.ts
+  var EVALUATED_RULE_FIELDS = ["type", "used_as", "option", "options_from", "subject", "aggregate"];
+  var NARROWABLE_KINDS = ["weights", "policy_weights", "confidence_floor"];
+  var json = (v) => JSON.stringify(v === void 0 ? null : v);
+  var rulesOf = (f) => f && f.rules || {};
+  var observationsOf = (f) => f && f.observations && typeof f.observations === "object" && !Array.isArray(f.observations) ? f.observations : {};
+  function versionOf(f) {
+    const v = f?.meta?.version;
+    return typeof v === "number" && Number.isFinite(v) ? v : void 0;
+  }
+  function diffFormulas(before, after) {
+    const rulesBefore = rulesOf(before);
+    const rulesAfter = rulesOf(after);
+    const changes = {};
+    const push = (key, id) => {
+      (changes[key] || (changes[key] = [])).push(id);
+    };
+    for (const id of Object.keys(rulesAfter)) {
+      const a = rulesBefore[id];
+      const b = rulesAfter[id] || {};
+      if (!a) {
+        push("added", id);
+        continue;
+      }
+      const moved = [];
+      for (const field of EVALUATED_RULE_FIELDS) if (json(a[field]) !== json(b[field])) moved.push(field);
+      if (String(a.instructions || "") !== String(b.instructions || "")) moved.push("instructions");
+      if (JSON.stringify(a.criteria || {}) !== JSON.stringify(b.criteria || {})) moved.push("criteria");
+      if (moved.length) changes[id] = moved;
+    }
+    for (const id of Object.keys(rulesBefore)) if (!rulesAfter[id]) push("removed", id);
+    if (JSON.stringify(before.weights || {}) !== JSON.stringify(after.weights || {})) changes.weights = true;
+    if (JSON.stringify(before.policy_weights || {}) !== JSON.stringify(after.policy_weights || {})) changes.policy_weights = true;
+    if (before.confidence_floor !== after.confidence_floor) changes.confidence_floor = true;
+    const obsBefore = observationsOf(before);
+    const obsAfter = observationsOf(after);
+    const specText = (decl) => stableStringify({ spec: decl?.spec === void 0 ? null : decl.spec });
+    for (const id of Object.keys(obsAfter)) {
+      if (!Object.prototype.hasOwnProperty.call(obsBefore, id)) push("obs_added", id);
+      else if (specText(obsAfter[id]) !== specText(obsBefore[id])) push("obs_changed", id);
+    }
+    for (const id of Object.keys(obsBefore)) if (!Object.prototype.hasOwnProperty.call(obsAfter, id)) push("obs_removed", id);
+    return changes;
+  }
+  function changeKinds(changes) {
+    const kinds = [];
+    for (const key of Object.keys(changes || {})) {
+      const value = changes[key];
+      if (key === "added") kinds.push("battery.added:" + value.join("|"));
+      else if (key === "removed") kinds.push("battery.removed:" + value.join("|"));
+      else if (key === "weights" || key === "policy_weights" || key === "confidence_floor") kinds.push(key);
+      else if (key === "obs_added") kinds.push("observations.added:" + value.join("|"));
+      else if (key === "obs_removed") kinds.push("observations.removed:" + value.join("|"));
+      else if (key === "obs_changed") kinds.push("observations.changed:" + value.join("|"));
+      else kinds.push("battery." + value.join("+") + ":" + key);
+    }
+    return kinds;
+  }
+  function hasEvaluableChange(before, after) {
+    return changeKinds(diffFormulas(before, after)).length > 0;
+  }
+  function shortenText(value, max) {
+    const text = String(value === void 0 || value === null ? "" : value).replace(/\s+/g, " ").trim();
+    return text.length > max ? text.slice(0, max - 1) + "~" : text;
+  }
+  function describeCriteriaDelta(before, after) {
+    const a = before || {};
+    const b = after || {};
+    if (Array.isArray(a) || Array.isArray(b)) return "levels " + (Array.isArray(a) ? a.length : 0) + " -> " + (Array.isArray(b) ? b.length : 0);
+    const keys = Object.keys(b).filter((k) => String(a[k]) !== String(b[k]));
+    return keys.length ? "rewrote " + keys.join("/") : "shape only";
+  }
+  function describeWeightsDelta(before, after) {
+    const a = before || {};
+    const b = after || {};
+    const ids = [.../* @__PURE__ */ new Set([...Object.keys(a), ...Object.keys(b)])];
+    return ids.map((id) => id + " " + (Number.isFinite(a[id]) ? a[id] : 0) + "->" + (Number.isFinite(b[id]) ? b[id] : 0)).join(", ");
+  }
+  function describeChange(before, after) {
+    const changes = diffFormulas(before, after);
+    const kinds = changeKinds(changes);
+    if (!kinds.length) return "no evaluable change (prose/rationale only)";
+    const rulesBefore = rulesOf(before);
+    const rulesAfter = rulesOf(after);
+    const obsBefore = observationsOf(before);
+    const obsAfter = observationsOf(after);
+    const details = [];
+    const obsDelta = (id, kind) => {
+      const ao = obsBefore[id]?.spec?.op || "?";
+      const bo = obsAfter[id]?.spec?.op || "?";
+      if (kind === "obs_added") return "observation " + id + " declared (" + bo + ", range " + JSON.stringify(obsAfter[id]?.range || null) + ")";
+      if (kind === "obs_removed") return "observation " + id + " removed (was " + ao + ")";
+      return "observation " + id + " re-specified (" + ao + " -> " + bo + ")";
+    };
+    for (const key of Object.keys(changes)) {
+      if (key === "obs_added" || key === "obs_removed" || key === "obs_changed") {
+        for (const id of changes[key]) details.push(obsDelta(id, key));
+        continue;
+      }
+      if (key === "weights" || key === "policy_weights" || key === "confidence_floor" || key === "added" || key === "removed") continue;
+      const a = rulesBefore[key] || {};
+      const b = rulesAfter[key] || {};
+      for (const field of changes[key]) {
+        if (field === "instructions") details.push(key + '.instructions: "' + shortenText(a.instructions, 70) + '" -> "' + shortenText(b.instructions, 70) + '"');
+        else if (field === "criteria") details.push(key + ".criteria rewritten (" + describeCriteriaDelta(a.criteria, b.criteria) + ")");
+        else details.push(key + "." + field + ": " + String(a[field]) + " -> " + String(b[field]));
+      }
+    }
+    if (changes.added) details.push("new question(s): " + changes.added.join(", "));
+    if (changes.removed) details.push("removed question(s): " + changes.removed.join(", "));
+    if (changes.weights) details.push("weights: " + describeWeightsDelta(before.weights, after.weights));
+    if (changes.policy_weights) {
+      details.push("policy_weights (the merge between policy questions): " + describeWeightsDelta(before.policy_weights || {}, after.policy_weights || {}));
+    }
+    if (changes.confidence_floor) details.push("confidence_floor: " + before.confidence_floor + " -> " + after.confidence_floor);
+    return kinds.join(", ") + " [" + details.join(" | ") + "]";
+  }
+  function toFormulaDiff(before, after) {
+    const changes = diffFormulas(before, after);
+    const kinds = changeKinds(changes);
+    const rulesBefore = rulesOf(before);
+    const rulesAfter = rulesOf(after);
+    const fields = [];
+    for (const key of Object.keys(changes)) {
+      if (key === "weights" || key === "policy_weights" || key === "confidence_floor") {
+        fields.push({ kind: key, id: null, from: null, to: null });
+        continue;
+      }
+      if (key === "added" || key === "removed") {
+        for (const id of changes[key]) {
+          fields.push({ kind: key, id, from: key === "added" ? null : rulesBefore[id] || null, to: key === "removed" ? null : rulesAfter[id] || null });
+        }
+        continue;
+      }
+      if (key === "obs_added" || key === "obs_removed" || key === "obs_changed") {
+        for (const id of changes[key]) {
+          fields.push({
+            kind: key,
+            id,
+            from: key === "obs_added" ? null : observationsOf(before)[id] || null,
+            to: key === "obs_removed" ? null : observationsOf(after)[id] || null
+          });
+        }
+        continue;
+      }
+      for (const field of changes[key]) {
+        const a = rulesBefore[key] || {};
+        const b = rulesAfter[key] || {};
+        fields.push({ kind: field, id: key, from: a[field] === void 0 ? null : a[field], to: b[field] === void 0 ? null : b[field] });
+      }
+    }
+    return {
+      from_version: versionOf(before),
+      to_version: versionOf(after),
+      kinds,
+      fields,
+      narrowable: kinds.filter((k) => NARROWABLE_KINDS.includes(k)),
+      summary: describeChange(before, after)
+    };
+  }
+  var equalShares = (ids) => Object.fromEntries(ids.map((id) => [id, round(1 / ids.length, 4)]));
+  function settleWeights(raw, fallbackWeights, ids, policyIds = []) {
+    const keys = ids.length ? ids.slice() : Object.keys(fallbackWeights || {});
+    const fallback = fallbackWeights || equalShares(keys);
+    const warnings = [];
+    const candidate = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
+    if (!candidate) {
+      warnings.push("Weights were not a JSON object; kept the previous vector.");
+      return { weights: { ...fallback }, warnings };
+    }
+    const weights = {};
+    let sum = 0;
+    for (const key of keys) {
+      const value = candidate[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        const clipped = clamp(value, 0, 1);
+        if (clipped !== value) warnings.push('Weight "' + key + '" clipped to ' + clipped + ".");
+        weights[key] = clipped;
+      } else {
+        const f = fallback[key];
+        weights[key] = typeof f === "number" && Number.isFinite(f) ? f : 0;
+        if (value !== void 0) warnings.push('Weight "' + key + '" was not numeric; kept ' + weights[key] + ".");
+      }
+      sum += weights[key];
+    }
+    for (const key of Object.keys(candidate)) {
+      if (keys.includes(key)) continue;
+      if (policyIds.includes(key)) warnings.push('Weight "' + key + '" ignored: a policy question never enters V(s); its merge weight belongs in "policyWeights".');
+      else warnings.push('Weight "' + key + '" ignored: the battery declares no such question.');
+    }
+    if (sum <= 0) {
+      warnings.push("All weights were zero; reverted to the neutral vector.");
+      return { weights: { ...fallback }, warnings };
+    }
+    for (const key of keys) weights[key] = round(weights[key] / sum, 4);
+    return { weights, warnings };
+  }
+  function settlePolicyWeights(raw, policyIds, fallbackWeights) {
+    const ids = policyIds || [];
+    const fallback = fallbackWeights || {};
+    const warnings = [];
+    if (!ids.length) return { policyWeights: {}, warnings };
+    const candidate = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
+    if (!candidate) {
+      const kept = Object.keys(fallback).length ? { ...fallback } : equalShares(ids);
+      if (raw !== void 0) warnings.push("policyWeights was not a JSON object; kept " + (Object.keys(fallback).length ? "the previous vector." : "an equal share."));
+      return { policyWeights: kept, warnings };
+    }
+    const weights = {};
+    let sum = 0;
+    for (const id of ids) {
+      const value = candidate[id];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        const clipped = clamp(value, 0, 1);
+        if (clipped !== value) warnings.push('policyWeights "' + id + '" clipped to ' + clipped + ".");
+        weights[id] = clipped;
+      } else weights[id] = typeof fallback[id] === "number" ? fallback[id] : round(1 / ids.length, 4);
+      sum += weights[id];
+    }
+    for (const key of Object.keys(candidate)) if (!ids.includes(key)) warnings.push('policyWeights "' + key + '" ignored: it is not a declared policy question.');
+    if (sum <= 0) {
+      warnings.push("Every policy weight was zero; reverted to an equal share.");
+      return { policyWeights: equalShares(ids), warnings };
+    }
+    for (const id of ids) weights[id] = round(weights[id] / sum, 4);
+    return { policyWeights: weights, warnings };
+  }
+  function nextVersion(previousVersion, ledgerVersions = []) {
+    let max = typeof previousVersion === "number" && Number.isFinite(previousVersion) ? previousVersion : 0;
+    for (const v of ledgerVersions) if (typeof v === "number" && Number.isFinite(v) && v > max) max = v;
+    return max + 1;
+  }
+  function narrowFormula(previous, candidate, kinds, ledgerVersions = []) {
+    const usable = (kinds || []).filter((k) => NARROWABLE_KINDS.includes(k));
+    if (!usable.length) return null;
+    const narrowed = cloneJson(previous);
+    const settledWarnings = [];
+    if (usable.includes("weights")) {
+      const settled = settleWeights(candidate.weights, previous.weights, valueRuleIds(previous), policyRuleIds(previous));
+      narrowed.weights = settled.weights;
+      settledWarnings.push(...settled.warnings);
+    }
+    if (usable.includes("policy_weights")) {
+      const settled = settlePolicyWeights(candidate.policy_weights, policyRuleIds(previous), previous.policy_weights);
+      narrowed.policy_weights = settled.policyWeights;
+      settledWarnings.push(...settled.warnings);
+    }
+    if (usable.includes("confidence_floor")) narrowed.confidence_floor = candidate.confidence_floor;
+    const candidateWarnings = Array.isArray(candidate.meta?.warnings) ? candidate.meta.warnings : [];
+    narrowed.meta = {
+      ...previous.meta || {},
+      version: nextVersion(versionOf(previous), ledgerVersions),
+      source: "llm-narrowed",
+      rationale: candidate.meta?.rationale,
+      evidence: candidate.meta?.evidence ?? null,
+      warnings: candidateWarnings.concat(settledWarnings),
+      narrowed_from: usable.slice()
+    };
+    return narrowed;
+  }
+
+  // src/learn/judges.ts
+  var JUDGE_MEASURED = "measurement";
+  var PREFILTER_TOLERANCE = 0.01;
+  function usableCases(cases, previousWeights, candidateWeights) {
+    const ids = [.../* @__PURE__ */ new Set([...Object.keys(previousWeights || {}), ...Object.keys(candidateWeights || {})])];
+    return (cases || []).filter((c) => c && c.atoms && ids.every((id) => Number.isFinite(c.atoms[id])));
+  }
+  function decisiveness(cases, weights) {
+    if (!cases.length) return 0;
+    const edges = cases.map((c) => Math.abs(compose(c.atoms || {}, weights).value - 0.5));
+    return edges.reduce((a, b) => a + b, 0) / edges.length;
+  }
+  function prefilter(previous, candidate, cases, tolerance = PREFILTER_TOLERANCE) {
+    const usable = usableCases(cases, previous.weights, candidate.weights);
+    if (usable.length < 2) {
+      return { ok: true, before: null, after: null, cases: usable.length, reason: "not enough composed answers to prefilter (the clean games stay the test)" };
+    }
+    const before = round(decisiveness(usable, previous.weights), 4);
+    const after = round(decisiveness(usable, candidate.weights), 4);
+    const ok = after >= before - tolerance;
+    return {
+      ok,
+      before,
+      after,
+      cases: usable.length,
+      reason: ok ? "prefilter passed: decisiveness over the " + usable.length + " triggering line(s) " + before + " -> " + after : "the candidate would make the composition LESS decisive over the " + usable.length + " line(s) that triggered the consult (" + before + " -> " + after + ", tolerance " + tolerance + ")"
+    };
+  }
+  function judgeMeasured(previous, candidate, options = {}) {
+    const diff = toFormulaDiff(previous, candidate);
+    const base = { judge: JUDGE_MEASURED, votes: null, applied_fields: [], diff };
+    if (!hasEvaluableChange(previous, candidate)) {
+      return { ...base, decision: "reject", reason: "nothing Jev evaluates moved (prose only)" };
+    }
+    const pf = prefilter(previous, candidate, options.cases || [], options.tolerance);
+    const silent = pf.before === null || pf.after === null;
+    const measured = silent ? "the replay was SILENT over " + pf.cases + " triggering line(s) (fewer than 2 usable composed answers - the clean games are the test)" : pf.before + " -> " + pf.after + " over " + pf.cases + " triggering line(s)";
+    if (!pf.ok) return { ...base, decision: "reject", reason: "the replay refuses it: " + pf.reason };
+    if (options.contradicted === true) {
+      return {
+        ...base,
+        decision: "apply",
+        applied_fields: diff.kinds,
+        reason: "it answers a CONTRADICTION between the rules and the value at this ply (" + measured + ")"
+      };
+    }
+    if (!silent && pf.after > pf.before) {
+      return { ...base, decision: "apply", applied_fields: diff.kinds, reason: "the replay measures it as strictly more decisive (" + measured + ")" };
+    }
+    const narrowed = narrowFormula(previous, candidate, diff.narrowable, options.ledgerVersions);
+    if (narrowed) {
+      return {
+        ...base,
+        decision: "narrow",
+        applied_fields: diff.narrowable,
+        narrowed,
+        reason: (silent ? "the replay was SILENT (it measured nothing over the " + pf.cases + " triggering line(s)), so only the " : "the replay cannot measure a gain over the " + pf.cases + " triggering line(s), so only the ") + diff.narrowable.join(", ") + " are applied; the rest is queued for the next attempt"
+      };
+    }
+    return null;
+  }
+
+  // src/learn/gates.ts
+  function validateEvidenceRef(ref, evidence) {
+    if (!evidence) return true;
+    if (!ref || typeof ref !== "object") return false;
+    if (evidence.directive && ref.operator_directive === true) return true;
+    const caseCount = evidence.cases || 0;
+    const truths = evidence.truthKeys || [];
+    const anchor = typeof evidence.anchorKey === "string" ? evidence.anchorKey : null;
+    if (!caseCount && !truths.length && !evidence.directive && !anchor) return true;
+    if (Number.isInteger(ref.case) && ref.case >= 0) {
+      if (caseCount && ref.case < caseCount) return true;
+      if (truths.length && ref.case < truths.length) return true;
+    }
+    if (typeof ref.state_key === "string" && (truths.length || anchor)) {
+      if (anchor && ref.state_key === anchor) return true;
+      if (truths.includes(ref.state_key)) return true;
+    }
+    return false;
+  }
+  var isCode = (decl) => !!decl && !!decl.spec && decl.spec.kind === "code";
+  function replayOnEvidence(observer, observations, entries, options = {}) {
+    const ids = Object.keys(observations || {});
+    const checkTwice = options.checkTwice ?? isCode;
+    const rows = [];
+    const errors = [];
+    (entries || []).forEach((entry, index) => {
+      const caseId = entry?.id ?? null;
+      if (!entry || !entry.state) {
+        errors.push({ case_index: index, case_id: caseId, error: "leaf board is unavailable" });
+        return;
+      }
+      const measured = observer.observe(entry.state, observations);
+      const twice = ids.filter((id) => checkTwice(observations[id]));
+      if (twice.length) {
+        const subset = {};
+        for (const id of twice) subset[id] = observations[id];
+        const again = observer.observe(entry.state, subset);
+        for (const id of twice) {
+          if (Object.prototype.hasOwnProperty.call(measured.values, id) && measured.values[id] !== again.values[id]) {
+            errors.push({
+              case_index: index,
+              case_id: caseId,
+              observation: id,
+              error: "non-deterministic: the same board measured " + measured.values[id] + " and then " + again.values[id]
+            });
+          }
+        }
+      }
+      for (const e of measured.errors) errors.push({ case_index: index, case_id: caseId, observation: e.id, error: e.error });
+      if (measured.count !== ids.length) errors.push({ case_index: index, case_id: caseId, error: "computed " + measured.count + "/" + ids.length + " declared observations" });
+      rows.push({ case_index: index, case_id: caseId, outcome_label: entry.label || "unresolved", measurements: measured.values });
+    });
+    const variation = {};
+    for (const id of ids) {
+      const values = rows.map((r) => r.measurements[id]).filter((v) => Number.isFinite(v));
+      variation[id] = {
+        samples: values.length,
+        min: values.length ? Math.min(...values) : null,
+        max: values.length ? Math.max(...values) : null,
+        spread: values.length ? round(Math.max(...values) - Math.min(...values), 4) : null
+      };
+    }
+    return { valid: rows.length > 0 && errors.length === 0, declared_observations: ids, evaluated_boards: rows.length, rows, variation, errors };
+  }
+
+  // src/learn/evidence.ts
+  var REVISION_MIN_DELTA = 0.05;
+  function beliefOf(value, confidence, atoms, measured, ply) {
+    return {
+      V: round(clamp(value, 0, 1), 4),
+      confidence: confidence === null || confidence === void 0 ? null : round(clamp(confidence, 0, 1), 4),
+      atoms: atoms ? { ...atoms } : null,
+      observations: measured ? { ...measured } : null,
+      ply
+    };
+  }
+  function reviseBelief(previous, current, facts) {
+    if (!previous) return null;
+    const delta = round(current.V - previous.V, 4);
+    if (Math.abs(delta) < (facts.minDelta ?? REVISION_MIN_DELTA)) return null;
+    const atomDelta = {};
+    for (const id of Object.keys(current.atoms || {})) {
+      if (!previous.atoms || !Number.isFinite(previous.atoms[id])) continue;
+      atomDelta[id] = round(current.atoms[id] - previous.atoms[id], 4);
+    }
+    const known = !!(facts.truth && facts.truth.known === true);
+    const winner = known ? facts.truth.winner : null;
+    const againstTruth = !known ? null : winner === facts.maximizer ? delta < 0 : winner !== null && winner !== "draw" ? delta > 0 : null;
+    return {
+      state_key: facts.stateKey,
+      ply: current.ply,
+      side_to_move: facts.sideToMove,
+      prev_V: previous.V,
+      new_V: current.V,
+      delta_V: delta,
+      prev_atoms: previous.atoms,
+      new_atoms: current.atoms,
+      atom_delta: atomDelta,
+      confidence: current.confidence,
+      source: facts.source,
+      oracle: known ? { known: true, winner, plies: facts.truth.plies, reason: facts.truth.reason } : null,
+      against_truth: againstTruth
+    };
+  }
+  function foldAtomStat(stats, revision) {
+    for (const id of Object.keys(revision.atom_delta || {})) {
+      const stat = stats[id] || (stats[id] = { id, revisions: 0, sum: 0, toward_truth: 0, against_truth: 0, unknown: 0 });
+      stat.revisions++;
+      stat.sum += revision.atom_delta[id];
+      if (revision.against_truth === true) stat.against_truth++;
+      else if (revision.against_truth === false) stat.toward_truth++;
+      else stat.unknown++;
+    }
+    return stats;
+  }
+  function witnessRow(id, stat) {
+    const meanDelta = round(stat.sum / stat.revisions, 4);
+    return {
+      id,
+      revisions: stat.revisions,
+      mean_delta: meanDelta,
+      direction: meanDelta >= 0 ? "rising" : "falling",
+      toward_truth: stat.toward_truth,
+      against_truth: stat.against_truth,
+      unknown: stat.unknown
+    };
+  }
+  function witness(stats) {
+    return Object.keys(stats).map((id) => witnessRow(id, stats[id])).sort((a, b) => Math.abs(b.mean_delta) - Math.abs(a.mean_delta));
+  }
+  function truthLabelCounts(revisions) {
+    const counts = { known: 0, toward_truth: 0, against_truth: 0, unknown: 0 };
+    for (const r of revisions || []) {
+      if (!r.oracle || !r.oracle.known) {
+        counts.unknown++;
+        continue;
+      }
+      counts.known++;
+      if (r.against_truth === true) counts.against_truth++;
+      else if (r.against_truth === false) counts.toward_truth++;
+    }
+    return counts;
+  }
+  function revisionsByState(revisions) {
+    const byState = /* @__PURE__ */ new Map();
+    for (const r of revisions || []) {
+      const current = byState.get(r.state_key);
+      if (!current) {
+        byState.set(r.state_key, {
+          state_key: r.state_key,
+          ply: r.ply,
+          side_to_move: r.side_to_move,
+          first_V: r.prev_V,
+          last_V: r.new_V,
+          revisions: 1,
+          atom_delta: { ...r.atom_delta },
+          confidence: r.confidence,
+          oracle: r.oracle,
+          against_truth: r.against_truth
+        });
+        continue;
+      }
+      current.ply = r.ply;
+      current.last_V = r.new_V;
+      current.revisions++;
+      for (const id of Object.keys(r.atom_delta || {})) current.atom_delta[id] = round((current.atom_delta[id] || 0) + r.atom_delta[id], 4);
+      if (r.oracle) current.oracle = r.oracle;
+      if (r.against_truth !== null && r.against_truth !== void 0) current.against_truth = r.against_truth;
+    }
+    const rows = [...byState.values()];
+    for (const row of rows) row.net_V = round(row.last_V - row.first_V, 4);
+    return rows.sort((a, b) => Math.abs(b.net_V) - Math.abs(a.net_V));
+  }
+  var PATH_TIE_MARGIN = 0.15;
+  var PATH_COINFLIP_MARGIN = 0.05;
+  var PATH_EXTREME_MARGIN = 0.35;
+  function selectCases(records, options) {
+    if (!records.length) return [];
+    const tieMargin = options.tieMargin ?? PATH_TIE_MARGIN;
+    const extremeMargin = options.extremeMargin ?? PATH_EXTREME_MARGIN;
+    const floor = options.floor;
+    const chosen = [];
+    const used = /* @__PURE__ */ new Set();
+    const add = (kind, record, why, extra) => {
+      if (!record || used.has(record.state_key) || chosen.length >= options.limit) return;
+      used.add(record.state_key);
+      chosen.push(extra ? { kind, record, why, extra } : { kind, record, why });
+    };
+    const bestPerRoot = {};
+    for (const r of records) if (!bestPerRoot[r.root_move] || r.V > bestPerRoot[r.root_move].V) bestPerRoot[r.root_move] = r;
+    const support = options.bestMoveKey ? bestPerRoot[options.bestMoveKey] : null;
+    const alt = Object.keys(bestPerRoot).filter((k) => k !== options.bestMoveKey).map((k) => bestPerRoot[k]).sort((a, b) => b.V - a.V)[0] || null;
+    const gap = support && alt ? round(support.V - alt.V, 4) : null;
+    if (support) {
+      add("decision_support", support, "this is the line behind the chosen move: the leaf at the end of it returned V " + support.V + (support.confidence === null ? " with no confidence reported" : " at confidence " + support.confidence));
+    }
+    if (alt && gap !== null && Math.abs(gap) <= tieMargin) {
+      add("near_tie", alt, "this alternative line was within " + Math.abs(gap) + " of the chosen one (V " + alt.V + "): the move rests on a difference this small", { gap: Math.abs(gap) });
+    }
+    const withConfidence = records.filter((r) => r.confidence !== null).sort((a, b) => a.confidence - b.confidence);
+    if (withConfidence.length && withConfidence[0].confidence < floor) {
+      const worst = withConfidence[0];
+      add("lowest_confidence", worst, "Jev least trustworthy judgment on this ply: confidence " + worst.confidence + " < floor " + floor + " at V " + worst.V);
+    }
+    const extreme = records.filter((r) => r.confidence !== null && r.confidence < floor && Math.abs(r.V - 0.5) >= extremeMargin).sort((a, b) => Math.abs(b.V - 0.5) - Math.abs(a.V - 0.5))[0];
+    if (extreme) add("overconfident_extreme", extreme, "an emphatic judgment Jev could not back: V " + extreme.V + " at confidence " + extreme.confidence);
+    return chosen;
+  }
+  var TRIGGER_CLASSES = ["contradiction", "coin_flip", "no_belief"];
+  function trigger(cls, text) {
+    return { class: cls, text: String(text), toString() {
+      return this.text;
+    } };
+  }
+  function classifyTrigger(signals) {
+    if (signals.contradiction) return trigger("contradiction", signals.contradiction);
+    const margin = signals.coinflipMargin ?? PATH_COINFLIP_MARGIN;
+    if (signals.nearTieGap !== null && Number.isFinite(signals.nearTieGap) && signals.nearTieGap <= margin) {
+      return trigger("coin_flip", "the decision was a coin-flip: the alternative line was within " + signals.nearTieGap + " of the chosen one");
+    }
+    const c = signals.commit;
+    if (c && c.value < 0.5 && c.confidence !== null && c.confidence < signals.floor) {
+      return trigger("no_belief", "the engine is committing to a move it does not believe in: V " + c.value + " at confidence " + c.confidence + " (floor " + signals.floor + ")");
+    }
+    return null;
+  }
+  function appendReflection(list, next, cap) {
+    const previous = list.length ? list[list.length - 1] : null;
+    if (previous && previous.class === next.class && previous.side_to_move === next.side_to_move) {
+      previous.count = (previous.count || 1) + 1;
+      previous.ply = next.ply;
+      if (next.V !== null && Number.isFinite(next.V)) previous.V = next.V;
+      if (next.confidence !== null && Number.isFinite(next.confidence)) previous.confidence = next.confidence;
+      return { reflection: previous, added: false };
+    }
+    next.count = next.count || 1;
+    list.push(next);
+    if (list.length > cap) list.shift();
+    return { reflection: next, added: true };
+  }
+  function reflectionWindow(list, max) {
+    const byClass = {};
+    for (const cls of TRIGGER_CLASSES) byClass[cls] = 0;
+    for (const r of list) byClass[r.class] = (byClass[r.class] || 0) + (r.count || 1);
+    const kept = list.slice(Math.max(0, list.length - max));
+    return { byClass, kept, omitted: list.length - kept.length };
+  }
+
+  // src/learn/system2.ts
+  var clock4 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
+  function chatRequestBody(options, system, user) {
+    const body = {
+      model: options.model,
+      temperature: clamp(options.temperature ?? 0.3, 0, 2),
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: JSON.stringify(user, null, 2) }
+      ]
+    };
+    if (options.jsonMode) body.response_format = { type: "json_object" };
+    return body;
+  }
+  function openAiChatClient(options) {
+    const read = typeof options === "function" ? options : () => options;
+    return {
+      async complete({ system, user, signal }) {
+        const o = read();
+        o.onRequest?.();
+        if (!o.url) throw new ApiError("network", "No LLM endpoint configured.");
+        const started = clock4();
+        const response = await fetchJson(o.url, {
+          body: chatRequestBody(o, system, user),
+          headers: o.apiKey ? { Authorization: "Bearer " + o.apiKey } : {},
+          timeoutMs: o.timeoutMs ?? 3e4,
+          retries: o.retries ?? 1,
+          signal: signal ?? null,
+          fetch: o.fetch,
+          sleep: o.sleep
+        });
+        const data = response.data;
+        const content = data && data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : null;
+        if (!content) throw new ApiError("parse", "LLM response contained no choices[0].message.content.");
+        const answer = { content, latencyMs: Math.round(clock4() - started), raw: response.data };
+        o.onAnswer?.(answer);
+        return answer;
+      }
+    };
+  }
+  var JUDGE_CONSENSUS = "consensus";
+  var CONSENSUS_VOTES = 3;
+  var CONSENSUS_QUORUM = 2;
+  function parseVote(content) {
+    const parsed = parseJsonLoose(content);
+    const decision = parsed && typeof parsed.decision === "string" ? parsed.decision.toLowerCase() : null;
+    if (decision !== "apply" && decision !== "reject" && decision !== "narrow") {
+      return { decision: null, kinds: [], reason: "unusable answer: " + String(content || "").slice(0, 120) };
+    }
+    const kinds = parsed && Array.isArray(parsed.kinds) ? parsed.kinds.filter((k) => typeof k === "string") : [];
+    return { decision, kinds, reason: String(parsed.reason || "").slice(0, 300) };
+  }
+  function consensusPayload(diff, evidence) {
+    return {
+      task: "judge_rule_diff",
+      instruction: "Decide whether applying this change is justified by the evidence. The rationale of the system that proposed it is deliberately withheld.",
+      proposed_change: { from_version: diff.from_version, to_version: diff.to_version, kinds: diff.kinds, fields: diff.fields, summary: diff.summary },
+      evidence,
+      acceptance_criterion: "The games decide in the end: a change you approve is re-measured, and one with mid-game corrections is re-verified cleanly."
+    };
+  }
+  async function judgeConsensus(diff, payload, options) {
+    const n = options.votes ?? CONSENSUS_VOTES;
+    const quorum = options.quorum ?? CONSENSUS_QUORUM;
+    const votes = { apply: 0, reject: 0, narrow: 0 };
+    const votedKinds = {};
+    const reasons = [];
+    let usable = 0;
+    for (let i = 0; i < n; i++) {
+      try {
+        const answer = await options.client.complete({ system: options.systemPrompt, user: payload, signal: options.signal });
+        const vote = parseVote(answer.content);
+        if (!vote.decision) {
+          reasons.push("unusable: " + vote.reason);
+          continue;
+        }
+        usable++;
+        votes[vote.decision]++;
+        for (const kind of vote.kinds) votedKinds[kind] = (votedKinds[kind] || 0) + 1;
+        reasons.push(vote.decision + (vote.reason ? ": " + vote.reason : ""));
+      } catch (error) {
+        if (error && error.kind === "aborted") throw error;
+        reasons.push("error: " + (options.describeError ? options.describeError(error) : String(error?.message || error)));
+      }
+    }
+    if (!usable) return null;
+    const decision = votes.apply >= quorum ? "apply" : votes.narrow >= quorum ? "narrow" : "reject";
+    const named = diff.narrowable.filter((kind) => (votedKinds[kind] || 0) >= 1);
+    const applied = decision === "narrow" && named.length ? named : decision === "narrow" ? diff.narrowable : decision === "apply" ? diff.kinds : [];
+    return {
+      decision,
+      judge: JUDGE_CONSENSUS,
+      votes,
+      applied_fields: applied,
+      diff,
+      usable,
+      reason: "consensus " + votes.apply + "/" + votes.reject + "/" + votes.narrow + " over " + usable + " usable vote(s) (quorum " + quorum + "/" + n + "): " + reasons.slice(0, 3).join(" | ")
+    };
+  }
+
+  // src/learn/loop.ts
+  async function runAttempts(first, hooks) {
+    let candidate = first;
+    let best = null;
+    let incumbent = null;
+    let escalations = 0;
+    let attempts = 0;
+    const finish = (accepted, stoppedBy) => ({ accepted, incumbent, best, attempts, escalations, stoppedBy });
+    const climb = (score) => {
+      if (!hooks.escalate || !hooks.escalate(score)) return false;
+      incumbent = score;
+      escalations++;
+      return true;
+    };
+    for (let attempt = 1; attempt <= hooks.budget; attempt++) {
+      if (!hooks.isRunning()) return finish(null, "not_running");
+      attempts = attempt;
+      hooks.onAttemptStart?.(attempt, candidate);
+      const score = await hooks.measure(candidate, attempt);
+      if (!score.total) return finish(null, "no_games");
+      await hooks.onMeasured?.(attempt, score);
+      const directive = hooks.takeDirective ? hooks.takeDirective() : null;
+      if (directive !== null && directive !== void 0 && hooks.directiveCandidate) {
+        const forced = await hooks.directiveCandidate(candidate, attempt, score, directive);
+        if (forced) {
+          candidate = forced;
+          continue;
+        }
+        hooks.onDirectiveFailed?.(attempt);
+      }
+      if (!best || score.wins > best.wins) {
+        best = score;
+        hooks.onBest?.(attempt, score);
+      }
+      const revised = score.games.filter((g) => (g.midgameChanges || 0) > 0);
+      if (score.perfect) {
+        if (!revised.length) {
+          if (climb(score)) continue;
+          return finish(score, "accepted");
+        }
+        const clean = await hooks.verifyClean(candidate, attempt, revised);
+        if (clean.perfect) {
+          clean.cleanVerified = true;
+          hooks.onCleanVerification?.(attempt, clean, true);
+          if (climb(clean)) continue;
+          return finish(clean, "accepted");
+        }
+        hooks.onCleanVerification?.(attempt, clean, false);
+        const repaired = await hooks.nextHypothesis(candidate, attempt, hooks.lossEvidence(clean));
+        if (!repaired) {
+          hooks.onNoHypothesis?.(attempt, "clean_verification");
+          return finish(null, "no_hypothesis");
+        }
+        candidate = repaired;
+        continue;
+      }
+      const evidence = hooks.lossEvidence(score);
+      hooks.onRejected?.(attempt, score, evidence);
+      const consolidated = hooks.consolidate ? await hooks.consolidate(attempt, score) : null;
+      if (consolidated) {
+        candidate = consolidated;
+        continue;
+      }
+      const next = await hooks.nextHypothesis(best.formula, attempt, evidence);
+      if (!next) {
+        hooks.onNoHypothesis?.(attempt, "rejection");
+        return finish(null, "no_hypothesis");
+      }
+      candidate = next;
+    }
+    return finish(null, "budget");
   }
 
   // src/worlds/foxhounds/index.ts
@@ -4495,34 +5287,20 @@ function buildMetaContext(state, options) {
   };
 }
 /* Raw LLM round trip; the raw assistant text is returned for logging/evidence. */
+/* System 2 is the library's chat-completions client (Neurosym.openAiChatClient), configured from the header at
+   every call. This file counts every request (before it can fail: a failed call is a call) and every answer. */
+const SYSTEM2_CLIENT = Neurosym.openAiChatClient(function () {
+  return {
+    url: config.llmUrl, apiKey: config.llmKey, model: config.llmModel, temperature: config.llmTemperature,
+    jsonMode: config.llmJsonMode, timeoutMs: config.llmTimeoutMs, retries: config.llmRetries,
+    fetch: function (url, init) { return fetch(url, init); },
+    onRequest: function () { Telemetry.llmCalls++; },
+    onAnswer: function (answer) { Telemetry.llmLatencies.push(answer.latencyMs); noteLlmSuccess(); }
+  };
+});
 async function requestMetaReasoning(userPayload, options) {
   const opts = options || {};
-  Telemetry.llmCalls++;                        // counted even when the URL is missing
-  if (!config.llmUrl) throw new ApiError('network', 'No LLM endpoint configured.');
-  const body = {
-    model: config.llmModel,
-    temperature: clamp(config.llmTemperature, 0, 2),
-    messages: [
-      { role: 'system', content: opts.systemPrompt || buildLlmSystemPrompt() },
-      { role: 'user', content: JSON.stringify(userPayload, null, 2) }
-    ]
-  };
-  if (config.llmJsonMode) body.response_format = { type: 'json_object' };
-  const startedAt = now();
-  const response = await fetchJSON(config.llmUrl, {
-    body: body,
-    headers: authHeaders(config.llmKey),
-    timeoutMs: config.llmTimeoutMs,
-    retries: config.llmRetries,
-    signal: opts.signal || null
-  });
-  const latency = Math.round(now() - startedAt);
-  Telemetry.llmLatencies.push(latency);
-  noteLlmSuccess();
-  const choice = response.data && response.data.choices && response.data.choices[0];
-  const content = choice && choice.message ? choice.message.content : null;
-  if (!content) throw new ApiError('parse', 'LLM response contained no choices[0].message.content.');
-  return { content: content, latencyMs: latency, raw: response.data };
+  return SYSTEM2_CLIENT.complete({ system: opts.systemPrompt || buildLlmSystemPrompt(), user: userPayload, signal: opts.signal || null });
 }
 /* Outer loop, phase 1: fired at the start of a game (or an explicit compile). */
 async function compileRulesWithLLM(state, options) {
@@ -4648,6 +5426,7 @@ function readingSeparatesCases(reading) {
    the cited case exists in it; false when evidence was handed and the reply cites none of it.
    "Born from the scenarios observed" must be a rule the harness enforces, not a plea. */
 function validateEvidenceRef(proposal, opts) {
+  /* J0 is the library's (Neurosym.validateEvidenceRef); this file only says what the consult showed. */
   const brief = (opts && (opts.pathBrief || opts.consolidationBrief)) || null;
   const loss = (opts && opts.lossReport) || null;
   const directive = (opts && opts.operatorDirective) || null;
@@ -4655,29 +5434,12 @@ function validateEvidenceRef(proposal, opts) {
   const candidate = (proposal && typeof proposal === 'object' && !Array.isArray(proposal)) ? proposal : null;
   if (!candidate) return false;
   const root = (candidate.rules && typeof candidate.rules === 'object') ? candidate.rules : candidate;
-  const ref = root.evidence_ref || candidate.evidence_ref;
-  if (!ref || typeof ref !== 'object') return false;
-  /* An operator directive is addressable evidence too: acknowledging it is a valid citation,
-     and ignoring what the operator asked for is the same offence as citing no shown case. */
-  if (directive && ref.operator_directive === true) return true;
-  const caseCount = brief && brief.cases ? brief.cases.length : (brief && brief.reflections ? brief.reflections.length : 0);
-  const truthCount = (loss && Array.isArray(loss.truth)) ? loss.truth.length : 0;
-  /* Evidence with nothing addressable in it imposes no citation: there is nothing to point at,
-     and refusing every proposal would stall the loop on a technicality. */
-  /* With a directive in play the proposal must ACKNOWLEDGE it even when nothing else is
-     addressable: an unanswered instruction is not a hypothesis. */
-  if (!caseCount && !truthCount && !directive && !(loss && typeof loss.blunder_state_key === 'string')) return true;
-  /* The index addresses the cases of the brief, or the labelled truths of a loss report. */
-  if (Number.isInteger(ref.case) && ref.case >= 0) {
-    if (caseCount && ref.case < caseCount) return true;
-    if (truthCount && ref.case < truthCount) return true;
-  }
-  /* A state key is also a valid citation when the loss report carries labelled truths. */
-  if (typeof ref.state_key === 'string' && loss) {
-    if (typeof loss.blunder_state_key === 'string' && ref.state_key === loss.blunder_state_key) return true;
-    if (Array.isArray(loss.truth) && loss.truth.some(function (t) { return t && t.state_key === ref.state_key; })) return true;
-  }
-  return false;
+  return Neurosym.validateEvidenceRef(root.evidence_ref || candidate.evidence_ref, {
+    cases: brief && brief.cases ? brief.cases.length : (brief && brief.reflections ? brief.reflections.length : 0),
+    truthKeys: (loss && Array.isArray(loss.truth)) ? loss.truth.map(function (t) { return t ? t.state_key : undefined; }) : [],
+    anchorKey: (loss && typeof loss.blunder_state_key === 'string') ? loss.blunder_state_key : null,
+    directive: !!directive
+  });
 }
 /* Resolve the concrete boards behind a System-2 consultation. These stay structured all the way to
    the formula executor: no OCR of ASCII boards and no model-authored measurement values. */
@@ -5196,69 +5958,34 @@ function evidenceStateOf(caseEntry) {
   return null;
 }
 function replayFormulaOnEvidence(rules, cases) {
+  /* Executability and determinism over the exact leaves that motivated the proposal: Neurosym.replayOnEvidence
+     (every code measure is computed twice). This file adds its board positions and state keys to the rows. */
   const formula = rules || DEFAULT_RULES;
   const declarations = observationsOf(formula);
-  const ids = Object.keys(declarations);
-  const rows = [];
-  const errors = [];
-  (cases || []).forEach(function (caseEntry, index) {
-    const state = evidenceStateOf(caseEntry);
-    if (!state) {
-      errors.push({ case_index: index, case_id: caseEntry && caseEntry.case_id ? caseEntry.case_id : null, error: "leaf board is unavailable" });
-      return;
-    }
-    const measured = computeObservations(state, declarations);
-    /* A code measure must be a FACT: the same board, measured twice, gives the same number. */
-    const codeIds = ids.filter(function (id) { return declarations[id] && declarations[id].spec && declarations[id].spec.kind === 'code'; });
-    if (codeIds.length) {
-      const subset = {};
-      codeIds.forEach(function (id) { subset[id] = declarations[id]; });
-      const again = computeObservations(state, subset);
-      codeIds.forEach(function (id) {
-        if (Object.prototype.hasOwnProperty.call(measured.values, id) && measured.values[id] !== again.values[id]) {
-          errors.push({ case_index: index, case_id: caseEntry.case_id || null, observation: id,
-            error: 'non-deterministic: the same board measured ' + measured.values[id] + ' and then ' + again.values[id] });
-        }
-      });
-    }
-    measured.errors.forEach(function (entry) {
-      errors.push({ case_index: index, case_id: caseEntry.case_id || null, observation: entry.id, error: entry.error });
-    });
-    if (measured.count !== ids.length) {
-      errors.push({ case_index: index, case_id: caseEntry.case_id || null,
-        error: "computed " + measured.count + "/" + ids.length + " declared observations" });
-    }
-    rows.push({
-      case_index: index,
-      case_id: caseEntry.case_id || null,
-      state_key: stateKey(state),
-      outcome_label: caseEntry.leaf && caseEntry.leaf.outcome_label ? caseEntry.leaf.outcome_label : "unresolved",
-      positions: measured.positions,
-      measurements: measured.values
-    });
-  });
-  const variation = {};
-  ids.forEach(function (id) {
-    const values = rows.map(function (row) { return row.measurements[id]; }).filter(function (value) { return Number.isFinite(value); });
-    variation[id] = {
-      samples: values.length,
-      min: values.length ? Math.min.apply(null, values) : null,
-      max: values.length ? Math.max.apply(null, values) : null,
-      spread: values.length ? round(Math.max.apply(null, values) - Math.min.apply(null, values), 4) : null
+  const entries = (cases || []).map(function (caseEntry) {
+    return {
+      state: evidenceStateOf(caseEntry),
+      id: caseEntry && caseEntry.case_id ? caseEntry.case_id : null,
+      label: caseEntry && caseEntry.leaf && caseEntry.leaf.outcome_label ? caseEntry.leaf.outcome_label : 'unresolved'
     };
   });
+  const report = Neurosym.replayOnEvidence(HARNESS_OBSERVER, declarations, entries);
+  const rows = report.rows.map(function (row) {
+    const state = entries[row.case_index].state;
+    return { case_index: row.case_index, case_id: row.case_id, state_key: stateKey(state), outcome_label: row.outcome_label,
+      positions: boardPositionArray(state), measurements: row.measurements };
+  });
   Telemetry.formulaEvidenceReplays++;
-  const valid = rows.length > 0 && errors.length === 0;
-  if (!valid) Telemetry.formulaEvidenceRejected++;
+  if (!report.valid) Telemetry.formulaEvidenceRejected++;
   return {
-    valid: valid,
+    valid: report.valid,
     formula_hash: formulaHash(formula),
     judgment_formula_hash: judgmentFormulaHash(formula),
-    declared_observations: ids,
-    evaluated_leaf_boards: rows.length,
+    declared_observations: report.declared_observations,
+    evaluated_leaf_boards: report.evaluated_boards,
     rows: rows,
-    variation: variation,
-    errors: errors
+    variation: report.variation,
+    errors: report.errors
   };
 }
 /* {{id}} in an instruction or a criterion becomes the MEASURED number: Jev reads facts instead of
@@ -6117,45 +6844,17 @@ const jevBeliefBaseline = new Map();
 
 function recordRevision(state, jev, ctx) {
   const key = stateKey(state);
-  const belief = {
-    V: round(clamp(jev.winProbability, 0, 1), 4),
-    confidence: (jev.confidence === null || jev.confidence === undefined) ? null : round(clamp(jev.confidence, 0, 1), 4),
-    atoms: jev.atoms ? Object.assign({}, jev.atoms) : null,
-    observations: jev.measured ? Object.assign({}, jev.measured) : null,
-    ply: state.ply
-  };
+  /* What counts as a revision (first sighting no, a move below REVISION_MIN_DELTA no), the per-question delta
+     and the label against the truth are the library's (Neurosym.reviseBelief). A verdict already in the cache
+     costs nothing to use as the label; the key is oracleCacheKey, the one it was STORED under. */
+  const belief = Neurosym.beliefOf(jev.winProbability, jev.confidence, jev.atoms, jev.measured, state.ply);
   const previous = jevBeliefBaseline.get(key);
   jevBeliefBaseline.set(key, belief);
-  if (!previous) return null;                                   // first sighting of the state: not a revision
-  const delta = round(belief.V - previous.V, 4);
-  if (Math.abs(delta) < REVISION_MIN_DELTA) return null;
-  const atomDelta = {};
-  Object.keys(belief.atoms || {}).forEach(function (id) {
-    if (!previous.atoms || !Number.isFinite(previous.atoms[id])) return;
-    atomDelta[id] = round(belief.atoms[id] - previous.atoms[id], 4);
+  const revision = Neurosym.reviseBelief(previous, belief, {
+    stateKey: key, sideToMove: state.turn, source: jev.source,
+    truth: oracleCache.get(oracleCacheKey(state)) || null, maximizer: SIDE_CATS, minDelta: REVISION_MIN_DELTA
   });
-  /* A verdict already in the cache costs nothing to use as the label; no verdict means "unknown".
-     The key is oracleCacheKey: the same one the verdict was STORED under, model included. */
-  const cached = oracleCache.get(oracleCacheKey(state)) || null;
-  const known = !!(cached && cached.known === true);
-  const againstTruth = known
-    ? (cached.winner === SIDE_MOUSE ? (delta > 0) : (cached.winner === SIDE_CATS ? (delta < 0) : null))
-    : null;
-  const revision = {
-    state_key: key,
-    ply: state.ply,
-    side_to_move: state.turn,
-    prev_V: previous.V,
-    new_V: belief.V,
-    delta_V: delta,
-    prev_atoms: previous.atoms,
-    new_atoms: belief.atoms,
-    atom_delta: atomDelta,
-    confidence: belief.confidence,
-    source: jev.source,
-    oracle: known ? { known: true, winner: cached.winner, plies: cached.plies, reason: cached.reason } : null,
-    against_truth: againstTruth
-  };
+  if (!revision) return null;
   if (ctx && ctx.revisions) {
     ctx.revisions.push(revision);
     if (ctx.revisions.length > REVISION_CAP) ctx.revisions.shift();
@@ -6163,8 +6862,8 @@ function recordRevision(state, jev, ctx) {
   Telemetry.revisionsRecorded++;
   /* The ring may trim this row later; the run-level accumulators must not lose it. */
   Telemetry.noteRevisionRecorded(revision);
-  if (againstTruth === true) Telemetry.revisionsAgainstTruth++;
-  else if (againstTruth === false) Telemetry.revisionsTowardTruth++;
+  if (revision.against_truth === true) Telemetry.revisionsAgainstTruth++;
+  else if (revision.against_truth === false) Telemetry.revisionsTowardTruth++;
   return revision;
 }
 /* The pass journal joins the run journal. The rows are MOVED, not copied: a pass that has been merged
@@ -6180,86 +6879,25 @@ function mergeRevisions(list) {
 }
 /* The journal as the rule author should read it: per STATE, not per row - the same state often moves
    more than once in a run, and what matters is the net displacement, not the number of rows. */
-function viewRevisions() {
-  const byState = new Map();
-  (match.revisions || []).forEach(function (r) {
-    const current = byState.get(r.state_key);
-    if (!current) {
-      byState.set(r.state_key, {
-        state_key: r.state_key, ply: r.ply, side_to_move: r.side_to_move,
-        first_V: r.prev_V, last_V: r.new_V, revisions: 1,
-        atom_delta: Object.assign({}, r.atom_delta),
-        confidence: r.confidence, oracle: r.oracle, against_truth: r.against_truth
-      });
-      return;
-    }
-    current.ply = r.ply;
-    current.last_V = r.new_V;
-    current.revisions++;
-    Object.keys(r.atom_delta || {}).forEach(function (id) {
-      current.atom_delta[id] = round((current.atom_delta[id] || 0) + r.atom_delta[id], 4);
-    });
-    if (r.oracle) current.oracle = r.oracle;
-    if (r.against_truth !== null && r.against_truth !== undefined) current.against_truth = r.against_truth;
-  });
-  const rows = Array.from(byState.values());
-  rows.forEach(function (row) { row.net_V = round(row.last_V - row.first_V, 4); });
-  rows.sort(function (a, b) { return Math.abs(b.net_V) - Math.abs(a.net_V); });
-  return rows;
-}
+function viewRevisions() { return Neurosym.revisionsByState(match.revisions || []); }
 /* How far the truth labels reach: reported so an absent label is read as "no verdict was computed for
    that state", never as "the question was fine". */
-function truthLabelCounts(revisions) {
-  const counts = { known: 0, toward_truth: 0, against_truth: 0, unknown: 0 };
-  (revisions || []).forEach(function (r) {
-    if (!r.oracle || !r.oracle.known) { counts.unknown++; return; }
-    counts.known++;
-    if (r.against_truth === true) counts.against_truth++;
-    else if (r.against_truth === false) counts.toward_truth++;
-  });
-  return counts;
-}
+function truthLabelCounts(revisions) { return Neurosym.truthLabelCounts(revisions || []); }
 /* Per QUESTION: which way its judgment moved across the run, and how often that movement AGREED with
    the rules. This is what turns "the value changed" into "this question is the one that moved". */
 function buildAtomWitness(revisions) {
   const per = {};
-  (revisions || []).forEach(function (r) { foldAtomStat(per, r); });
-  return sortAtomWitnessRows(Object.keys(per).map(function (id) { return formatAtomWitnessRow(id, per[id]); }));
+  (revisions || []).forEach(function (r) { Neurosym.foldAtomStat(per, r); });
+  return Neurosym.witness(per);
 }
 /* The pass journal and the run accumulator MUST fold a revision the same way, or the two windows would
    disagree for a reason that is not the data. */
-function foldAtomStat(stats, revision) {
-  Object.keys(revision.atom_delta || {}).forEach(function (id) {
-    const stat = stats[id] || (stats[id] = { id: id, revisions: 0, sum: 0, toward_truth: 0, against_truth: 0, unknown: 0 });
-    stat.revisions++;
-    stat.sum += revision.atom_delta[id];
-    if (revision.against_truth === true) stat.against_truth++;
-    else if (revision.against_truth === false) stat.toward_truth++;
-    else stat.unknown++;
-  });
-  return stats;
-}
+function foldAtomStat(stats, revision) { return Neurosym.foldAtomStat(stats, revision); }
 /* One witness ROW, from either source: sharing the formatter is what guarantees the two agree. */
-function formatAtomWitnessRow(id, stat) {
-  const meanDelta = round(stat.sum / stat.revisions, 4);
-  return {
-    id: id,
-    revisions: stat.revisions,
-    mean_delta: meanDelta,
-    direction: meanDelta >= 0 ? 'rising' : 'falling',
-    toward_truth: stat.toward_truth,
-    against_truth: stat.against_truth,
-    unknown: stat.unknown
-  };
-}
-function sortAtomWitnessRows(rows) {
-  return rows.sort(function (a, b) { return Math.abs(b.mean_delta) - Math.abs(a.mean_delta); });
-}
+function formatAtomWitnessRow(id, stat) { return Neurosym.witnessRow(id, stat); }
+function sortAtomWitnessRows(rows) { return rows.sort(function (a, b) { return Math.abs(b.mean_delta) - Math.abs(a.mean_delta); }); }
 /* The SAME witness over the WHOLE run: the ring trims, so reading it off the ring lost most revisions. */
-function atomWitnessOverRun() {
-  const stats = Telemetry.revisionAtomStats;
-  return sortAtomWitnessRows(Object.keys(stats).map(function (id) { return formatAtomWitnessRow(id, stats[id]); }));
-}
+function atomWitnessOverRun() { return Neurosym.witness(Telemetry.revisionAtomStats); }
 /* The bounded digest that travels with the next proposal: built from the journal the games already
    filled, so it adds evidence without adding a single call. */
 function buildRevisionDigest() {
@@ -6391,18 +7029,21 @@ function pathBoards(entries, rules) {
 function selectPathCases(ctx, result) {
   const records = (ctx && ctx.leafRecords) ? ctx.leafRecords : [];
   if (!records.length) return [];
-  const limit = clamp(Math.round(config.pathCasesLimit), 1, 6);
   const floor = (ctx && Number.isFinite(ctx.confidenceFloor))
     ? ctx.confidenceFloor : clamp(match.rules.confidenceFloor, CONFIDENCE_FLOOR_RANGE.min, CONFIDENCE_FLOOR_RANGE.max);
-  const chosen = [];
-  const used = {};
-  const add = function (kind, record, why, extra) {
-    if (!record || used[record.state_key] || chosen.length >= limit) return;
-    used[record.state_key] = true;
+  /* Which lines (the line behind the chosen move, the near-tie alternative, the least trusted judgment and an
+     emphatic one Jev could not back) is decided in code by Neurosym.selectCases; here they become boards. */
+  const picks = Neurosym.selectCases(records, {
+    bestMoveKey: (result && result.bestMove) ? moveKey(result.bestMove) : null,
+    limit: clamp(Math.round(config.pathCasesLimit), 1, 6),
+    floor: floor, tieMargin: PATH_TIE_MARGIN, extremeMargin: PATH_EXTREME_MARGIN
+  });
+  return picks.map(function (pick, index) {
+    const record = pick.record;
     const entry = {
-      case_id: kind + "#" + chosen.length,
-      kind: kind,
-      why: why,
+      case_id: pick.kind + "#" + index,
+      kind: pick.kind,
+      why: pick.why,
       state_key: record.state_key,
       leaf: {
         board_ascii: renderBoardAscii(record.leafState),
@@ -6422,47 +7063,9 @@ function selectPathCases(ctx, result) {
       leaf_state: deepClone(record.leafState),
       path: pathBoards(record.path, ctx && ctx.rules ? ctx.rules : null)
     };
-    if (extra) Object.assign(entry, extra);
-    chosen.push(entry);
-  };
-  /* Best leaf per ROOT move: that is what makes the chosen line and the alternative line
-     comparable instead of a guess about which leaf matters. */
-  const bestPerRoot = {};
-  records.forEach(function (record) {
-    const current = bestPerRoot[record.root_move];
-    if (!current || record.V > current.V) bestPerRoot[record.root_move] = record;
+    if (pick.extra) Object.assign(entry, pick.extra);
+    return entry;
   });
-  const bestMoveKey = (result && result.bestMove) ? moveKey(result.bestMove) : null;
-  const support = bestMoveKey ? bestPerRoot[bestMoveKey] : null;
-  const alternatives = Object.keys(bestPerRoot)
-    .filter(function (key) { return key !== bestMoveKey; })
-    .map(function (key) { return bestPerRoot[key]; })
-    .sort(function (a, b) { return b.V - a.V; });
-  const alt = alternatives.length ? alternatives[0] : null;
-  const gap = (support && alt) ? round(support.V - alt.V, 4) : null;
-  if (support) {
-    add("decision_support", support, "this is the line behind the chosen move: the leaf at the end of it returned V " +
-      support.V + (support.confidence === null ? " with no confidence reported" : " at confidence " + support.confidence));
-  }
-  if (alt && gap !== null && Math.abs(gap) <= PATH_TIE_MARGIN) {
-    add("near_tie", alt, "this alternative line was within " + Math.abs(gap) + " of the chosen one (V " + alt.V +
-      "): the move rests on a difference this small", { gap: Math.abs(gap) });
-  }
-  const withConfidence = records.filter(function (r) { return r.confidence !== null; })
-    .sort(function (a, b) { return a.confidence - b.confidence; });
-  if (withConfidence.length && withConfidence[0].confidence < floor) {
-    const worst = withConfidence[0];
-    add("lowest_confidence", worst, "Jev least trustworthy judgment on this ply: confidence " +
-      worst.confidence + " < floor " + floor + " at V " + worst.V);
-  }
-  const extreme = records.filter(function (r) {
-    return r.confidence !== null && r.confidence < floor && Math.abs(r.V - 0.5) >= PATH_EXTREME_MARGIN;
-  }).sort(function (a, b) { return Math.abs(b.V - 0.5) - Math.abs(a.V - 0.5); })[0];
-  if (extreme) {
-    add("overconfident_extreme", extreme, "an emphatic judgment Jev could not back: V " + extreme.V +
-      " at confidence " + extreme.confidence);
-  }
-  return chosen;
 }
 /* The complete brief: real boards, Jev answers, measured confidences, and an explicit contract -
    including that the answer must live in the fields Jev evaluates, and that no change is valid. */
@@ -6499,48 +7102,21 @@ function buildPathBrief(ply, rules, cases, trigger) {
    a weight change free. It cannot prove a rule set better (only games can) but it catches a candidate
    that makes the composition less decisive on the very lines that triggered the consult. */
 function prefilterUsableCases(cases, previousWeights, candidateWeights) {
-  const keys = {};
-  Object.keys(previousWeights || {}).forEach(function (k) { keys[k] = true; });
-  Object.keys(candidateWeights || {}).forEach(function (k) { keys[k] = true; });
-  const ids = Object.keys(keys);
   return (cases || []).filter(function (c) {
-    return c.leaf && c.leaf.atoms && ids.every(function (id) { return Number.isFinite(c.leaf.atoms[id]); });
+    return !!(c && c.leaf) && Neurosym.usableCases([{ atoms: c.leaf.atoms }], previousWeights, candidateWeights).length === 1;
   });
 }
-function meanAbsEdge(cases, weights) {
-  const values = (cases || []).map(function (c) { return composeLeafValue(c.leaf.atoms, weights); });
-  if (!values.length) return 0;
-  return mean(values.map(function (v) { return Math.abs(v - 0.5); }));
-}
+function meanAbsEdge(cases, weights) { return Neurosym.decisiveness((cases || []).map(function (c) { return { atoms: c.leaf.atoms }; }), weights); }
 function prefilterCandidate(previous, candidate, cases) {
-  const usable = prefilterUsableCases(cases, previous.weights, candidate.weights);
-  if (usable.length < 2) {
-    return { ok: true, before: null, after: null, cases: usable.length,
-      reason: "not enough composed answers to prefilter (the clean games stay the test)" };
-  }
-  const before = round(meanAbsEdge(usable, previous.weights), 4);
-  const after = round(meanAbsEdge(usable, candidate.weights), 4);
-  const ok = after >= before - PATH_PREFILTER_TOLERANCE;
-  return {
-    ok: ok, before: before, after: after, cases: usable.length,
-    reason: ok
-      ? ("prefilter passed: decisiveness over the " + usable.length + " triggering line(s) " + before + " -> " + after)
-      : ("the candidate would make the composition LESS decisive over the " + usable.length +
-        " line(s) that triggered the consult (" + before + " -> " + after + ", tolerance " + PATH_PREFILTER_TOLERANCE + ")")
-  };
+  return Neurosym.prefilter(formulaShellOf(previous), formulaShellOf(candidate),
+    (cases || []).map(function (c) { return { atoms: c && c.leaf ? c.leaf.atoms : null }; }), PATH_PREFILTER_TOLERANCE);
 }
 
 /* A trigger is a CLASS plus the sentence that explains it. The class is what the operator can COUNT
    (the consolidation groups by it, and the tile shows the mix), the sentence is what a human reads.
    The object keeps its sentence as its string form, so every log line and payload that interpolates
    the trigger keeps reading exactly as before - the typing is additive, never a rewrite. */
-function triggerOf(cls, text) {
-  return {
-    class: cls,
-    text: String(text),
-    toString: function () { return this.text; }
-  };
-}
+function triggerOf(cls, text) { return Neurosym.trigger(cls, text); }
 function triggerText(trigger) {
   if (typeof trigger === "string") return trigger;
   if (!trigger) return null;
@@ -6557,26 +7133,19 @@ function courseCorrectionTrigger(search) {
   const cases = (search.ctx && search.ctx.pathCases) ? search.ctx.pathCases : [];
   const floor = (search.ctx && Number.isFinite(search.ctx.confidenceFloor)) ? search.ctx.confidenceFloor
     : clamp(match.rules.confidenceFloor, CONFIDENCE_FLOOR_RANGE.min, CONFIDENCE_FLOOR_RANGE.max);
-  /* 1) The strongest signal there is: the RULES already decided this position and the value disagrees.
-        Uncertainty is deliberately NOT a trigger any more: with a vendor whose measured mean confidence
-        is ~0.46, a "confidence < floor" trigger fired on every ply and the budget was always spent
-        chasing noise instead of correcting an error. */
+  /* The order (contradiction with the rules > coin-flip > no belief) and the margins are Neurosym.classifyTrigger.
+     Uncertainty alone is NOT a trigger: with a vendor whose mean confidence is ~0.46 it fired on every ply. */
   const verdict = (search && search.oracle) ? search.oracle : null;
-  if (verdict && verdict.known) {
-    const contradiction = describeValueAgainstTruth(played.value, verdict);
-    if (contradiction.indexOf("CONTRADICTION") === 0) return triggerOf("contradiction", contradiction);
-  }
+  const described = (verdict && verdict.known) ? describeValueAgainstTruth(played.value, verdict) : '';
   const tie = cases.filter(function (c) { return c.kind === "near_tie"; })[0];
-  if (tie && Number.isFinite(tie.gap) && tie.gap <= PATH_COINFLIP_MARGIN) {
-    return triggerOf("coin_flip",
-      "the decision was a coin-flip: the alternative line was within " + tie.gap + " of the chosen one");
-  }
   const commit = cases.filter(function (c) { return c.kind === "decision_support"; })[0];
-  if (commit && commit.leaf.value < 0.5 && commit.leaf.confidence !== null && commit.leaf.confidence < floor) {
-    return triggerOf("no_belief", "the engine is committing to a move it does not believe in: V " + commit.leaf.value +
-      " at confidence " + commit.leaf.confidence + " (floor " + floor + ")");
-  }
-  return null;
+  return Neurosym.classifyTrigger({
+    contradiction: described.indexOf("CONTRADICTION") === 0 ? described : null,
+    nearTieGap: tie ? tie.gap : null,
+    commit: commit ? { value: commit.leaf.value, confidence: commit.leaf.confidence } : null,
+    floor: floor,
+    coinflipMargin: PATH_COINFLIP_MARGIN
+  });
 }
 
 /* Cases queued during play travel with the NEXT proposal: zero extra calls, and the hypothesis stops
@@ -6634,16 +7203,6 @@ function recordReflection(search, cases) {
   Telemetry.noteTrigger(cls);
   const played = (search && search.result) ? search.result : null;
   const verdict = (search && search.oracle) ? search.oracle : null;
-  /* Two consecutive plies that doubt themselves the same way, with the same side to move, are ONE
-     doubt with a count: repetition is not evidence, and the model reads what we send it. */
-  const previous = match.reflections.length ? match.reflections[match.reflections.length - 1] : null;
-  if (previous && previous.class === cls && previous.side_to_move === match.state.turn) {
-    previous.count = (previous.count || 1) + 1;
-    previous.ply = match.state.ply;
-    previous.V = (played && Number.isFinite(played.value)) ? played.value : previous.V;
-    previous.confidence = (played && Number.isFinite(played.calibrated)) ? played.calibrated : previous.confidence;
-    return previous;
-  }
   const reflection = {
     ply: match.state.ply,
     side_to_move: match.state.turn,
@@ -6658,8 +7217,10 @@ function recordReflection(search, cases) {
     cases: (cases || []).slice(0, CONSOLIDATION_CASES_PER_REFLECTION),
     count: 1
   };
-  match.reflections.push(reflection);
-  if (match.reflections.length > REFLECTION_CAP) match.reflections.shift();
+  /* Two consecutive plies that doubt themselves the same way, with the same side to move, are ONE doubt with a
+     count (Neurosym.appendReflection): repetition is not evidence, and the model reads what we send it. */
+  const appended = Neurosym.appendReflection(match.reflections, reflection, REFLECTION_CAP);
+  if (!appended.added) return appended.reflection;
   Telemetry.reflectionsRecorded++;
   logNoteOnce("reflection:" + cls, "SEARCH", "info",
     "REFLECTION class=" + cls + " at ply " + reflection.ply + " - " + reflection.trigger_text +
@@ -6671,10 +7232,9 @@ function recordReflection(search, cases) {
    replaces: six doubts, two lines behind each one. */
 function buildConsolidationBrief(attempt, rules, reflections, score) {
   const list = reflections || [];
-  const kept = list.slice(Math.max(0, list.length - CONSOLIDATION_MAX_REFLECTIONS));
-  const byClass = {};
-  TRIGGER_CLASSES.forEach(function (cls) { byClass[cls] = 0; });
-  list.forEach(function (r) { byClass[r.class] = (byClass[r.class] || 0) + (r.count || 1); });
+  const reflectionView = Neurosym.reflectionWindow(list, CONSOLIDATION_MAX_REFLECTIONS);
+  const kept = reflectionView.kept;
+  const byClass = reflectionView.byClass;
   return {
     scope: CONSOLIDATION_SCOPE,
     attempt: attempt,
@@ -6813,148 +7373,37 @@ async function consolidateReflections(attempt, score) {
     return null;
   }
 }
-function shortenText(value, max) {
-  const text = String(value === undefined || value === null ? "" : value).replace(/\s+/g, " ").trim();
-  return text.length > max ? (text.slice(0, max - 1) + "~") : text;
-}
-function describeCriteriaDelta(before, after) {
-  const a = before || {};
-  const b = after || {};
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return "levels " + (Array.isArray(a) ? a.length : 0) + " -> " + (Array.isArray(b) ? b.length : 0);
-  }
-  const keys = Object.keys(b).filter(function (k) { return String(a[k]) !== String(b[k]); });
-  return keys.length ? ("rewrote " + keys.join("/")) : "shape only";
-}
-function describeWeightsDelta(before, after) {
-  const a = before || {};
-  const b = after || {};
-  const ids = {};
-  Object.keys(a).forEach(function (k) { ids[k] = true; });
-  Object.keys(b).forEach(function (k) { ids[k] = true; });
-  return Object.keys(ids).map(function (id) {
-    const av = Number.isFinite(a[id]) ? a[id] : 0;
-    const bv = Number.isFinite(b[id]) ? b[id] : 0;
-    return id + " " + av + "->" + bv;
-  }).join(", ");
-}
+function shortenText(value, max) { return Neurosym.shortenText(value, max); }
+/* describeCriteriaDelta: part of the library's describeChange. */
+function describeWeightsDelta(before, after) { return Neurosym.describeWeightsDelta(before, after); }
 /* The delta restricted to the fields System 1 EVALUATES. This is the guard that keeps "learning"
    from degrading into prose: a reply that only rewrites rationale changed nothing Jev can judge, so
    it is reported as cosmetic and the version is not touched. */
 const EVALUATED_QUESTION_FIELDS = ["type", "used_as", "option", "options_from", "subject", "aggregate"];
-function diffRuleSets(previous, candidate) {
-  const before = previous || DEFAULT_RULES;
-  const after = candidate || DEFAULT_RULES;
-  const batteryBefore = batteryOf(before);
-  const batteryAfter = batteryOf(after);
-  const changes = {};
-  Object.keys(batteryAfter).forEach(function (id) {
-    const a = batteryBefore[id];
-    const b = batteryAfter[id] || {};
-    if (!a) { (changes.added || (changes.added = [])).push(id); return; }
-    const moved = [];
-    EVALUATED_QUESTION_FIELDS.forEach(function (field) {
-      const av = a[field] === undefined ? null : a[field];
-      const bv = b[field] === undefined ? null : b[field];
-      if (JSON.stringify(av) !== JSON.stringify(bv)) moved.push(field);
-    });
-    if (String(a.instructions || "") !== String(b.instructions || "")) moved.push("instructions");
-    if (JSON.stringify(a.criteria || {}) !== JSON.stringify(b.criteria || {})) moved.push("criteria");
-    if (moved.length) changes[id] = moved;
+/* The learner's algebra, judges and gates are the library's (Neurosym.learn). The harness keeps its rule-set
+   shape; formulaShellOf is the one bridge: the learner compares observation specs, it never executes them, so
+   they travel in the harness format. */
+function formulaShellOf(rules) {
+  const r = rules || DEFAULT_RULES;
+  return Neurosym.makeFormula({
+    world: FOX.FOXHOUNDS_ID,
+    observations: observationsOf(r),
+    rules: batteryOf(r),
+    weights: r.weights || {},
+    policy_weights: r.policyWeights || {},
+    confidence_floor: r.confidenceFloor,
+    meta: { version: r.version, source: r.source, rationale: r.rationale, evidence: r.evidence === undefined ? null : r.evidence, warnings: r.warnings || [] }
   });
-  Object.keys(batteryBefore).forEach(function (id) {
-    if (!batteryAfter[id]) (changes.removed || (changes.removed = [])).push(id);
-  });
-  if (JSON.stringify(before.weights || {}) !== JSON.stringify(after.weights || {})) changes.weights = true;
-  if (JSON.stringify(before.policyWeights || {}) !== JSON.stringify(after.policyWeights || {})) changes.policy_weights = true;
-  if (before.confidenceFloor !== after.confidenceFloor) changes.confidence_floor = true;
-  /* OBSERVATIONS are declared measures, not prose: added, removed, or re-specified ids are an evaluable
-     change (they decide what facts every future leaf measures and what its vector key is). The comparison
-     is on the executable spec only. Name/definition are documentation; a prose-only rewrite must not
-     count as learning, and a recompiled-but-identical declaration is NOT a change. */
-  (function () {
-    const beforeObs = (before && before.observations && typeof before.observations === 'object' && !Array.isArray(before.observations)) ? before.observations : {};
-    const afterObs = (after && after.observations && typeof after.observations === 'object' && !Array.isArray(after.observations)) ? after.observations : {};
-    const declText = function (which, id) {
-      const decl = (which === 'before' ? beforeObs : afterObs)[id] || {};
-      return stableStringify({ spec: (decl.spec === undefined) ? null : decl.spec });
-    };
-    Object.keys(afterObs).forEach(function (id) {
-      if (!Object.prototype.hasOwnProperty.call(beforeObs, id)) { (changes.obs_added || (changes.obs_added = [])).push(id); }
-      else if (declText('after', id) !== declText('before', id)) { (changes.obs_changed || (changes.obs_changed = [])).push(id); }
-    });
-    Object.keys(beforeObs).forEach(function (id) {
-      if (!Object.prototype.hasOwnProperty.call(afterObs, id)) (changes.obs_removed || (changes.obs_removed = [])).push(id);
-    });
-  })();
-  return changes;
 }
-function ruleChangeKinds(changes) {
-  const kinds = [];
-  Object.keys(changes || {}).forEach(function (key) {
-    if (key === "added") kinds.push("battery.added:" + changes.added.join("|"));
-    else if (key === "removed") kinds.push("battery.removed:" + changes.removed.join("|"));
-    else if (key === "weights") kinds.push("weights");
-    else if (key === "policy_weights") kinds.push("policy_weights");
-    else if (key === "confidence_floor") kinds.push("confidence_floor");
-    else if (key === "obs_added") kinds.push("observations.added:" + changes.obs_added.join("|"));
-    else if (key === "obs_removed") kinds.push("observations.removed:" + changes.obs_removed.join("|"));
-    else if (key === "obs_changed") kinds.push("observations.changed:" + changes.obs_changed.join("|"));
-    else kinds.push("battery." + changes[key].join("+") + ":" + key);
-  });
-  return kinds;
+function ledgerVersions() {
+  return (match.rulesHistory || []).map(function (rules) { return rules ? rules.version : undefined; });
 }
-function hasEvaluableRuleChange(previous, candidate) {
-  return ruleChangeKinds(diffRuleSets(previous, candidate)).length > 0;
-}
+function diffRuleSets(previous, candidate) { return Neurosym.diffFormulas(formulaShellOf(previous), formulaShellOf(candidate)); }
+function ruleChangeKinds(changes) { return Neurosym.changeKinds(changes); }
+function hasEvaluableRuleChange(previous, candidate) { return Neurosym.hasEvaluableChange(formulaShellOf(previous), formulaShellOf(candidate)); }
 /* Human-readable delta for the log: the before/after of every evaluable field that moved, so the
    evolution of the exploration policy can be READ by a person, not only measured. */
-function describeRuleChange(previous, candidate) {
-  const changes = diffRuleSets(previous, candidate);
-  const kinds = ruleChangeKinds(changes);
-  if (!kinds.length) return "no evaluable change (prose/rationale only)";
-  const batteryBefore = batteryOf(previous);
-  const batteryAfter = batteryOf(candidate);
-  const details = [];
-  const obsBefore = observationsOf(previous);
-  const obsAfter = observationsOf(candidate);
-  function describeObsDelta(id, kind) {
-    const a = obsBefore[id] || {};
-    const b = obsAfter[id] || {};
-    const ao = (a.spec && a.spec.op) || "?";
-    const bo = (b.spec && b.spec.op) || "?";
-    if (kind === "obs_added") return "observation " + id + " declared (" + bo + ", range " + JSON.stringify(b.range || null) + ")";
-    if (kind === "obs_removed") return "observation " + id + " removed (was " + ao + ")";
-    return "observation " + id + " re-specified (" + ao + " -> " + bo + ")";
-  }
-  Object.keys(changes).forEach(function (key) {
-    if (key === "obs_added" || key === "obs_removed" || key === "obs_changed") { (changes[key] || []).forEach(function (id) { details.push(describeObsDelta(id, key)); }); return; }
-    if (key === "weights" || key === "policy_weights" || key === "confidence_floor" || key === "added" || key === "removed") return;
-    const a = batteryBefore[key] || {};
-    const b = batteryAfter[key] || {};
-    changes[key].forEach(function (field) {
-      if (field === "instructions") {
-        details.push(key + ".instructions: \"" + shortenText(a.instructions, 70) + "\" -> \"" +
-          shortenText(b.instructions, 70) + "\"");
-      } else if (field === "criteria") {
-        details.push(key + ".criteria rewritten (" + describeCriteriaDelta(a.criteria, b.criteria) + ")");
-      } else {
-        details.push(key + "." + field + ": " + String(a[field]) + " -> " + String(b[field]));
-      }
-    });
-  });
-  if (changes.added) details.push("new question(s): " + changes.added.join(", "));
-  if (changes.removed) details.push("removed question(s): " + changes.removed.join(", "));
-  if (changes.weights) details.push("weights: " + describeWeightsDelta(previous.weights, candidate.weights));
-  if (changes.policy_weights) {
-    details.push("policy_weights (the merge between policy questions): " +
-      describeWeightsDelta(previous.policyWeights || {}, candidate.policyWeights || {}));
-  }
-  if (changes.confidence_floor) {
-    details.push("confidence_floor: " + previous.confidenceFloor + " -> " + candidate.confidenceFloor);
-  }
-  return kinds.join(", ") + " [" + details.join(" | ") + "]";
-}
+function describeRuleChange(previous, candidate) { return Neurosym.describeChange(formulaShellOf(previous), formulaShellOf(candidate)); }
 /* ============================================================================
  * JUDGES - a diff is not applied blindly
  * ----------------------------------------------------------------------------
@@ -6982,145 +7431,46 @@ const NARROWABLE_KINDS = ['weights', 'policy_weights', 'confidence_floor'];
 
 /* The proposal as a LIST OF TYPED FIELDS. The kinds come from ruleChangeKinds, so the diff the judge
    reads and the diff the harness reports are the same object, not two opinions about it. */
-function toRuleDiff(previous, candidate) {
-  const changes = diffRuleSets(previous, candidate);
-  const kinds = ruleChangeKinds(changes);
-  const batteryBefore = batteryOf(previous);
-  const batteryAfter = batteryOf(candidate);
-  const fields = [];
-  Object.keys(changes).forEach(function (key) {
-    if (key === 'weights' || key === 'policy_weights' || key === 'confidence_floor') {
-      fields.push({ kind: key, id: null, from: null, to: null });
-      return;
-    }
-    if (key === 'added' || key === 'removed') {
-      changes[key].forEach(function (id) {
-        fields.push({ kind: key, id: id,
-          from: key === 'added' ? null : (batteryBefore[id] || null),
-          to: key === 'removed' ? null : (batteryAfter[id] || null) });
-      });
-      return;
-    }
-    if (key === 'obs_added' || key === 'obs_removed' || key === 'obs_changed') {
-      changes[key].forEach(function (id) {
-        const obsBefore = observationsOf(previous)[id] || null;
-        const obsAfter = observationsOf(candidate)[id] || null;
-        fields.push({ kind: key, id: id,
-          from: key === 'obs_added' ? null : obsBefore,
-          to: key === 'obs_removed' ? null : obsAfter });
-      });
-      return;
-    }
-    changes[key].forEach(function (field) {
-      fields.push({
-        kind: field,
-        id: key,
-        from: (batteryBefore[key] || {})[field] === undefined ? null : (batteryBefore[key] || {})[field],
-        to: (batteryAfter[key] || {})[field] === undefined ? null : (batteryAfter[key] || {})[field]
-      });
-    });
-  });
-  return {
-    from_version: previous.version,
-    to_version: candidate.version,
-    kinds: kinds,
-    fields: fields,
-    narrowable: kinds.filter(function (kind) { return NARROWABLE_KINDS.indexOf(kind) >= 0; }),
-    summary: describeRuleChange(previous, candidate)
-  };
-}
+function toRuleDiff(previous, candidate) { return Neurosym.toFormulaDiff(formulaShellOf(previous), formulaShellOf(candidate)); }
 /* The highest version any rule set in this run's LEDGER has carried. Versions are the harness's
    bookkeeping, never the model's claim: the mutation path starts from best.rules (an OLDER version
    than the ones explored since), so a version floored only at previous/candidate let the exported
    history bounce v8 -> v3 -> v2 across one run while every individual step looked monotonic. */
-function highestKnownVersion(previous) {
-  let max = (previous && Number.isFinite(previous.version)) ? previous.version : 0;
-  (match.rulesHistory || []).forEach(function (rules) {
-    if (rules && Number.isFinite(rules.version) && rules.version > max) max = rules.version;
-  });
-  return max;
-}
+function highestKnownVersion(previous) { return Neurosym.nextVersion(previous ? previous.version : undefined, ledgerVersions()) - 1; }
 /* The narrow verdict in practice: keep the previous rule set and move ONLY the fields the replay can
    measure. The version still moves (strictly UP: the model may repeat a lower number, but a version
    history that goes backwards is unreadable), because what Jev is asked has changed - and the next
    attempt is what measures it. */
 function narrowRuleSet(previous, candidate, kinds) {
-  const usable = (kinds || []).filter(function (kind) { return NARROWABLE_KINDS.indexOf(kind) >= 0; });
-  if (!usable.length) return null;
+  /* Only the measurable fields move, re-settled over the CONSERVED battery (a ghost weight is dropped, never
+     kept), and the version climbs above the run's ledger: Neurosym.narrowFormula. */
+  const narrowedFormula = Neurosym.narrowFormula(formulaShellOf(previous), formulaShellOf(candidate), kinds || [], ledgerVersions());
+  if (!narrowedFormula) return null;
   const narrowed = deepClone(previous);
-  /* The battery a narrow verdict CONSERVES is the previous one: only the weights, the policy merge and
-     the floor move. A candidate weight naming a question the conserved battery does not declare would
-     be a GHOST atom: composeLeafValue scores every undeclared atom as the neutral 0.5, so the ghost
-     quietly filled a third of the answers with noise - and that noise then contaminated the very
-     replays that judge the diffs. The candidate vector is therefore RE-SETTLED over the conserved
-     atoms (clipped, reported, renormalised by normalizeWeights); ghosts are reported, never kept. */
-  const keptBattery = batteryOf(previous);
-  const settledWarnings = [];
-  if (usable.indexOf('weights') >= 0) {
-    const settled = normalizeWeights(candidate.weights, previous.weights, valueAtoms(keptBattery), policyAtoms(keptBattery));
-    narrowed.weights = settled.weights;
-    settledWarnings.push.apply(settledWarnings, settled.warnings);
-  }
-  if (usable.indexOf('policy_weights') >= 0) {
-    const settledPolicy = normalizePolicyWeights(candidate.policyWeights, policyAtoms(keptBattery), previous.policyWeights);
-    narrowed.policyWeights = settledPolicy.policyWeights;
-    settledWarnings.push.apply(settledWarnings, settledPolicy.warnings);
-  }
-  if (usable.indexOf('confidence_floor') >= 0) narrowed.confidenceFloor = candidate.confidenceFloor;
-  /* Floored at the RUN LEDGER, not just at previous/candidate: see highestKnownVersion. */
-  narrowed.version = highestKnownVersion(previous) + 1;
-  narrowed.source = 'llm-narrowed';
-  narrowed.rationale = candidate.rationale;
-  narrowed.evidence = candidate.evidence || null;
-  narrowed.warnings = (candidate.warnings || []).concat(settledWarnings);
-  narrowed.narrowed_from = usable.slice(0);
+  narrowed.weights = narrowedFormula.weights;
+  narrowed.policyWeights = narrowedFormula.policy_weights;
+  narrowed.confidenceFloor = narrowedFormula.confidence_floor;
+  narrowed.version = narrowedFormula.meta.version;
+  narrowed.source = narrowedFormula.meta.source;
+  narrowed.rationale = narrowedFormula.meta.rationale;
+  narrowed.evidence = narrowedFormula.meta.evidence;
+  narrowed.warnings = narrowedFormula.meta.warnings;
+  narrowed.narrowed_from = narrowedFormula.meta.narrowed_from;
   return narrowed;
 }
 /* J1 and J2, measured. Returns a verdict, or NULL when the measurement cannot decide - null is what
    lets the consensus judge exist without becoming the default path. */
 function judgeRuleDiffMeasured(previous, candidate, options) {
   const opts = options || {};
-  const cases = opts.cases || [];
-  const diff = toRuleDiff(previous, candidate);
-  const base = { judge: JUDGE_MEASURED, votes: null, applied_fields: [], diff: diff, reason: '' };
-  if (!hasEvaluableRuleChange(previous, candidate)) {
-    return Object.assign({}, base, { decision: 'reject', reason: 'nothing Jev evaluates moved (prose only)' });
-  }
-  const prefilter = prefilterCandidate(previous, candidate, cases);
-  /* A SILENT replay (fewer than 2 usable composed answers) is reported as what it is: the
-     measurement decided nothing and the clean games are the test. The old text printed
-     "null -> null" inside a sentence that read like a measurement had happened. */
-  const silent = prefilter.before === null || prefilter.after === null;
-  const decisiveness = silent
-    ? 'the replay was SILENT over ' + prefilter.cases + ' triggering line(s) (fewer than 2 usable composed answers - the clean games are the test)'
-    : prefilter.before + ' -> ' + prefilter.after + ' over ' + prefilter.cases + ' triggering line(s)';
-  if (!prefilter.ok) {
-    return Object.assign({}, base, { decision: 'reject', reason: 'the replay refuses it: ' + prefilter.reason });
-  }
-  const contradicted = opts.contradicted === true && opts.oracle && opts.oracle.known === true;
-  if (contradicted) {
-    return Object.assign({}, base, {
-      decision: 'apply', applied_fields: diff.kinds,
-      reason: 'it answers a CONTRADICTION between the rules and the value at this ply (' + decisiveness + ')'
-    });
-  }
-  if (prefilter.after > prefilter.before) {
-    return Object.assign({}, base, {
-      decision: 'apply', applied_fields: diff.kinds,
-      reason: 'the replay measures it as strictly more decisive (' + decisiveness + ')'
-    });
-  }
-  const narrowed = narrowRuleSet(previous, candidate, diff.narrowable);
-  if (narrowed) {
-    return Object.assign({}, base, {
-      decision: 'narrow', applied_fields: diff.narrowable,
-      reason: (silent
-        ? 'the replay was SILENT (it measured nothing over the ' + prefilter.cases + ' triggering line(s)), so only the '
-        : 'the replay cannot measure a gain over the ' + prefilter.cases + ' triggering line(s), so only the ') +
-        diff.narrowable.join(', ') + ' are applied; the rest is queued for the next attempt'
-    });
-  }
-  return null;   // silent: J1 and J2 cannot decide, and only then is a consensus worth its calls
+  const verdict = Neurosym.judgeMeasured(formulaShellOf(previous), formulaShellOf(candidate), {
+    cases: (opts.cases || []).map(function (c) { return { atoms: c && c.leaf ? c.leaf.atoms : null }; }),
+    contradicted: opts.contradicted === true && !!opts.oracle && opts.oracle.known === true,
+    tolerance: PATH_PREFILTER_TOLERANCE,
+    ledgerVersions: ledgerVersions()
+  });
+  if (!verdict) return null;   // silent: J1 and J2 cannot decide, and only then is a consensus worth its calls
+  return { decision: verdict.decision, judge: verdict.judge, votes: verdict.votes, applied_fields: verdict.applied_fields,
+    diff: verdict.diff, reason: verdict.reason };
 }
 /* The judge's OWN system prompt: judging is a different task from authoring, so it must not receive the
    authoring contract (which invites the model to rewrite weights). */
@@ -7146,76 +7496,38 @@ function buildJudgeSystemPrompt() {
 async function judgeDiffWithLLM(payload, options) {
   const opts = options || {};
   const answer = await requestMetaReasoning(payload, { signal: opts.signal, systemPrompt: buildJudgeSystemPrompt() });
-  const parsed = parseJSONLoose(answer.content);
-  const decision = (parsed && typeof parsed.decision === 'string') ? parsed.decision.toLowerCase() : null;
-  if (['apply', 'reject', 'narrow'].indexOf(decision) < 0) {
-    return { decision: null, kinds: [], reason: 'unusable answer: ' + String(answer.content || '').slice(0, 120) };
-  }
-  const kinds = (parsed && Array.isArray(parsed.kinds))
-    ? parsed.kinds.filter(function (kind) { return typeof kind === 'string'; }) : [];
-  return { decision: decision, kinds: kinds, reason: String(parsed.reason || '').slice(0, 300) };
+  return Neurosym.parseVote(answer.content);
 }
 /* J3: independent votes, declared quorum, BLINDED payload (the proponent's rationale never travels).
    Returns a verdict, or null when no vote was usable - and null here does NOT mean "approved". */
 async function judgeRuleDiffConsensus(previous, candidate, options) {
+  /* J3 is the library's (Neurosym.judgeConsensus): independent votes, declared quorum, BLINDED payload (the
+     proponent's rationale never travels), narrow restricted to the measurable kinds the votes named. Returns
+     null when no vote was usable - and null here does NOT mean "approved". This file supplies the evidence. */
   const opts = options || {};
   const diff = opts.diff || toRuleDiff(previous, candidate);
-  const payload = {
-    task: 'judge_rule_diff',
-    instruction: 'Decide whether applying this change is justified by the evidence. The rationale of the system that proposed it is deliberately withheld.',
-    proposed_change: {
-      from_version: diff.from_version, to_version: diff.to_version,
-      kinds: diff.kinds, fields: diff.fields, summary: diff.summary
-    },
-    evidence: {
-      witness: opts.witness || null,
-      triggering_lines: (opts.cases || []).map(function (c) {
-        return { kind: c.kind, why: c.why, leaf: { value: c.leaf.value, confidence: c.leaf.confidence, atoms: c.leaf.atoms } };
-      }),
-      /* The author supplies formulas, never measurements. This replay is the harness's deterministic
-         execution of candidate O(s) over the evidence boards, so the judge sees verified facts. */
-      formula_observation_replay: opts.formulaReplay || null,
-      oracle: opts.oracle || null,
-      atom_accuracy: Telemetry.atomAccuracy(),
-      dead_atoms: Telemetry.atomStatistics().filter(function (s) { return s.dead; }).map(function (s) { return s.id; })
-    },
-    acceptance_criterion: 'The games decide in the end: a change you approve is re-measured, and one with mid-game corrections is re-verified cleanly.'
-  };
-  const votes = { apply: 0, reject: 0, narrow: 0 };
-  const votedKinds = {};
-  const reasons = [];
-  let usable = 0;
-  for (let i = 0; i < CONSENSUS_VOTES; i++) {
-    try {
-      const vote = await judgeDiffWithLLM(payload, { signal: opts.signal });
-      if (!vote.decision) { reasons.push('unusable: ' + vote.reason); continue; }
-      usable++;
-      votes[vote.decision]++;
-      vote.kinds.forEach(function (kind) { votedKinds[kind] = (votedKinds[kind] || 0) + 1; });
-      reasons.push(vote.decision + (vote.reason ? ': ' + vote.reason : ''));
-    } catch (error) {
-      if (error && error.kind === 'aborted') throw error;
-      reasons.push('error: ' + summarizeError(error));
-    }
-  }
-  Telemetry.judgeCalls += usable;
-  if (!usable) return null;
-  const decision = (votes.apply >= CONSENSUS_QUORUM) ? 'apply'
-    : (votes.narrow >= CONSENSUS_QUORUM ? 'narrow' : 'reject');
-  /* A narrow verdict applies only the MEASURABLE kinds the votes named: a judge cannot ask for a field
-     the replay cannot check, whatever it says. */
-  const named = diff.narrowable.filter(function (kind) { return (votedKinds[kind] || 0) >= 1; });
-  const applied = (decision === 'narrow' && named.length) ? named
-    : (decision === 'narrow' ? diff.narrowable : (decision === 'apply' ? diff.kinds : []));
-  return {
-    decision: decision,
-    judge: JUDGE_CONSENSUS,
-    votes: votes,
-    applied_fields: applied,
-    diff: diff,
-    reason: 'consensus ' + votes.apply + '/' + votes.reject + '/' + votes.narrow +
-      ' over ' + usable + ' usable vote(s) (quorum ' + CONSENSUS_QUORUM + '/' + CONSENSUS_VOTES + '): ' + reasons.slice(0, 3).join(' | ')
-  };
+  const payload = Neurosym.consensusPayload(diff, {
+    witness: opts.witness || null,
+    triggering_lines: (opts.cases || []).map(function (c) {
+      return { kind: c.kind, why: c.why, leaf: { value: c.leaf.value, confidence: c.leaf.confidence, atoms: c.leaf.atoms } };
+    }),
+    /* The author supplies formulas, never measurements. This replay is the harness's deterministic
+       execution of candidate O(s) over the evidence boards, so the judge sees verified facts. */
+    formula_observation_replay: opts.formulaReplay || null,
+    oracle: opts.oracle || null,
+    atom_accuracy: Telemetry.atomAccuracy(),
+    dead_atoms: Telemetry.atomStatistics().filter(function (s) { return s.dead; }).map(function (s) { return s.id; })
+  });
+  const verdict = await Neurosym.judgeConsensus(diff, payload, {
+    client: { complete: function (request) { return requestMetaReasoning(request.user, { signal: request.signal, systemPrompt: request.system }); } },
+    systemPrompt: buildJudgeSystemPrompt(),
+    votes: CONSENSUS_VOTES, quorum: CONSENSUS_QUORUM, signal: opts.signal || null,
+    describeError: summarizeError
+  });
+  if (!verdict) return null;
+  Telemetry.judgeCalls += verdict.usable;
+  return { decision: verdict.decision, judge: verdict.judge, votes: verdict.votes, applied_fields: verdict.applied_fields,
+    diff: verdict.diff, reason: verdict.reason };
 }
 /* The ONE place a rule set may change inside a game. Budgeted, prefiltered, and every applied change
    is logged with the before/after of the field that moved, so the harness can be audited as "a system
@@ -8603,141 +8915,135 @@ async function runLearning() {
   let best = null;
   let accepted = null;
   try {
-    for (let attempt = 1; attempt <= attemptBudget; attempt++) {
-      if (match.status !== 'tuning') {
+    /* THE BOUNDARY DECISIONS are the library's (Neurosym.runAttempts): measure with a frozen rule set; an operator
+       directive first (it overrides even acceptance); accept only a clean win of EVERY game, re-verifying a win
+       whose rule set moved mid-game; the curriculum may raise the bar on a clean win; otherwise consolidate the
+       doubts once or ask for the next hypothesis from the best score - and stop when System 2 has none. This file
+       plays the games, talks to System 2, keeps the books and writes the log. */
+    let costBefore = null;
+    const scoreOf = function (score) { if (score) score.formula = score.rules; return score; };
+    const loop = await Neurosym.runAttempts(candidate, {
+      budget: attemptBudget,
+      isRunning: function () {
+        if (match.status === 'tuning') return true;
         if (match.status === 'error') log('ERROR', 'error', 'A game crashed the harness - learning aborted.');
-        break;
-      }
-      match.tuning.attempt = attempt;
-      Telemetry.hypotheses++;
-      /* Cost of this attempt, measured as a delta: nodes, leaves, live Jev calls and wall clock.
-         This is what turns "few LLM calls" into "each call costs 4 minutes of Jev". */
-      const costBefore = {
-        nodes: Telemetry.nodes, leaves: Telemetry.leafNodes, jevCalls: Telemetry.jevCalls,
-        prunes: Telemetry.prunes, jevPrunes: Telemetry.jevPrunes, certainPrunes: Telemetry.certainPrunes,
-        below: Telemetry.confidenceBelowFloor, startedAt: now()
-      };
-      const score = await scoreRulesOverTrials(candidate, trialMatrix, 'tuning');
-      if (!score.total) break;
-      const floorNow = clamp(candidate.confidenceFloor, CONFIDENCE_FLOOR_RANGE.min, CONFIDENCE_FLOOR_RANGE.max);
-      const cost = {
-        nodes: Telemetry.nodes - costBefore.nodes,
-        leaves: Telemetry.leafNodes - costBefore.leaves,
-        jev_calls: Telemetry.jevCalls - costBefore.jevCalls,
-        prunes: Telemetry.prunes - costBefore.prunes,
-        jev_prunes: Telemetry.jevPrunes - costBefore.jevPrunes,
-        certain_prunes: Telemetry.certainPrunes - costBefore.certainPrunes,
-        leaves_below_floor: Telemetry.confidenceBelowFloor - costBefore.below,
-        ms: Math.round(now() - costBefore.startedAt),
-        confidence_mean: Telemetry.confidenceMean === null ? null : round(Telemetry.confidenceMean, 4),
-        floor: floorNow
-      };
-      log('SEARCH', score.perfect ? 'ok' : 'warn',
-        'Attempt ' + attempt + ' rules v' + candidate.version + ' -> ' + score.wins + '/' + score.total + ' cat wins [' +
-        score.games.map(function (g) { return g.outcome + '@' + g.plies; }).join(', ') + ']',
-        { attempt: attempt, weights: candidate.weights, rationale: candidate.rationale, cost: cost });
-      log('SEARCH', 'info', 'Attempt ' + attempt + ' cost: ' + cost.nodes + ' nodes, ' + cost.leaves +
-        ' leaf evals, ' + cost.jev_calls + ' live Jev calls in ' + (cost.ms / 1000).toFixed(1) + ' s' +
-        (cost.confidence_mean === null ? ' (Jev reported no confidence at all)' :
-          ' (Jev confidence mean ' + cost.confidence_mean + ', sigma ' + round(Telemetry.confidenceSigma(), 4) + ')') + '.');
-      /* ACCURACY, not dispersion: a question that answers the same on positions the rules win and
-         lose cannot discriminate, whatever weight it carries. This is what System 2 needed. */
-      const accuracy = Telemetry.atomAccuracy();
-      const flat = accuracy.filter(function (a) { return a.informative === false; });
-      if (flat.length) {
-        log('SEARCH', 'warn', 'UNINFORMATIVE QUESTION(S) after attempt ' + attempt + ': ' + flat.map(function (a) {
-          return a.id + ' answers ' + a.mean_when_cats_win + ' when the rules win vs ' + a.mean_when_mouse_wins +
-            ' when they lose (separation ' + a.separation + ' over ' + (a.samples_cat_wins + a.samples_mouse_wins) + ' labelled position(s))';
-        }).join('; ') + '. Rewrite its instructions or criteria: changing its weight cannot fix a question that does not discriminate.');
-      } else if (accuracy.length) {
-        log('SEARCH', 'info', 'Per-question accuracy so far: ' + accuracy.map(function (a) {
-          return a.id + ' separation ' + a.separation + ' (' + (a.samples_cat_wins + a.samples_mouse_wins) + ' labelled)';
-        }).join(', ') + '.');
-      }
-      if (logState.suppressedNotes > 0) {
-        log('SEARCH', 'info', 'Attempt ' + attempt + ' folded ' + logState.suppressedNotes +
-          ' repeated note(s): the same per-leaf note is printed once and counted after that.');
-        logState.suppressedNotes = 0;
-      }
-      /* Learning values evidence coverage, so its fan-out is deliberately exhaustive. Confidence is
-         still reported because it helps System 2 revise a rule, but it no longer masquerades as a
-         mathematical condition for alpha-beta correctness. */
-      if (cost.leaves_below_floor > 0) {
-        log('SEARCH', 'warn', 'Learning fan-out kept the complete Jev frontier: ' + cost.leaves_below_floor + '/' + cost.leaves +
-          ' leaves were below the evidence floor ' + cost.floor +
-          (cost.confidence_mean === null ? '' : ' (mean ' + cost.confidence_mean + ')') +
-          '. They remain negative/uncertain evidence for System 2. Alpha-beta is reserved for PLAY against the human and never uses this floor as a bound.');
-      }
-      match.tuning.history.push({ attempt: attempt, version: candidate.version, wins: score.wins, total: score.total, weights: candidate.weights, cost: cost });
-      match.tuning.lastCost = cost;
-      reportDeadAtoms();
-      /* OPERATOR INTERVENTION FIRST: a queued directive overrides the boundary's normal choice -
-         INCLUDING ACCEPTANCE, because "it just won" is exactly the local minimum the operator may
-         be trying to escape. The next attempt measures the directive set like any candidate;
-         nothing is ever applied inside a game. */
-      const directive = takeOperatorIntervention();
-      if (directive) {
-        const forced = await directiveRules(candidate, attempt, score, directive);
-        if (forced) { candidate = forced; continue; }
-        log('HALT', 'warn', 'The operator directive produced no rule set; the boundary proceeds normally.');
-      }
-      if (!best || score.wins > best.wins) {
-        best = score;
-        match.tuning.best = { attempt: attempt, wins: score.wins, total: score.total, version: candidate.version };
-      }
-      const movedGames = score.games.filter(function (g) { return (g.midgameChanges || 0) > 0; });
-      if (score.perfect) {
-        if (!movedGames.length) {
-          /* THE CURRICULUM FIRST: a clean win may raise the bar instead of ending the run. */
-          if (escalateMouseNow(score)) continue;
-          accepted = score; break;
+        return false;
+      },
+      onAttemptStart: function (attempt) {
+        match.tuning.attempt = attempt;
+        Telemetry.hypotheses++;
+        /* Cost of this attempt, measured as a delta: nodes, leaves, live Jev calls and wall clock.
+           This is what turns "few LLM calls" into "each call costs 4 minutes of Jev". */
+        costBefore = {
+          nodes: Telemetry.nodes, leaves: Telemetry.leafNodes, jevCalls: Telemetry.jevCalls,
+          prunes: Telemetry.prunes, jevPrunes: Telemetry.jevPrunes, certainPrunes: Telemetry.certainPrunes,
+          below: Telemetry.confidenceBelowFloor, startedAt: now()
+        };
+      },
+      measure: async function (rules) { return scoreOf(await scoreRulesOverTrials(rules, trialMatrix, 'tuning')); },
+      onMeasured: function (attempt, score) {
+        const measured = score.rules;
+        const floorNow = clamp(measured.confidenceFloor, CONFIDENCE_FLOOR_RANGE.min, CONFIDENCE_FLOOR_RANGE.max);
+        const cost = {
+          nodes: Telemetry.nodes - costBefore.nodes,
+          leaves: Telemetry.leafNodes - costBefore.leaves,
+          jev_calls: Telemetry.jevCalls - costBefore.jevCalls,
+          prunes: Telemetry.prunes - costBefore.prunes,
+          jev_prunes: Telemetry.jevPrunes - costBefore.jevPrunes,
+          certain_prunes: Telemetry.certainPrunes - costBefore.certainPrunes,
+          leaves_below_floor: Telemetry.confidenceBelowFloor - costBefore.below,
+          ms: Math.round(now() - costBefore.startedAt),
+          confidence_mean: Telemetry.confidenceMean === null ? null : round(Telemetry.confidenceMean, 4),
+          floor: floorNow
+        };
+        log('SEARCH', score.perfect ? 'ok' : 'warn',
+          'Attempt ' + attempt + ' rules v' + measured.version + ' -> ' + score.wins + '/' + score.total + ' cat wins [' +
+          score.games.map(function (g) { return g.outcome + '@' + g.plies; }).join(', ') + ']',
+          { attempt: attempt, weights: measured.weights, rationale: measured.rationale, cost: cost });
+        log('SEARCH', 'info', 'Attempt ' + attempt + ' cost: ' + cost.nodes + ' nodes, ' + cost.leaves +
+          ' leaf evals, ' + cost.jev_calls + ' live Jev calls in ' + (cost.ms / 1000).toFixed(1) + ' s' +
+          (cost.confidence_mean === null ? ' (Jev reported no confidence at all)' :
+            ' (Jev confidence mean ' + cost.confidence_mean + ', sigma ' + round(Telemetry.confidenceSigma(), 4) + ')') + '.');
+        /* ACCURACY, not dispersion: a question that answers the same on positions the rules win and
+           lose cannot discriminate, whatever weight it carries. This is what System 2 needed. */
+        const accuracy = Telemetry.atomAccuracy();
+        const flat = accuracy.filter(function (a) { return a.informative === false; });
+        if (flat.length) {
+          log('SEARCH', 'warn', 'UNINFORMATIVE QUESTION(S) after attempt ' + attempt + ': ' + flat.map(function (a) {
+            return a.id + ' answers ' + a.mean_when_cats_win + ' when the rules win vs ' + a.mean_when_mouse_wins +
+              ' when they lose (separation ' + a.separation + ' over ' + (a.samples_cat_wins + a.samples_mouse_wins) + ' labelled position(s))';
+          }).join('; ') + '. Rewrite its instructions or criteria: changing its weight cannot fix a question that does not discriminate.');
+        } else if (accuracy.length) {
+          log('SEARCH', 'info', 'Per-question accuracy so far: ' + accuracy.map(function (a) {
+            return a.id + ' separation ' + a.separation + ' (' + (a.samples_cat_wins + a.samples_mouse_wins) + ' labelled)';
+          }).join(', ') + '.');
         }
+        if (logState.suppressedNotes > 0) {
+          log('SEARCH', 'info', 'Attempt ' + attempt + ' folded ' + logState.suppressedNotes +
+            ' repeated note(s): the same per-leaf note is printed once and counted after that.');
+          logState.suppressedNotes = 0;
+        }
+        /* Learning values evidence coverage, so its fan-out is deliberately exhaustive. Confidence is
+           still reported because it helps System 2 revise a rule, but it no longer masquerades as a
+           mathematical condition for alpha-beta correctness. */
+        if (cost.leaves_below_floor > 0) {
+          log('SEARCH', 'warn', 'Learning fan-out kept the complete Jev frontier: ' + cost.leaves_below_floor + '/' + cost.leaves +
+            ' leaves were below the evidence floor ' + cost.floor +
+            (cost.confidence_mean === null ? '' : ' (mean ' + cost.confidence_mean + ')') +
+            '. They remain negative/uncertain evidence for System 2. Alpha-beta is reserved for PLAY against the human and never uses this floor as a bound.');
+        }
+        match.tuning.history.push({ attempt: attempt, version: measured.version, wins: score.wins, total: score.total, weights: measured.weights, cost: cost });
+        match.tuning.lastCost = cost;
+        reportDeadAtoms();
+      },
+      takeDirective: takeOperatorIntervention,
+      directiveCandidate: function (rules, attempt, score, directive) { return directiveRules(rules, attempt, score, directive); },
+      onDirectiveFailed: function () {
+        log('HALT', 'warn', 'The operator directive produced no rule set; the boundary proceeds normally.');
+      },
+      onBest: function (attempt, score) {
+        best = score;
+        match.tuning.best = { attempt: attempt, wins: score.wins, total: score.total, version: score.rules.version };
+      },
+      verifyClean: async function (rules, attempt, movedGames) {
         /* The rule set moved inside the games that won, so the win is a HYPOTHESIS, not a
            measurement: replay the same games with the corrections held back before accepting. */
         log("HALT", "warn", "Attempt " + attempt + " won every game, but the rule set was revised mid-game in " +
-          movedGames.length + "/" + score.total + " of them (" + movedGames.map(function (g) {
+          movedGames.length + "/" + trialMatrix.length + " of them (" + movedGames.map(function (g) {
             return g.midgameChanges + "x";
-          }).join(", ") + "). Re-verifying v" + candidate.version + " over " + trialMatrix.length +
+          }).join(", ") + "). Re-verifying v" + rules.version + " over " + trialMatrix.length +
           " clean game(s) with the corrections held back.");
-        const clean = await verifyRulesCleanly(candidate, trialMatrix);
-        if (clean.perfect) {
-          clean.cleanVerified = true;
-          log("SYSTEM", "ok", "CLEAN RE-VERIFICATION PASSED: v" + candidate.version + " wins " + clean.wins + "/" +
+        return scoreOf(await verifyRulesCleanly(rules, trialMatrix));
+      },
+      onCleanVerification: function (attempt, clean, passed) {
+        if (passed) {
+          log("SYSTEM", "ok", "CLEAN RE-VERIFICATION PASSED: v" + clean.rules.version + " wins " + clean.wins + "/" +
             clean.total + " with a FROZEN rule set - the PRE-correction set holds on its own, so the mid-game revision(s) of the trial games are NOT part of the accepted artifact (they live in the rules history and the log).");
-          /* THE CURRICULUM FIRST: a clean win may raise the bar instead of ending the run. */
-          if (escalateMouseNow(clean)) continue;
-          accepted = clean;
-          break;
+        } else {
+          log("HALT", "error", "CLEAN RE-VERIFICATION FAILED: v" + clean.rules.version + " won " + clean.wins + "/" +
+            clean.total + " clean game(s). The mid-game revisions produced wins the frozen rule set cannot hold; " +
+            "those clean games are the evidence for the next attempt.");
         }
-        log("HALT", "error", "CLEAN RE-VERIFICATION FAILED: v" + candidate.version + " won " + clean.wins + "/" +
-          clean.total + " clean game(s). The mid-game revisions produced wins the frozen rule set cannot hold; " +
-          "those clean games are the evidence for the next attempt.");
-        const cleanEvidence = pickLossEvidence(clean);
-        const repaired = await nextHypothesisRules(candidate, attempt, cleanEvidence);
-        if (!repaired) {
-          log("HALT", "error", "Learning stopped after attempt " + attempt +
-            ": System 2 produced no new hypothesis from the clean re-verification.");
-          break;
-        }
-        candidate = repaired;
-        continue;
-      }
-      const evidence = pickLossEvidence(score);
-      log('HALT', 'warn', 'Attempt ' + attempt + ' rejected. ' + (evidence ? evidence.diagnosis : 'No loss evidence captured.'));
+      },
+      /* THE CURRICULUM FIRST: a clean win may raise the bar instead of ending the run. */
+      escalate: escalateMouseNow,
+      lossEvidence: pickLossEvidence,
+      onRejected: function (attempt, score, evidence) {
+        log('HALT', 'warn', 'Attempt ' + attempt + ' rejected. ' + (evidence ? evidence.diagnosis : 'No loss evidence captured.'));
+      },
       /* CONSOLIDATION first: the plies where the rule set did not believe itself are evidence a score
          cannot carry, and answering them ONCE at the boundary (instead of ply by ply inside the games)
-         is what keeps every trial game a clean measurement. If it produces a candidate, that candidate
-         is what the next attempt measures; otherwise the loss report is the evidence. */
-      const consolidated = await consolidateReflections(attempt, score);
-      if (consolidated) { candidate = consolidated; continue; }
-      const nextRules = await nextHypothesisRules(best.rules, attempt, evidence);
-      if (!nextRules) {
-        log('HALT', 'error', 'Learning stopped after attempt ' + attempt +
-          ': System 2 produced no new hypothesis, and the harness does not invent one.');
-        break;
+         is what keeps every trial game a clean measurement. */
+      consolidate: consolidateReflections,
+      nextHypothesis: function (from, attempt, evidence) { return nextHypothesisRules(from, attempt, evidence); },
+      onNoHypothesis: function (attempt, after) {
+        log('HALT', 'error', after === 'clean_verification'
+          ? 'Learning stopped after attempt ' + attempt + ': System 2 produced no new hypothesis from the clean re-verification.'
+          : 'Learning stopped after attempt ' + attempt + ': System 2 produced no new hypothesis, and the harness does not invent one.');
       }
-      candidate = nextRules;
-    }
+    });
+    accepted = loop.accepted;
+    best = loop.best;
     /* The aggregate grew with the depth probe too, so the verdict on each question is reported
        once more before the run closes. */
     reportDeadAtoms();

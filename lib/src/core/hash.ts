@@ -38,9 +38,10 @@ export function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/** Identical to the harness's round (the EPSILON nudge makes 0.1235 round up the way a reader expects). */
 export function round(value: number, digits: number): number {
-  const f = Math.pow(10, digits);
-  return Math.round(value * f) / f;
+  const f = Math.pow(10, Number.isFinite(digits) ? digits : 4);
+  return Math.round((Number(value) + Number.EPSILON) * f) / f;
 }
 
 export function clamp(value: number, min: number, max: number): number {

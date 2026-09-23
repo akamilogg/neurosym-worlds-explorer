@@ -100,7 +100,7 @@ gate('the default rubric judges O(s), while code owns the declared measurements'
    model can only reshuffle the same four numbers, which is what made every revision useless. */
 gate('the System-2 prompt carries a Jev schema document',
   source.indexOf('function buildJevSchemaDoc()') >= 0 && source.indexOf('buildJevSchemaDoc()') >= 0 &&
-  source.indexOf('content: opts.systemPrompt || buildLlmSystemPrompt()') >= 0);
+  source.indexOf('system: opts.systemPrompt || buildLlmSystemPrompt()') >= 0 && source.indexOf('{ role: "system", content: system }') >= 0);
 gate('the schema document is generated from one question-type registry',
   source.indexOf('const QUESTION_TYPES = {') >= 0 && source.indexOf('spec.criteriaShape') >= 0 &&
   source.indexOf('renderRulesShape(null, true)') >= 0);
@@ -163,7 +163,7 @@ gate('the policy merge is a DECLARED operation with one implementation, never a 
   source.indexOf('policyWeights: policyWeightsResult.policyWeights,') >= 0 &&
   source.indexOf('policy_weights: source.policyWeights || {},') >= 0 &&
   source.indexOf('changes.policy_weights = true') >= 0 &&
-  source.indexOf('kinds.push("policy_weights");') >= 0 &&
+  source.indexOf('else if (key === "weights" || key === "policy_weights" || key === "confidence_floor") kinds.push(key);') >= 0 &&
   source.indexOf('"subject", "aggregate"];') >= 0 &&
   source.indexOf('function mergePolicyDistributions(entries, mode, policyWeights) { return Neurosym.mergePolicyDistributions(') >= 0 &&
   source.indexOf('const merge = mergePolicyDistributions(') >= 0 && source.indexOf("weighted ? \"weighted_mean\" : \"single\"") >= 0 &&
@@ -195,8 +195,8 @@ gate('the Mouse is a CODE-ONLY planner: deterministic, budgeted, independent of 
 gate('the CURRICULUM escalates the Mouse while the Cats\' depth never moves',
   source.indexOf('function escalateMouseNow(score)') >= 0 &&
   source.indexOf('function resetMeasurementWorld()') >= 0 &&
-  source.indexOf('if (escalateMouseNow(score)) continue;') >= 0 &&
-  source.indexOf('if (escalateMouseNow(clean)) continue;') >= 0 &&
+  source.indexOf('if (climb(score)) continue;') >= 0 && source.indexOf('escalate: escalateMouseNow,') >= 0 &&
+  source.indexOf('if (climb(clean)) continue;') >= 0 &&
   source.indexOf('Curriculum ceiling') >= 0 &&
   source.indexOf('mouseDepth: clamp(Math.round(config.depth) || 1, 1, 6)') >= 0);
 gate('an escalation is a NEW measurement world: no cache of the weaker Mouse survives it',
@@ -246,7 +246,7 @@ gate('the only mid-game writer is the path consult, guarded by mode, budget, pre
 gate('a win obtained with a moving rule set is re-verified with the corrections held back',
   source.indexOf('async function verifyRulesCleanly(rules, trials)') >= 0 &&
   source.indexOf('config.pathLearning = "collect";') >= 0 &&
-  source.indexOf('const clean = await verifyRulesCleanly(candidate, trialMatrix);') >= 0 &&
+  source.indexOf('const clean = await hooks.verifyClean(candidate, attempt, revised);') >= 0 && source.indexOf('return scoreOf(await verifyRulesCleanly(rules, trialMatrix));') >= 0 &&
   source.indexOf('clean.cleanVerified = true;') >= 0 &&
   source.indexOf('CLEAN RE-VERIFICATION FAILED') >= 0 &&
   source.indexOf('match.measurementGame !== true') >= 0 &&
@@ -258,7 +258,8 @@ gate('learning is expressed only in the fields System 1 evaluates, and prose alo
   source.indexOf('if (identical || !hasEvaluableRuleChange(previous, normalized.rules)) {') >= 0 &&
   source.indexOf('System 2 returned NO CHANGE') >= 0 &&
   source.indexOf('Nothing Jev evaluates changed') >= 0 &&
-  source.indexOf('ruleChangeKinds(diffRuleSets(previous, candidate)).length > 0') >= 0);
+  source.indexOf('return changeKinds(diffFormulas(before, after)).length > 0;') >= 0 &&
+  source.indexOf('function hasEvaluableRuleChange(previous, candidate) { return Neurosym.hasEvaluableChange(') >= 0);
 gate('the path brief carries the BOARDS of the line, the Jev answers and the confidence',
   source.indexOf('function buildPathBrief(ply, rules, cases, trigger)') >= 0 &&
   source.indexOf('function pathBoards(entries, rules)') >= 0 &&
@@ -312,16 +313,17 @@ gate('every belief that MOVED is recorded, and only with the truth it could be l
   source.indexOf('if (!previous) return null;') >= 0);
 gate('the oracle key is built in ONE place, and the revision journal reads it with the same key',
   source.indexOf('function oracleCacheKey(state) {') >= 0 &&
-  source.indexOf("const cached = oracleCache.get(oracleCacheKey(state)) || null;") >= 0 &&
+  source.indexOf('truth: oracleCache.get(oracleCacheKey(state)) || null, maximizer: SIDE_CATS') >= 0 &&
   source.indexOf('const key = oracleCacheKey(state);') >= 0 &&
   source.indexOf("oracleCache.get(key + '|p' + state.ply)") < 0,
   'a verdict is about a board AT a ply AGAINST a Mouse model; a reader that drops the model from the key reads verdicts about a different game');
 gate('a narrow verdict cannot plant GHOST weights, and the version history only moves up',
   source.indexOf('const MOUSE_PLAN_CACHE_LIMIT = 40000;') >= 0 &&
   source.indexOf('cacheSet(mousePlanCache, key, move, MOUSE_PLAN_CACHE_LIMIT)') >= 0 &&
-  source.indexOf('normalizeWeights(candidate.weights, previous.weights, valueAtoms(keptBattery), policyAtoms(keptBattery))') >= 0 &&
-  source.indexOf('normalizePolicyWeights(candidate.policyWeights, policyAtoms(keptBattery), previous.policyWeights)') >= 0 &&
-  source.indexOf('narrowed.version = highestKnownVersion(previous) + 1;') >= 0 &&
+  source.indexOf('settleWeights(candidate.weights, previous.weights, valueRuleIds(previous), policyRuleIds(previous))') >= 0 &&
+  source.indexOf('settlePolicyWeights(candidate.policy_weights, policyRuleIds(previous), previous.policy_weights)') >= 0 &&
+  source.indexOf('version: nextVersion(versionOf(previous), ledgerVersions),') >= 0 &&
+  source.indexOf('Neurosym.narrowFormula(formulaShellOf(previous), formulaShellOf(candidate), kinds || [], ledgerVersions())') >= 0 &&
   source.indexOf("'RENAMING IS NOT EVOLUTION:") >= 0 &&
   source.indexOf('function highestKnownVersion(previous) {') >= 0 &&
   source.indexOf('const versionFloor = highestKnownVersion(previous);') >= 0);
@@ -331,11 +333,12 @@ gate('the operator can FORCE a System-2 consult mid-run, consumed at the attempt
   source.indexOf('function queueOperatorIntervention() {') >= 0 &&
   source.indexOf('function takeOperatorIntervention() {') >= 0 &&
   source.indexOf('async function directiveRules(candidate, attempt, score, directive) {') >= 0 &&
-  source.indexOf('const directive = takeOperatorIntervention();') >= 0 &&
+  source.indexOf('const directive = hooks.takeDirective ? hooks.takeDirective() : null;') >= 0 && source.indexOf('takeDirective: takeOperatorIntervention,') >= 0 &&
   source.indexOf("task: opts.operatorDirective ? 'operator_directive'") >= 0 &&
   source.indexOf('operator_directive: opts.operatorDirective') >= 0 &&
   source.indexOf('OPERATOR DIRECTIVE: when the payload carries') >= 0 &&
-  source.indexOf('if (directive && ref.operator_directive === true) return true;') >= 0 &&
+  source.indexOf('if (evidence.directive && ref.operator_directive === true) return true;') >= 0 &&
+  source.indexOf('directive: !!directive') >= 0 &&
   source.indexOf('match.operatorIntervention = null;') >= 0);
 gate('the post-game report carries the CATS OWN FORMATION, and strategy is a first-class hypothesis',
   source.indexOf('function catFormationFacts(trace) {') >= 0 &&
@@ -354,8 +357,9 @@ gate('learning is triggered by being WRONG (the oracle), not by being uncertain'
   source.indexOf('const oracleCache = new Map();') >= 0 &&
   source.indexOf('function oracleVerdict(state, options) {') >= 0 &&
   source.indexOf('function describeValueAgainstTruth(value, verdict) {') >= 0 &&
-  source.indexOf('const contradiction = describeValueAgainstTruth(played.value, verdict);') >= 0 &&
-  source.indexOf('if (contradiction.indexOf("CONTRADICTION") === 0) return triggerOf("contradiction", contradiction);') >= 0 &&
+  source.indexOf("const described = (verdict && verdict.known) ? describeValueAgainstTruth(played.value, verdict) : '';") >= 0 &&
+  source.indexOf('contradiction: described.indexOf("CONTRADICTION") === 0 ? described : null,') >= 0 &&
+  source.indexOf('if (signals.contradiction) return trigger("contradiction", signals.contradiction);') >= 0 &&
   source.indexOf("'the ply judgment cannot be trusted: confidence '") < 0 &&
   source.indexOf('const verdict = oracleVerdict(match.state);') >= 0);
 gate('the trigger is TYPED and its mix is COUNTED, not only printed in prose',
@@ -371,7 +375,7 @@ gate('consolidation learns at the BOUNDARY: the doubts are recorded, never appli
   source.indexOf('const PATH_LEARNING_MODES = ["off", "collect", "consolidate", "live"];') >= 0 &&
   source.indexOf('const CONSOLIDATION_SCOPE = "attempt";') >= 0 &&
   source.indexOf('if (pathLearningMode() === "consolidate") recordReflection(search, cases);') >= 0 &&
-  source.indexOf('const consolidated = await consolidateReflections(attempt, score);') >= 0 &&
+  source.indexOf('const consolidated = hooks.consolidate ? await hooks.consolidate(attempt, score) : null;') >= 0 && source.indexOf('consolidate: consolidateReflections,') >= 0 &&
   source.indexOf("(opts.consolidationBrief ? 'consolidate_reflections'") >= 0 &&
   source.indexOf('consolidation_brief: opts.consolidationBrief || null,') >= 0 &&
   source.indexOf('CONSOLIDATION: when the payload carries consolidation_brief') >= 0 &&

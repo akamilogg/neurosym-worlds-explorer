@@ -77,6 +77,21 @@ new Observer(world, { dialects: [foxhoundsDialect] })                 // ambos (
 
 `meta` nunca entra en el hash. `judgmentHash` excluye los pesos: las respuestas del juez se reutilizan al re-pesar.
 
+## El aprendiz (`learn/`)
+
+Neutral respecto al mundo, extraído del harness por capas y con paridad contra el commit base:
+
+| Capa | Qué decide | Ficheros |
+|---|---|---|
+| **L1** álgebra y puertas | qué cambió entre dos fórmulas (sólo campos evaluables: la prosa no es aprendizaje), el `narrow` (sólo pesos/floor, re-asentados sobre las reglas conservadas; versión por encima del ledger), el prefiltro de decisividad, el juez medido J1/J2, la procedencia J0 y el replay de ejecutabilidad + determinismo sobre la evidencia | `diff.ts`, `judges.ts`, `gates.ts` |
+| **L2** evidencia | revisiones (qué regla se movió y si fue contra la verdad), testigo por regla, los cuatro casos que pediría un revisor, el disparador de una consulta (contradicción > moneda al aire > no se lo cree), reflexiones agrupadas | `evidence.ts` |
+| **L3** System 2 | cliente chat-completions inyectable y juez de consenso J3 (votos independientes, quórum, justificación del autor oculta, `narrow` limitado a lo medible) | `system2.ts` |
+| **L4** el bucle | `runAttempts`: medir congelado → directiva del operador → aceptar sólo victoria limpia de TODOS los juegos (re-verificar si la fórmula se movió) → currículum → consolidar o pedir la siguiente hipótesis; sin propuesta, se para | `loop.ts` |
+
+Lo que sigue siendo del harness es lo propio del dominio y de la UI: los textos del prompt y de los
+resúmenes, los tableros ASCII, el `mutateRulesWithLLM` que arma el payload y cose las puertas, la telemetría,
+los logs y el panel. El harness llama a `learn/` en cada una de esas decisiones.
+
 ## El harness consume la biblioteca
 
 `fox-hounds-harness.html` sigue siendo UN fichero: `npm run bundle` compila `src/browser.ts` a un IIFE
@@ -148,5 +163,6 @@ real la proporción dependerá de cuántas hojas comparten vector.)
 | **P0b** | Juez Jev, búsqueda (fan-out / PV-αβ), modelo del ratón y oráculo con paridad; el harness incrusta la biblioteca y le delega mundo, vocabulario y planner | **hecho** |
 | **P0c** | El harness evalúa y busca con la biblioteca (`Evaluator`, `JevJudge`, `minimax` con ganchos); hereda la agrupación de preguntas en vuelo | **hecho** |
 | **P1** | System 2 escribe medidas `code` en el harness: modo de observación, semilla de código, prompt por modo, determinismo en el replay, telemetría de juicio absorbido | **hecho** |
+| **L1–L4** | El aprendiz en la biblioteca (álgebra, jueces, puertas, evidencia, System 2, bucle de intentos); el harness delega | **hecho** |
 | P2 | Ablaciones con las mismas semillas: catálogo vs code vs ambos; juez lineal sólo como línea base | pendiente |
 | P3 | Un segundo World, pequeño y distinto: sin él no hay biblioteca | pendiente |

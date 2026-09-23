@@ -34,6 +34,7 @@ export interface HarnessApi {
   resetCaches(): void;
   /** PLAY mode with a human Mouse, as the page sets it (only `humanSide` is read by the opponent model). */
   setHumanMouse(on: boolean): void;
+  learner: any;
 }
 
 /** The harness's fetch is routed here, so a test can install the same Jev stub on both sides. */
@@ -59,7 +60,14 @@ export function loadHarness(): HarnessApi {
     'stateKey, computeObservations, OBSERVATION_OPS, planMouseMove, solveAgainstModel, searchBestMove, normalizeRules, ' +
     'rulesFromFormula, moveKey, config, resetCaches: function () { [jevAnswerCache, jevVectorCache, jevValueCache, mousePlanCache, ' +
     'oracleCache, jevBeliefBaseline].forEach(function (m) { m.clear(); }); }, ' +
-    'setHumanMouse: function (on) { match.play = on ? { humanSide: SIDE_MOUSE } : null; } };', sandbox, { filename: 'harness-inline.js' });
+    'setHumanMouse: function (on) { match.play = on ? { humanSide: SIDE_MOUSE } : null; }, ' +
+    'learner: { diffRuleSets, ruleChangeKinds, describeRuleChange, toRuleDiff, narrowRuleSet, judgeRuleDiffMeasured, prefilterCandidate, ' +
+    'validateEvidenceRef, normalizeRules, DEFAULT_RULES, setLedger: function (list) { match.rulesHistory = list; }, ' +
+    'recordRevision, jevBeliefBaseline, oracleCache, oracleCacheKey, viewRevisions, truthLabelCounts, buildAtomWitness, ' +
+    'selectPathCases, courseCorrectionTrigger, recordReflection, describeValueAgainstTruth, createSearchContext, config, ' +
+    'setRevisions: function (list) { match.revisions = list; }, setReflections: function (list) { match.reflections = list; }, ' +
+    'getReflections: function () { return match.reflections; }, setMatch: function (state, rules) { match.state = state; match.rules = rules; }, ' +
+    'judgeRuleDiffConsensus, buildJudgeSystemPrompt, requestMetaReasoning, Telemetry } };', sandbox, { filename: 'harness-inline.js' });
   cached = sandbox.__api as HarnessApi;
   return cached;
 }
