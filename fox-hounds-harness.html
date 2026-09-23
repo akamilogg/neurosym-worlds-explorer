@@ -605,6 +605,7 @@ var Neurosym = (() => {
     LEARNING_FANOUT: () => LEARNING_FANOUT,
     MeasurementError: () => MeasurementError,
     NARROWABLE_KINDS: () => NARROWABLE_KINDS,
+    Notebook: () => Notebook,
     Observer: () => Observer,
     PATH_COINFLIP_MARGIN: () => PATH_COINFLIP_MARGIN,
     PATH_EXTREME_MARGIN: () => PATH_EXTREME_MARGIN,
@@ -612,12 +613,14 @@ var Neurosym = (() => {
     PLAY_PV_ALPHA_BETA: () => PLAY_PV_ALPHA_BETA,
     PREFILTER_TOLERANCE: () => PREFILTER_TOLERANCE,
     REVISION_MIN_DELTA: () => REVISION_MIN_DELTA,
+    STANCES: () => STANCES,
     TRIGGER_CLASSES: () => TRIGGER_CLASSES,
     TT_EXACT: () => TT_EXACT,
     TT_LOWER: () => TT_LOWER,
     TT_UPPER: () => TT_UPPER,
     actionAccuracy: () => actionAccuracy,
     appendReflection: () => appendReflection,
+    auc: () => auc,
     beliefOf: () => beliefOf,
     calibrateConfidence: () => calibrateConfidence,
     changeKinds: () => changeKinds,
@@ -2997,23 +3000,70 @@ var Neurosym = (() => {
 
   // src/learn/experiments.ts
   var mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
-  function classify(win, loss, threshold, minSamples) {
+  function auc(win, loss) {
+    if (!win.length || !loss.length) return null;
+    let wins = 0;
+    for (const w of win) for (const l of loss) wins += w > l ? 1 : w === l ? 0.5 : 0;
+    return wins / (win.length * loss.length);
+  }
+  function classify(win, loss, options = {}) {
     const mw = mean(win), ml = mean(loss);
-    if (win.length < minSamples || loss.length < minSamples || mw === null || ml === null) return { separation: mw !== null && ml !== null ? round(mw - ml, 4) : null, status: "inconclusive" };
-    const separation = round(mw - ml, 4);
-    return { separation, status: separation >= threshold ? "supported" : separation <= -threshold ? "inverted" : "unsupported" };
+    const separation = mw !== null && ml !== null ? round(mw - ml, 4) : null;
+    const a = auc(win, loss);
+    const minSamples = options.minSamples ?? 6;
+    if (a === null || win.length < minSamples || loss.length < minSamples) {
+      return { auc: a === null ? null : round(a, 4), margin: null, separation, status: "inconclusive" };
+    }
+    const n1 = win.length, n2 = loss.length;
+    const margin = (options.z ?? 1.96) * Math.sqrt((n1 + n2 + 1) / (12 * n1 * n2));
+    const status = a >= 0.5 + margin ? "supported" : a <= 0.5 - margin ? "inverted" : "unsupported";
+    return { auc: round(a, 4), margin: round(margin, 4), separation, status };
+  }
+  function testOf(by, positions, win, loss, options) {
+    const c = classify(win, loss, options);
+    const mw = mean(win), ml = mean(loss);
+    return {
+      by,
+      positions,
+      samples_win: win.length,
+      samples_loss: loss.length,
+      mean_when_win: mw === null ? null : round(mw, 4),
+      mean_when_loss: ml === null ? null : round(ml, 4),
+      auc: c.auc,
+      margin: c.margin,
+      status: c.status,
+      separation: c.separation
+    };
   }
   async function runProbes(probes, positions, context, options = {}) {
-    const threshold = options.threshold ?? 0.15;
-    const minSamples = options.minSamples ?? 6;
     const results = [];
+    const inPlay = positions.filter((p) => !p.final);
+    const finals = positions.filter((p) => p.final);
     for (const probe of probes) {
       const errors = [];
-      const observations = { ...context.base.observations };
-      if (probe.observation) observations["probe_" + probe.id] = probe.observation;
-      const win = [];
-      const loss = [];
+      const tests = [];
+      if (probe.observation) {
+        const id = "probe_" + probe.id;
+        const decl = probe.observation;
+        const range = decl.range;
+        const measure = (set) => {
+          const win = [], loss = [];
+          for (const p of set) {
+            const o = context.observer.observe(p.state, { ...context.base.observations, [id]: decl });
+            const v = o.values[id];
+            const own = o.errors.find((e) => e.id === id);
+            if (own && errors.length < 3) errors.push(own.error);
+            if (!Number.isFinite(v) || !range || !(range[1] > range[0])) continue;
+            (p.label === "win" ? win : loss).push((v - range[0]) / (range[1] - range[0]));
+          }
+          return [win, loss];
+        };
+        tests.push(testOf("observation", "in_play", ...measure(inPlay), options));
+        if (finals.length) tests.push(testOf("observation", "final", ...measure(finals), { ...options, minSamples: options.minFinalSamples ?? Math.min(3, options.minSamples ?? 6) }));
+      }
       if (probe.question) {
+        const observations = { ...context.base.observations };
+        if (probe.observation) observations["probe_" + probe.id] = probe.observation;
         const formula = makeFormula({
           world: context.base.world,
           observations,
@@ -3022,7 +3072,8 @@ var Neurosym = (() => {
           meta: { source: "probe" }
         });
         const ev = new Evaluator(context.observer, context.judge, { maximizer: context.maximizer, strictMeasures: false });
-        for (const p of positions) {
+        const win = [], loss = [];
+        for (const p of inPlay) {
           try {
             const r = await ev.eval(formula, p.state, options.signal);
             const v = r.answers[probe.id]?.value;
@@ -3032,31 +3083,25 @@ var Neurosym = (() => {
             if (errors.length < 3) errors.push(String(error?.message || error));
           }
         }
-      } else if (probe.observation) {
-        const id = "probe_" + probe.id;
-        const range = probe.observation.range;
-        for (const p of positions) {
-          const o = context.observer.observe(p.state, { ...context.base.observations, [id]: probe.observation });
-          const v = o.values[id];
-          const own = o.errors.find((e) => e.id === id);
-          if (own && errors.length < 3) errors.push(own.error);
-          if (!Number.isFinite(v) || !range || !(range[1] > range[0])) continue;
-          (p.label === "win" ? win : loss).push((v - range[0]) / (range[1] - range[0]));
-        }
-      } else {
-        errors.push("a probe needs an observation or a question");
+        tests.push(testOf("question", "in_play", win, loss, options));
       }
-      const { separation, status } = classify(win, loss, threshold, minSamples);
+      if (!tests.length) errors.push("a probe needs an observation or a question");
+      const rank = { supported: 2, inverted: 2, unsupported: 1, inconclusive: 0 };
+      const decisiveness2 = (t) => rank[t.status] + (t.auc === null ? 0 : Math.abs(t.auc - 0.5));
+      const head = tests.slice().sort((a, b) => decisiveness2(b) - decisiveness2(a))[0];
       results.push({
         id: probe.id,
         hypothesis: probe.hypothesis,
-        tested_by: probe.question ? "question" : "observation",
-        samples_win: win.length,
-        samples_loss: loss.length,
-        mean_when_win: mean(win) === null ? null : round(mean(win), 4),
-        mean_when_loss: mean(loss) === null ? null : round(mean(loss), 4),
-        separation,
-        status,
+        tests: tests.map(({ separation: _separation, ...t }) => t),
+        tested_by: head?.by ?? (probe.question ? "question" : "observation"),
+        positions: head?.positions ?? "in_play",
+        samples_win: head?.samples_win ?? 0,
+        samples_loss: head?.samples_loss ?? 0,
+        mean_when_win: head?.mean_when_win ?? null,
+        mean_when_loss: head?.mean_when_loss ?? null,
+        separation: head?.separation ?? null,
+        auc: head?.auc ?? null,
+        status: head?.status ?? "inconclusive",
         round: options.round ?? 0,
         errors
       });
@@ -3106,6 +3151,198 @@ var Neurosym = (() => {
     };
   }
 
+  // src/learn/notebook.ts
+  var STANCES = ["new", "keep", "revise", "confirm", "drop"];
+  var clip = (text, n) => text.length > n ? text.slice(0, n - 1) + "…" : text;
+  function summarize(formula) {
+    const observations = {};
+    for (const [id, d] of Object.entries(formula.observations)) {
+      if (d.spec.kind === "sense") continue;
+      observations[id] = clip(d.definition || d.spec.source || "", 140);
+    }
+    const rules = {};
+    for (const [id, r] of Object.entries(formula.rules)) rules[id] = clip(r.instructions, 200);
+    return { observations, rules, weights: { ...formula.weights } };
+  }
+  function changesBetween(before, after) {
+    if (!before) return null;
+    const ids = (f) => [...Object.keys(f.observations).map((o) => "observation " + o), ...Object.keys(f.rules).map((r) => "rule " + r)];
+    const was = ids(before), now2 = ids(after);
+    return {
+      added: now2.filter((x) => !was.includes(x)),
+      removed: was.filter((x) => !now2.includes(x)),
+      reweighted: Object.keys(after.weights).filter((r) => r in before.weights && Math.abs(before.weights[r] - after.weights[r]) >= 0.05)
+    };
+  }
+  var Notebook = class {
+    constructor() {
+      __publicField(this, "beliefs", /* @__PURE__ */ new Map());
+      __publicField(this, "rounds", []);
+      __publicField(this, "episodes", []);
+    }
+    /** Apply the explorer's stances. Returns what was refused (as warnings) and the beliefs it said nothing about. */
+    applyStances(round2, stances) {
+      const warnings = [];
+      const touched = /* @__PURE__ */ new Set();
+      for (const s of stances) {
+        const known = this.beliefs.get(s.id);
+        const entry = { round: round2, stance: s.stance, statement: s.statement ?? known?.statement ?? "", why: s.why ?? "", evidence: [...s.evidence ?? []] };
+        if (s.stance === "new") {
+          if (known) {
+            warnings.push('belief "' + s.id + '" already exists: use keep, revise, confirm or drop');
+            continue;
+          }
+          if (!s.statement) {
+            warnings.push('new belief "' + s.id + '" has no statement');
+            continue;
+          }
+          this.beliefs.set(s.id, { id: s.id, statement: s.statement, status: "held", since: round2, history: [entry] });
+          touched.add(s.id);
+          continue;
+        }
+        if (!known) {
+          warnings.push('belief "' + s.id + '" does not exist (stance "' + s.stance + '" ignored)');
+          continue;
+        }
+        if (s.stance === "revise") {
+          if (!s.statement) {
+            warnings.push('revised belief "' + s.id + '" has no new statement');
+            continue;
+          }
+          known.statement = s.statement;
+          known.status = "held";
+        } else if (s.stance === "confirm") known.status = "confirmed";
+        else if (s.stance === "drop") known.status = "dropped";
+        else if (known.status === "dropped") known.status = "held";
+        known.history.push(entry);
+        touched.add(s.id);
+      }
+      const unaddressed = [...this.beliefs.values()].filter((b) => b.status !== "dropped" && !touched.has(b.id) && b.since < round2).map((b) => b.id);
+      return { warnings, unaddressed };
+    }
+    recordRound(round2, formula, lessons, nextExperiment) {
+      const summary = summarize(formula);
+      const previous = this.rounds.length ? this.rounds[this.rounds.length - 1].formula : null;
+      const record = {
+        round: round2,
+        formula: summary,
+        changes: changesBetween(previous, summary),
+        probes: [],
+        trials: [],
+        code_only: null,
+        lessons: [...lessons],
+        next_experiment: nextExperiment
+      };
+      this.rounds.push(record);
+      return record;
+    }
+    round(round2) {
+      return this.rounds.find((r) => r.round === round2);
+    }
+    recordProbes(round2, results) {
+      const r = this.round(round2);
+      if (!r) return;
+      r.probes = results.map((p) => ({
+        id: p.id,
+        hypothesis: clip(p.hypothesis, 200),
+        status: p.status,
+        auc: p.auc,
+        tests: p.tests.map((t) => t.by + " on " + t.positions.replace("_", " ") + " positions: " + t.status + (t.auc === null ? "" : " (auc " + t.auc + ")"))
+      }));
+    }
+    recordTrial(round2, trial) {
+      this.round(round2)?.trials.push(trial);
+    }
+    recordCodeOnly(round2, wins, total) {
+      const r = this.round(round2);
+      if (r) r.code_only = { wins, total };
+    }
+    addEpisodes(episodes) {
+      this.episodes.push(...episodes);
+    }
+    /** What the explorer reads about its own past: beliefs, lineage, its last lessons and plan. */
+    brief(unaddressed = []) {
+      const beliefs = [...this.beliefs.values()];
+      const last = this.rounds[this.rounds.length - 1];
+      return {
+        beliefs_held: beliefs.filter((b) => b.status !== "dropped").map((b) => ({
+          id: b.id,
+          statement: b.statement,
+          status: b.status,
+          since_round: b.since,
+          history: b.history.map((h) => "round " + h.round + ": " + h.stance + (h.why ? " - " + clip(h.why, 200) : "") + (h.evidence.length ? " [" + h.evidence.join(", ") + "]" : ""))
+        })),
+        beliefs_dropped: beliefs.filter((b) => b.status === "dropped").map((b) => ({
+          id: b.id,
+          statement: b.statement,
+          why: b.history[b.history.length - 1].why
+        })),
+        ...unaddressed.length ? { you_took_no_stance_on: [...unaddressed] } : {},
+        rounds: this.rounds.map((r) => ({
+          round: r.round,
+          formula: r.formula,
+          ...r.changes ? { changes: r.changes } : {},
+          probes: r.probes,
+          games: r.trials.map((t) => ({
+            opponent_level: t.level,
+            wins: t.wins,
+            of: t.total,
+            results: t.results,
+            turns_still_winning: t.held_win_turns,
+            move_quality: t.action_accuracy
+          })),
+          ...r.code_only ? { observations_alone_won: r.code_only.wins + " of " + r.code_only.total } : {}
+        })),
+        ...last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {}
+      };
+    }
+    /** Experience curated for the explorer. `keyframes` of a game: its start, its critical moment and its end. */
+    memory(options = {}) {
+      const eps = this.episodes;
+      const full = (e) => ({ case: e.id, how: e.how, result: e.result, turns: e.frames.length - 1, frames: e.frames });
+      const keyframes = (e) => {
+        const idx = [.../* @__PURE__ */ new Set([0, ...e.critical !== null && e.critical !== void 0 ? [e.critical, e.critical + 1] : [], e.frames.length - 1])].filter((i) => i >= 0 && i < e.frames.length).sort((a, b) => a - b);
+        return {
+          case: e.id,
+          how: e.how,
+          result: e.result,
+          turns: e.frames.length - 1,
+          ...e.heldWinTurns !== null && e.heldWinTurns !== void 0 ? { turns_still_winning: e.heldWinTurns } : {},
+          key_frames: idx.map((i) => ({ turn: i, frame: e.frames[i] }))
+        };
+      };
+      const shown = /* @__PURE__ */ new Set();
+      const wins = eps.filter((e) => e.result === "won").slice(-(options.wins ?? 3));
+      wins.forEach((e) => shown.add(e.id));
+      const critical = eps.filter((e) => e.ownPlay && e.result !== "won" && e.critical !== null && e.critical !== void 0).slice(-(options.critical ?? 6)).map((e) => ({
+        case: e.id,
+        turn: e.critical,
+        before_your_move: e.frames[e.critical],
+        after_your_move: e.frames[e.critical + 1],
+        note: "before this move your position could still be won; after it, it could not"
+      }));
+      const bestLosses = eps.filter((e) => e.ownPlay && e.result !== "won" && !shown.has(e.id) && (e.heldWinTurns ?? 0) > 0).sort((a, b) => (b.heldWinTurns ?? 0) - (a.heldWinTurns ?? 0)).slice(0, options.bestLosses ?? 1);
+      bestLosses.forEach((e) => shown.add(e.id));
+      const latestRound = eps.length ? eps[eps.length - 1].round : 0;
+      const latest = eps.filter((e) => e.round === latestRound && !shown.has(e.id));
+      const firstLook = !eps.some((e) => e.ownPlay);
+      return {
+        wins: wins.map(full),
+        critical_moments: critical,
+        best_losses: bestLosses.map(full),
+        latest_games: firstLook ? latest.map(full) : latest.map(keyframes),
+        total_games_played: eps.length
+      };
+    }
+    toJSON() {
+      return {
+        beliefs: [...this.beliefs.values()],
+        rounds: this.rounds,
+        episodes: this.episodes.map((e) => ({ id: e.id, round: e.round, how: e.how, result: e.result, turns: e.frames.length - 1, critical: e.critical ?? null, held: e.heldWinTurns ?? null }))
+      };
+    }
+  };
+
   // src/learn/explorer.ts
   var EXPLORER_SYSTEM = [
     "You are a scientist facing an environment nobody has described to you.",
@@ -3115,20 +3352,29 @@ var Neurosym = (() => {
     "  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived (the object described in `percept`), each returning a number inside its declared range. They can only compute from the picture.",
     `  - RULES: questions a semantic judge answers about a position. The judge sees the picture AND the values of your observations (cite an observation inside a rule as {{observation_id}}). A rule's answer, 0..1, means "good for my side" when high.`,
     "  - WEIGHTS over the rules (they are normalised to sum 1).",
-    "Work as a scientist: infer from the pictures how things change, form hypotheses about what leads to winning, and TEST them with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question; it is measured on positions whose final outcome is known, and reported as supported, inverted (true the other way round), unsupported or inconclusive. Do not repeat a probe already reported; build on what was learned.",
     "Both carriers of judgement are welcome: code is deterministic and readable, the judge understands plain words. Put each part of your understanding where it is clearest; a rule in plain words is preferred when it explains a judgement better than a formula would.",
+    "",
+    "You work over many rounds and keep a LAB NOTEBOOK (the `notebook` field). It is your memory: your beliefs and their history, every formula you tried with what changed and how its games went, what the observations alone achieved, the probes and their results, and your own lessons and planned next experiment from the previous round. Read it first. Do not repeat what failed unless you say why it should now work; build on partial improvements.",
+    'Every round, take a stance on EVERY belief you still hold: "keep", "revise" (give the new statement), "confirm" (the evidence settled it) or "drop" (the evidence refuted it); add new ones with "new". Cite the evidence: game cases, probe ids, rounds.',
+    'Your EXPERIENCE (the `experience` field) is curated: every game you won, the critical moment of games you lost (the position before your move, when you could still win, and the position after it, when you no longer could; the move that would have kept the win is not shown), your best losses, and the latest games. "turns_still_winning" counts your turns played while your position could still be won: it grows when you improve, even before you win.',
+    "",
+    'Test ideas with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question. The observation and the question are tested SEPARATELY. The judge answering a probe question never knows how the game ended: ask it to describe the position (e.g. "is the other piece boxed in?"), and the outcome comparison is done for you.',
+    'Each test reports an AUC: the probability that a position that was won scores higher than one that was lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost). It is "supported" or "inverted" only when it is further from 0.5 than chance allows with that many samples. Observations are tested on two kinds of positions: "in play" (does it predict who will win?) and "final" (is it what the end of a won or lost game looks like? - this is how you can learn how games end).',
+    "",
     "Answer with ONE JSON object and nothing else:",
     "{",
     '  "rationale": "what you believe now and why, citing the evidence",',
-    '  "hypotheses": ["short statements you currently hold"],',
+    '  "beliefs": [ { "id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "the belief (required for new and revise)", "why": "...", "evidence": ["<case id, probe id or round>"] } ],',
     '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } },',
     '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
     '  "weights": { "<rule id>": number },',
     '  "probes": [ { "id": "<id>", "hypothesis": "...", "observation": { "definition": "...", "source": "(p) => ...", "range": [min, max] } , "question": { "type": ..., "instructions": ..., "criteria": ... } } ],',
-    '  "evidence_ref": { "case": <index of a game or probe you rely on>, "why": "..." }',
+    '  "lessons": ["what this round taught you, in a sentence each"],',
+    '  "next_experiment": "what you intend to test next round, and why",',
+    '  "evidence_ref": { "case": "<a case id or probe id you rely on most>", "why": "..." }',
     "}",
     'Rule types: "noul" answers a probability 0..1 that the statement holds (criteria: {"yes": "...", "no": "..."}); "score" picks a level from criteria ordered worst to best (an array of 3 to 5 strings); "choice" gives probabilities over named options (criteria: {"<option>": "..."}; its value is the probability of the FIRST option, so put the good one first).',
-    "Ids are lowercase snake_case. A probe needs an observation or a question (or both: then the question is what is tested; inside it, cite the observation of that same probe as {{probe_<probe id>}}). Keep observation code short, pure and deterministic; no randomness, no dates."
+    "Ids are lowercase snake_case. A probe needs an observation or a question (or both; inside its question, cite the observation of that same probe as {{probe_<probe id>}}). Keep observation code short, pure and deterministic; no randomness, no dates."
   ].join("\n");
   function ownFormula(formula) {
     const observations = {};
@@ -3142,20 +3388,26 @@ var Neurosym = (() => {
     return { observations, rules, weights: formula.weights };
   }
   function explorerPayload(brief) {
+    const experience = Array.isArray(brief.experience) ? brief.experience.map((t) => ({ case: t.id, how: t.how, result: t.result, turns: t.frames.length - 1, frames: t.frames })) : brief.experience;
     return {
       round: brief.round,
       percept: brief.perceptDoc,
-      experience: brief.experience.map((t, i) => ({ case: i, id: t.id, how: t.how, result: t.result, turns: t.frames.length - 1, frames: t.frames })),
-      ...brief.formula ? { your_current_formula: ownFormula(brief.formula) } : {},
+      ...brief.notebook ? { notebook: brief.notebook } : {},
+      experience,
+      ...brief.formula ? { your_best_formula: { ...brief.formulaRound ? { from_round: brief.formulaRound } : {}, ...ownFormula(brief.formula) } } : {},
       ...brief.lastScore ? { last_trial: brief.lastScore } : {},
       ...brief.hypotheses && brief.hypotheses.length ? { probes_reported: brief.hypotheses.map((h) => ({
         id: h.id,
         hypothesis: h.hypothesis,
         status: h.status,
-        separation: h.separation,
-        mean_when_won: h.mean_when_win,
-        mean_when_lost: h.mean_when_loss,
-        samples: [h.samples_win, h.samples_loss],
+        round: h.round,
+        tests: h.tests.map((t) => ({
+          tested: t.by,
+          on: t.positions === "final" ? "final positions" : "positions in play",
+          status: t.status,
+          auc: t.auc,
+          samples: { won: t.samples_win, lost: t.samples_loss }
+        })),
         ...h.errors.length ? { errors: h.errors } : {}
       })) } : {},
       ...brief.actionAccuracy ? { move_quality: brief.actionAccuracy } : {},
@@ -3274,6 +3526,33 @@ var Neurosym = (() => {
       }
       probes.push({ id, hypothesis, ...observation ? { observation } : {}, ...question ? { question } : {} });
     });
+    const beliefs = [];
+    const rawBeliefs = Array.isArray(data.beliefs) ? data.beliefs : [];
+    rawBeliefs.forEach((raw, i) => {
+      const b = obj(raw);
+      const id = b && typeof b.id === "string" ? b.id : "";
+      if (!b || !ID.test(id)) {
+        warnings.push("belief #" + i + ' ignored: "id" must be lowercase snake_case');
+        return;
+      }
+      const stance = b.stance;
+      if (!STANCES.includes(stance)) {
+        warnings.push('belief "' + id + '" ignored: stance must be one of ' + STANCES.join(", "));
+        return;
+      }
+      beliefs.push({
+        id,
+        stance,
+        ...typeof b.statement === "string" && b.statement.trim() ? { statement: b.statement.trim() } : {},
+        ...typeof b.why === "string" ? { why: b.why } : {},
+        evidence: Array.isArray(b.evidence) ? b.evidence.map(String) : b.evidence !== void 0 && b.evidence !== null ? [String(b.evidence)] : []
+      });
+    });
+    if (!rawBeliefs.length && Array.isArray(data.hypotheses)) {
+      data.hypotheses.filter((h) => typeof h === "string").forEach((statement, i) => beliefs.push({ id: "r" + (context.round ?? 0) + "_h" + (i + 1), stance: "new", statement }));
+    }
+    const lessons = Array.isArray(data.lessons) ? data.lessons.filter((l) => typeof l === "string") : [];
+    const nextExperiment = typeof data.next_experiment === "string" ? data.next_experiment : "";
     const formula = makeFormula({
       world: context.world,
       observations,
@@ -3292,7 +3571,9 @@ var Neurosym = (() => {
         probes,
         warnings,
         rationale: typeof data.rationale === "string" ? data.rationale : "",
-        hypotheses: Array.isArray(data.hypotheses) ? data.hypotheses.filter((h) => typeof h === "string") : [],
+        beliefs,
+        lessons,
+        nextExperiment,
         evidenceRef: data.evidence_ref ?? null
       }
     };
@@ -3334,7 +3615,15 @@ var Neurosym = (() => {
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     for (const state of states) {
-      if (world.outcome(state).over || world.toMove(state) !== maximizer) continue;
+      const outcome2 = world.outcome(state);
+      if (outcome2.over) {
+        const key2 = "final:" + world.key(state);
+        if (!options.includeFinal || seen.has(key2)) continue;
+        seen.add(key2);
+        out.push({ state, label: outcome2.winner === maximizer ? "win" : "loss", final: true });
+        continue;
+      }
+      if (world.toMove(state) !== maximizer) continue;
       const key = world.key(state);
       if (seen.has(key)) continue;
       seen.add(key);

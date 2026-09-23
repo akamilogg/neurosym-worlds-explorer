@@ -4,7 +4,7 @@ import { Observer } from '../src/core/observer.ts';
 import { JevJudge } from '../src/core/jev.ts';
 import { makeFormula } from '../src/core/formula.ts';
 import { createPlanner, solveAgainstModel } from '../src/core/truth.ts';
-import { actionAccuracy, classify, HypothesisRegistry, runProbes, winningMoves, type LabelledPosition } from '../src/learn/experiments.ts';
+import { actionAccuracy, auc, classify, HypothesisRegistry, runProbes, winningMoves, type LabelledPosition } from '../src/learn/experiments.ts';
 import { asciiSense, bFallback, createGridWorld, generateSpec, readPicture, type GridState } from '../src/worlds/grid/index.ts';
 import { stubJev } from './stub-jev.ts';
 
@@ -29,11 +29,18 @@ function positions(): LabelledPosition<GridState>[] {
   return out.map((p, i) => ({ ...p, label: i < out.length / 2 ? 'win' : 'loss' }));
 }
 
-test('a hypothesis is classified by how it separates won from lost positions', () => {
-  assert.equal(classify([0.9, 0.8, 0.85], [0.2, 0.3, 0.1], 0.15, 3).status, 'supported');
-  assert.equal(classify([0.1, 0.2, 0.1], [0.8, 0.9, 0.7], 0.15, 3).status, 'inverted');
-  assert.equal(classify([0.5, 0.5, 0.5], [0.52, 0.48, 0.5], 0.15, 3).status, 'unsupported');
-  assert.equal(classify([0.9], [0.1, 0.2, 0.3], 0.15, 3).status, 'inconclusive');
+test('a hypothesis is classified by its AUC, against what chance gives with that many samples', () => {
+  const hi = [0.9, 0.8, 0.85, 0.7, 0.95, 0.75, 0.8, 0.9], lo = [0.2, 0.3, 0.1, 0.4, 0.25, 0.15, 0.3, 0.2];
+  assert.equal(auc(hi, lo), 1);
+  assert.equal(classify(hi, lo).status, 'supported');
+  assert.equal(classify(lo, hi).status, 'inverted');
+  assert.equal(classify([0.5, 0.5, 0.5, 0.5, 0.5, 0.5], [0.52, 0.48, 0.5, 0.5, 0.51, 0.49]).status, 'unsupported');
+  assert.equal(classify([0.9], [0.1, 0.2, 0.3]).status, 'inconclusive');
+  /* A small but CONSISTENT difference is decisive (the old mean-difference threshold called it noise)... */
+  const a = Array.from({ length: 20 }, (_, i) => 0.30 + i * 0.001), b = Array.from({ length: 20 }, (_, i) => 0.25 + i * 0.001);
+  assert.equal(classify(a, b).status, 'supported');
+  /* ...and the same AUC on two samples a side is not. */
+  assert.equal(classify(a.slice(0, 2), b.slice(0, 2), { minSamples: 2 }).status, 'unsupported');
 });
 
 test('an observation probe costs nothing; a question probe asks the Judge and is cached per picture', async () => {
@@ -46,6 +53,7 @@ test('an observation probe costs nothing; a question probe asks the Judge and is
   const results = await runProbes(probes, ps, { observer, judge: new JevJudge({ fetch: stub.fetch }), base, maximizer: 'A' }, { minSamples: 3, round: 1 });
   const clock = results.find((r) => r.id === 'clock')!;
   assert.equal(clock.tested_by, 'observation');
+  assert.deepEqual(clock.tests.map((t) => t.by + ':' + t.positions), ['observation:in_play']);
   assert.equal(clock.status, 'inverted', 'the move counter is higher on the "lost" (late) positions');
   const ask = results.find((r) => r.id === 'ask')!;
   assert.equal(ask.tested_by, 'question');
@@ -70,4 +78,20 @@ test('the truth names the moves that keep a won position won, and action accurac
   for (const m of keep!) assert.equal(solveAgainstModel(world, world.step(s0, m), 'A', respond).winner, 'A');
   const acc = actionAccuracy([{ winning: true, available: 5, keeping: 2 }, { winning: false, available: 5, keeping: 1 }, { winning: true, available: 3, keeping: 3 }]);
   assert.deepEqual([acc.plies, acc.kept_the_win, acc.rate], [2, 1, 0.5]);
+});
+
+test('observation and question are reported separately, and finished positions test only the code', async () => {
+  const stub = stubJev();
+  const ps = positions();
+  const finals = ps.slice(0, 6).map((p, i) => ({ ...p, final: true, label: (i < 3 ? 'win' : 'loss') as 'win' | 'loss' }));
+  const probe = { id: 'both', hypothesis: 'late is bad',
+    observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.move' }, range: [0, 12] as [number, number] },
+    question: { type: 'noul' as const, instructions: 'The clock reads {{probe_both}}. Early?', criteria: { yes: 'y', no: 'n' } } };
+  const [r] = await runProbes([probe], [...ps, ...finals], { observer, judge: new JevJudge({ fetch: stub.fetch }), base, maximizer: 'A' }, { minSamples: 3 });
+  assert.deepEqual(r.tests.map((t) => t.by + ':' + t.positions), ['observation:in_play', 'observation:final', 'question:in_play']);
+  assert.equal(r.tests[0].status, 'inverted');
+  assert.equal(r.tests[1].samples_win + r.tests[1].samples_loss, 6);
+  assert.equal(r.tests[2].samples_win + r.tests[2].samples_loss, ps.length, 'the Judge is asked only about positions in play');
+  assert.equal(r.status, 'inverted', 'the headline is the most decisive test');
+  assert.ok(stub.bodies.every((b) => /The clock reads \d+/.test(b.questions.both.instructions)));
 });

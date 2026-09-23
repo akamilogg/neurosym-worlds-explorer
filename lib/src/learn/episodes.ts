@@ -52,13 +52,22 @@ export function noisyOpponent<S, A>(world: World<S, A>, respond: (s: S) => A | n
   };
 }
 
-/** Label the states where `maximizer` is to move (known verdicts only; a draw counts as not won). */
+/** Label the states where `maximizer` is to move (known verdicts only; a draw counts as not won).
+    `includeFinal`: finished positions too, labelled by their outcome and marked `final`. */
 export function labelPositions<S, A>(world: World<S, A>, states: readonly S[], maximizer: string, respond: (s: S) => A | null,
-  options: { budget?: number; memo?: Map<string, { winner: string | null; plies: number; reason: string | null }> } = {}): LabelledPosition<S>[] {
+  options: { budget?: number; memo?: Map<string, { winner: string | null; plies: number; reason: string | null }>; includeFinal?: boolean } = {}): LabelledPosition<S>[] {
   const out: LabelledPosition<S>[] = [];
   const seen = new Set<string>();
   for (const state of states) {
-    if (world.outcome(state).over || world.toMove(state) !== maximizer) continue;
+    const outcome = world.outcome(state);
+    if (outcome.over) {
+      const key = 'final:' + world.key(state);
+      if (!options.includeFinal || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ state, label: outcome.winner === maximizer ? 'win' : 'loss', final: true });
+      continue;
+    }
+    if (world.toMove(state) !== maximizer) continue;
     const key = world.key(state);
     if (seen.has(key)) continue;
     seen.add(key);

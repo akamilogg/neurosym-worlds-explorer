@@ -70,7 +70,7 @@ test('the explorer is told nothing about the world: the payload is pictures, res
   for (const word of [spec.winA, spec.winB, 'grid@1', world.id.toLowerCase(), 'legal', 'fox', 'hound', 'cat', 'mouse']) {
     assert.ok(!text.includes(word), 'the payload must not say "' + word + '"');
   }
-  const own = (payload as any).your_current_formula;
+  const own = (payload as any).your_best_formula;
   assert.deepEqual(Object.keys(own.observations), ['mine'], 'the sense is the host\'s, not echoed as the explorer\'s code');
   assert.equal((payload as any).experience[0].frames[0], sense.render(world.initial()));
 });

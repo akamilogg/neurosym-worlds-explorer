@@ -31,7 +31,8 @@ import { openAiChatClient } from '../src/learn/system2.ts';
 import { replayOnEvidence } from '../src/learn/gates.ts';
 import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loop.ts';
 import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
-import { EXPLORER_SYSTEM, explorerPayload, parseExplorerProposal, type ExplorerProposal, type Trajectory } from '../src/learn/explorer.ts';
+import { EXPLORER_SYSTEM, explorerPayload, parseExplorerProposal, type ExplorerProposal } from '../src/learn/explorer.ts';
+import { Notebook, type EpisodeRecord } from '../src/learn/notebook.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
 import { labelPositions, noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
@@ -54,8 +55,7 @@ const cfg = {
   epsilon: Number(arg('epsilon', '0.15')),
   probePositions: Number(arg('probe-positions', '40')),
   flat: flag('flat'),
-  ablation: !flag('no-ablation'),
-  experienceKept: 6
+  ablation: !flag('no-ablation')
 };
 const env = process.env;
 if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
@@ -113,19 +113,18 @@ const say = (text: string): void => console.log('[' + Math.round((Date.now() - s
 
 /* --- Playing ---------------------------------------------------------------------- */
 
-const trajectoryOf = (id: string, how: string, states: GridState[], winner: string | null): Trajectory => ({
-  id, how, frames: states.map((s) => sense.render(s)), result: winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw'
-});
+const resultOf = (winner: string | null): EpisodeRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
 const pool: GridState[] = [];
-const experience: Trajectory[] = [];
+const notebook = new Notebook();
 /* Won positions the learner's own play rarely reaches: games where A picks at random AMONG the moves the truth says
    keep the win. They are measured by probes only - never shown to System 2 (that would be a demonstration). */
 const bank: GridState[] = [];
 
 async function fillBank(): Promise<void> {
-  for (let g = 0; g < 4; g++) {
+  for (let g = 0; g < 10; g++) {
     const rnd = mulberry32(cfg.seed * 4001 + g + level * 97);
-    const opponent = noisyOpponent(world, (s) => planner.respond(s), cfg.epsilon, rnd);
+    /* A noisier opponent than in the trials: the bank needs varied endings (a forced line tends to end in one place). */
+    const opponent = noisyOpponent(world, (s) => planner.respond(s), Math.max(cfg.epsilon, 0.5), rnd);
     const ep = await playEpisode(world, (s, actor) => {
       if (actor === 'B') return opponent(s);
       const moves = winningMoves(world, s, 'A', (x) => planner.respond(x), 40000);
@@ -147,89 +146,125 @@ async function explore(): Promise<void> {
       return moves[Math.floor(rnd() * moves.length)];
     });
     pool.push(...ep.states);
-    experience.push(trajectoryOf('explore-' + g, 'exploration: your side moved at random', ep.states, ep.outcome.winner));
+    notebook.addEpisodes([{ id: 'explore-' + g, round: 0, how: 'exploration: your side moved at random', result: resultOf(ep.outcome.winner),
+      frames: ep.states.map((s) => sense.render(s)), critical: null, heldWinTurns: null, ownPlay: false }]);
     log('exploration_game', { game: g, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1 });
   }
 }
 
-interface Measured extends AttemptScore<Formula> { readonly trajectories: Trajectory[]; readonly samples: ActionSample[] }
+interface Measured extends AttemptScore<Formula> {
+  readonly episodes: EpisodeRecord[];
+  readonly samples: ActionSample[];
+  readonly held: (number | null)[];
+}
 
-async function trial(formula: Formula, attempt: number, using: Evaluator<GridState> = evaluator, tag = ''): Promise<Measured> {
+/** One trial: the formula plays `cfg.games` games. The truth watches every one of A's turns: was the position won,
+    and did the chosen move keep it? The first move that threw a win away is the game's critical moment. */
+async function trial(formula: Formula, attempt: number, using: Evaluator<GridState> = evaluator, tag = '', record = true): Promise<Measured> {
   const games: TrialGame[] = [];
-  const trajectories: Trajectory[] = [];
+  const episodes: EpisodeRecord[] = [];
   const samples: ActionSample[] = [];
+  const held: (number | null)[] = [];
+  const round = roundOf.get(formula) ?? currentRound;
   for (let g = 0; g < cfg.games; g++) {
     const rnd = mulberry32(cfg.seed * 7717 + attempt * 101 + g * 7 + level * 1_000_003);
     const opponent = noisyOpponent(world, (s) => planner.respond(s), cfg.epsilon, rnd);
     const t0 = Date.now();
+    let stillWinning = 0;
+    let critical: number | null = null;
+    let knownThroughout = true;
     const ep = await playEpisode(world, async (s, actor) => {
       if (actor === 'B') return opponent(s);
       const r = await searchBestMove<GridState, GridMove>(using, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
       const chosen = r.best.bestMove ?? world.actions(s)[0];
       const winners = winningMoves(world, s, 'A', (x) => planner.respond(x), 40000);
-      if (winners) {
-        const available = world.actions(s).length;
-        samples.push({ winning: winners.some((m) => world.actionKey!(m) === world.actionKey!(chosen)), available, keeping: winners.length });
+      if (!winners) { if (critical === null) knownThroughout = false; return chosen; }
+      const keeps = winners.some((m) => world.actionKey!(m) === world.actionKey!(chosen));
+      samples.push({ winning: keeps, available: world.actions(s).length, keeping: winners.length });
+      if (critical === null && winners.length) {
+        if (keeps) stillWinning++;
+        else critical = s.ply;
       }
       return chosen;
     });
-    pool.push(...ep.states);
-    games.push({ outcome: ep.outcome.winner === 'A' ? 'win' : ep.outcome.winner === 'B' ? 'loss' : 'draw', plies: ep.states.length - 1 });
-    trajectories.push(trajectoryOf('a' + attempt + 'g' + g, 'trial: your formula chose your moves', ep.states, ep.outcome.winner));
+    const outcome = ep.outcome.winner === 'A' ? 'win' : ep.outcome.winner === 'B' ? 'loss' : 'draw';
+    games.push({ outcome, plies: ep.states.length - 1 });
+    const heldTurns = knownThroughout || critical !== null ? stillWinning : null;
+    held.push(heldTurns);
+    if (record) {
+      pool.push(...ep.states);
+      episodes.push({ id: 'r' + round + 'a' + attempt + 'g' + g, round, how: 'trial: your formula chose your moves (round ' + round + ')',
+        result: resultOf(ep.outcome.winner), frames: ep.states.map((s) => sense.render(s)), critical, heldWinTurns: heldTurns, ownPlay: true });
+    }
     say(tag + 'attempt ' + attempt + ' game ' + g + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
-      ' turns (' + Math.round((Date.now() - t0) / 1000) + ' s, Jev calls ' + judge.stats.calls + ')');
+      ' turns, still winning for ' + (heldTurns ?? '?') + ' of your turns' + (critical !== null ? ' (thrown at turn ' + critical + ')' : '') +
+      ' (' + Math.round((Date.now() - t0) / 1000) + ' s' + (record ? ', Jev calls ' + judge.stats.calls : '') + ')');
   }
   const wins = games.filter((g) => g.outcome === 'win').length;
-  return { formula, wins, total: games.length, perfect: wins === games.length, games, trajectories, samples };
+  return { formula, wins, total: games.length, perfect: wins === games.length, games, episodes, samples, held };
 }
 
 /* Information, not a verdict: the same observations read linearly, no Judge, the same games. Never shown to System 2. */
 async function ablate(formula: Formula, attempt: number, score: Measured): Promise<void> {
-  const fit = fitCodeOnly(observer, formula, await probeSet());
+  const fit = fitCodeOnly(observer, formula, (await probeSet()).filter((p) => !p.final));
   const plain = new Evaluator<GridState>(observer, codeOnlyJudge(fit), { maximizer: 'A' });
-  const ablated = await trial(codeOnlyFormula(formula), attempt, plain, '  [code-only] ');
-  const carrier = ablated.wins >= score.wins ? (score.wins ? 'the observations carry it' : 'neither wins')
+  const ablated = await trial(codeOnlyFormula(formula), attempt, plain, '  [code-only] ', false);
+  const carrier = ablated.wins > score.wins ? 'the observations alone won MORE than the formula (' + ablated.wins + ' vs ' + score.wins + ')'
+    : ablated.wins === score.wins ? (score.wins ? 'the observations carry it' : 'neither wins')
     : 'the rules of the Judge add ' + (score.wins - ablated.wins) + ' win(s)';
+  notebook.recordCodeOnly(roundOf.get(formula) ?? currentRound, ablated.wins, ablated.total);
   log('ablation_code_only', { attempt, level: cfg.levels[level], fit, formula_wins: score.wins, code_only_wins: ablated.wins, total: score.total,
-    code_only_action_accuracy: actionAccuracy(ablated.samples), reading: carrier });
+    formula_held: score.held, code_only_held: ablated.held, code_only_action_accuracy: actionAccuracy(ablated.samples), reading: carrier });
   say('  ablation: formula ' + score.wins + '/' + score.total + ', observations alone ' + ablated.wins + '/' + ablated.total + ' -> ' + carrier);
 }
 
 /* --- Proposing and experimenting ---------------------------------------------------- */
 
 const registry = new HypothesisRegistry();
-let round = 0;
+let currentRound = 0;
+const roundOf = new WeakMap<Formula, number>();
 let lastScore: Measured | null = null;
+let unaddressed: string[] = [];
 
 async function probeSet(): Promise<LabelledPosition<GridState>[]> {
   if (!bank.length) await fillBank();
-  const labelled = labelPositions(world, [...bank, ...pool], 'A', (s) => planner.respond(s), { budget: 40000, memo: truthMemo });
-  /* Balanced and bounded: a probe is measured on as many won as lost positions when it can be. */
-  const win = labelled.filter((p) => p.label === 'win'), loss = labelled.filter((p) => p.label === 'loss');
-  const half = Math.floor(cfg.probePositions / 2);
+  const labelled = labelPositions(world, [...bank, ...pool], 'A', (s) => planner.respond(s), { budget: 40000, memo: truthMemo, includeFinal: true });
+  /* Balanced and bounded: as many won as lost positions when it can be; finished positions are a separate, smaller set. */
   const take = <T>(xs: T[], n: number) => { const step = Math.max(1, xs.length / n); return Array.from({ length: Math.min(n, xs.length) }, (_, i) => xs[Math.floor(i * step)]); };
-  return [...take(win, half), ...take(loss, half)];
+  const half = Math.floor(cfg.probePositions / 2);
+  const pick = (final: boolean, n: number) => [
+    ...take(labelled.filter((p) => !!p.final === final && p.label === 'win'), n),
+    ...take(labelled.filter((p) => !!p.final === final && p.label === 'loss'), n)
+  ];
+  return [...pick(false, half), ...pick(true, Math.max(6, Math.floor(half / 2)))];
 }
 
 async function experiment(probes: Probe[], base: Formula): Promise<void> {
   if (!probes.length) return;
   const positions = await probeSet();
-  const results = await runProbes(probes, positions, { observer, judge, base, maximizer: 'A' }, { round });
+  const results = await runProbes(probes, positions, { observer, judge, base, maximizer: 'A' }, { round: currentRound });
   registry.record(results);
-  log('probes', { round, positions: { win: positions.filter((p) => p.label === 'win').length, loss: positions.filter((p) => p.label === 'loss').length }, results });
-  for (const r of results) say('  probe ' + r.id + ': ' + r.status + ' (separation ' + r.separation + ') - ' + r.hypothesis);
+  notebook.recordProbes(currentRound, results);
+  const count = (final: boolean, label: string) => positions.filter((p) => !!p.final === final && p.label === label).length;
+  log('probes', { round: currentRound, positions: { in_play: { win: count(false, 'win'), loss: count(false, 'loss') }, final: { win: count(true, 'win'), loss: count(true, 'loss') } }, results });
+  for (const r of results) {
+    say('  probe ' + r.id + ': ' + r.status + ' - ' + r.hypothesis);
+    for (const t of r.tests) say('      ' + t.by + ' on ' + t.positions + ': ' + t.status + ' (auc ' + t.auc + ', ' + t.samples_win + '/' + t.samples_loss + ')');
+  }
 }
 
 async function propose(from: Formula | null, directive: string | null = null): Promise<Formula | null> {
-  round++;
+  currentRound++;
+  const round = currentRound;
   let refused: string[] = [];
   for (let tryNo = 0; tryNo < 3; tryNo++) {
-    const brief = {
-      round, perceptDoc: GRID_PERCEPT_DOC, experience: experience.slice(-cfg.experienceKept), formula: from,
-      lastScore: lastScore ? { wins: lastScore.wins, total: lastScore.total, results: lastScore.games.map((g) => g.outcome) } : null,
+    const payload = explorerPayload({
+      round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), experience: notebook.memory(),
+      formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
+      lastScore: lastScore ? { opponent_level: cfg.levels[level], wins: lastScore.wins, of: lastScore.total, results: lastScore.games.map((g) => g.outcome),
+        turns_still_winning: lastScore.held } : null,
       hypotheses: registry.current(), actionAccuracy: lastScore ? actionAccuracy(lastScore.samples) : null, refused, directive
-    };
-    const payload = explorerPayload(brief);
+    });
     say('round ' + round + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
     let content = '';
     try {
@@ -257,10 +292,17 @@ async function propose(from: Formula | null, directive: string | null = null): P
       continue;
     }
     const proposal: ExplorerProposal = parsed.proposal;
-    log('proposal', { round, try: tryNo, rationale: proposal.rationale, hypotheses: proposal.hypotheses, evidence_ref: proposal.evidenceRef,
+    const stances = notebook.applyStances(round, proposal.beliefs);
+    unaddressed = stances.unaddressed;
+    notebook.recordRound(round, proposal.formula, proposal.lessons, proposal.nextExperiment);
+    roundOf.set(proposal.formula, round);
+    log('proposal', { round, try: tryNo, rationale: proposal.rationale, beliefs: proposal.beliefs, lessons: proposal.lessons,
+      next_experiment: proposal.nextExperiment, evidence_ref: proposal.evidenceRef, stance_warnings: stances.warnings, no_stance_on: stances.unaddressed,
       formula: proposal.formula, probes: proposal.probes, warnings: proposal.warnings, variation: replay.variation });
     say('  proposal: ' + Object.keys(proposal.formula.observations).length + ' observations, ' + Object.keys(proposal.formula.rules).length +
-      ' rules, ' + proposal.probes.length + ' probes');
+      ' rules, ' + proposal.probes.length + ' probes; beliefs ' + proposal.beliefs.map((b) => b.id + ':' + b.stance).join(' ') +
+      (stances.unaddressed.length ? '; NO STANCE on ' + stances.unaddressed.join(', ') : ''));
+    for (const l of proposal.lessons) say('  lesson: ' + l);
     await experiment(proposal.probes, proposal.formula);
     return proposal.formula;
   }
@@ -274,7 +316,7 @@ say('seed ' + cfg.seed + ': ' + spec.width + 'x' + spec.height + ' ' + spec.shap
 log('start', { picture: sense.render(world.initial()) });
 await explore();
 const first = await propose(null);
-if (!first) { log('end', { stoppedBy: 'no_first_proposal' }); say('no usable first proposal'); process.exit(1); }
+if (!first) { log('end', { stoppedBy: 'no_first_proposal', notebook }); say('no usable first proposal'); process.exit(1); }
 
 const result = await runAttempts<Formula, Measured, never>(first, {
   budget: cfg.attempts,
@@ -283,13 +325,17 @@ const result = await runAttempts<Formula, Measured, never>(first, {
   measure: async (candidate, attempt) => {
     const score = await trial(candidate, attempt);
     lastScore = score;
-    experience.push(...score.trajectories);
-    log('trial', { attempt, level: cfg.levels[level], wins: score.wins, total: score.total, games: score.games,
-      action_accuracy: actionAccuracy(score.samples), jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+    notebook.addEpisodes(score.episodes);
+    const accuracy = actionAccuracy(score.samples);
+    notebook.recordTrial(roundOf.get(candidate) ?? currentRound, { level: cfg.levels[level], wins: score.wins, total: score.total,
+      results: score.games.map((g) => g.outcome), held_win_turns: score.held, action_accuracy: accuracy.rate });
+    log('trial', { attempt, round: roundOf.get(candidate) ?? currentRound, level: cfg.levels[level], wins: score.wins, total: score.total, games: score.games,
+      turns_still_winning: score.held, critical: score.episodes.map((e) => e.critical), action_accuracy: accuracy,
+      jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
     if (cfg.ablation) await ablate(candidate, attempt, score);
     return score;
   },
-  verifyClean: async (candidate) => lastScore!,
+  verifyClean: async () => lastScore!,
   escalate: () => {
     if (level >= cfg.levels.length - 1) return false;
     level++;
@@ -309,8 +355,8 @@ const result = await runAttempts<Formula, Measured, never>(first, {
 log('end', {
   stoppedBy: result.stoppedBy, attempts: result.attempts, escalations: result.escalations,
   accepted: result.accepted ? { formula: result.accepted.formula, wins: result.accepted.wins, total: result.accepted.total } : null,
-  best: result.best ? { formula: result.best.formula, wins: result.best.wins, total: result.best.total } : null,
-  hypotheses: registry.all(), summary: registry.summary(),
+  best: result.best ? { formula: result.best.formula, round: roundOf.get(result.best.formula) ?? null, wins: result.best.wins, total: result.best.total } : null,
+  hypotheses: registry.all(), summary: registry.summary(), notebook,
   jev: { calls: judge.stats.calls, errors: judge.stats.errors }
 });
 say('done: ' + result.stoppedBy + ', best ' + (result.best ? result.best.wins + '/' + result.best.total : '-') + ', hypotheses ' + JSON.stringify(registry.summary()));

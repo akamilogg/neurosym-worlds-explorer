@@ -2,6 +2,7 @@ import { parseJsonLoose } from '../core/net.ts';
 import { checkFormula, makeFormula, normalizeWeights } from '../core/formula.ts';
 import type { Formula, MeasureDecl, QuestionType, Rule } from '../core/types.ts';
 import type { Probe, ProbeResult } from './experiments.ts';
+import { STANCES, type BeliefStance, type Stance } from './notebook.ts';
 
 /* ============================================================================
  * The explorer: System 2 in a world it has never seen.
@@ -10,17 +11,21 @@ import type { Probe, ProbeResult } from './experiments.ts';
  * beyond "your side won / lost". It perceives what the senses render (e.g. an ASCII
  * picture), game after game, and must:
  *
- *   hypothesise   say in words what it believes matters
+ *   hypothesise   hold BELIEFS in words, and take a stance on each one every round
  *   experiment    PROBES: a hypothesis plus an observation (code over the percept) and/or
  *                 a question to the Judge, tested on positions whose outcome is known
  *   formulate     the formula: observations (code over the percept) + rules the Judge
  *                 answers over the picture AND those measured values + weights
+ *   reflect       LESSONS and the NEXT EXPERIMENT, returned to it verbatim next round
  *
+ * What it carries between rounds is the lab notebook (notebook.ts): its beliefs and
+ * their history, the formula's lineage with every result, and curated experience.
  * The prompt is world-agnostic: the only world-specific text is `perceptDoc`, the
  * shape of the object an observation receives (which the sense defines, not the rules).
  * Every proposal crosses the same gates as any other: parse, structure, executability.
  * ========================================================================== */
 
+/** A game as the explorer saw it (exploration or trial), before the notebook curates it. */
 export interface Trajectory {
   readonly id: string;
   /** What the senses rendered, one frame per ply from the first position to the last. */
@@ -39,29 +44,43 @@ export const EXPLORER_SYSTEM = [
   '  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived (the object described in `percept`), each returning a number inside its declared range. They can only compute from the picture.',
   '  - RULES: questions a semantic judge answers about a position. The judge sees the picture AND the values of your observations (cite an observation inside a rule as {{observation_id}}). A rule\'s answer, 0..1, means "good for my side" when high.',
   '  - WEIGHTS over the rules (they are normalised to sum 1).',
-  'Work as a scientist: infer from the pictures how things change, form hypotheses about what leads to winning, and TEST them with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question; it is measured on positions whose final outcome is known, and reported as supported, inverted (true the other way round), unsupported or inconclusive. Do not repeat a probe already reported; build on what was learned.',
   'Both carriers of judgement are welcome: code is deterministic and readable, the judge understands plain words. Put each part of your understanding where it is clearest; a rule in plain words is preferred when it explains a judgement better than a formula would.',
+  '',
+  'You work over many rounds and keep a LAB NOTEBOOK (the `notebook` field). It is your memory: your beliefs and their history, every formula you tried with what changed and how its games went, what the observations alone achieved, the probes and their results, and your own lessons and planned next experiment from the previous round. Read it first. Do not repeat what failed unless you say why it should now work; build on partial improvements.',
+  'Every round, take a stance on EVERY belief you still hold: "keep", "revise" (give the new statement), "confirm" (the evidence settled it) or "drop" (the evidence refuted it); add new ones with "new". Cite the evidence: game cases, probe ids, rounds.',
+  'Your EXPERIENCE (the `experience` field) is curated: every game you won, the critical moment of games you lost (the position before your move, when you could still win, and the position after it, when you no longer could; the move that would have kept the win is not shown), your best losses, and the latest games. "turns_still_winning" counts your turns played while your position could still be won: it grows when you improve, even before you win.',
+  '',
+  'Test ideas with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question. The observation and the question are tested SEPARATELY. The judge answering a probe question never knows how the game ended: ask it to describe the position (e.g. "is the other piece boxed in?"), and the outcome comparison is done for you.',
+  'Each test reports an AUC: the probability that a position that was won scores higher than one that was lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost). It is "supported" or "inverted" only when it is further from 0.5 than chance allows with that many samples. Observations are tested on two kinds of positions: "in play" (does it predict who will win?) and "final" (is it what the end of a won or lost game looks like? - this is how you can learn how games end).',
+  '',
   'Answer with ONE JSON object and nothing else:',
   '{',
   '  "rationale": "what you believe now and why, citing the evidence",',
-  '  "hypotheses": ["short statements you currently hold"],',
+  '  "beliefs": [ { "id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "the belief (required for new and revise)", "why": "...", "evidence": ["<case id, probe id or round>"] } ],',
   '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } },',
   '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
   '  "weights": { "<rule id>": number },',
   '  "probes": [ { "id": "<id>", "hypothesis": "...", "observation": { "definition": "...", "source": "(p) => ...", "range": [min, max] } , "question": { "type": ..., "instructions": ..., "criteria": ... } } ],',
-  '  "evidence_ref": { "case": <index of a game or probe you rely on>, "why": "..." }',
+  '  "lessons": ["what this round taught you, in a sentence each"],',
+  '  "next_experiment": "what you intend to test next round, and why",',
+  '  "evidence_ref": { "case": "<a case id or probe id you rely on most>", "why": "..." }',
   '}',
   'Rule types: "noul" answers a probability 0..1 that the statement holds (criteria: {"yes": "...", "no": "..."}); "score" picks a level from criteria ordered worst to best (an array of 3 to 5 strings); "choice" gives probabilities over named options (criteria: {"<option>": "..."}; its value is the probability of the FIRST option, so put the good one first).',
-  'Ids are lowercase snake_case. A probe needs an observation or a question (or both: then the question is what is tested; inside it, cite the observation of that same probe as {{probe_<probe id>}}). Keep observation code short, pure and deterministic; no randomness, no dates.'
+  'Ids are lowercase snake_case. A probe needs an observation or a question (or both; inside its question, cite the observation of that same probe as {{probe_<probe id>}}). Keep observation code short, pure and deterministic; no randomness, no dates.'
 ].join('\n');
 
 export interface ExplorerBrief {
   readonly round: number;
   /** The shape of what an observation receives (e.g. `{ cells: string[][], you: string, ... }`). */
   readonly perceptDoc: string;
-  readonly experience: readonly Trajectory[];
+  /** Curated experience (Notebook.memory()), or plain trajectories. */
+  readonly experience: Record<string, unknown> | readonly Trajectory[];
+  /** The notebook as the explorer reads it (Notebook.brief()). */
+  readonly notebook?: Record<string, unknown> | null;
+  /** The formula the next one should build on (the best so far), and the round that wrote it. */
   readonly formula?: Formula | null;
-  readonly lastScore?: { wins: number; total: number; results: readonly string[] } | null;
+  readonly formulaRound?: number | null;
+  readonly lastScore?: Record<string, unknown> | null;
   readonly hypotheses?: readonly ProbeResult[];
   readonly actionAccuracy?: unknown;
   /** Why the previous proposal was refused before it could be tested. */
@@ -83,15 +102,20 @@ function ownFormula(formula: Formula): Record<string, unknown> {
 }
 
 export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
+  const experience = Array.isArray(brief.experience)
+    ? (brief.experience as readonly Trajectory[]).map((t) => ({ case: t.id, how: t.how, result: t.result, turns: t.frames.length - 1, frames: t.frames }))
+    : brief.experience;
   return {
     round: brief.round,
     percept: brief.perceptDoc,
-    experience: brief.experience.map((t, i) => ({ case: i, id: t.id, how: t.how, result: t.result, turns: t.frames.length - 1, frames: t.frames })),
-    ...(brief.formula ? { your_current_formula: ownFormula(brief.formula) } : {}),
+    ...(brief.notebook ? { notebook: brief.notebook } : {}),
+    experience,
+    ...(brief.formula ? { your_best_formula: { ...(brief.formulaRound ? { from_round: brief.formulaRound } : {}), ...ownFormula(brief.formula) } } : {}),
     ...(brief.lastScore ? { last_trial: brief.lastScore } : {}),
     ...(brief.hypotheses && brief.hypotheses.length ? { probes_reported: brief.hypotheses.map((h) => ({
-      id: h.id, hypothesis: h.hypothesis, status: h.status, separation: h.separation,
-      mean_when_won: h.mean_when_win, mean_when_lost: h.mean_when_loss, samples: [h.samples_win, h.samples_loss],
+      id: h.id, hypothesis: h.hypothesis, status: h.status, round: h.round,
+      tests: h.tests.map((t) => ({ tested: t.by, on: t.positions === 'final' ? 'final positions' : 'positions in play', status: t.status,
+        auc: t.auc, samples: { won: t.samples_win, lost: t.samples_loss } })),
       ...(h.errors.length ? { errors: h.errors } : {}) })) } : {}),
     ...(brief.actionAccuracy ? { move_quality: brief.actionAccuracy } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
@@ -105,7 +129,10 @@ export interface ExplorerProposal {
   readonly formula: Formula;
   readonly probes: Probe[];
   readonly rationale: string;
-  readonly hypotheses: string[];
+  /** The stances on beliefs, as written (the notebook applies them). */
+  readonly beliefs: BeliefStance[];
+  readonly lessons: string[];
+  readonly nextExperiment: string;
   readonly evidenceRef: unknown;
   readonly warnings: string[];
 }
@@ -190,6 +217,26 @@ export function parseExplorerProposal(content: string, context: {
     probes.push({ id, hypothesis, ...(observation ? { observation } : {}), ...(question ? { question } : {}) });
   });
 
+  const beliefs: BeliefStance[] = [];
+  const rawBeliefs = Array.isArray(data.beliefs) ? data.beliefs : [];
+  rawBeliefs.forEach((raw, i) => {
+    const b = obj(raw);
+    const id = b && typeof b.id === 'string' ? b.id : '';
+    if (!b || !ID.test(id)) { warnings.push('belief #' + i + ' ignored: "id" must be lowercase snake_case'); return; }
+    const stance = b.stance as Stance;
+    if (!STANCES.includes(stance)) { warnings.push('belief "' + id + '" ignored: stance must be one of ' + STANCES.join(', ')); return; }
+    beliefs.push({ id, stance, ...(typeof b.statement === 'string' && b.statement.trim() ? { statement: b.statement.trim() } : {}),
+      ...(typeof b.why === 'string' ? { why: b.why } : {}),
+      evidence: Array.isArray(b.evidence) ? b.evidence.map(String) : (b.evidence !== undefined && b.evidence !== null ? [String(b.evidence)] : []) });
+  });
+  /* An answer in the older shape (plain hypotheses) still counts: each becomes a new belief. */
+  if (!rawBeliefs.length && Array.isArray(data.hypotheses)) {
+    data.hypotheses.filter((h): h is string => typeof h === 'string').forEach((statement, i) =>
+      beliefs.push({ id: 'r' + (context.round ?? 0) + '_h' + (i + 1), stance: 'new', statement }));
+  }
+  const lessons = Array.isArray(data.lessons) ? data.lessons.filter((l): l is string => typeof l === 'string') : [];
+  const nextExperiment = typeof data.next_experiment === 'string' ? data.next_experiment : '';
+
   const formula = makeFormula({
     world: context.world, observations, rules, weights,
     meta: { source: 'explorer', round: context.round ?? 0, rationale: typeof data.rationale === 'string' ? data.rationale : '' }
@@ -203,7 +250,7 @@ export function parseExplorerProposal(content: string, context: {
     proposal: {
       formula, probes, warnings,
       rationale: typeof data.rationale === 'string' ? data.rationale : '',
-      hypotheses: Array.isArray(data.hypotheses) ? data.hypotheses.filter((h): h is string => typeof h === 'string') : [],
+      beliefs, lessons, nextExperiment,
       evidenceRef: data.evidence_ref ?? null
     }
   };
