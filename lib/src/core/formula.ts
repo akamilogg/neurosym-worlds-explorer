@@ -57,12 +57,12 @@ export function placeholdersOf(rule: Rule): string[] {
 }
 
 /** {{id}} becomes the measured number; an unknown placeholder stays visible (never silently deleted). */
-export function substitute(text: string, values: Readonly<Record<string, number>>): string {
+export function substitute(text: string, values: Readonly<Record<string, number | string>>): string {
   if (typeof text !== 'string' || !text.includes('{{')) return text;
   return text.replace(PLACEHOLDER, (whole, id: string) => Object.prototype.hasOwnProperty.call(values, id) ? String(values[id]) : whole);
 }
 
-export function materializeRules(rules: Formula['rules'], values: Readonly<Record<string, number>>, ids?: readonly string[]): Record<string, Rule> {
+export function materializeRules(rules: Formula['rules'], values: Readonly<Record<string, number | string>>, ids?: readonly string[]): Record<string, Rule> {
   const out: Record<string, Rule> = {};
   for (const id of ids ?? Object.keys(rules || {})) {
     const r = rules[id];
@@ -141,7 +141,9 @@ export function checkFormula(formula: Formula): FormulaCheck {
     const missing = placeholdersOf(formula.rules[id]).filter((p) => !obsIds.includes(p));
     if (missing.length) errors.push('rule "' + id + '" references undeclared observation(s): ' + missing.join(', '));
   }
-  const unread = obsIds.filter((o) => !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o)));
+  /* A sense reaches the Judge whether a rule cites it or not; every other fact needs a rule that reads it. */
+  const unread = obsIds.filter((o) => (formula.observations[o]?.spec as { kind?: string } | undefined)?.kind !== 'sense' &&
+    !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o)));
   if (unread.length) warnings.push('observation(s) no rule reads: ' + unread.join(', '));
   for (const id of Object.keys(formula.weights || {})) if (!values.includes(id)) errors.push('weight "' + id + '" has no value rule');
   return { ok: errors.length === 0, errors, warnings };

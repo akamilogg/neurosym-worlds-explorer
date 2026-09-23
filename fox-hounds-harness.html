@@ -593,8 +593,10 @@ var Neurosym = (() => {
     Evaluator: () => Evaluator,
     FORMULA_FORMAT: () => FORMULA_FORMAT,
     FORMULA_FORMAT_VERSION: () => FORMULA_FORMAT_VERSION,
+    HypothesisRegistry: () => HypothesisRegistry,
     JEV_DEFAULT_URL: () => JEV_DEFAULT_URL,
     JEV_EVALUATION_CONTRACT: () => JEV_EVALUATION_CONTRACT,
+    JEV_PERCEPTION_CONTRACT: () => JEV_PERCEPTION_CONTRACT,
     JUDGE_CONSENSUS: () => JUDGE_CONSENSUS,
     JUDGE_MEASURED: () => JUDGE_MEASURED,
     JevJudge: () => JevJudge,
@@ -612,6 +614,7 @@ var Neurosym = (() => {
     TT_EXACT: () => TT_EXACT,
     TT_LOWER: () => TT_LOWER,
     TT_UPPER: () => TT_UPPER,
+    actionAccuracy: () => actionAccuracy,
     appendReflection: () => appendReflection,
     beliefOf: () => beliefOf,
     calibrateConfidence: () => calibrateConfidence,
@@ -619,6 +622,7 @@ var Neurosym = (() => {
     chatRequestBody: () => chatRequestBody,
     checkFormula: () => checkFormula,
     clamp: () => clamp,
+    classify: () => classify,
     classifyTrigger: () => classifyTrigger,
     cloneJson: () => cloneJson,
     compose: () => compose,
@@ -672,6 +676,7 @@ var Neurosym = (() => {
     revisionsByState: () => revisionsByState,
     round: () => round,
     runAttempts: () => runAttempts,
+    runProbes: () => runProbes,
     searchBestMove: () => searchBestMove,
     selectCases: () => selectCases,
     settlePolicyWeights: () => settlePolicyWeights,
@@ -691,6 +696,7 @@ var Neurosym = (() => {
     valueOption: () => valueOption,
     valueRuleIds: () => valueRuleIds,
     versionOf: () => versionOf,
+    winningMoves: () => winningMoves,
     witness: () => witness,
     witnessRow: () => witnessRow
   });
@@ -989,8 +995,12 @@ var Neurosym = (() => {
       __publicField(this, "runners", /* @__PURE__ */ new Map());
       __publicField(this, "cache", /* @__PURE__ */ new Map());
       __publicField(this, "cacheLimit");
+      __publicField(this, "senses");
+      __publicField(this, "perceive");
       this.world = world;
-      this.kinds = options.kinds && options.kinds.length ? options.kinds.slice() : ["code", "dsl"];
+      this.kinds = options.kinds && options.kinds.length ? options.kinds.slice() : ["code", "dsl", "sense"];
+      this.senses = options.senses ?? {};
+      this.perceive = options.perceive;
       this.cacheLimit = options.compileCacheLimit ?? 4e3;
       if (options.core !== false) this.registerDialect(coreDialect());
       for (const d of options.dialects ?? []) this.registerDialect(d);
@@ -1041,13 +1051,19 @@ var Neurosym = (() => {
     compileUncached(spec, declaredRange) {
       const hash = specHash(spec);
       if (!spec || typeof spec !== "object") return { ok: false, kind: null, hash, error: "the measure spec is not an object" };
-      if (spec.kind !== "code" && spec.kind !== "dsl") {
+      if (spec.kind !== "code" && spec.kind !== "dsl" && spec.kind !== "sense") {
         const unknownKind = String(spec.kind);
-        return { ok: false, kind: unknownKind, hash, error: 'measure kind "' + unknownKind + '" is unknown (kinds: code, dsl)' };
+        return { ok: false, kind: unknownKind, hash, error: 'measure kind "' + unknownKind + '" is unknown (kinds: code, dsl, sense)' };
       }
       const kind = spec.kind;
       if (!this.kinds.includes(kind)) {
         return { ok: false, kind, hash, error: 'measure kind "' + kind + '" is not admitted by this experiment (admitted: ' + this.kinds.join(", ") + ")" };
+      }
+      if (kind === "sense") {
+        if (!Object.prototype.hasOwnProperty.call(this.senses, spec.sense)) {
+          return { ok: false, kind, hash, error: 'sense "' + spec.sense + '" does not exist in this world (it has: ' + (Object.keys(this.senses).join(", ") || "none") + ")" };
+        }
+        return { ok: true, kind, fn: () => NaN, range: null, hash, warnings: [] };
       }
       const range = validRange(declaredRange);
       this.stats.compilations++;
@@ -1074,13 +1090,39 @@ var Neurosym = (() => {
     observe(state, observations) {
       const frozen = deepFreeze(cloneJson(state));
       const view = deepFreeze(this.world.view(frozen));
-      const ctx = Object.freeze({ view, state: frozen, world: this.world });
       const values = {};
+      const percepts = {};
       const errors = [];
       const timings = {};
       const parts = [];
-      for (const id of Object.keys(observations || {})) {
+      const ids = Object.keys(observations || {});
+      for (const id of ids) {
+        const spec = observations[id]?.spec;
+        if (!spec || spec.kind !== "sense") continue;
+        const render = this.senses[String(spec.sense)];
+        if (!render) {
+          errors.push({ id, error: 'sense "' + String(spec.sense) + '" does not exist in this world' });
+          this.stats.errors++;
+          continue;
+        }
+        const text = render(frozen);
+        percepts[id] = text;
+        parts.push(id + "=#" + hashString(text));
+      }
+      let ctx = null;
+      let perceiveError = null;
+      const context = () => {
+        if (ctx || perceiveError) return ctx;
+        try {
+          ctx = Object.freeze(this.perceive ? { ...this.perceive(frozen, Object.freeze({ ...percepts })) } : { view, state: frozen, world: this.world });
+        } catch (error) {
+          perceiveError = "nothing could be perceived: " + message(error);
+        }
+        return ctx;
+      };
+      for (const id of ids) {
         const decl = observations[id];
+        if (decl?.spec?.kind === "sense") continue;
         const compiled = this.compile(decl?.spec, decl?.range);
         if (!compiled.ok) {
           errors.push({ id, error: compiled.error });
@@ -1090,8 +1132,14 @@ var Neurosym = (() => {
         const started = now();
         let value = null;
         let failure = null;
+        const measureContext = context();
+        if (!measureContext) {
+          errors.push({ id, error: perceiveError || "no context" });
+          this.stats.errors++;
+          continue;
+        }
         try {
-          value = compiled.fn(ctx);
+          value = compiled.fn(measureContext);
         } catch (error) {
           failure = message(error);
         }
@@ -1108,7 +1156,7 @@ var Neurosym = (() => {
         this.stats.computations++;
       }
       parts.sort();
-      return { values, errors, vector: parts.join("|"), count: parts.length, view, timings };
+      return { values, percepts, errors, vector: parts.join("|"), count: parts.length, view, timings };
     }
   };
   function validRange(range) {
@@ -1221,7 +1269,7 @@ var Neurosym = (() => {
       const missing = placeholdersOf(formula.rules[id]).filter((p) => !obsIds.includes(p));
       if (missing.length) errors.push('rule "' + id + '" references undeclared observation(s): ' + missing.join(", "));
     }
-    const unread = obsIds.filter((o) => !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o)));
+    const unread = obsIds.filter((o) => formula.observations[o]?.spec?.kind !== "sense" && !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o)));
     if (unread.length) warnings.push("observation(s) no rule reads: " + unread.join(", "));
     for (const id of Object.keys(formula.weights || {})) if (!values.includes(id)) errors.push('weight "' + id + '" has no value rule');
     return { ok: errors.length === 0, errors, warnings };
@@ -1352,6 +1400,7 @@ var Neurosym = (() => {
   // src/core/jev.ts
   var JEV_DEFAULT_URL = "https://api.typesafe.ai/v1/systemone";
   var JEV_EVALUATION_CONTRACT = "Judge only the declared measurements. The board coordinates are intentionally absent; System 2 chose O(s).";
+  var JEV_PERCEPTION_CONTRACT = "Judge from what is perceived and from the declared measurements only. Nothing else about this world is known: no rules, no names, no strategy.";
   function pickNumber(value) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
@@ -1444,6 +1493,17 @@ var Neurosym = (() => {
     const errors = request.measurementErrors && request.measurementErrors.length ? { measurement_errors: request.measurementErrors.slice() } : {};
     if (request.position) {
       return { ...request.position, measurements: { ...request.measurements }, ...errors };
+    }
+    if (request.percepts && Object.keys(request.percepts).length) {
+      return {
+        evaluation_contract: JEV_PERCEPTION_CONTRACT,
+        perception: { ...request.percepts },
+        measurements: { ...request.measurements },
+        side_to_move: request.sideToMove,
+        ...ctx.opponent !== void 0 ? { opponent: ctx.opponent } : {},
+        judgment_formula_hash: ctx.judgment_hash ?? null,
+        ...errors
+      };
     }
     const wire = {
       rules_of_the_game: request.rulesOfTheWorld,
@@ -1651,7 +1711,8 @@ var Neurosym = (() => {
         rulesOfTheWorld: world.describeRules(),
         sideToMove: side,
         measurements: observation.values,
-        questions: materializeRules(formula.rules, observation.values, ids),
+        questions: materializeRules(formula.rules, { ...observation.values, ...observation.percepts }, ids),
+        ...Object.keys(observation.percepts || {}).length ? { percepts: observation.percepts } : {},
         ...observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ": " + e.error) } : {},
         context: { ...context.facts, judgment_hash: jHash }
       }, signal);
@@ -2920,6 +2981,117 @@ var Neurosym = (() => {
       known: !!result && result.winner !== null,
       exhausted,
       nodes
+    };
+  }
+
+  // src/learn/experiments.ts
+  var mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  function classify(win, loss, threshold, minSamples) {
+    const mw = mean(win), ml = mean(loss);
+    if (win.length < minSamples || loss.length < minSamples || mw === null || ml === null) return { separation: mw !== null && ml !== null ? round(mw - ml, 4) : null, status: "inconclusive" };
+    const separation = round(mw - ml, 4);
+    return { separation, status: separation >= threshold ? "supported" : separation <= -threshold ? "inverted" : "unsupported" };
+  }
+  async function runProbes(probes, positions, context, options = {}) {
+    const threshold = options.threshold ?? 0.15;
+    const minSamples = options.minSamples ?? 6;
+    const results = [];
+    for (const probe of probes) {
+      const errors = [];
+      const observations = { ...context.base.observations };
+      if (probe.observation) observations["probe_" + probe.id] = probe.observation;
+      const win = [];
+      const loss = [];
+      if (probe.question) {
+        const formula = makeFormula({
+          world: context.base.world,
+          observations,
+          rules: { [probe.id]: { ...probe.question, used_as: "value" } },
+          weights: { [probe.id]: 1 },
+          meta: { source: "probe" }
+        });
+        const ev = new Evaluator(context.observer, context.judge, { maximizer: context.maximizer, strictMeasures: false });
+        for (const p of positions) {
+          try {
+            const r = await ev.eval(formula, p.state, options.signal);
+            const v = r.answers[probe.id]?.value;
+            if (Number.isFinite(v)) (p.label === "win" ? win : loss).push(v);
+          } catch (error) {
+            if (error?.kind === "aborted") throw error;
+            if (errors.length < 3) errors.push(String(error?.message || error));
+          }
+        }
+      } else if (probe.observation) {
+        const id = "probe_" + probe.id;
+        const range = probe.observation.range;
+        for (const p of positions) {
+          const o = context.observer.observe(p.state, { ...context.base.observations, [id]: probe.observation });
+          const v = o.values[id];
+          const own = o.errors.find((e) => e.id === id);
+          if (own && errors.length < 3) errors.push(own.error);
+          if (!Number.isFinite(v) || !range || !(range[1] > range[0])) continue;
+          (p.label === "win" ? win : loss).push((v - range[0]) / (range[1] - range[0]));
+        }
+      } else {
+        errors.push("a probe needs an observation or a question");
+      }
+      const { separation, status } = classify(win, loss, threshold, minSamples);
+      results.push({
+        id: probe.id,
+        hypothesis: probe.hypothesis,
+        tested_by: probe.question ? "question" : "observation",
+        samples_win: win.length,
+        samples_loss: loss.length,
+        mean_when_win: mean(win) === null ? null : round(mean(win), 4),
+        mean_when_loss: mean(loss) === null ? null : round(mean(loss), 4),
+        separation,
+        status,
+        round: options.round ?? 0,
+        errors
+      });
+    }
+    return results;
+  }
+  var HypothesisRegistry = class {
+    constructor() {
+      __publicField(this, "byId", /* @__PURE__ */ new Map());
+      __publicField(this, "history", []);
+    }
+    record(results) {
+      for (const r of results) {
+        this.byId.set(r.id, r);
+        this.history.push(r);
+      }
+    }
+    current() {
+      return [...this.byId.values()];
+    }
+    all() {
+      return this.history.slice();
+    }
+    summary() {
+      const count = (s) => this.current().filter((r) => r.status === s).length;
+      return { tested: this.byId.size, supported: count("supported"), inverted: count("inverted"), unsupported: count("unsupported"), inconclusive: count("inconclusive") };
+    }
+  };
+  function winningMoves(world, state, maximizer, respond, budget = 6e4) {
+    const moves = world.actions(state, maximizer);
+    const winners = [];
+    for (const m of moves) {
+      const v = solveAgainstModel(world, world.step(state, m), maximizer, respond, { budget });
+      if (v.exhausted) return null;
+      if (v.winner === maximizer) winners.push(m);
+    }
+    return winners;
+  }
+  function actionAccuracy(samples) {
+    const counted = samples.filter((s) => s.keeping > 0 && s.keeping < s.available);
+    const hits = counted.filter((s) => s.winning).length;
+    return {
+      plies: counted.length,
+      kept_the_win: hits,
+      rate: counted.length ? round(hits / counted.length, 4) : null,
+      note: "plies where the position was won and at least one move would have thrown it away"
     };
   }
 

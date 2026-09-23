@@ -178,7 +178,8 @@ export class Evaluator<S = unknown> {
       rulesOfTheWorld: world.describeRules(),
       sideToMove: side,
       measurements: observation.values,
-      questions: materializeRules(formula.rules, observation.values, ids),
+      questions: materializeRules(formula.rules, { ...observation.values, ...observation.percepts }, ids),
+      ...(Object.keys(observation.percepts || {}).length ? { percepts: observation.percepts } : {}),
       ...(observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ': ' + e.error) } : {}),
       context: { ...context.facts, judgment_hash: jHash }
     }, signal);

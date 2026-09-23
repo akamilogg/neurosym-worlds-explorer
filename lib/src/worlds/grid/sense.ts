@@ -71,3 +71,32 @@ export function asciiSense(spec: GridSpec): GridSense {
     }
   };
 }
+
+/** What a perception-only measure may read: the picture itself and the same picture as a grid of cells
+    (rows as drawn, top to bottom). No state, no rules, no legal moves. */
+export interface GridPercept {
+  readonly picture: string;
+  readonly cells: readonly (readonly string[])[];
+  readonly width: number;
+  readonly height: number;
+  readonly you: string;
+  readonly toMove: string;
+  readonly move: number;
+}
+
+export function readPicture(picture: string): GridPercept {
+  const lines = picture.split('\n');
+  const legend = lines[lines.length - 1];
+  const rows = lines.slice(1, -1).map((line) => {
+    const body = line.slice(4);
+    const cells: string[] = [];
+    for (let i = 0; i < body.length; i += 2) cells.push(body[i] ?? ' ');
+    return cells;
+  });
+  const width = Math.max(0, ...rows.map((r) => r.length));
+  const cells = rows.map((r) => Object.freeze(Array.from({ length: width }, (_, i) => r[i] ?? ' ')));
+  const you = /you: (\S)/.exec(legend)?.[1] ?? '';
+  const toMove = /to move: (\S)/.exec(legend)?.[1] ?? '';
+  const move = Number(/move (\d+)$/.exec(legend)?.[1] ?? 0);
+  return Object.freeze({ picture, cells: Object.freeze(cells), width, height: cells.length, you, toMove, move });
+}

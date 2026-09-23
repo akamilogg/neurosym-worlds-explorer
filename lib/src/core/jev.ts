@@ -19,6 +19,9 @@ import type { Judge, JudgeAnswer, JudgeRequest, Rule } from './types.ts';
 export const JEV_DEFAULT_URL = 'https://api.typesafe.ai/v1/systemone';
 export const JEV_EVALUATION_CONTRACT =
   'Judge only the declared measurements. The board coordinates are intentionally absent; System 2 chose O(s).';
+/** When the world is perceived through senses: nothing else about it is known to anyone. */
+export const JEV_PERCEPTION_CONTRACT =
+  'Judge from what is perceived and from the declared measurements only. Nothing else about this world is known: no rules, no names, no strategy.';
 
 export interface JevJudgeOptions {
   readonly url?: string;
@@ -144,6 +147,17 @@ export function jevWireState(request: JudgeRequest): Record<string, unknown> {
   const errors = request.measurementErrors && request.measurementErrors.length ? { measurement_errors: request.measurementErrors.slice() } : {};
   if (request.position) {
     return { ...request.position, measurements: { ...request.measurements }, ...errors };
+  }
+  if (request.percepts && Object.keys(request.percepts).length) {
+    return {
+      evaluation_contract: JEV_PERCEPTION_CONTRACT,
+      perception: { ...request.percepts },
+      measurements: { ...request.measurements },
+      side_to_move: request.sideToMove,
+      ...(ctx.opponent !== undefined ? { opponent: ctx.opponent } : {}),
+      judgment_formula_hash: ctx.judgment_hash ?? null,
+      ...errors
+    };
   }
   const wire: Record<string, unknown> = {
     rules_of_the_game: request.rulesOfTheWorld,

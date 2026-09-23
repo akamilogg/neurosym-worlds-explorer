@@ -82,7 +82,13 @@ export interface DslSpec {
   readonly expr?: unknown;
 }
 
-export type MeasureSpec = CodeSpec | DslSpec;
+/** A predefined SENSE of the world: its value is what is perceived (text), computed by the world itself. */
+export interface SenseSpec {
+  readonly kind: 'sense';
+  readonly sense: string;
+}
+
+export type MeasureSpec = CodeSpec | DslSpec | SenseSpec;
 export type MeasureKind = MeasureSpec['kind'];
 
 export interface MeasureDecl {
@@ -156,6 +162,8 @@ export interface JudgeRequest {
   /** The rules with every {{id}} already replaced by its measured value. Policy rules arrive
       materialised: one criterion per legal action key, each with a null rubric. */
   readonly questions: Readonly<Record<string, Rule>>;
+  /** What the declared senses perceived (e.g. an ASCII picture): the Judge judges it WITH the measured facts. */
+  readonly percepts?: Readonly<Record<string, string>>;
   /** Present only when a question denotes concrete actions: the Judge then needs the position itself.
       Value-only requests are judged from the measurements alone (that is what makes the vector cache valid). */
   readonly position?: Readonly<Record<string, unknown>>;
