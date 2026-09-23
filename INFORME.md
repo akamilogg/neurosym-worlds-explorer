@@ -361,3 +361,40 @@ valores `EXACT` de cotas `LOWER` y `UPPER`, evitando reutilizar como exacto un n
 
 La interfaz expone fan-out de aprendizaje, pasadas PV, primeras ramas, cortes, hermanos omitidos, cotas
 reutilizadas y el pico de concurrencia Jev. El semáforo global sigue limitando a 8 las llamadas vivas.
+
+---
+
+## Actualización 23/09/2026 · Biblioteca portable `neurosym` y modo Eval
+
+**Objetivo reformulado:** interpretabilidad del mecanismo de búsqueda. El código observa (hechos deterministas,
+legibles por humanos y máquinas) y Jev juzga con reglas en lenguaje humano; ambos presentes, y es preferible que
+el juicio viva en Jev y no dentro de una función.
+
+**Qué dijo el run del 21/09** (`runs/2026-09-21-run-journal.json`): se aceptó la **v1**, la primera compilación
+(3/3 a mouse depth 5); las mutaciones v2–v4 se descartaron; 10 de las 12 ops del catálogo, 0 `expr`. El mérito
+se reparte entre el catálogo del diseñador (que ya codifica estrategia: `mouse_routes`, `covered_mouse_moves`),
+la primera elección del LLM y Jev; el bucle no mejoró nada. `cat_formation` no informa (0,047) y pesa 0,2.
+
+**Hecho (commits P0–P1, ver `lib/README.md`):**
+- `lib/` (TypeScript, sin dependencias de runtime): World, Observer (`code` | `dsl`: `core@1` + dialectos del
+  diseñador), Formula (JSON portable, hash semántico), Evaluator, JevJudge, búsqueda (fan-out / PV-αβ),
+  mundo `foxhounds@1` con su dialecto, modelo del ratón y oráculo. Paridad demostrada contra el harness del
+  commit base (reglas, 12 ops, fórmula aceptada, planner, oráculo, búsqueda completa y preguntas a Jev byte a byte).
+- El harness incrusta la biblioteca (sigue siendo un solo fichero) y le delega mundo, vocabulario, System 1 y
+  búsqueda. **Hallazgo:** el harness anterior pagaba preguntas duplicadas en vuelo (219 llamadas / 103 distintas
+  en la prueba de paridad); ahora cada pregunta se paga una vez.
+- **Modo Eval (P1):** *Observation Mode* `both | code | dsl`; semilla de código sin catálogo; prompt por modo;
+  determinismo comprobado en el replay; telemetría `measure_accuracy` / `absorbs_judgment`.
+
+**Qué observar en el próximo run real:** en modo `code`, qué hechos escribe System 2 y si alguno llega a
+`absorbs_judgment` (entonces el juicio se ha ido al código); llamadas Jev por intento frente al run del 21/09
+(la agrupación en vuelo debería bajarlas); y si sin catálogo el sistema aún encuentra un rule set ganador.
+
+**Pendiente:** extraer el aprendiz (propuesta → puertas → jueces → aceptación/currículum → journal) a la
+biblioteca; ablaciones con las mismas semillas (catálogo vs code vs ambos; juez lineal sólo como línea base);
+un segundo World pequeño (sin él no hay biblioteca); y de la hoja de ruta previa, `ACTION ACCURACY`, el A/B de
+modos de aprendizaje y la aceptación graduada.
+
+**Limitación honesta:** una medida `code` corre en el hilo de la página sin límite de tiempo (lo decidido: sin
+tope de cómputo); un bucle infinito colgaría la página. El replay sobre la evidencia la ejecuta antes que nada,
+pero no puede detectar un bucle que no termine. En Node, `nodeVmRunner` sí aplica un timeout.

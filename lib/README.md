@@ -94,9 +94,26 @@ El harness delega en la biblioteca:
   orden de jugadas y fusión de políticas son las de la biblioteca.
 
 Lo que sigue en el HTML es lo que todavía no es biblioteca: **el aprendiz** (bucle de intentos, System 2,
-jueces, consolidación, journal, currículum), la telemetría y la UI. El harness todavía mide `O(s)` con su
-propio `computeObservations` (formatos `op`/`expr`), conectado al `Evaluator` como `ObserverLike`; pasarlo al
-`Observer` de la biblioteca es lo que abre las medidas `code` (P1).
+jueces, consolidación, journal, currículum), la telemetría y la UI. El harness mide `O(s)` con su
+`computeObservations` (conectado al `Evaluator` como `ObserverLike`), que ejecuta los tres kinds: `op` y `expr`
+(formato del harness) y `code` (compilado por el runner de la biblioteca).
+
+### Modo Eval en el harness (P1)
+
+- **Observation Mode** (cabecera): `both` (por defecto) · `code` (sólo Eval) · `dsl` (catálogo + `expr`). El modo
+  decide qué kinds puede **declarar System 2**; lo importado o aceptado antes sigue ejecutándose.
+- **Semilla de código** (`DEFAULT_CODE_RULES`): en modo `code` el punto de partida sólo mide hechos escritos
+  desde las reglas (filas, dispersión, movilidad legal, hueco gato-ratón). Ninguna op del catálogo
+  (`mouse_routes`, `covered_mouse_moves`) puede llegar a System 2 por herencia.
+- **Prompt por modo**: System 2 ve sólo el vocabulario admitido; en `code`, la API de `ctx` (vista, estado y
+  reglas: `actions`/`step`/`outcome`) y la consigna **«observa hechos, deja juzgar a Jev»**.
+- **Puertas**: rango declarado, `lang` con runner, compila, ≤ 4000 caracteres (legibilidad, no cómputo); sin azar,
+  reloj ni globals; el **replay sobre la evidencia** mide cada medida `code` dos veces y rechaza la que no
+  repite su número.
+- **Juicio absorbido** (`measure_accuracy`, tile *Verdict-like measures*): cada medida se normaliza por su rango
+  y se compara en posiciones que las reglas ganan vs pierden; si una sola medida separa ≥ 0,5 y al menos tanto
+  como la mejor regla, se marca `absorbs_judgment: true` y System 2 recibe `verdict_like_measures`. Es una
+  medida, no una prohibición: el objetivo es que el juicio viva en reglas de Jev legibles.
 
 ## Validación
 
@@ -130,6 +147,6 @@ real la proporción dependerá de cuántas hojas comparten vector.)
 | **P0** | Núcleo: World, Observer (code/dsl), Formula, Evaluator; `foxhounds@1` con paridad | **hecho** |
 | **P0b** | Juez Jev, búsqueda (fan-out / PV-αβ), modelo del ratón y oráculo con paridad; el harness incrusta la biblioteca y le delega mundo, vocabulario y planner | **hecho** |
 | **P0c** | El harness evalúa y busca con la biblioteca (`Evaluator`, `JevJudge`, `minimax` con ganchos); hereda la agrupación de preguntas en vuelo | **hecho** |
-| P1 | El harness mide con el `Observer` de la biblioteca; System 2 escribe medidas `code`: prompt, replay sobre la evidencia, chequeo de determinismo, telemetría "la medida absorbe el juicio" | pendiente |
+| **P1** | System 2 escribe medidas `code` en el harness: modo de observación, semilla de código, prompt por modo, determinismo en el replay, telemetría de juicio absorbido | **hecho** |
 | P2 | Ablaciones con las mismas semillas: catálogo vs code vs ambos; juez lineal sólo como línea base | pendiente |
 | P3 | Un segundo World, pequeño y distinto: sin él no hay biblioteca | pendiente |

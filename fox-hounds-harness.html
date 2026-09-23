@@ -433,6 +433,14 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
         </select>
       </div>
       <div class='field'>
+        <label for='cfg-observation-mode'>Observation Mode (how System 2 declares O(s))</label>
+        <select id='cfg-observation-mode'>
+          <option value='both'>both: code (Eval) + catalogue DSL</option>
+          <option value='code'>code only: Eval facts written from the rules, no catalogue</option>
+          <option value='dsl'>DSL only: catalogue ops + bounded expr</option>
+        </select>
+      </div>
+      <div class='field'>
         <label for='cfg-midgame-corrections'>Course Corrections / Game</label>
         <input type='number' id='cfg-midgame-corrections' min='0' max='8' step='1'>
       </div>
@@ -2619,6 +2627,9 @@ const DEFAULT_CONFIG = {
      ones to System 2, which is the only author of a rule set. "live" lets the rule set be revised
      inside the game: the point is to try a system whose exploration policy evolves. */
   pathLearning: "live",       // off | collect | consolidate | live
+  /* How System 2 may declare O(s): "code" (Eval: JavaScript functions of the state, written from the rules of
+     the world), "dsl" (the designer's catalogue ops + bounded expr), or "both". The judgment stays in Jev. */
+  observationMode: 'both',
   midgameCorrections: 3,      // "live": max revisions per game (a budget, not a wish)
   pathCasesLimit: 4,          // informative lines per ply handed to System 2
   parallelLeaves: 8,          // max concurrent LIVE Jev requests (one slot per possible Cat move)
@@ -2881,6 +2892,52 @@ const Telemetry = {
       else { stat.mean += delta / n; stat.m2 += delta * (value - stat.mean); }
     });
   },
+  /* The same yardstick for the MEASURES: each fact normalised by its declared range, averaged on positions the
+     rules win vs lose. Direction is irrelevant for a fact (a count may rise or fall with the truth); what matters
+     is how much it separates on its own. A measure that separates as well as the best rule means V(s) is echoing
+     that code: the judgment has moved from Jev into the observation. Measured, never enforced. */
+  measureTruthWon: {},
+  measureTruthLost: {},
+  noteMeasureTruth: function (winner, measured, observations) {
+    if (!measured || !observations || (winner !== SIDE_CATS && winner !== SIDE_MOUSE)) return;
+    const bucket = (winner === SIDE_CATS) ? this.measureTruthWon : this.measureTruthLost;
+    Object.keys(measured).forEach(function (id) {
+      const decl = observations[id];
+      const range = decl && Array.isArray(decl.range) ? decl.range : null;
+      const value = measured[id];
+      if (!range || !Number.isFinite(value) || !(range[1] > range[0])) return;
+      const x = (value - range[0]) / (range[1] - range[0]);
+      const stat = bucket[id] || (bucket[id] = { n: 0, mean: 0, kind: (decl.spec && decl.spec.kind) || 'op' });
+      stat.n++;
+      stat.mean += (x - stat.mean) / stat.n;
+    });
+  },
+  measureAccuracy: function () {
+    const self = this;
+    const ids = {};
+    Object.keys(this.measureTruthWon).forEach(function (id) { ids[id] = true; });
+    Object.keys(this.measureTruthLost).forEach(function (id) { ids[id] = true; });
+    const bestRule = this.atomAccuracy().reduce(function (best, a) {
+      return (a.informative === true && a.separation > best) ? a.separation : best;
+    }, 0);
+    return Object.keys(ids).map(function (id) {
+      const won = self.measureTruthWon[id] || { n: 0, mean: null };
+      const lost = self.measureTruthLost[id] || { n: 0, mean: null };
+      const samples = won.n + lost.n;
+      const separation = (won.n && lost.n) ? round(Math.abs(won.mean - lost.mean), 4) : null;
+      return {
+        id: id,
+        kind: won.kind || lost.kind || null,
+        mean_when_cats_win: won.n ? round(won.mean, 4) : null,
+        mean_when_mouse_wins: lost.n ? round(lost.mean, 4) : null,
+        samples_cat_wins: won.n, samples_mouse_wins: lost.n,
+        separation: separation,
+        best_rule_separation: round(bestRule, 4),
+        absorbs_judgment: (separation === null || samples < ATOM_ACCURACY_MIN_SAMPLES) ? null
+          : (separation >= JUDGMENT_ABSORPTION_SEPARATION && separation >= bestRule)
+      };
+    });
+  },
   atomAccuracy: function (options) {
     const opts = options || {};
     const minSamples = Number.isFinite(opts.minSamples) ? opts.minSamples : ATOM_ACCURACY_MIN_SAMPLES;
@@ -2937,7 +2994,7 @@ const Telemetry = {
     this.droppedQuestionPlaceholders = 0;
     this.formulaCompilations = 0; this.formulaCacheHits = 0; this.environmentEvals = 0;
     this.formulaEvidenceReplays = 0; this.formulaEvidenceRejected = 0;
-    this.oracleCalls = 0; this.oracleReuses = 0; this.atomTruthWon = {}; this.atomTruthLost = {};
+    this.oracleCalls = 0; this.oracleReuses = 0; this.atomTruthWon = {}; this.atomTruthLost = {}; this.measureTruthWon = {}; this.measureTruthLost = {};
     this.confidenceSamples = 0; this.confidenceMean = null; this.confidenceM2 = 0;
     this.confidenceMin = null; this.confidenceMax = null; this.confidenceBelowFloor = 0;
     this.atomStats = {};
@@ -2997,6 +3054,7 @@ const Telemetry = {
       value_truth_contradictions: this.valueTruthContradictions,
       oracle_calls: this.oracleCalls, oracle_reuses: this.oracleReuses,
       atom_accuracy: this.atomAccuracy(),
+      measure_accuracy: this.measureAccuracy(),
       jev_confidence_mean: this.confidenceMean === null ? null : round(this.confidenceMean, 4),
       jev_confidence_min: this.confidenceMin,
       jev_confidence_max: this.confidenceMax,
@@ -3649,6 +3707,60 @@ const DEFAULT_RULES = {
   confidenceFloor: 0.45,
   evidence: null
 };
+/* The neutral seed of the CODE observation mode. Same two judgments, over facts computed by code from the
+   rules of the world alone - positions and legal moves. No catalogue op, so no designer strategy (routes,
+   covered exits) can reach System 2 by inheritance: in "code" mode every richer fact is System 2's to write. */
+const codeSpec = function (range, source) { return { kind: 'code', lang: 'js', range: range, source: source }; };
+const DEFAULT_CODE_RULES = {
+  version: 0,
+  source: 'default-code',
+  rationale: 'Neutral code seed: facts computed from the rules of the world only; Jev judges them with equal weights.',
+  weights: defaultWeights(),
+  battery: {
+    cats_win_forecast: {
+      type: 'choice', used_as: 'value', option: 'cats_win',
+      instructions: 'Judge whether the Cats force a trap from the DECLARED measurements only: Mouse row={{mouse_row}}, ' +
+        'Mouse legal moves={{mouse_mobility}}, Cat front/rear row={{cat_front_row}}/{{cat_rear_row}}, Cat spread={{cat_row_spread}}, ' +
+        'rear Cat row minus Mouse row={{cat_mouse_row_gap}}. Assume the Mouse plays as the opponent field describes and the Cats play their best.',
+      criteria: {
+        cats_win: 'Against the described Mouse, the Cats force the trap before the Mouse reaches row 0 or gets above every Cat.',
+        mouse_win: 'The Mouse reaches row 0 or gets above every Cat whatever the Cats do.',
+        draw: 'Neither side can force its result from here.'
+      }
+    },
+    mouse_containment: {
+      type: 'score', used_as: 'value',
+      instructions: 'How contained is the Mouse, given its row {{mouse_row}}, its {{mouse_mobility}} legal moves, the Cat rows ' +
+        '{{cat_front_row}}/{{cat_rear_row}}, their spread {{cat_row_spread}} and the rear-Cat-to-Mouse gap {{cat_mouse_row_gap}}?',
+      criteria: [
+        'The Mouse is free: it has room to pass the Cat line.',
+        'The Mouse is favoured: the line has gaps it can reach.',
+        'Unsettled: the Mouse is restricted but not closed in.',
+        'The Cats are favoured: the Mouse has little room left.',
+        'The Mouse is closed in: a trap is imminent.'
+      ]
+    }
+  },
+  observations: {
+    mouse_row: { name: 'Mouse row', definition: 'the Mouse y (0 is its goal, 7 its start)',
+      spec: codeSpec([0, 7], "(ctx) => ctx.view.entities.find((e) => e.type === 'mouse').y") },
+    cat_front_row: { name: 'Cat front row', definition: 'the largest Cat y (the most advanced Cat)',
+      spec: codeSpec([0, 7], "(ctx) => Math.max(...ctx.view.entities.filter((e) => e.type === 'cat').map((e) => e.y))") },
+    cat_rear_row: { name: 'Cat rear row', definition: 'the smallest Cat y (the last line of defence)',
+      spec: codeSpec([0, 7], "(ctx) => Math.min(...ctx.view.entities.filter((e) => e.type === 'cat').map((e) => e.y))") },
+    cat_row_spread: { name: 'Cat row spread', definition: 'largest Cat y minus smallest Cat y',
+      spec: codeSpec([0, 7], "(ctx) => { const ys = ctx.view.entities.filter((e) => e.type === 'cat').map((e) => e.y); return Math.max(...ys) - Math.min(...ys); }") },
+    mouse_mobility: { name: 'Mouse legal moves', definition: 'how many legal moves the rules give the Mouse here',
+      spec: codeSpec([0, 4], "(ctx) => ctx.world.actions(ctx.state, 'mouse').length") },
+    cat_mouse_row_gap: { name: 'rear Cat to Mouse gap', definition: 'smallest Cat y minus Mouse y (positive: every Cat is behind the Mouse)',
+      spec: codeSpec([-7, 7], "(ctx) => { const cats = ctx.view.entities.filter((e) => e.type === 'cat'); const mouse = ctx.view.entities.find((e) => e.type === 'mouse'); return Math.min(...cats.map((e) => e.y)) - mouse.y; }") }
+  },
+  policyWeights: {},
+  confidenceFloor: 0.45,
+  evidence: null
+};
+/* The bootstrap of the current observation mode. */
+function seedRules() { return observationMode() === 'code' ? DEFAULT_CODE_RULES : DEFAULT_RULES; }
 
 /* ----------------------------------------------------------------------------
  * STRUCTURAL TYPE GATES (the only door into the search)
@@ -3913,7 +4025,10 @@ function normalizeRules(raw, options) {
      revision silently erased O(s) and every question that referenced it. */
   const rawObservations = Object.prototype.hasOwnProperty.call(root, 'observations')
     ? root.observations : observationsOf(fallback);
-  const observationsResult = normalizeObservations(rawObservations, warnings);
+  /* What System 2 proposes passes the observation mode; a rule set imported, restored or compiled by the
+     harness itself is trusted to be whatever it already was. */
+  const proposalKinds = /^llm/.test(String(opts.source || '')) ? admittedMeasureKinds() : null;
+  const observationsResult = normalizeObservations(rawObservations, warnings, { admittedKinds: proposalKinds });
   if (!Object.keys(observationsResult.observations).length) {
     warnings.push('A formula must declare at least one executable observation; kept the previous observations.');
     observationsResult.observations = normalizeObservations(observationsOf(fallback), warnings).observations;
@@ -3967,6 +4082,21 @@ function normalizeRules(raw, options) {
    rewrite. Both are structural artifacts and are validated by normalizeRules. */
 /* The shape is RENDERED from the live battery (it used to be a hand-copied literal), so the
    example in the prompt always lists the ids and types the structural gate accepts. */
+/* One example line per kind the current observation mode admits (the shape never shows a kind the gate refuses). */
+function observationShapeLines() {
+  const kinds = admittedMeasureKinds();
+  const out = [];
+  if (kinds.indexOf('code') >= 0) {
+    out.push('    "<your_code_measure_id>": { "name": "<fact name>", "definition": "<what the number reports>",\n' +
+      '      "spec": { "kind": "code", "lang": "js", "range": [<min>, <max>], "source": "(ctx) => <number>" } }');
+  }
+  if (kinds.indexOf('op') >= 0) out.push('    "<your_primitive_measure_id>": { "spec": { "kind": "op", "op": "<op from the table>", "args": {} } }');
+  if (kinds.indexOf('expr') >= 0) {
+    out.push('    "<your_derived_measure_id>": { "name": "<fact name>", "definition": "<reproducible calculation>",\n' +
+      '      "spec": { "kind": "expr", "range": [<min>, <max>], "expr": { "op": "<expression op>", "args": [] } } }');
+  }
+  return out;
+}
 function renderRulesShape(battery, placeholders) {
   const source = battery || DEFAULT_BATTERY;
   /* DE-ANCHORING: the Required JSON shape shown to System 2 may not name the ids of the shipped
@@ -3998,9 +4128,7 @@ function renderRulesShape(battery, placeholders) {
     ids.map(shapeFor).join('\n'),
     '  },',
     '  "observations": {',
-    '    "<your_primitive_measure_id>": { "spec": { "kind": "op", "op": "<op from the table>", "args": {} } },',
-    '    "<your_derived_measure_id>": { "name": "<fact name>", "definition": "<reproducible calculation>",',
-    '      "spec": { "kind": "expr", "range": [<min>, <max>], "expr": { "op": "<expression op>", "args": [] } } }',
+    observationShapeLines().join(',\n'),
     '  }',
     '}'].join('\n');
 }
@@ -4052,30 +4180,52 @@ function buildJevSchemaDoc() {
   lines.push('  any instructions or criteria as {{id}}: the harness substitutes the MEASURED number, so Jev');
   lines.push('  reads a fact instead of computing it. A measure is a FACT about the board, never a value:');
   lines.push('  it cannot judge, it only reports what the position contains.');
-  lines.push('  Primitive form: { "spec": { "kind":"op", "op":"<op from the table>", "args":{...} } }.');
-  lines.push('  Derived form: { "definition":"<reproducible calculation>", "spec": { "kind":"expr", "range":[min,max], "expr":<AST> } }.');
+  const admittedKinds = admittedMeasureKinds();
+  lines.push('  OBSERVATION MODE "' + observationMode() + '": you may declare the kinds ' + admittedKinds.join(', ') +
+    '; a declaration of any other kind is refused at the gate WITH A REASON.');
   lines.push('  The gate compiles every spec AT THE GATE: a formulation this build cannot run is refused WITH A REASON,');
   lines.push('  never a silent neutral. A question whose {{id}} names a measure you did NOT declare is DROPPED');
   lines.push('  (its text would reach Jev with a literal placeholder). The measured facts travel with every');
   lines.push('  judgement as measurements, and are recited back in the payload as evidence a later formula cites.');
   lines.push('  The measured vector keys THE CACHE: two boards that measure the same reuse the judgement');
   lines.push('  already paid for (source "cached-vector"); a different vector never reuses anything.');
-  lines.push('  This build executes kind "op" and safe declarative kind "expr". Arbitrary code is never executed.');
-  lines.push('  MEASURE VOCABULARY (pure functions of the state - no network, no Jev, no randomness, no verdict):');
-  Object.keys(OBSERVATION_OPS).forEach(function (key) {
-    const entry = OBSERVATION_OPS[key];
-    const names = Object.keys(entry.args || {});
-    const params = names.length ? names.map(function (name) {
-      const declared = entry.args[name];
-      return name + ' in [' + declared.min + '..' + declared.max + '] (default ' + declared.default + ')';
-    }).join('; ') : 'no args';
-    lines.push('  - ' + key + ': ' + entry.definition + ' Range [' + entry.range[0] + '..' + entry.range[1] + ']. Args: ' + params + '.');
-  });
-  lines.push('  EXPR AST: a finite number or {op:"const",value}; {op:"aggregate",group:"cats"|"mouse"|"all",');
-  lines.push('    field:"x"|"y",reduce:"count"|"min"|"max"|"sum"|"mean"|"spread"}; {op:"primitive",name,args};');
-  lines.push('    {op:"add"|"sub"|"mul"|"div"|"min"|"max"|"mean",args:[...]}; {op:"abs"|"neg",arg};');
-  lines.push('    or {op:"clamp",value,min,max}. Limit ' + MEASURE_EXPR_MAX_NODES + ' nodes / depth ' + MEASURE_EXPR_MAX_DEPTH + '; expr requires an explicit finite range.');
-  lines.push('  FORMULATION contract: stable lowercase id, reproducible definition, and either one registered op or one bounded expr AST.');
+  if (admittedKinds.indexOf('code') >= 0) {
+    lines.push('  EVAL form (kind "code"): { "name":"<fact>", "definition":"<what the number reports>", "spec": { "kind":"code", "lang":"js",');
+    lines.push('    "range":[min,max], "source":"(ctx) => <number>" } }. The harness runs YOUR function over every judged board.');
+    lines.push('    ctx.view.entities = [{type:"cat"|"mouse", id, index, x, y}], ctx.view.scalars = {ply, turn, board_size};');
+    lines.push('    ctx.state = {cats:[[x,y],...], mouse:[x,y], turn, ply} (frozen); ctx.world = the RULES only:');
+    lines.push('    world.actions(state, "cats"|"mouse") -> legal moves {piece, catIndex, from:[x,y], to:[x,y]}; world.step(state, move) -> next state;');
+    lines.push('    world.outcome(state) -> {over, winner, reason}; world.key(state) -> canonical id.');
+    lines.push('    Pure and deterministic: Math.random, the clock, timers, network and globals are NOT in scope. No compute limit:');
+    lines.push('    you may count, search or simulate with the rules. Source up to ' + MEASURE_CODE_MAX_CHARS +
+      ' characters: a fact nobody can read is not interpretable - split long logic into several named measures.');
+    lines.push('  OBSERVE FACTS, LET JEV JUDGE: a code measure should REPORT what the position contains (a count, a distance, a number');
+    lines.push('    of moves or of paths), never decide who wins. The judgment belongs in a Jev rule, in human language, where it can be');
+    lines.push('    read and audited. "measure_accuracy" in the payload flags a measure that already separates won from lost positions on');
+    lines.push('    its own ("absorbs_judgment": true): then V(s) is only echoing that code and Jev adds nothing - prefer a factual measure');
+    lines.push('    plus a rule that judges it.');
+  }
+  if (admittedKinds.indexOf('op') >= 0) {
+    lines.push('  Primitive form (kind "op"): { "spec": { "kind":"op", "op":"<op from the table>", "args":{...} } }.');
+    lines.push('  MEASURE VOCABULARY (pure functions of the state - no network, no Jev, no randomness, no verdict):');
+    Object.keys(OBSERVATION_OPS).forEach(function (key) {
+      const entry = OBSERVATION_OPS[key];
+      const names = Object.keys(entry.args || {});
+      const params = names.length ? names.map(function (name) {
+        const declared = entry.args[name];
+        return name + ' in [' + declared.min + '..' + declared.max + '] (default ' + declared.default + ')';
+      }).join('; ') : 'no args';
+      lines.push('  - ' + key + ': ' + entry.definition + ' Range [' + entry.range[0] + '..' + entry.range[1] + ']. Args: ' + params + '.');
+    });
+  }
+  if (admittedKinds.indexOf('expr') >= 0) {
+    lines.push('  Derived form (kind "expr"): { "definition":"<reproducible calculation>", "spec": { "kind":"expr", "range":[min,max], "expr":<AST> } }.');
+    lines.push('  EXPR AST: a finite number or {op:"const",value}; {op:"aggregate",group:"cats"|"mouse"|"all",');
+    lines.push('    field:"x"|"y",reduce:"count"|"min"|"max"|"sum"|"mean"|"spread"}; {op:"primitive",name,args};');
+    lines.push('    {op:"add"|"sub"|"mul"|"div"|"min"|"max"|"mean",args:[...]}; {op:"abs"|"neg",arg};');
+    lines.push('    or {op:"clamp",value,min,max}. Limit ' + MEASURE_EXPR_MAX_NODES + ' nodes / depth ' + MEASURE_EXPR_MAX_DEPTH + '; expr requires an explicit finite range.');
+  }
+  lines.push('  FORMULATION contract: stable lowercase id, reproducible definition, and one spec of an admitted kind.');
   lines.push('WHAT THE HARNESS COMPOSES: formula = {O(s), r_i, w_i}; Environment.Eval(formula) computes O(s), Jev judges every r_i(O(s)),');
   lines.push('  and code alone computes V(s) = SUM_i(w_i * r_i). Weights are clipped to [0,1] and normalised to sum 1.');
   lines.push('WHAT DECIDES: the Cats play your rule set against a fixed, deterministic Mouse opponent (described in every state). A rule set is');
@@ -4175,7 +4325,7 @@ function buildLlmSystemPrompt() {
   'NO CHANGE IS VALID: if the cases show no distinction worth observing or judging, omit "observations", "weights" and "battery" and say why in rationale. Omission preserves the current formula; an empty observations object is refused because every executable formula must observe at least one fact. That answer is legitimate and is not punished - a prose-only edit is not.',
   'Reply with ONE JSON object and nothing else: no markdown fences, no commentary.',
   'Required JSON shape:',
-  RULES_JSON_SHAPE,
+  renderRulesShape(null, true),
   buildJevSchemaDoc()
   ].join('\n');
 }
@@ -4319,6 +4469,13 @@ function buildMetaContext(state, options) {
     atom_stats: Telemetry.atomStatistics(),
     /* ACCURACY, not dispersion: what each question answers on positions the RULES win vs lose. */
     atom_accuracy: Telemetry.atomAccuracy(),
+    measure_accuracy: Telemetry.measureAccuracy(),
+    verdict_like_measures: Telemetry.measureAccuracy()
+      .filter(function (m) { return m.absorbs_judgment === true; })
+      .map(function (m) { return { id: m.id, kind: m.kind, separation: m.separation, best_rule_separation: m.best_rule_separation }; }),
+    how_to_read_measure_accuracy: 'For every measure: its value normalised by its declared range, averaged on positions the RULES ' +
+      'win vs lose for the Cats. absorbs_judgment=true means the fact alone separates the outcome at least as well as your best ' +
+      'rule: V(s) is echoing that code and Jev adds nothing. Keep observations as facts and let a rule judge them.',
     uninformative_questions: Telemetry.atomAccuracy()
       .filter(function (a) { return a.informative === false; })
       .map(function (a) {
@@ -4371,7 +4528,7 @@ async function requestMetaReasoning(userPayload, options) {
 async function compileRulesWithLLM(state, options) {
   const opts = options || {};
   if (!llmAvailable()) {
-    const fallback = normalizeRules(DEFAULT_RULES, { fallback: DEFAULT_RULES, source: 'bootstrap' });
+    const fallback = normalizeRules(seedRules(), { fallback: seedRules(), source: 'bootstrap' });
     log('LLM', 'warn', 'System 2 unavailable (' +
       (config.llmUrl ? 'suspended after repeated failures' : 'no endpoint configured') +
       ') - using the bootstrap rule set v' + fallback.rules.version + '. The harness ships no rule set of its own: configure System 2 to search for one.');
@@ -4387,7 +4544,7 @@ async function compileRulesWithLLM(state, options) {
     const answer = await requestMetaReasoning(context, { signal: opts.signal });
     const proposed = parseJSONLoose(answer.content);
     const normalized = normalizeRules(proposed, {
-      fallback: DEFAULT_RULES, source: 'llm-compile',
+      fallback: seedRules(), source: 'llm-compile',
       evidence: { latency_ms: answer.latencyMs, raw: answer.content.slice(0, 600) }
     });
     noteDroppedQuestions(proposed, normalized.rules.battery, 'compile');
@@ -4400,7 +4557,7 @@ async function compileRulesWithLLM(state, options) {
     if (error && error.kind === 'aborted') throw error;
     Telemetry.llmErrors++;
     noteLlmFailure(error);
-    const fallback = normalizeRules(DEFAULT_RULES, { fallback: DEFAULT_RULES, source: 'bootstrap' });
+    const fallback = normalizeRules(seedRules(), { fallback: seedRules(), source: 'bootstrap' });
     log('LLM', 'warn', 'System 2 compile failed (' + summarizeError(error) +
       ') - continuing with the bootstrap rule set v' + fallback.rules.version + '.', { warnings: fallback.warnings });
     return { rules: fallback.rules, warnings: fallback.warnings, source: 'fallback' };
@@ -4556,7 +4713,7 @@ function formulaEvidenceCases(options) {
    attempt from the measured evidence (a loss report, or a low-confidence report). */
 async function mutateRulesWithLLM(state, failedRules, lowConfidenceScore, options) {
   const opts = options || {};
-  const previous = failedRules || DEFAULT_RULES;
+  const previous = failedRules || seedRules();
   if (!llmAvailable()) {
     /* Suspended or not configured. The harness will NOT invent a rule set: it keeps the
        current one, and the ply proceeds with the best-effort move. */
@@ -4742,7 +4899,21 @@ function questionsFingerprint(questions) {
  * board, never a value.
  * ========================================================================== */
 const MEASURE_SPEC_VERSION = 2;
-const MEASURE_KINDS = ["op", "expr"];
+const MEASURE_KINDS = ["op", "expr", "code"];
+/* The engine executes all three kinds; the observation MODE (observationMode) decides which ones System 2 may
+   DECLARE - a rule set imported or accepted earlier keeps running whatever the mode. */
+/* Interpretability, not compute: a code measure has no compute limit, but a fact nobody can read is not an
+   interpretable fact. Longer logic is split into several named measures. */
+const MEASURE_CODE_MAX_CHARS = 4000;
+/* A measure whose value alone separates the positions the rules win from those they lose by at least this much
+   (on its own normalised range) is flagged: V(s) may just be echoing the code, with Jev adding nothing. */
+const JUDGMENT_ABSORPTION_SEPARATION = 0.5;
+/* Functions, not table lookups: the prompt shape is rendered at load time, before this table is declared. */
+function observationMode() { return (config.observationMode === 'code' || config.observationMode === 'dsl') ? config.observationMode : 'both'; }
+function admittedMeasureKinds() {
+  const mode = observationMode();
+  return mode === 'code' ? ['code'] : (mode === 'dsl' ? ['op', 'expr'] : ['op', 'expr', 'code']);
+}
 const MEASURE_EXPR_MAX_NODES = 64;
 const MEASURE_EXPR_MAX_DEPTH = 8;
 const MEASURE_EXPR_GROUPS = ["cats", "mouse", "all"];
@@ -4898,6 +5069,7 @@ function compileMeasure(spec) {
     return { ok: false, kind: kind, fn: null, range: null, spec_hash: specHash(raw), warnings: [],
       error: "measure kind \"" + kind + "\" is not executable by this build (it executes: " + MEASURE_KINDS.join(", ") + ")" };
   }
+  if (kind === 'code') return compileCodeMeasure(raw);
   if (kind === 'expr') {
     const declaredRange = Array.isArray(raw.range) && raw.range.length === 2 &&
       Number.isFinite(raw.range[0]) && Number.isFinite(raw.range[1]) && raw.range[0] <= raw.range[1]
@@ -4936,6 +5108,32 @@ function compileMeasure(spec) {
   return { ok: true, kind: kind, range: op.range, fn: function (positions, context) {
     return op.fn(stateFromPositionArray(positions, context), settled);
   }, spec_hash: specHash(raw), warnings: warnings, error: null };
+}
+/* EVAL MODE: a measure written as a JavaScript function of the state, compiled by the library's runner
+   (Neurosym.Observer, kind "code"): Math.random, the clock, timers, network and globals are not in its scope,
+   and the state it reads is frozen. It receives ctx = { view, state, world }: the plain-data view (entities
+   and scalars), the state, and the RULES of the world (actions, step, outcome, key). No compute limit: it may
+   count, search or simulate. It must still be a FACT - the judgment belongs to Jev. */
+const CODE_MEASURE_OBSERVER = new Neurosym.Observer(FOX.foxhounds, { kinds: ['code'], core: false });
+function compileCodeMeasure(raw) {
+  const hash = specHash(raw);
+  const fail = function (error) { return { ok: false, kind: 'code', fn: null, range: null, spec_hash: hash, warnings: [], error: error }; };
+  const range = Array.isArray(raw.range) && raw.range.length === 2 &&
+    Number.isFinite(raw.range[0]) && Number.isFinite(raw.range[1]) && raw.range[0] <= raw.range[1]
+    ? [raw.range[0], raw.range[1]] : null;
+  if (!range) return fail('a code measure must declare finite range [min,max]');
+  if (typeof raw.source !== 'string' || !raw.source.trim()) return fail('a code measure needs "source": a function (ctx) => number');
+  if (raw.source.length > MEASURE_CODE_MAX_CHARS) {
+    return fail('the source has ' + raw.source.length + ' characters (limit ' + MEASURE_CODE_MAX_CHARS +
+      '): a fact nobody can read is not interpretable; split it into several named measures');
+  }
+  const compiled = CODE_MEASURE_OBSERVER.compile({ kind: 'code', lang: raw.lang || 'js', source: raw.source }, range);
+  if (!compiled.ok) return fail(compiled.error);
+  return { ok: true, kind: 'code', range: range, spec_hash: hash, warnings: [], error: null,
+    fn: function (positions, context) {
+      const state = Neurosym.deepFreeze(stateFromPositionArray(positions, context));
+      return compiled.fn(Object.freeze({ view: Neurosym.deepFreeze(FOX.foxView(state)), state: state, world: FOX.foxhounds }));
+    } };
 }
 const compiledMeasureCache = new Map();
 function compileMeasureCached(spec) {
@@ -5010,6 +5208,19 @@ function replayFormulaOnEvidence(rules, cases) {
       return;
     }
     const measured = computeObservations(state, declarations);
+    /* A code measure must be a FACT: the same board, measured twice, gives the same number. */
+    const codeIds = ids.filter(function (id) { return declarations[id] && declarations[id].spec && declarations[id].spec.kind === 'code'; });
+    if (codeIds.length) {
+      const subset = {};
+      codeIds.forEach(function (id) { subset[id] = declarations[id]; });
+      const again = computeObservations(state, subset);
+      codeIds.forEach(function (id) {
+        if (Object.prototype.hasOwnProperty.call(measured.values, id) && measured.values[id] !== again.values[id]) {
+          errors.push({ case_index: index, case_id: caseEntry.case_id || null, observation: id,
+            error: 'non-deterministic: the same board measured ' + measured.values[id] + ' and then ' + again.values[id] });
+        }
+      });
+    }
     measured.errors.forEach(function (entry) {
       errors.push({ case_index: index, case_id: caseEntry.case_id || null, observation: entry.id, error: entry.error });
     });
@@ -5063,7 +5274,8 @@ function substituteObservations(text, values) {
 /* The GATE side of observations: which declared measures a rule set keeps, and which questions are
    dropped because they reference a measure nobody declared. A hypothesis lost silently is the worst
    failure mode this harness has, so both decisions are counted and explained. */
-function normalizeObservations(raw, warnings) {
+function normalizeObservations(raw, warnings, options) {
+  const admitted = (options && Array.isArray(options.admittedKinds)) ? options.admittedKinds : null;
   const source = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : null;
   if (!source) return { observations: {}, dropped: [] };
   const kept = {};
@@ -5073,6 +5285,15 @@ function normalizeObservations(raw, warnings) {
     if (!QUESTION_ID_PATTERN.test(id)) { warnings.push('Observation "' + id + '" was dropped: not a valid id.'); dropped.push(id); return; }
     const clean = (decl && typeof decl === "object" && !Array.isArray(decl)) ? decl : null;
     if (!clean) { warnings.push('Observation "' + id + '" was dropped: it is not an object.'); dropped.push(id); return; }
+    if (admitted) {
+      const declaredKind = (clean.spec && typeof clean.spec === 'object' && typeof clean.spec.kind === 'string' && clean.spec.kind) ? clean.spec.kind : 'op';
+      if (admitted.indexOf(declaredKind) < 0) {
+        warnings.push('Observation "' + id + '" was dropped: kind "' + declaredKind + '" is not admitted by the observation mode "' +
+          observationMode() + '" (admitted: ' + admitted.join(', ') + ').');
+        dropped.push(id);
+        return;
+      }
+    }
     const compiled = compileMeasure(clean.spec);
     if (!compiled.ok) { warnings.push('Observation "' + id + '" was dropped: ' + compiled.error + '.'); dropped.push(id); return; }
     compiled.warnings.forEach(function (w) { warnings.push('Observation "' + id + '": ' + w + '.'); });
@@ -5081,7 +5302,9 @@ function normalizeObservations(raw, warnings) {
       name: (typeof clean.name === "string" && clean.name.trim()) ? truncateText(clean.name, 60) : (op ? op.name : id),
       definition: (typeof clean.definition === "string" && clean.definition.trim())
         ? truncateText(clean.definition, 200)
-        : (op ? op.definition : ('derived from the board position array as ' + stableStringify(clean.spec.expr)).slice(0, 200)),
+        : (op ? op.definition : (clean.spec.kind === 'code'
+          ? 'computed by its declared code (spec.source)'
+          : ('derived from the board position array as ' + stableStringify(clean.spec.expr)).slice(0, 200))),
       spec: deepClone(clean.spec), range: compiled.range, kind: compiled.kind, spec_hash: compiled.spec_hash
     };
   });
@@ -7853,7 +8076,11 @@ async function runCatsPly(controller, options) {
       c.leaf.outcome_label = !leafVerdict.known ? "unresolved"
         : (leafVerdict.winner === SIDE_CATS ? "good_for_cats"
         : (leafVerdict.winner === SIDE_MOUSE ? "bad_for_cats" : "neutral"));
-      if (leafVerdict.known) { Telemetry.noteAtomTruth(leafVerdict.winner, c.leaf.atoms); labelled++; }
+      if (leafVerdict.known) {
+        Telemetry.noteAtomTruth(leafVerdict.winner, c.leaf.atoms);
+        Telemetry.noteMeasureTruth(leafVerdict.winner, c.leaf.measurements, observationsOf(match.rules));
+        labelled++;
+      }
     });
     log("SEARCH", verdict.known ? "info" : "warn", "Oracle at ply " + match.state.ply + ": " +
       describeValueAgainstTruth(search.result.value, verdict) +
@@ -8932,6 +9159,10 @@ const STAT_TILE_DEFS = [
   { key: 'cache', label: 'Jev answer reuse', get: function () { return Telemetry.jevCacheHits; }, className: 'good' },
   { key: 'recomp', label: 'Recompositions', get: function () { return Telemetry.jevRecompositions; }, className: 'good' },
   { key: 'measure', label: 'O(s) computations/errors', get: function () { return Telemetry.measureComputations + '/' + Telemetry.measureErrors; }, className: 'good' },
+  { key: 'absorb', label: 'Verdict-like measures', get: function () {
+      const rows = Telemetry.measureAccuracy();
+      return rows.filter(function (m) { return m.absorbs_judgment === true; }).length + '/' + rows.length;
+    }, className: 'warn' },
   { key: 'formula', label: 'Environment Eval (compiled/hit)', get: function () { return Telemetry.environmentEvals + ' (' + Telemetry.formulaCompilations + '/' + Telemetry.formulaCacheHits + ')'; }, className: 'good' },
   { key: 'vectorcache', label: 'Measured-vector reuse', get: function () { return Telemetry.jevVectorCacheHits; }, className: 'good' },
   { key: 'tt', label: 'Transpositions (bound hits)', get: function () { return Telemetry.transpositionHits + ' (' + Telemetry.ttBoundHits + ')'; }, className: 'good' },
@@ -9634,6 +9865,7 @@ const CONFIG_FIELDS = [
   { id: 'cfg-parallel-leaves', key: 'parallelLeaves', type: 'number' },
   { id: 'cfg-policy-depth', key: 'policyDepth', type: 'number' },
   { id: 'cfg-path-learning', key: 'pathLearning', type: 'string' },
+  { id: 'cfg-observation-mode', key: 'observationMode', type: 'string' },
   { id: 'cfg-path-cases', key: 'pathCasesLimit', type: 'number' },
   { id: 'cfg-midgame-corrections', key: 'midgameCorrections', type: 'number' },
   { id: 'cfg-tune-hypotheses', key: 'autotuneHypotheses', type: 'number' },

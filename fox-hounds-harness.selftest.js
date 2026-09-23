@@ -2494,8 +2494,8 @@ function createSandbox(stub, quiet, withDom) {
     JSON.stringify(api.DEFAULT_RULES.observations));
   push('the measurement spec is gated by a version constant',
     typeof api.MEASURE_SPEC_VERSION === 'number' && api.MEASURE_SPEC_VERSION === 2, api.MEASURE_SPEC_VERSION);
-  push('the measurement vocabulary executes registered ops and bounded declarative expressions',
-    JSON.stringify(api.MEASURE_KINDS) === JSON.stringify(['op', 'expr']), JSON.stringify(api.MEASURE_KINDS));
+  push('the measurement vocabulary executes registered ops, bounded declarative expressions and code facts (Eval mode)',
+    JSON.stringify(api.MEASURE_KINDS) === JSON.stringify(['op', 'expr', 'code']), JSON.stringify(api.MEASURE_KINDS));
   const weightOnlyFormula = api.normalizeRules({ weights: { cats_win_forecast: 1, mouse_containment: 0 } },
     { fallback: api.DEFAULT_RULES }).rules;
   push('omitting observations preserves the current O(s) instead of silently erasing the formula',
