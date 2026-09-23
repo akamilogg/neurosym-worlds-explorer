@@ -1293,11 +1293,22 @@ var Neurosym = (() => {
           body: options.body === void 0 || options.body === null ? void 0 : JSON.stringify(options.body),
           signal: controller.signal
         });
-        let text = "";
+        let text;
         try {
           text = await response.text();
-        } catch {
-          text = "";
+        } catch (readError) {
+          if (controller.signal.aborted) {
+            throw external?.aborted ? new ApiError("aborted", "Request aborted by the caller.") : new ApiError("timeout", "The response body did not finish within " + timeoutMs + " ms (the headers had arrived: HTTP " + response.status + ").");
+          }
+          throw new ApiError("network", "The response body could not be read: " + (readError?.message || String(readError)));
+        }
+        const contentType = response.headers && typeof response.headers.get === "function" ? response.headers.get("content-type") : null;
+        if (response.ok && !text.trim()) {
+          throw new ApiError(
+            "http",
+            "Empty response body (HTTP " + response.status + (contentType ? ", " + contentType : "") + ")",
+            { status: response.status, retryable: true, retryAfterMs: null, body: "" }
+          );
         }
         if (!response.ok) {
           throw new ApiError("http", "HTTP " + response.status + " " + (response.statusText ?? ""), {
@@ -1308,7 +1319,9 @@ var Neurosym = (() => {
           });
         }
         const data = parseJsonLoose(text);
-        if (data === null) throw new ApiError("parse", "Response body was not valid JSON.", { body: text.slice(0, 400) });
+        if (data === null) {
+          throw new ApiError("parse", "Response body was not valid JSON (HTTP " + response.status + (contentType ? ", " + contentType : "") + ", " + text.length + " chars).", { status: response.status, body: text.slice(0, 400) });
+        }
         return { data, status: response.status, latencyMs: Math.round(clock() - startedAt), attempts: attempt + 1 };
       } catch (raw) {
         let error;
@@ -5171,7 +5184,12 @@ function summarizeTriedRuleSets() {
       formula_hash: formulaHash(rules), verdict: verdict
     });
   };
-  (match.rulesHistory || []).forEach(function (rules) { push(rules, 'measured'); });
+  /* The neutral seeds are never measured (the loop refuses to measure a prior nobody proposed), so they are
+     not "tried": listing them would also leak the catalogue ops of the DSL seed into a code-only run. */
+  (match.rulesHistory || []).forEach(function (rules) {
+    if (rules && (rules.source === 'default' || rules.source === 'default-code')) return;
+    push(rules, 'measured');
+  });
   if (match.bestRules) push(match.bestRules, 'accepted');
   return seen;
 }
@@ -5215,7 +5233,9 @@ function buildMetaContext(state, options) {
        propose the NEXT measure from evidence, not from creativity. Measured here, on the board shown,
        with no network call - and the vocabulary the next declaration draws from. */
     observations_in_use: (function () {
-      const source = opts.failedRules || DEFAULT_RULES;
+      /* The formula under discussion, or the seed of the CURRENT observation mode: in "code" mode no catalogue
+         measure may reach System 2, not even as the neutral starting point. */
+      const source = opts.failedRules || seedRules();
       const declared = (source && source.observations) || {};
       const here = computeObservations(state, declared);
       const declaredIds = Object.keys(declared);
@@ -5228,9 +5248,11 @@ function buildMetaContext(state, options) {
         formula_hash: formulaHash(source),
         judgment_formula_hash: judgmentFormulaHash(source),
         measure_spec_version: MEASURE_SPEC_VERSION,
-        vocabulary: Object.keys(OBSERVATION_OPS).map(function (key) {
+        observation_mode: observationMode(),
+        /* The designer's catalogue is shown only when the mode admits kind "op". */
+        vocabulary: admittedMeasureKinds().indexOf('op') >= 0 ? Object.keys(OBSERVATION_OPS).map(function (key) {
           return { id: key, name: OBSERVATION_OPS[key].name, definition: OBSERVATION_OPS[key].definition, range: OBSERVATION_OPS[key].range, args: Object.keys(OBSERVATION_OPS[key].args || {}) };
-        })
+        }) : []
       };
     })(),
     weight_zero_policy: 'Weight 0 removes that term from V(s); the question is still sent to Jev and still costs latency.',
@@ -8207,8 +8229,8 @@ function resetHarness(keepScore) {
   if (match.abort) match.abort.abort();
   match.state = createInitialState(config.mouseStartCol);
   match.status = 'idle';
-  match.rules = DEFAULT_RULES;
-  match.rulesHistory = [DEFAULT_RULES];
+  match.rules = seedRules();
+  match.rulesHistory = [seedRules()];
   match.bestRules = null;              // a reset is a clean slate: no accepted rule set survives it
   match.acceptedAt = null;            // ... and neither does its provenance
   match.history = [stateKey(match.state)];

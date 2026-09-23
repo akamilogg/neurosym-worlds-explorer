@@ -99,8 +99,24 @@ export async function fetchJson(url: string, options: FetchJsonOptions = {}): Pr
         body: options.body === undefined || options.body === null ? undefined : JSON.stringify(options.body),
         signal: controller.signal
       });
-      let text = '';
-      try { text = await response.text(); } catch { text = ''; }
+      /* The body can arrive long after the headers (OpenRouter answers 200 at once and sends keep-alive
+         comments while the model works). A body cut by OUR timeout is a timeout - retryable - never an
+         empty string later misreported as "not valid JSON". */
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (readError) {
+        if (controller.signal.aborted) {
+          throw external?.aborted ? new ApiError('aborted', 'Request aborted by the caller.')
+            : new ApiError('timeout', 'The response body did not finish within ' + timeoutMs + ' ms (the headers had arrived: HTTP ' + response.status + ').');
+        }
+        throw new ApiError('network', 'The response body could not be read: ' + ((readError as Error)?.message || String(readError)));
+      }
+      const contentType = response.headers && typeof response.headers.get === 'function' ? response.headers.get('content-type') : null;
+      if (response.ok && !text.trim()) {
+        throw new ApiError('http', 'Empty response body (HTTP ' + response.status + (contentType ? ', ' + contentType : '') + ')',
+          { status: response.status, retryable: true, retryAfterMs: null, body: '' });
+      }
       if (!response.ok) {
         throw new ApiError('http', 'HTTP ' + response.status + ' ' + (response.statusText ?? ''), {
           status: response.status,
@@ -110,7 +126,10 @@ export async function fetchJson(url: string, options: FetchJsonOptions = {}): Pr
         });
       }
       const data = parseJsonLoose(text);
-      if (data === null) throw new ApiError('parse', 'Response body was not valid JSON.', { body: text.slice(0, 400) });
+      if (data === null) {
+        throw new ApiError('parse', 'Response body was not valid JSON (HTTP ' + response.status + (contentType ? ', ' + contentType : '') +
+          ', ' + text.length + ' chars).', { status: response.status, body: text.slice(0, 400) });
+      }
       return { data, status: response.status, latencyMs: Math.round(clock() - startedAt), attempts: attempt + 1 };
     } catch (raw) {
       let error: ApiError;

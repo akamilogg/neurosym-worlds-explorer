@@ -171,3 +171,18 @@ test('the prompt teaches exactly the vocabulary of the mode (no capability it wo
   const dslPrompt = api.buildLlmSystemPrompt();
   assert.ok(!dslPrompt.includes('EVAL form') && dslPrompt.includes('- mouse_routes:') && !dslPrompt.includes('"kind": "code"'));
 });
+
+test('in code mode no catalogue op reaches System 2: not as vocabulary, not as a seed, not as a "tried" set', () => {
+  const api = loadWorkingHarness();
+  api.config.observationMode = 'code';
+  const payload = plain(api.buildMetaContext(api.createInitialState(0), { task: 'compile_rules', lowConfidenceScore: null }));
+  assert.deepEqual(payload.observations_in_use.vocabulary, []);
+  assert.equal(payload.observations_in_use.observation_mode, 'code');
+  assert.ok(!payload.observations_in_use.declared_ids.includes('mouse_routes'));
+  assert.ok(payload.tried_rule_sets.every((t: any) => t.source !== 'default'));
+  const text = JSON.stringify(payload);
+  for (const op of ['mouse_routes', 'covered_mouse_moves', 'front_row_gap', 'cat_adjacent_pairs']) assert.ok(!text.includes(op), op + ' leaked');
+  api.config.observationMode = 'dsl';
+  const dsl = plain(api.buildMetaContext(api.createInitialState(0), { task: 'compile_rules', lowConfidenceScore: null }));
+  assert.ok(dsl.observations_in_use.vocabulary.some((v: any) => v.id === 'mouse_routes'));
+});
