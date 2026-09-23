@@ -20,7 +20,8 @@ function loadWorkingHarness(fetchImpl?: (url: string, init: any) => Promise<any>
   vm.createContext(sandbox);
   vm.runInContext(source + ';globalThis.__api = { config, compileMeasure, normalizeRules, seedRules, DEFAULT_RULES, DEFAULT_CODE_RULES, ' +
     'buildLlmSystemPrompt, renderRulesShape, computeObservations, replayFormulaOnEvidence, evaluateWithJev, Telemetry, ' +
-    'MEASURE_CODE_MAX_CHARS, ATOM_ACCURACY_MIN_SAMPLES, buildMetaContext, createInitialState };', sandbox);
+    'MEASURE_CODE_MAX_CHARS, ATOM_ACCURACY_MIN_SAMPLES, buildMetaContext, createInitialState, diagnoseOutcome, recordRevision, ' +
+    'createSearchContext, buildJevSchemaDoc };', sandbox);
   return sandbox.__api;
 }
 const plain = (v: unknown): any => JSON.parse(JSON.stringify(v));
@@ -185,4 +186,55 @@ test('in code mode no catalogue op reaches System 2: not as vocabulary, not as a
   api.config.observationMode = 'dsl';
   const dsl = plain(api.buildMetaContext(api.createInitialState(0), { task: 'compile_rules', lowConfidenceScore: null }));
   assert.ok(dsl.observations_in_use.vocabulary.some((v: any) => v.id === 'mouse_routes'));
+});
+
+const DOCTRINE = [/left behind/i, /formation/i, /horizontal line/i, /stranded/i, /unbroken/i, /Cat line/i, /mouse_routes/, /cat_line/, /spread of the line/i, /of paths/i];
+
+test('the neutral doctrine removes every strategic hint of the designer from the prompt, the seed and the diagnoses', () => {
+  const api = loadWorkingHarness();
+  api.config.observationMode = 'code';
+  api.config.promptDoctrine = 'designer';
+  const designer = api.buildLlmSystemPrompt();
+  assert.ok(DOCTRINE.some((re) => re.test(designer)), 'the designer doctrine is there by default');
+  api.config.promptDoctrine = 'neutral';
+  const neutral = api.buildLlmSystemPrompt();
+  for (const re of DOCTRINE) assert.ok(!re.test(neutral), 'neutral prompt still says ' + re);
+  const seed = api.seedRules();
+  assert.deepEqual(Object.keys(seed.observations).sort(), ['cat_mouse_row_gap', 'mouse_mobility', 'mouse_row']);
+  assert.equal(api.normalizeRules(seed, { fallback: seed, source: 'bootstrap' }).warnings.length, 0);
+  const payload = JSON.stringify(plain(api.buildMetaContext(api.createInitialState(0), { task: 'compile_rules', lowConfidenceScore: null })));
+  for (const re of DOCTRINE) assert.ok(!re.test(payload), 'neutral payload still says ' + re);
+  for (const reason of ['mouse_reached_row_0', 'mouse_bypassed_cats', 'ply_cap_stalemate']) {
+    const text = api.diagnoseOutcome(reason);
+    for (const re of DOCTRINE) assert.ok(!re.test(text), reason + ' diagnosis still says ' + re);
+  }
+});
+
+test('a fact that separates the truth better than every Jev rule is reported, with the rule it is missing', () => {
+  const api = loadWorkingHarness();
+  const obs = { strong_fact: { range: [0, 7], spec: { kind: 'code' } }, weak_fact: { range: [0, 7], spec: { kind: 'code' } } };
+  for (let i = 0; i < api.ATOM_ACCURACY_MIN_SAMPLES; i++) {
+    api.Telemetry.noteAtomTruth('cats', { rule_a: 0.6, rule_b: 0.3 });
+    api.Telemetry.noteAtomTruth('mouse', { rule_a: 0.4, rule_b: 0.4 });
+    api.Telemetry.noteMeasureTruth('cats', { strong_fact: 6, weak_fact: 3 }, obs);
+    api.Telemetry.noteMeasureTruth('mouse', { strong_fact: 1, weak_fact: 3 }, obs);
+  }
+  const rows = Object.fromEntries(api.Telemetry.measureAccuracy().map((r: any) => [r.id, r]));
+  assert.equal(rows.strong_fact.best_rule_separation, 0.2, 'only rules separating WITH the truth count (rule_b is against it)');
+  assert.equal(rows.strong_fact.beats_rules, true);
+  assert.equal(rows.weak_fact.beats_rules, false);
+  const payload = plain(api.buildMetaContext(api.createInitialState(0), { task: 'compile_rules', lowConfidenceScore: null }));
+  assert.deepEqual(payload.facts_beating_rules.map((f: any) => f.id), ['strong_fact']);
+  assert.match(payload.how_to_read_facts_beating_rules, /write or rewrite a question/);
+});
+
+test('a V move caused only by a change of weights is not recorded as a revision of the judgment', () => {
+  const api = loadWorkingHarness();
+  const s = api.createInitialState(0);
+  const ctx = api.createSearchContext({ rules: api.DEFAULT_RULES });
+  const atoms = { cats_win_forecast: 0.6, mouse_containment: 0.2 };
+  assert.equal(api.recordRevision(s, { winProbability: 0.3, confidence: 0.5, atoms, measured: {}, source: 'live' }, ctx), null);
+  assert.equal(api.recordRevision(s, { winProbability: 0.55, confidence: 0.5, atoms, measured: {}, source: 'live' }, ctx), null, 'reweighting');
+  const moved = api.recordRevision(s, { winProbability: 0.8, confidence: 0.5, atoms: { cats_win_forecast: 0.95, mouse_containment: 0.2 }, measured: {}, source: 'live' }, ctx);
+  assert.ok(moved && moved.atom_delta.cats_win_forecast > 0.3);
 });

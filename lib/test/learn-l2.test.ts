@@ -35,10 +35,13 @@ test('revisions: first sighting, threshold, per-rule delta and the label against
     const mine = reviseBelief(beliefOf(j1.winProbability, j1.confidence, j1.atoms, j1.measured, s.ply),
       beliefOf(j2.winProbability, j2.confidence, j2.atoms, j2.measured, s.ply),
       { stateKey: foxhounds.key(s), sideToMove: s.turn, source: j2.source, truth: verdict, maximizer: SIDE_CATS });
-    assert.deepEqual(plain(mine), plain(theirs));
+    /* Intentional change (23/09 run): a V move with no rule answer moving by the threshold is a REWEIGHTING, and
+       the library no longer records it as a revision (the baseline harness did). Everything else is identical. */
+    const reweighting = theirs && Object.values(theirs.atom_delta as Record<string, number>).every((d) => Math.abs(d) < 0.05);
+    assert.deepEqual(plain(mine), reweighting ? null : plain(theirs));
     if (mine) { revisions.push(mine); if (mine.oracle) labelled++; }
   }
-  assert.ok(revisions.length > 50 && labelled > 10);
+  assert.ok(revisions.length > 40 && labelled > 10, revisions.length + ' revisions, ' + labelled + ' labelled');
   h.setRevisions(plain(revisions));
   assert.deepEqual(plain(revisionsByState(revisions)), plain(h.viewRevisions()));
   assert.deepEqual(plain(truthLabelCounts(revisions)), plain(h.truthLabelCounts(revisions)));
@@ -131,4 +134,16 @@ test('reflections: consecutive doubts of one class and side are ONE doubt with a
   const w = reflectionWindow(mine, 6);
   assert.equal(w.kept.length, Math.min(6, mine.length));
   assert.equal(Object.values(w.byClass).reduce((a, b) => a + b, 0), mine.reduce((a, r) => a + (r.count || 1), 0));
+});
+
+test('a pure reweighting is not a revision of the judgment (the 23/09 journal was full of them)', () => {
+  const atoms = { a: 0.6, b: 0.2 };
+  const prev = beliefOf(0.30, 0.5, atoms, null, 5);
+  const reweighted = beliefOf(0.55, 0.5, atoms, null, 5);
+  assert.equal(reviseBelief(prev, reweighted, { stateKey: 'k', sideToMove: 'mouse', source: 'live', truth: null, maximizer: SIDE_CATS }), null);
+  const moved = beliefOf(0.55, 0.5, { a: 0.9, b: 0.2 }, null, 5);
+  assert.ok(reviseBelief(prev, moved, { stateKey: 'k', sideToMove: 'mouse', source: 'live', truth: null, maximizer: SIDE_CATS }));
+  const stats: Record<string, AtomStat> = {};
+  foldAtomStat(stats, { atom_delta: { a: 0 }, against_truth: null });
+  assert.equal(witness(stats)[0].direction, 'flat');
 });

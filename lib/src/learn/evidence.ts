@@ -75,6 +75,11 @@ export function reviseBelief(previous: Belief | undefined, current: Belief, fact
     if (!previous.atoms || !Number.isFinite(previous.atoms[id])) continue;
     atomDelta[id] = round(current.atoms![id] - previous.atoms[id], 4);
   }
+  /* A revision is a JUDGMENT that moved. When both beliefs carry the per-rule answers and none of them moved by
+     the threshold, V changed only because the composition (the weights) changed: a reweighting, not a revision -
+     labelling it "toward/against the truth" would grade the weights and call it the Judge. */
+  const minDelta = facts.minDelta ?? REVISION_MIN_DELTA;
+  if (previous.atoms && current.atoms && !Object.values(atomDelta).some((d) => Math.abs(d) >= minDelta)) return null;
   const known = !!(facts.truth && facts.truth.known === true);
   const winner = known ? facts.truth!.winner : null;
   const againstTruth = !known ? null
@@ -108,7 +113,7 @@ export function foldAtomStat(stats: Record<string, AtomStat>, revision: Pick<Rev
 
 export function witnessRow(id: string, stat: AtomStat) {
   const meanDelta = round(stat.sum / stat.revisions, 4);
-  return { id, revisions: stat.revisions, mean_delta: meanDelta, direction: meanDelta >= 0 ? 'rising' : 'falling',
+  return { id, revisions: stat.revisions, mean_delta: meanDelta, direction: meanDelta > 0 ? 'rising' : (meanDelta < 0 ? 'falling' : 'flat'),
     toward_truth: stat.toward_truth, against_truth: stat.against_truth, unknown: stat.unknown };
 }
 

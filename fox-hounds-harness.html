@@ -441,6 +441,13 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
         </select>
       </div>
       <div class='field'>
+        <label for='cfg-prompt-doctrine'>Prompt Doctrine (the designer's strategic hints to System 2)</label>
+        <select id='cfg-prompt-doctrine'>
+          <option value='designer'>designer: hints and examples about the Cats' formation</option>
+          <option value='neutral'>neutral: rules of the game and measured evidence only</option>
+        </select>
+      </div>
+      <div class='field'>
         <label for='cfg-midgame-corrections'>Course Corrections / Game</label>
         <input type='number' id='cfg-midgame-corrections' min='0' max='8' step='1'>
       </div>
@@ -2443,6 +2450,8 @@ var Neurosym = (() => {
       if (!previous.atoms || !Number.isFinite(previous.atoms[id])) continue;
       atomDelta[id] = round(current.atoms[id] - previous.atoms[id], 4);
     }
+    const minDelta = facts.minDelta ?? REVISION_MIN_DELTA;
+    if (previous.atoms && current.atoms && !Object.values(atomDelta).some((d) => Math.abs(d) >= minDelta)) return null;
     const known = !!(facts.truth && facts.truth.known === true);
     const winner = known ? facts.truth.winner : null;
     const againstTruth = !known ? null : winner === facts.maximizer ? delta < 0 : winner !== null && winner !== "draw" ? delta > 0 : null;
@@ -2479,7 +2488,7 @@ var Neurosym = (() => {
       id,
       revisions: stat.revisions,
       mean_delta: meanDelta,
-      direction: meanDelta >= 0 ? "rising" : "falling",
+      direction: meanDelta > 0 ? "rising" : meanDelta < 0 ? "falling" : "flat",
       toward_truth: stat.toward_truth,
       against_truth: stat.against_truth,
       unknown: stat.unknown
@@ -3435,6 +3444,9 @@ const DEFAULT_CONFIG = {
   /* How System 2 may declare O(s): "code" (Eval: JavaScript functions of the state, written from the rules of
      the world), "dsl" (the designer's catalogue ops + bounded expr), or "both". The judgment stays in Jev. */
   observationMode: 'both',
+  /* "neutral" removes every strategic hint the DESIGNER wrote into the prompt, the briefs and the loss report
+     (the Cats' formation, a Cat left behind, one horizontal line...): what System 2 finds is then its own. */
+  promptDoctrine: 'designer',
   midgameCorrections: 3,      // "live": max revisions per game (a budget, not a wish)
   pathCasesLimit: 4,          // informative lines per ply handed to System 2
   parallelLeaves: 8,          // max concurrent LIVE Jev requests (one slot per possible Cat move)
@@ -3722,8 +3734,10 @@ const Telemetry = {
     const ids = {};
     Object.keys(this.measureTruthWon).forEach(function (id) { ids[id] = true; });
     Object.keys(this.measureTruthLost).forEach(function (id) { ids[id] = true; });
+    /* The best any Jev rule does WITH the truth (a rule answering against the truth does not count as separating). */
     const bestRule = this.atomAccuracy().reduce(function (best, a) {
-      return (a.informative === true && a.separation > best) ? a.separation : best;
+      const signed = (a.samples_cat_wins + a.samples_mouse_wins >= ATOM_ACCURACY_MIN_SAMPLES && Number.isFinite(a.signed_separation)) ? a.signed_separation : 0;
+      return signed > best ? signed : best;
     }, 0);
     return Object.keys(ids).map(function (id) {
       const won = self.measureTruthWon[id] || { n: 0, mean: null };
@@ -3738,6 +3752,9 @@ const Telemetry = {
         samples_cat_wins: won.n, samples_mouse_wins: lost.n,
         separation: separation,
         best_rule_separation: round(bestRule, 4),
+        /* The raw fact already tells won from lost positions better than every Jev rule: the judgment the
+           formula is missing is a rule that READS this fact. Seen in the 23/09 run (mouse_row 0.25 vs 0.18). */
+        beats_rules: (separation === null || samples < ATOM_ACCURACY_MIN_SAMPLES) ? null : separation > bestRule,
         absorbs_judgment: (separation === null || samples < ATOM_ACCURACY_MIN_SAMPLES) ? null
           : (separation >= JUDGMENT_ABSORPTION_SEPARATION && separation >= bestRule)
       };
@@ -4538,7 +4555,7 @@ const DEFAULT_CODE_RULES = {
       instructions: 'How contained is the Mouse, given its row {{mouse_row}}, its {{mouse_mobility}} legal moves, the Cat rows ' +
         '{{cat_front_row}}/{{cat_rear_row}}, their spread {{cat_row_spread}} and the rear-Cat-to-Mouse gap {{cat_mouse_row_gap}}?',
       criteria: [
-        'The Mouse is free: it has room to pass the Cat line.',
+        'The Mouse is free: it has room to get past the Cats.',
         'The Mouse is favoured: the line has gaps it can reach.',
         'Unsettled: the Mouse is restricted but not closed in.',
         'The Cats are favoured: the Mouse has little room left.',
@@ -4564,8 +4581,53 @@ const DEFAULT_CODE_RULES = {
   confidenceFloor: 0.45,
   evidence: null
 };
-/* The bootstrap of the current observation mode. */
-function seedRules() { return observationMode() === 'code' ? DEFAULT_CODE_RULES : DEFAULT_RULES; }
+/* The NEUTRAL code seed: only what the rules of the game name as winning or losing - the Mouse's row (its goal), its
+   legal moves (the trap) and the rear Cat's row against the Mouse's (getting above every Cat). No derived shape of
+   the Cats (front row, spread): with the neutral doctrine, every idea about the Cats is System 2's to find. */
+const DEFAULT_CODE_RULES_NEUTRAL = {
+  version: 0,
+  source: 'default-code',
+  rationale: 'Neutral code seed: the three facts the rules of the game name as winning or losing; Jev judges them with equal weights.',
+  weights: defaultWeights(),
+  battery: {
+    cats_win_forecast: {
+      type: 'choice', used_as: 'value', option: 'cats_win',
+      instructions: 'Judge whether the Cats force a trap from the DECLARED measurements only: Mouse row={{mouse_row}}, ' +
+        'Mouse legal moves={{mouse_mobility}}, rear Cat row minus Mouse row={{cat_mouse_row_gap}}. ' +
+        'Assume the Mouse plays as the opponent field describes and the Cats play their best.',
+      criteria: {
+        cats_win: 'Against the described Mouse, the Cats force the trap before the Mouse reaches row 0 or gets above every Cat.',
+        mouse_win: 'The Mouse reaches row 0 or gets above every Cat whatever the Cats do.',
+        draw: 'Neither side can force its result from here.'
+      }
+    },
+    mouse_containment: {
+      type: 'score', used_as: 'value',
+      instructions: 'How close is the Mouse to being trapped, given its row {{mouse_row}}, its {{mouse_mobility}} legal moves and the ' +
+        'rear-Cat-to-Mouse gap {{cat_mouse_row_gap}}?',
+      criteria: [
+        'The Mouse is free: nothing stops it from reaching its goal.',
+        'The Mouse is favoured.',
+        'Unsettled.',
+        'The Cats are favoured.',
+        'A trap is imminent.'
+      ]
+    }
+  },
+  observations: {
+    mouse_row: DEFAULT_CODE_RULES.observations.mouse_row,
+    mouse_mobility: DEFAULT_CODE_RULES.observations.mouse_mobility,
+    cat_mouse_row_gap: DEFAULT_CODE_RULES.observations.cat_mouse_row_gap
+  },
+  policyWeights: {},
+  confidenceFloor: 0.45,
+  evidence: null
+};
+/* The bootstrap of the current observation mode (and, in code mode, of the prompt doctrine). */
+function seedRules() {
+  if (observationMode() !== 'code') return DEFAULT_RULES;
+  return doctrineOn() ? DEFAULT_CODE_RULES : DEFAULT_CODE_RULES_NEUTRAL;
+}
 
 /* ----------------------------------------------------------------------------
  * STRUCTURAL TYPE GATES (the only door into the search)
@@ -4962,8 +5024,10 @@ function buildJevSchemaDoc() {
       ? (' Levels: ' + spec.minLevels + '..' + spec.maxLevels + ', ordered worst -> best for the Cats.')
       : ''));
   });
-  lines.push('ID RULES: a stable lowercase id (letters, digits, underscore), e.g. "cat_line" or "mouse_routes".');
-  lines.push('  The id is the key Jev answers under, so "questions.cat_line" comes back as "answers.cat_line".');
+  lines.push('ID RULES: a stable lowercase id (letters, digits, underscore), e.g. ' +
+    (doctrineOn() ? '"cat_line" or "mouse_routes".' : '"rule_one" or "fact_two".'));
+  lines.push('  The id is the key Jev answers under, so ' + (doctrineOn()
+    ? '"questions.cat_line" comes back as "answers.cat_line".' : '"questions.rule_one" comes back as "answers.rule_one".'));
   lines.push('  Keep the battery at ' + MAX_QUESTIONS + ' questions or fewer: V(s) is a weighted mean, so every extra term dilutes the ones that work.');
   lines.push('ANSWER CONTRACT (what comes back, one entry per id):');
   lines.push('  choice -> { "type": "choice", "choice": "<option>", "probabilities": { "<option>": <p>, ... }, "confidence": <0..1> }');
@@ -5005,10 +5069,11 @@ function buildJevSchemaDoc() {
     lines.push('    you may count, search or simulate with the rules. Source up to ' + MEASURE_CODE_MAX_CHARS +
       ' characters: a fact nobody can read is not interpretable - split long logic into several named measures.');
     lines.push('  OBSERVE FACTS, LET JEV JUDGE: a code measure should REPORT what the position contains (a count, a distance, a number');
-    lines.push('    of moves or of paths), never decide who wins. The judgment belongs in a Jev rule, in human language, where it can be');
+    lines.push('    of moves), never decide who wins. The judgment belongs in a Jev rule, in human language, where it can be');
     lines.push('    read and audited. "measure_accuracy" in the payload flags a measure that already separates won from lost positions on');
     lines.push('    its own ("absorbs_judgment": true): then V(s) is only echoing that code and Jev adds nothing - prefer a factual measure');
-    lines.push('    plus a rule that judges it.');
+    lines.push('    plus a rule that judges it. "facts_beating_rules" lists facts that already separate the outcome better than every');
+    lines.push('    rule you have: the formula is missing the rule that reads them - write that question, do not fold more into the code.');
   }
   if (admittedKinds.indexOf('op') >= 0) {
     lines.push('  Primitive form (kind "op"): { "spec": { "kind":"op", "op":"<op from the table>", "args":{...} } }.');
@@ -5041,8 +5106,12 @@ function buildJevSchemaDoc() {
   lines.push('  it never changes V(s), alpha-beta correctness or acceptance (the score does).');
   lines.push('ADDING A QUESTION (allowed - and sometimes the only honest fix):');
   lines.push('  When no existing wording can express the distinction you need, PROPOSE a new question: a stable id, one of the three valid types,');
+  if (doctrineOn()) {
   lines.push('  ordered criteria, declared in "battery". Shapes worth considering for this game, as QUESTIONS for Jev to answer (the harness itself evaluates nothing):');
   lines.push('    - "Is the Cat line unbroken: does every Cat still cover its neighbouring diagonal, with no Cat stranded or left behind?"');
+  } else {
+    lines.push('  ordered criteria, declared in "battery".');
+  }
   lines.push('    - "Is the Mouse contained: are all of its escape diagonals covered by Cats, or does it still own a free lane toward row 0?"');
   lines.push('    - "How many independent escape routes does the Mouse still have?" (as a score: 0, 1, 2, 3 or more)');
   lines.push('  ROLES: every question declares "used_as": "value" (composes V(s)) or "policy" (guides the next action).');
@@ -5122,10 +5191,16 @@ function buildLlmSystemPrompt() {
   'EVIDENCE FIRST: your proposal must be born from the evidence you were shown, not from your creativity alone. When the payload carries path_brief, consolidation_brief or loss_report, include in your JSON a field "evidence_ref": { "case": <index of the case or labelled truth you are answering>, "why": "<one sentence>" } (or "state_key" for one of the loss-report truths): the harness refuses a proposal that cites no evidence it was given (UNSUPPORTED), and every set you already tried is listed in "tried_rule_sets".',
   'THE ORACLE: against the Mouse model described in every state the position is solvable, so the harness computes the TRUTH of the lines it shows you (winner and plies, decided by the rules, never by a model). When the payload reports CONTRADICTION the value is WRONG, not merely uncertain - that is the strongest reason to rewrite a question. The per-question accuracy (mean answer when the rules say the Cats win vs when they say the Mouse wins, and the separation between them) tells you WHICH question is failing to discriminate: separation near 0 means it answers the same either way, so it is noise whatever its weight.',
   'FORMULATE; DO NOT CALCULATE: inspect the shown position_array values and express what should be measured in the executable "observations" field. Never return a hand-calculated board_reading or invented metric values. After your reply, the harness executes the proposed O(s) over those exact leaf arrays and refuses the formula if any declared measure cannot be computed.',
-  'READ THE LINES, NOT THE SCORE: ask which EVALUABLE distinction separated the cases (for example: in one line the Cat line stayed connected and in the other a Cat was left behind, yet your questions gave both the same answer). Then rewrite that question instruction or its criteria so the next judgment separates them.',
+  doctrineOn()
+    ? 'READ THE LINES, NOT THE SCORE: ask which EVALUABLE distinction separated the cases (for example: in one line the Cat line stayed connected and in the other a Cat was left behind, yet your questions gave both the same answer). Then rewrite that question instruction or its criteria so the next judgment separates them.'
+    : 'READ THE LINES, NOT THE SCORE: ask which EVALUABLE distinction separated the cases - a fact of the boards your observations can measure, on which your questions nevertheless gave the same answer. Then rewrite that question instruction or its criteria so the next judgment separates them.',
   'RENAMING IS NOT EVOLUTION: a question re-declared under a new id (same idea, new name) resets every measured statistic about it - its sigma, its accuracy against the rules, its witness deltas, its cached answers - so the harness loses everything it had learned about that question and starts from zero. EVOLVE the existing question instead: rewrite its instructions or criteria IN PLACE, keeping the id. Reserve a NEW id for a question that asks something genuinely different.',
-  'OPERATOR DIRECTIVE: when the payload carries "operator_directive", the human running this search interrupted the loop ON PURPOSE: the rule set looks stuck refining the same idea (a local minimum) and the operator instructs a specific direction. The directive is a REQUIREMENT for the next rule set, not a suggestion, and it is the one consult where BIG structural changes are expected: a directive about WHAT MATTERS becomes value criteria (for example, "the Cats advance in formation, keeping one horizontal line while far from the Mouse" becomes explicit criteria of a value question about formation and line integrity); a directive about HOW TO MOVE becomes a POLICY question (used_as "policy", options_from "legal_moves") whose instructions encode the strategy, for example "prefer the legal move that keeps the Cats in one connected line while the Mouse is far from it". Acknowledge it with "evidence_ref": { "operator_directive": true, "why": "<one sentence>" }. If you genuinely cannot express the directive in fields System 1 evaluates, say so in rationale and reply without changing the rule set - an honest refusal beats a fake compliance.',
-  'STRATEGIC HYPOTHESES: your batteries so far only ever asked about the MOUSE (its routes, its containment, its escapes); nothing has ever asked about the CATS own structure. When the payload carries "cat_formation" in the loss report, read the Cats OWN movement BEFORE touching any weight: the spread of the line, whether a Cat was left behind (left_behind), how the formation evolved up to the ply where the value broke. A STRATEGY is a first-class hypothesis and it cannot be expressed by tuning weights: express it either as a POLICY question that encodes a playing doctrine (for example "prefer the move that keeps the Cats in one horizontal line while the Mouse is far away") or as value criteria about the Cats formation (an unbroken advancing line, no stranded Cat, coverage kept on the Mouse side). If the losing game shows the Cats fragmenting while the value stayed high, the missing distinction is about the CATS, not the Mouse.',
+  doctrineOn()
+    ? 'OPERATOR DIRECTIVE: when the payload carries "operator_directive", the human running this search interrupted the loop ON PURPOSE: the rule set looks stuck refining the same idea (a local minimum) and the operator instructs a specific direction. The directive is a REQUIREMENT for the next rule set, not a suggestion, and it is the one consult where BIG structural changes are expected: a directive about WHAT MATTERS becomes value criteria (for example, "the Cats advance in formation, keeping one horizontal line while far from the Mouse" becomes explicit criteria of a value question about formation and line integrity); a directive about HOW TO MOVE becomes a POLICY question (used_as "policy", options_from "legal_moves") whose instructions encode the strategy, for example "prefer the legal move that keeps the Cats in one connected line while the Mouse is far from it". Acknowledge it with "evidence_ref": { "operator_directive": true, "why": "<one sentence>" }. If you genuinely cannot express the directive in fields System 1 evaluates, say so in rationale and reply without changing the rule set - an honest refusal beats a fake compliance.'
+    : 'OPERATOR DIRECTIVE: when the payload carries "operator_directive", the human running this search interrupted the loop ON PURPOSE: the rule set looks stuck refining the same idea (a local minimum) and the operator instructs a specific direction. The directive is a REQUIREMENT for the next rule set, not a suggestion, and it is the one consult where BIG structural changes are expected: a directive about WHAT MATTERS becomes value criteria (for example, "value X" becomes explicit criteria of a value question about X); a directive about HOW TO MOVE becomes a POLICY question (used_as "policy", options_from "legal_moves") whose instructions encode the strategy, for example "prefer the legal move that does Y". Acknowledge it with "evidence_ref": { "operator_directive": true, "why": "<one sentence>" }. If you genuinely cannot express the directive in fields System 1 evaluates, say so in rationale and reply without changing the rule set - an honest refusal beats a fake compliance.',
+  doctrineOn()
+    ? 'STRATEGIC HYPOTHESES: your batteries so far only ever asked about the MOUSE (its routes, its containment, its escapes); nothing has ever asked about the CATS own structure. When the payload carries "cat_formation" in the loss report, read the Cats OWN movement BEFORE touching any weight: the spread of the line, whether a Cat was left behind (left_behind), how the formation evolved up to the ply where the value broke. A STRATEGY is a first-class hypothesis and it cannot be expressed by tuning weights: express it either as a POLICY question that encodes a playing doctrine (for example "prefer the move that keeps the Cats in one horizontal line while the Mouse is far away") or as value criteria about the Cats formation (an unbroken advancing line, no stranded Cat, coverage kept on the Mouse side). If the losing game shows the Cats fragmenting while the value stayed high, the missing distinction is about the CATS, not the Mouse.'
+    : 'HYPOTHESES: a rule set can be wrong about either side. Read the shown boards of BOTH sides before touching any weight, and express a new idea as an observation plus the question that judges it: tuning weights cannot express an idea the formula does not contain.',
   'A NEW QUESTION IS WELCOME whenever no wording you have can express the distinction: declare it in battery with its type and criteria, and the harness composes it into V(s) from the next evaluation on.',
   'NO CHANGE IS VALID: if the cases show no distinction worth observing or judging, omit "observations", "weights" and "battery" and say why in rationale. Omission preserves the current formula; an empty observations object is refused because every executable formula must observe at least one fact. That answer is legitimate and is not punished - a prose-only edit is not.',
   'Reply with ONE JSON object and nothing else: no markdown fences, no commentary.',
@@ -5287,6 +5362,12 @@ function buildMetaContext(state, options) {
     verdict_like_measures: Telemetry.measureAccuracy()
       .filter(function (m) { return m.absorbs_judgment === true; })
       .map(function (m) { return { id: m.id, kind: m.kind, separation: m.separation, best_rule_separation: m.best_rule_separation }; }),
+    facts_beating_rules: Telemetry.measureAccuracy()
+      .filter(function (m) { return m.beats_rules === true; })
+      .map(function (m) { return { id: m.id, kind: m.kind, separation: m.separation, best_rule_separation: m.best_rule_separation }; }),
+    how_to_read_facts_beating_rules: 'A fact listed here separates the positions the rules win from those they lose better than ANY of ' +
+      'your Jev rules does. A fact never enters V(s) by itself: the missing piece is a RULE that reads it - write or rewrite a question ' +
+      'whose instructions and criteria use {{that_fact}}, so Jev turns it into a judgment you can read.',
     how_to_read_measure_accuracy: 'For every measure: its value normalised by its declared range, averaged on positions the RULES ' +
       'win vs lose for the Cats. absorbs_judgment=true means the fact alone separates the outcome at least as well as your best ' +
       'rule: V(s) is echoing that code and Jev adds nothing. Keep observations as facts and let a rule judge them.',
@@ -5693,6 +5774,9 @@ const MEASURE_CODE_MAX_CHARS = 4000;
    (on its own normalised range) is flagged: V(s) may just be echoing the code, with Jev adding nothing. */
 const JUDGMENT_ABSORPTION_SEPARATION = 0.5;
 /* Functions, not table lookups: the prompt shape is rendered at load time, before this table is declared. */
+/* The designer's strategic doctrine (examples and hints about the Cats' formation) reaches System 2 only in
+   "designer" mode; "neutral" leaves the rules of the game and the measured evidence. */
+function doctrineOn() { return config.promptDoctrine !== 'neutral'; }
 function observationMode() { return (config.observationMode === 'code' || config.observationMode === 'dsl') ? config.observationMode : 'both'; }
 function admittedMeasureKinds() {
   const mode = observationMode();
@@ -7109,9 +7193,13 @@ function buildPathBrief(ply, rules, cases, trigger) {
       "floor. rationale is documentation for humans and is NOT evaluated: a reply that only rewrites prose " +
       "is discarded as NO CHANGE. Adding a question is welcome when no wording you already have can express " +
       "the distinction you need - say it as a question plus its criteria.",
-    ask: "Ask yourself which EVALUABLE distinction would have separated these lines (for example: one line " +
-      "says the Cat line stayed connected, the other says a Cat was left behind, yet your questions gave " +
-      "both the same answer). Rewrite that question instruction or criteria to capture it, and adjust the " +
+    ask: (doctrineOn()
+      ? "Ask yourself which EVALUABLE distinction would have separated these lines (for example: one line " +
+        "says the Cat line stayed connected, the other says a Cat was left behind, yet your questions gave " +
+        "both the same answer). "
+      : "Ask yourself which EVALUABLE distinction would have separated these lines: a fact of these boards " +
+        "that differs between the good and the bad lines while your questions gave both the same answer. ") +
+      "Rewrite that question instruction or criteria to capture it, and adjust the " +
       "weights you can now justify. If the current rules are adequate, reply WITHOUT weights and battery: " +
       "the harness then keeps the rule set unchanged and that is a valid, expected answer.",
     what_happens_if_you_answer: "The harness first executes your candidate observations over these same leaf boards. " +
@@ -8561,6 +8649,15 @@ async function runHarness(options) {
  * attempt. A rule set is never rewritten inside a game.
  * ========================================================================== */
 function diagnoseOutcome(reason) {
+  if (!doctrineOn()) {
+    if (reason === 'mouse_reached_row_0' || reason === 'mouse_bypassed_cats') {
+      return 'The Mouse won (' + reason + '). Compare the measured facts and the Jev answers along the losing line: find a fact of ' +
+        'these boards that changed as the game was lost while your answers did not, measure it, and ask Jev about it.';
+    }
+    if (reason === 'ply_cap_stalemate' || reason === 'threefold_repetition') {
+      return 'The game stalled without a trap: compare the answers along the game with what the boards show and find where they stopped following it.';
+    }
+  }
   if (reason === 'mouse_reached_row_0') {
     return 'The Mouse walked to row 0. Compare Jev answers along the losing run: if the questions about the Mouse corridor stayed low while it advanced, the rubric (question wording) is not describing the route the Cats must close - rewrite those criteria before touching the weights.';
   }
@@ -8624,7 +8721,7 @@ function buildLossEvidence(terminal, trial) {
   const truth = annotateTruth(trace, { maxStates: 3 });
   const truthForBlunder = blunder ? truth.filter(function (t) { return t.state_key === blunder.state_key; })[0] : null;
   const truthGap = describeTruthGap(blunder, truthForBlunder);
-  return {
+  const report = {
     verdict: terminal && terminal.winner === SIDE_MOUSE ? 'cats_lost' : (terminal && terminal.winner === WINNER_DRAW ? 'draw' : 'cats_won'),
     outcome: terminal ? terminal.winner + ':' + terminal.reason : 'none',
     reason: terminal ? terminal.reason : 'none',
@@ -8650,6 +8747,10 @@ function buildLossEvidence(terminal, trial) {
     cat_formation: catFormationFacts(trace),
     final_state: toWireState(lastState)
   };
+  /* The formation facts are the DESIGNER's features (spread, a Cat left behind): in the neutral doctrine they do
+     not travel, so any idea about the Cats' shape has to come from System 2 reading the boards. */
+  if (!doctrineOn()) delete report.cat_formation;
+  return report;
 }
 function pickLossEvidence(score) {
   const losses = score.games.filter(function (g) { return !g.won && g.evidence; });
@@ -9487,6 +9588,10 @@ const STAT_TILE_DEFS = [
   { key: 'cache', label: 'Jev answer reuse', get: function () { return Telemetry.jevCacheHits; }, className: 'good' },
   { key: 'recomp', label: 'Recompositions', get: function () { return Telemetry.jevRecompositions; }, className: 'good' },
   { key: 'measure', label: 'O(s) computations/errors', get: function () { return Telemetry.measureComputations + '/' + Telemetry.measureErrors; }, className: 'good' },
+  { key: 'factsbeat', label: 'Facts beating rules', get: function () {
+      const rows = Telemetry.measureAccuracy();
+      return rows.filter(function (m) { return m.beats_rules === true; }).length + '/' + rows.length;
+    }, className: 'warn' },
   { key: 'absorb', label: 'Verdict-like measures', get: function () {
       const rows = Telemetry.measureAccuracy();
       return rows.filter(function (m) { return m.absorbs_judgment === true; }).length + '/' + rows.length;
@@ -10194,6 +10299,7 @@ const CONFIG_FIELDS = [
   { id: 'cfg-policy-depth', key: 'policyDepth', type: 'number' },
   { id: 'cfg-path-learning', key: 'pathLearning', type: 'string' },
   { id: 'cfg-observation-mode', key: 'observationMode', type: 'string' },
+  { id: 'cfg-prompt-doctrine', key: 'promptDoctrine', type: 'string' },
   { id: 'cfg-path-cases', key: 'pathCasesLimit', type: 'number' },
   { id: 'cfg-midgame-corrections', key: 'midgameCorrections', type: 'number' },
   { id: 'cfg-tune-hypotheses', key: 'autotuneHypotheses', type: 'number' },
