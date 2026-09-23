@@ -624,6 +624,7 @@ var Neurosym = (() => {
     compose: () => compose,
     consensusPayload: () => consensusPayload,
     coreDialect: () => coreDialect,
+    createPlanner: () => createPlanner,
     createSearchContext: () => createSearchContext,
     decisiveness: () => decisiveness,
     deepFreeze: () => deepFreeze,
@@ -677,6 +678,7 @@ var Neurosym = (() => {
     settleWeights: () => settleWeights,
     shortenText: () => shortenText,
     siblingBatchWidth: () => siblingBatchWidth,
+    solveAgainstModel: () => solveAgainstModel,
     specHash: () => specHash,
     stableStringify: () => stableStringify,
     storeTransposition: () => storeTransposition,
@@ -2788,6 +2790,139 @@ var Neurosym = (() => {
     return finish(null, "budget");
   }
 
+  // src/core/truth.ts
+  var ORDER = { win: 0, unknown: 1, draw: 2, loss: 3 };
+  function prefers(candidate, best) {
+    if (ORDER[candidate.kind] !== ORDER[best.kind]) return ORDER[candidate.kind] < ORDER[best.kind];
+    if (candidate.kind === "win") return candidate.plies < best.plies;
+    if (candidate.kind === "loss") return candidate.plies > best.plies;
+    return false;
+  }
+  function createPlanner(world, side, depth, options = {}) {
+    const cap = options.nodeBudget ?? 12e4;
+    const cache = /* @__PURE__ */ new Map();
+    const limit = options.cacheLimit ?? 4e4;
+    const kindFor = (winner) => winner === side ? "win" : winner === null || winner === "draw" || !world.actors.includes(winner) ? "draw" : "loss";
+    const solve = (state, d, budget) => {
+      const key = world.key(state) + "|d" + d;
+      const known = budget.memo.get(key);
+      if (known) return known;
+      const settle = (v) => {
+        budget.memo.set(key, v);
+        return v;
+      };
+      const o = world.outcome(state);
+      if (o.over) return settle({ kind: kindFor(o.winner), plies: 0 });
+      if (d <= 0) return settle({ kind: "unknown", plies: 0 });
+      const toMove = world.toMove(state);
+      const moves = world.actions(state);
+      if (!moves.length) {
+        if (!world.pass) return settle({ kind: "unknown", plies: 0 });
+        const passed = solve(world.pass(state), d - 1, budget);
+        return settle({ kind: passed.kind, plies: passed.plies + 1 });
+      }
+      budget.nodes++;
+      if (budget.nodes > cap) return settle({ kind: "unknown", plies: 0 });
+      const mine = toMove === side;
+      let best = null;
+      for (const move of moves) {
+        const child = solve(world.step(state, move), d - 1, budget);
+        const seen = { kind: mine ? child.kind : flip(child.kind), plies: child.plies + 1, move };
+        if (best === null || prefers(seen, best)) best = seen;
+        if (best.kind === "win") break;
+      }
+      const chosen = best;
+      return settle({ kind: mine ? chosen.kind : flip(chosen.kind), plies: chosen.plies, move: chosen.move });
+    };
+    return {
+      id: "planner" + depth + ":" + side,
+      side,
+      depth,
+      respond(state) {
+        const moves = world.actions(state, side);
+        if (!moves.length) return null;
+        const key = world.key(state) + "|d" + depth;
+        if (cache.has(key)) return cache.get(key);
+        const planned = depth > 0 ? solve(state, depth, { nodes: 0, memo: /* @__PURE__ */ new Map() }) : { kind: "unknown", plies: 0 };
+        const move = planned.kind !== "unknown" && planned.move ? planned.move : options.fallback ? options.fallback(state, moves) : moves[0];
+        if (cache.size >= limit) {
+          const oldest = cache.keys().next();
+          if (!oldest.done) cache.delete(oldest.value);
+        }
+        cache.set(key, move);
+        return move;
+      }
+    };
+  }
+  function flip(kind) {
+    return kind === "win" ? "loss" : kind === "loss" ? "win" : kind;
+  }
+  function solveAgainstModel(world, state, maximizer, respond, options = {}) {
+    const budget = options.budget ?? 12e4;
+    const memo = options.memo ?? /* @__PURE__ */ new Map();
+    let nodes = 0;
+    let exhausted = false;
+    const better = (c, b) => c.winner === maximizer && b.winner !== maximizer || c.winner === maximizer && b.winner === maximizer && c.plies < b.plies || c.winner !== maximizer && b.winner !== maximizer && isDraw(c.winner) && !isDraw(b.winner) || c.winner !== maximizer && b.winner !== maximizer && !isDraw(c.winner) && !isDraw(b.winner) && c.plies > b.plies;
+    const isDraw = (w) => w === null || w === "draw" || !world.actors.includes(w);
+    const solve = (s) => {
+      const key = world.key(s) + "|p" + (world.view(s).scalars.ply ?? "");
+      if (memo.has(key)) return memo.get(key);
+      if (++nodes > budget) {
+        exhausted = true;
+        return null;
+      }
+      const o = world.outcome(s);
+      if (o.over) {
+        const r = { winner: o.winner, plies: 0, reason: o.reason };
+        memo.set(key, r);
+        return r;
+      }
+      const moves = world.actions(s);
+      if (!moves.length) {
+        if (!world.pass) {
+          exhausted = true;
+          return null;
+        }
+        const passed = solve(world.pass(s));
+        if (!passed) return null;
+        const r = { ...passed, plies: passed.plies + 1 };
+        memo.set(key, r);
+        return r;
+      }
+      if (world.toMove(s) !== maximizer) {
+        const move = respond(s);
+        if (!move) {
+          exhausted = true;
+          return null;
+        }
+        const child = solve(world.step(s, move));
+        if (!child) return null;
+        const r = { ...child, plies: child.plies + 1 };
+        memo.set(key, r);
+        return r;
+      }
+      let best = null;
+      for (const move of moves) {
+        const child = solve(world.step(s, move));
+        if (!child) return null;
+        const c = { ...child, plies: child.plies + 1 };
+        if (best === null || better(c, best)) best = c;
+        if (best.winner === maximizer && best.plies === 1) break;
+      }
+      memo.set(key, best);
+      return best;
+    };
+    const result = solve(state);
+    return {
+      winner: result ? result.winner : null,
+      plies: result ? result.plies : null,
+      reason: result ? result.reason : null,
+      known: !!result && result.winner !== null,
+      exhausted,
+      nodes
+    };
+  }
+
   // src/worlds/foxhounds/index.ts
   var foxhounds_exports = {};
   __export(foxhounds_exports, {
@@ -2833,7 +2968,7 @@ var Neurosym = (() => {
     outcome: () => outcome,
     passTurn: () => passTurn,
     renderBoardAscii: () => renderBoardAscii,
-    solveAgainstModel: () => solveAgainstModel,
+    solveAgainstModel: () => solveAgainstModel2,
     solveLookahead: () => solveLookahead,
     stateKey: () => stateKey
   });
@@ -3182,7 +3317,7 @@ var Neurosym = (() => {
     mouse: { mouse: 0, unknown: 1, draw: 2, cats: 3 },
     cats: { cats: 0, draw: 1, unknown: 2, mouse: 3 }
   };
-  function prefers(side, candidate, best) {
+  function prefers2(side, candidate, best) {
     const order = PLAN_PREFERENCE[side === SIDE_MOUSE ? "mouse" : "cats"];
     if (order[candidate.kind] !== order[best.kind]) return order[candidate.kind] < order[best.kind];
     if (candidate.kind === best.kind && (candidate.kind === "mouse" || candidate.kind === "cats")) {
@@ -3220,7 +3355,7 @@ var Neurosym = (() => {
     for (const move of moves) {
       const child = solveLookahead(applyMove(position, move), depth - 1, budget);
       const candidate = { kind: child.kind, plies: child.plies + 1, move };
-      if (best === null || prefers(side, candidate, best)) best = candidate;
+      if (best === null || prefers2(side, candidate, best)) best = candidate;
       if (best.kind === (side === SIDE_MOUSE ? "mouse" : "cats")) break;
     }
     return settle(best ?? { kind: "unknown", plies: 0 });
@@ -3278,7 +3413,7 @@ var Neurosym = (() => {
     description: "a human is playing this side: the harness cannot predict the move, so judge against the WORST case for the Cats",
     predictable: false
   });
-  function solveAgainstModel(state, model, options = {}) {
+  function solveAgainstModel2(state, model, options = {}) {
     const budget = options.budget ?? TRUTH_NODE_BUDGET;
     const memo = options.memo ?? /* @__PURE__ */ new Map();
     let nodes = 0;
@@ -3360,7 +3495,7 @@ var Neurosym = (() => {
         const key = stateKey(state) + "|p" + state.ply + "|m" + model.depth;
         const hit = cache.get(key);
         if (hit) return hit;
-        const v = solveAgainstModel(state, model, { budget: options.budget });
+        const v = solveAgainstModel2(state, model, { budget: options.budget });
         if (cache.size >= limit) {
           const oldest = cache.keys().next();
           if (!oldest.done) cache.delete(oldest.value);

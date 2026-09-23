@@ -13,3 +13,4 @@ export * from './core/jev.ts';
 export * from './core/policy.ts';
 export * from './core/search.ts';
 export * from './learn/index.ts';
+export * from './core/truth.ts';
