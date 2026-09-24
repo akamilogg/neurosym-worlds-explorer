@@ -42,3 +42,20 @@ test('surprises: where the search\'s own value fell most before the next turn or
   assert.deepEqual(s.map((x) => [x.turn, x.next, x.drop]), [[2, 4, 0.4], [6, 'end', 0.4]]);
   assert.deepEqual(surprises([turn(0, 0.2)], 1), [], 'a rise is not a surprise');
 });
+
+test('generalization starts: never the usual one, each side in its own band, and still a fair (winnable) game', async () => {
+  const { variantStarts } = await import('../src/worlds/grid/variants.ts');
+  const { createPlanner, solveAgainstModel } = await import('../src/core/truth.ts');
+  const { bFallback } = await import('../src/worlds/grid/index.ts');
+  const starts = variantStarts(spec, { count: 4, level: 2, seed: 7 });
+  assert.equal(starts.length, 4);
+  const planner = createPlanner(world, 'B', 2, { fallback: bFallback(spec) });
+  const keys = new Set(starts.map((s) => world.key(s)));
+  assert.equal(keys.size, 4);
+  assert.ok(!keys.has(world.key(world.initial())));
+  for (const s of starts) {
+    assert.ok(s.a.every((p) => p[1] <= 1) && s.b.every((p) => p[1] >= spec.height - 2));
+    assert.equal(solveAgainstModel(world, s, 'A', (x) => planner.respond(x), { budget: 60000 }).winner, 'A');
+  }
+  assert.notDeepEqual(variantStarts(spec, { count: 4, level: 2, seed: 8 }).map((s) => world.key(s)), [...keys], 'a new attempt, new starts');
+});

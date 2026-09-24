@@ -677,6 +677,7 @@ var Neurosym = (() => {
     parseExplorerTurn: () => parseExplorerTurn,
     parseJevAnswers: () => parseJevAnswers,
     parseJsonLoose: () => parseJsonLoose,
+    parseReflection: () => parseReflection,
     parseVote: () => parseVote,
     pickNumber: () => pickNumber,
     placeholdersOf: () => placeholdersOf,
@@ -3262,6 +3263,8 @@ var Neurosym = (() => {
       __publicField(this, "notes", /* @__PURE__ */ new Map());
       __publicField(this, "rounds", []);
       __publicField(this, "games", []);
+      /** Rounds where it only looked back (no formula): what it concluded. */
+      __publicField(this, "reflections", []);
     }
     /** Apply the explorer's stances. Returns what was refused (as warnings) and the beliefs it said nothing about. */
     applyStances(round2, stances) {
@@ -3337,6 +3340,9 @@ var Neurosym = (() => {
     addGames(games) {
       this.games.push(...games);
     }
+    recordReflection(round2, rationale, lessons, nextExperiment) {
+      this.reflections.push({ round: round2, rationale, lessons: [...lessons], next_experiment: nextExperiment });
+    }
     recordRound(round2, formula, lessons, nextExperiment) {
       const summary = summarize(formula);
       const previous = this.rounds.length ? this.rounds[this.rounds.length - 1].formula : null;
@@ -3386,11 +3392,12 @@ var Neurosym = (() => {
         notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, positions: n.positions, written_round: n.written, updated_round: n.updated })),
         games: this.games.map((g) => ({ game: g.id, round: g.round, moves_chosen_by: g.how, result: g.result, turns: g.turns })),
         rounds: this.rounds.map((r) => ({ round: r.round, formula: r.formula, ...r.changes ? { changes: r.changes } : {}, probes: r.probes, games: r.games })),
+        ...this.reflections.length ? { reflections: this.reflections } : {},
         ...last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {}
       };
     }
     toJSON() {
-      return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], games: this.games, rounds: this.rounds };
+      return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], games: this.games, rounds: this.rounds, reflections: this.reflections };
     }
   };
 
@@ -3416,6 +3423,8 @@ var Neurosym = (() => {
     "`surprises` lists, for your latest games, the turns where your own search's value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.",
     "",
     'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. Each test reports an AUC: the probability that a position from a game you won scores higher than one from a game you lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost); "supported" or "inverted" only when further from 0.5 than chance allows. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the labels come from whole games: early positions of a lost game may have been fine.',
+    "",
+    "If the payload carries a `task`, it says what this consultation is for and what to answer instead of a proposal.",
     "",
     "When you propose, answer with ONE JSON object and nothing else:",
     "{",
@@ -3468,7 +3477,8 @@ var Neurosym = (() => {
       ...brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {},
       ...brief.stepsLeft !== void 0 ? { steps_left: brief.stepsLeft } : {},
       ...brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {},
-      ...brief.directive ? { operator_directive: brief.directive } : {}
+      ...brief.directive ? { operator_directive: brief.directive } : {},
+      ...brief.task ? { task: brief.task } : {}
     };
   }
   function parseNotes(raw, warnings) {
@@ -3580,6 +3590,44 @@ var Neurosym = (() => {
     }
     return { type, used_as: "value", instructions, criteria };
   }
+  function parseReflective(data, round2, warnings) {
+    const beliefs = [];
+    const rawBeliefs = Array.isArray(data.beliefs) ? data.beliefs : [];
+    rawBeliefs.forEach((raw, i) => {
+      const b = obj(raw);
+      const id = b && typeof b.id === "string" ? b.id : "";
+      if (!b || !ID2.test(id)) {
+        warnings.push("belief #" + i + ' ignored: "id" must be lowercase snake_case');
+        return;
+      }
+      const stance = b.stance;
+      if (!STANCES.includes(stance)) {
+        warnings.push('belief "' + id + '" ignored: stance must be one of ' + STANCES.join(", "));
+        return;
+      }
+      beliefs.push({
+        id,
+        stance,
+        ...typeof b.statement === "string" && b.statement.trim() ? { statement: b.statement.trim() } : {},
+        ...typeof b.why === "string" ? { why: b.why } : {},
+        evidence: Array.isArray(b.evidence) ? b.evidence.map(String) : b.evidence !== void 0 && b.evidence !== null ? [String(b.evidence)] : []
+      });
+    });
+    if (!rawBeliefs.length && Array.isArray(data.hypotheses)) {
+      data.hypotheses.filter((h) => typeof h === "string").forEach((statement, i) => beliefs.push({ id: "r" + round2 + "_h" + (i + 1), stance: "new", statement }));
+    }
+    const lessons = Array.isArray(data.lessons) ? data.lessons.filter((l) => typeof l === "string") : [];
+    const nextExperiment = typeof data.next_experiment === "string" ? data.next_experiment : "";
+    return { beliefs, lessons, nextExperiment };
+  }
+  function parseReflection(content, round2) {
+    const data = obj(parseJsonLoose(content));
+    if (!data) return { ok: false, errors: ["the answer was not a JSON object"] };
+    const warnings = [];
+    const { beliefs, lessons, nextExperiment } = parseReflective(data, round2, warnings);
+    if (!beliefs.length && !lessons.length) return { ok: false, errors: ["a reflection needs stances on your beliefs and/or lessons"] };
+    return { ok: true, reflection: { rationale: typeof data.rationale === "string" ? data.rationale : "", beliefs, lessons, nextExperiment, warnings } };
+  }
   function parseExplorerProposal(content, context) {
     const data = obj(parseJsonLoose(content));
     if (!data) return { ok: false, errors: ["the answer was not a JSON object"] };
@@ -3637,33 +3685,7 @@ var Neurosym = (() => {
       }
       probes.push({ id, hypothesis, ...observation ? { observation } : {}, ...question ? { question } : {} });
     });
-    const beliefs = [];
-    const rawBeliefs = Array.isArray(data.beliefs) ? data.beliefs : [];
-    rawBeliefs.forEach((raw, i) => {
-      const b = obj(raw);
-      const id = b && typeof b.id === "string" ? b.id : "";
-      if (!b || !ID2.test(id)) {
-        warnings.push("belief #" + i + ' ignored: "id" must be lowercase snake_case');
-        return;
-      }
-      const stance = b.stance;
-      if (!STANCES.includes(stance)) {
-        warnings.push('belief "' + id + '" ignored: stance must be one of ' + STANCES.join(", "));
-        return;
-      }
-      beliefs.push({
-        id,
-        stance,
-        ...typeof b.statement === "string" && b.statement.trim() ? { statement: b.statement.trim() } : {},
-        ...typeof b.why === "string" ? { why: b.why } : {},
-        evidence: Array.isArray(b.evidence) ? b.evidence.map(String) : b.evidence !== void 0 && b.evidence !== null ? [String(b.evidence)] : []
-      });
-    });
-    if (!rawBeliefs.length && Array.isArray(data.hypotheses)) {
-      data.hypotheses.filter((h) => typeof h === "string").forEach((statement, i) => beliefs.push({ id: "r" + (context.round ?? 0) + "_h" + (i + 1), stance: "new", statement }));
-    }
-    const lessons = Array.isArray(data.lessons) ? data.lessons.filter((l) => typeof l === "string") : [];
-    const nextExperiment = typeof data.next_experiment === "string" ? data.next_experiment : "";
+    const { beliefs, lessons, nextExperiment } = parseReflective(data, context.round ?? 0, warnings);
     const formula = makeFormula({
       world: context.world,
       observations,

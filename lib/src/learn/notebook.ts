@@ -97,6 +97,8 @@ export class Notebook {
   readonly notes = new Map<string, Note>();
   readonly rounds: RoundRecord[] = [];
   readonly games: GameRecord[] = [];
+  /** Rounds where it only looked back (no formula): what it concluded. */
+  readonly reflections: { round: number; rationale: string; lessons: string[]; next_experiment: string }[] = [];
 
   /** Apply the explorer's stances. Returns what was refused (as warnings) and the beliefs it said nothing about. */
   applyStances(round: number, stances: readonly BeliefStance[]): { warnings: string[]; unaddressed: string[] } {
@@ -148,6 +150,10 @@ export class Notebook {
 
   addGames(games: readonly GameRecord[]): void { this.games.push(...games); }
 
+  recordReflection(round: number, rationale: string, lessons: readonly string[], nextExperiment: string): void {
+    this.reflections.push({ round, rationale, lessons: [...lessons], next_experiment: nextExperiment });
+  }
+
   recordRound(round: number, formula: Formula, lessons: readonly string[], nextExperiment: string): RoundRecord {
     const summary = summarize(formula);
     const previous = this.rounds.length ? this.rounds[this.rounds.length - 1].formula : null;
@@ -186,11 +192,12 @@ export class Notebook {
       notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, positions: n.positions, written_round: n.written, updated_round: n.updated })),
       games: this.games.map((g) => ({ game: g.id, round: g.round, moves_chosen_by: g.how, result: g.result, turns: g.turns })),
       rounds: this.rounds.map((r) => ({ round: r.round, formula: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes, games: r.games })),
+      ...(this.reflections.length ? { reflections: this.reflections } : {}),
       ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {})
     };
   }
 
   toJSON(): Record<string, unknown> {
-    return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], games: this.games, rounds: this.rounds };
+    return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], games: this.games, rounds: this.rounds, reflections: this.reflections };
   }
 }

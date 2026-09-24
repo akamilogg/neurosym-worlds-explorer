@@ -17,6 +17,9 @@
      --steps N           investigation answers System 2 may give per round before proposing (default 3)
      --reveal-choices    inspect also shows every position the search considered (default: only the one it chose; the
                          learner finds out what else was possible by TRYING changes against the environment)
+     --variants N        generalization: games from N starting positions never played, every trial (default 4; 0 = off).
+                         Accepting a formula requires winning them too.
+     --no-reflection     skip the final reflection round (beliefs, notes and lessons after the last trial; no formula)
      --no-ablation       skip the code-only ablation (same observations, no Judge; information only)
      --flat              CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted
      --out FILE          the journal (default runs/grid-s<seed>-<time>.json)
@@ -37,7 +40,8 @@ import { replayOnEvidence } from '../src/learn/gates.ts';
 import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loop.ts';
 import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
 import { ceilingOf, tightness } from '../src/worlds/grid/informed.ts';
-import { EXPLORER_SYSTEM, explorerPayload, parseExplorerTurn, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
+import { variantStarts } from '../src/worlds/grid/variants.ts';
+import { EXPLORER_SYSTEM, explorerPayload, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
 import { Notebook, type GameRecord } from '../src/learn/notebook.ts';
 import { recordTurn, surprises, type TurnRecord } from '../src/learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
@@ -63,6 +67,8 @@ const cfg = {
   probePositions: Number(arg('probe-positions', '40')),
   flat: flag('flat'),
   ablation: !flag('no-ablation'),
+  variants: Number(arg('variants', '4')),
+  reflection: !flag('no-reflection'),
   steps: Number(arg('steps', '3')),
   revealChoices: flag('reveal-choices')
 };
@@ -102,6 +108,14 @@ const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env
 
 let level = 0;
 let planner = createPlanner(world, 'B', cfg.levels[level], { fallback: bFallback(spec) });
+/* OPERATOR-CHOSEN starting positions never played before, new for every attempt (A can still force the win from each:
+   the test must be fair); the learner only ever plays them. The formula and its ablation get the same ones. */
+const variantCache = new Map<string, GridState[]>();
+const variantsFor = (attempt: number): GridState[] => {
+  const key = cfg.levels[level] + ':' + attempt;
+  if (!variantCache.has(key)) variantCache.set(key, cfg.variants > 0 ? variantStarts(spec, { count: cfg.variants, level: cfg.levels[level], seed: cfg.seed * 1009 + attempt }) : []);
+  return variantCache.get(key)!;
+};
 
 /* --- The journal ------------------------------------------------------------------ */
 
@@ -181,6 +195,8 @@ interface Measured extends AttemptScore<Formula> {
   readonly samples: ActionSample[];
   readonly held: (number | null)[];
   readonly critical: (number | null)[];
+  /** Wins from the starting positions it had never played (the generalization test). */
+  readonly variantWins: number;
 }
 
 /** One trial: the formula plays `cfg.games` games. Its search's view of each of its turns is recorded for the learner;
@@ -192,7 +208,12 @@ async function trial(formula: Formula, attempt: number, using: Evaluator<GridSta
   const held: (number | null)[] = [];
   const criticals: (number | null)[] = [];
   const round = roundOf.get(formula) ?? currentRound;
-  for (let g = 0; g < cfg.games; g++) {
+  /* The usual start, then (generalization) starting positions the learner has never played. */
+  const plans: { start?: GridState; label: string }[] = [
+    ...Array.from({ length: cfg.games }, (_, g) => ({ label: 'game ' + g })),
+    ...variantsFor(attempt).map((start, v) => ({ start, label: 'new start ' + v }))
+  ];
+  for (const [g, plan] of plans.entries()) {
     const rnd = mulberry32(cfg.seed * 7717 + attempt * 101 + g * 7 + level * 1_000_003);
     const opponent = noisyOpponent(world, (s) => planner.respond(s), cfg.epsilon, rnd);
     const t0 = Date.now();
@@ -210,17 +231,18 @@ async function trial(formula: Formula, attempt: number, using: Evaluator<GridSta
       samples.push({ winning: keeps, available: world.actions(s).length, keeping: winners.length });
       if (critical === null && winners.length) { if (keeps) stillWinning++; else critical = s.ply; }
       return chosen;
-    });
+    }, plan.start ? { start: plan.start } : {});
     results.push({ outcome: ep.outcome.winner === 'A' ? 'win' : ep.outcome.winner === 'B' ? 'loss' : 'draw', plies: ep.states.length - 1 });
     held.push(knownThroughout || critical !== null ? stillWinning : null);
     criticals.push(critical);
-    if (record) stored.push(store(round, 'your formula of round ' + round, ep.states, ep.outcome.winner, turns));
-    say(tag + 'attempt ' + attempt + ' game ' + g + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
+    if (record) stored.push(store(round, 'your formula of round ' + round + (plan.start ? ', from a starting position you had not played' : ''), ep.states, ep.outcome.winner, turns));
+    say(tag + 'attempt ' + attempt + ' ' + plan.label + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
       ' turns [operator: still winning for ' + (held[held.length - 1] ?? '?') + ' turns' + (critical !== null ? ', thrown at ' + critical : '') + ']' +
       ' (' + Math.round((Date.now() - t0) / 1000) + ' s' + (record ? ', Jev calls ' + judge.stats.calls : '') + ')');
   }
   const wins = results.filter((g) => g.outcome === 'win').length;
-  return { formula, wins, total: results.length, perfect: wins === results.length, games: results, stored, samples, held, critical: criticals };
+  const variantWins = results.slice(cfg.games).filter((g) => g.outcome === 'win').length;
+  return { formula, wins, total: results.length, perfect: wins === results.length, games: results, stored, samples, held, critical: criticals, variantWins };
 }
 
 /* OPERATOR ONLY: the same observations read linearly, no Judge, the same games. Never shown to System 2. */
@@ -335,7 +357,11 @@ function latestSurprises(): unknown {
   return latest.map((g) => ({ game: g.id, result: g.result, where_your_search_was_most_wrong: surprises([...g.turns.values()], valueOfResult(g.result)) }));
 }
 
-async function propose(from: Formula | null, directive: string | null = null): Promise<Formula | null> {
+const REFLECTION_TASK = 'REFLECTION ROUND. Your formula is final: do not propose one. Look back at your games (you may investigate first) and '
+  + 'answer with {"rationale": ..., "beliefs": [stances on every belief you hold, and any new ones], "notes": [...], "lessons": [...], "next_experiment": ...}: '
+  + 'what you now believe about this environment - how it works, how each side wins, and why your formula won or lost - citing your evidence.';
+
+async function propose(from: Formula | null, directive: string | null = null, mode: 'propose' | 'reflect' = 'propose'): Promise<Formula | null> {
   currentRound++;
   const round = currentRound;
   let refused: string[] = [];
@@ -346,7 +372,7 @@ async function propose(from: Formula | null, directive: string | null = null): P
     const payload = explorerPayload({
       round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(),
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-      hypotheses: registry.current(), investigation, stepsLeft, refused, directive
+      hypotheses: registry.current(), investigation, stepsLeft, refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null
     });
     say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
     steps++;
@@ -371,6 +397,18 @@ async function propose(from: Formula | null, directive: string | null = null): P
         : 'measure on ' + r.on.length).join('; '));
       refused = [];
       continue;
+    }
+    if (mode === 'reflect') {
+      const r = parseReflection(content, round);
+      if (!r.ok) { refused = r.errors; refusals++; log('reflection_refused', { round, errors: r.errors, content }); continue; }
+      const stances = notebook.applyStances(round, r.reflection.beliefs);
+      unaddressed = stances.unaddressed;
+      notebook.recordReflection(round, r.reflection.rationale, r.reflection.lessons, r.reflection.nextExperiment);
+      log('reflection', { round, investigation_steps: investigation.length, rationale: r.reflection.rationale, beliefs: r.reflection.beliefs, notes: turn.notes,
+        lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings, no_stance_on: stances.unaddressed });
+      say('  reflection: beliefs ' + r.reflection.beliefs.map((b) => b.id + ':' + b.stance).join(' ') + (stances.unaddressed.length ? '; NO STANCE on ' + stances.unaddressed.join(', ') : ''));
+      for (const l of r.reflection.lessons) say('  lesson: ' + l);
+      return from;
     }
     const parsed = turn.parse;
     if (!parsed.ok) {
@@ -434,7 +472,7 @@ const result = await runAttempts<Formula, Measured, never>(first, {
     lastScore = score;
     const round = roundOf.get(candidate) ?? currentRound;
     notebook.recordGames(round, score.stored.map((g) => g.result));
-    log('trial', { attempt, round, level: cfg.levels[level], wins: score.wins, total: score.total, games: score.stored.map((g) => ({ id: g.id, result: g.result, turns: g.states.length - 1 })),
+    log('trial', { attempt, round, level: cfg.levels[level], wins: score.wins, total: score.total, usual_start_wins: score.wins - score.variantWins, new_start_wins: score.variantWins, new_starts: variantsFor(attempt).length, games: score.stored.map((g) => ({ id: g.id, result: g.result, turns: g.states.length - 1 })),
       operator: { turns_still_winning: score.held, critical: score.critical, action_accuracy: actionAccuracy(score.samples) },
       jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
     if (cfg.ablation) await ablate(candidate, attempt, score);
@@ -454,6 +492,11 @@ const result = await runAttempts<Formula, Measured, never>(first, {
   nextHypothesis: (from) => propose(from),
   onNoHypothesis: (attempt) => say('attempt ' + attempt + ': System 2 gave no usable proposal')
 });
+
+if (cfg.reflection) {
+  say('reflection round: the formula is final; System 2 looks back');
+  await propose(result.accepted?.formula ?? result.best?.formula ?? null, null, 'reflect');
+}
 
 log('end', {
   stoppedBy: result.stoppedBy, attempts: result.attempts, escalations: result.escalations,

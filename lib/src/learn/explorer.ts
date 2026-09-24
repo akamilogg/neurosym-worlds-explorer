@@ -47,6 +47,8 @@ export const EXPLORER_SYSTEM = [
   '',
   'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. Each test reports an AUC: the probability that a position from a game you won scores higher than one from a game you lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost); "supported" or "inverted" only when further from 0.5 than chance allows. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the labels come from whole games: early positions of a lost game may have been fine.',
   '',
+  'If the payload carries a `task`, it says what this consultation is for and what to answer instead of a proposal.',
+  '',
   'When you propose, answer with ONE JSON object and nothing else:',
   '{',
   '  "rationale": "what you believe now and why, citing the evidence",',
@@ -81,6 +83,8 @@ export interface ExplorerBrief {
   /** Why the previous answer was refused. */
   readonly refused?: readonly string[];
   readonly directive?: string | null;
+  /** What this consultation is for, when it is not a proposal (e.g. a reflection round). */
+  readonly task?: string | null;
 }
 
 /** Only what the explorer wrote travels back: its own code and words, never the host's internals. */
@@ -113,7 +117,8 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
-    ...(brief.directive ? { operator_directive: brief.directive } : {})
+    ...(brief.directive ? { operator_directive: brief.directive } : {}),
+    ...(brief.task ? { task: brief.task } : {})
   };
 }
 
@@ -226,6 +231,48 @@ function parseRule(raw: unknown, where: string, errors: string[]): Rule | null {
   return { type, used_as: 'value', instructions, criteria };
 }
 
+/** The reflective part of any answer: stances on beliefs, lessons, the next experiment. */
+function parseReflective(data: Record<string, unknown>, round: number, warnings: string[]): { beliefs: BeliefStance[]; lessons: string[]; nextExperiment: string } {
+  const beliefs: BeliefStance[] = [];
+  const rawBeliefs = Array.isArray(data.beliefs) ? data.beliefs : [];
+  rawBeliefs.forEach((raw, i) => {
+    const b = obj(raw);
+    const id = b && typeof b.id === 'string' ? b.id : '';
+    if (!b || !ID.test(id)) { warnings.push('belief #' + i + ' ignored: "id" must be lowercase snake_case'); return; }
+    const stance = b.stance as Stance;
+    if (!STANCES.includes(stance)) { warnings.push('belief "' + id + '" ignored: stance must be one of ' + STANCES.join(', ')); return; }
+    beliefs.push({ id, stance, ...(typeof b.statement === 'string' && b.statement.trim() ? { statement: b.statement.trim() } : {}),
+      ...(typeof b.why === 'string' ? { why: b.why } : {}),
+      evidence: Array.isArray(b.evidence) ? b.evidence.map(String) : (b.evidence !== undefined && b.evidence !== null ? [String(b.evidence)] : []) });
+  });
+  /* An answer in the older shape (plain hypotheses) still counts: each becomes a new belief. */
+  if (!rawBeliefs.length && Array.isArray(data.hypotheses)) {
+    data.hypotheses.filter((h): h is string => typeof h === 'string').forEach((statement, i) =>
+      beliefs.push({ id: 'r' + round + '_h' + (i + 1), stance: 'new', statement }));
+  }
+  const lessons = Array.isArray(data.lessons) ? data.lessons.filter((l): l is string => typeof l === 'string') : [];
+  const nextExperiment = typeof data.next_experiment === 'string' ? data.next_experiment : '';
+  return { beliefs, lessons, nextExperiment };
+}
+
+export interface ExplorerReflection {
+  readonly rationale: string;
+  readonly beliefs: BeliefStance[];
+  readonly lessons: string[];
+  readonly nextExperiment: string;
+  readonly warnings: string[];
+}
+
+/** A reflection round's answer: what it now believes, with no formula. */
+export function parseReflection(content: string, round: number): { ok: true; reflection: ExplorerReflection } | { ok: false; errors: string[] } {
+  const data = obj(parseJsonLoose(content));
+  if (!data) return { ok: false, errors: ['the answer was not a JSON object'] };
+  const warnings: string[] = [];
+  const { beliefs, lessons, nextExperiment } = parseReflective(data, round, warnings);
+  if (!beliefs.length && !lessons.length) return { ok: false, errors: ['a reflection needs stances on your beliefs and/or lessons'] };
+  return { ok: true, reflection: { rationale: typeof data.rationale === 'string' ? data.rationale : '', beliefs, lessons, nextExperiment, warnings } };
+}
+
 /** `senses`: the observations every formula carries (what is perceived); the explorer never writes them. */
 export function parseExplorerProposal(content: string, context: {
   world: string; senses: Readonly<Record<string, MeasureDecl>>; lang?: string; round?: number;
@@ -268,25 +315,7 @@ export function parseExplorerProposal(content: string, context: {
     probes.push({ id, hypothesis, ...(observation ? { observation } : {}), ...(question ? { question } : {}) });
   });
 
-  const beliefs: BeliefStance[] = [];
-  const rawBeliefs = Array.isArray(data.beliefs) ? data.beliefs : [];
-  rawBeliefs.forEach((raw, i) => {
-    const b = obj(raw);
-    const id = b && typeof b.id === 'string' ? b.id : '';
-    if (!b || !ID.test(id)) { warnings.push('belief #' + i + ' ignored: "id" must be lowercase snake_case'); return; }
-    const stance = b.stance as Stance;
-    if (!STANCES.includes(stance)) { warnings.push('belief "' + id + '" ignored: stance must be one of ' + STANCES.join(', ')); return; }
-    beliefs.push({ id, stance, ...(typeof b.statement === 'string' && b.statement.trim() ? { statement: b.statement.trim() } : {}),
-      ...(typeof b.why === 'string' ? { why: b.why } : {}),
-      evidence: Array.isArray(b.evidence) ? b.evidence.map(String) : (b.evidence !== undefined && b.evidence !== null ? [String(b.evidence)] : []) });
-  });
-  /* An answer in the older shape (plain hypotheses) still counts: each becomes a new belief. */
-  if (!rawBeliefs.length && Array.isArray(data.hypotheses)) {
-    data.hypotheses.filter((h): h is string => typeof h === 'string').forEach((statement, i) =>
-      beliefs.push({ id: 'r' + (context.round ?? 0) + '_h' + (i + 1), stance: 'new', statement }));
-  }
-  const lessons = Array.isArray(data.lessons) ? data.lessons.filter((l): l is string => typeof l === 'string') : [];
-  const nextExperiment = typeof data.next_experiment === 'string' ? data.next_experiment : '';
+  const { beliefs, lessons, nextExperiment } = parseReflective(data, context.round ?? 0, warnings);
 
   const formula = makeFormula({
     world: context.world, observations, rules, weights,
