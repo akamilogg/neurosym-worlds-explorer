@@ -3280,6 +3280,7 @@ var Neurosym = (() => {
     constructor() {
       __publicField(this, "beliefs", /* @__PURE__ */ new Map());
       __publicField(this, "notes", /* @__PURE__ */ new Map());
+      __publicField(this, "methods", /* @__PURE__ */ new Map());
       __publicField(this, "rounds", []);
       __publicField(this, "games", []);
       /** Rounds where it only looked back (no formula): what it concluded. */
@@ -3356,6 +3357,31 @@ var Neurosym = (() => {
       }
       return warnings;
     }
+    /** Write or forget methods (no positions: a method is about investigating, not about one game). */
+    applyMethods(round2, ops2) {
+      const warnings = [];
+      for (const op of ops2) {
+        if (!ID.test(op.id)) {
+          warnings.push('method id "' + op.id + '" must be lowercase snake_case');
+          continue;
+        }
+        if (op.do === "forget") {
+          if (!this.methods.delete(op.id)) warnings.push('method "' + op.id + '" does not exist');
+          continue;
+        }
+        const text = (op.text ?? "").trim();
+        if (!text) {
+          warnings.push('method "' + op.id + '" has no text');
+          continue;
+        }
+        const old = this.methods.get(op.id);
+        if (old) {
+          old.text = clip(text, 800);
+          old.updated = round2;
+        } else this.methods.set(op.id, { id: op.id, text: clip(text, 800), written: round2, updated: round2 });
+      }
+      return warnings;
+    }
     addGames(games) {
       this.games.push(...games);
     }
@@ -3409,6 +3435,7 @@ var Neurosym = (() => {
         beliefs_dropped: beliefs.filter((b) => b.status === "dropped").map((b) => ({ id: b.id, statement: b.statement, why: b.history[b.history.length - 1].why })),
         ...unaddressed.length ? { you_took_no_stance_on: [...unaddressed] } : {},
         notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, positions: n.positions, written_round: n.written, updated_round: n.updated })),
+        methods: [...this.methods.values()].map((m) => ({ id: m.id, text: m.text, written_round: m.written, updated_round: m.updated })),
         games: this.games.map((g) => ({ game: g.id, round: g.round, moves_chosen_by: g.how, result: g.result, turns: g.turns })),
         rounds: this.rounds.map((r) => ({ round: r.round, fingerprint: r.fingerprint, formula: r.formula, ...r.changes ? { changes: r.changes } : {}, probes: r.probes, games: r.games })),
         ...this.reflections.length ? { reflections: this.reflections } : {},
@@ -3416,7 +3443,7 @@ var Neurosym = (() => {
       };
     }
     toJSON() {
-      return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], games: this.games, rounds: this.rounds, reflections: this.reflections };
+      return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], methods: [...this.methods.values()], games: this.games, rounds: this.rounds, reflections: this.reflections };
     }
   };
 
@@ -3440,6 +3467,15 @@ var Neurosym = (() => {
     '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests) and whether that change ended the game (and who won). It never says why a change was refused or why a game ended: that is for you to work out. A try is how you TEST an idea about how games end, directly. Trying changes nothing in any game.',
     '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
     '  {"play": "<position>", "formula": <round> | { "observations": ..., "rules": ..., "weights": ... }}   PLAY a game again yourself: from any position of your games ("<game>@0" is its start, "<game>@<turn>" a moment of it, "try<n>" where a try left you), your side choosing with the formula of that round, or with a draft you write in the same shape as a proposal (without "formula", your best formula). The other side plays as it always does, so the same experiment can end differently. You get a new game (its name, how it ended, how many turns), to view and inspect like any other. Repeat an experiment, or change one thing and play it again: it is your laboratory, and nothing it plays counts on the scoreboard. At most `plays_left` games this round.',
+    "",
+    "METHOD. How you investigate is yours to design, and it is part of what you learn. Some general strategies (none of them says anything about this environment):",
+    "  - When a belief keeps collecting exceptions, stop patching it. Gather the exceptions and ask what they share that the confirming cases do not. Write code that measures that candidate property and run it with `table` or `measure` over the positions where it should matter, then read each value yourself.",
+    "  - Your reading of a picture can be wrong. Before one reading changes a belief, check it with code on that same position.",
+    "  - `try` tells you whether a change is allowed and whether it ends the game; `play` tells you how a whole game goes from a position. Repeat an experiment to see how much chance moves it; change one thing at a time to see what that one thing does.",
+    "  - Prefer a test whose result could prove you wrong over one that can only agree with you.",
+    "  - Every tool you have is for use: an investigation that only looks at pictures leaves your measuring and experimenting tools idle.",
+    'Build your own strategies from these tools. When you find a way of investigating that works, or one that wasted your steps, write it down as a METHOD in any answer: "methods": [ {"do": "write", "id": "<id>", "text": "..."} | {"do": "forget", "id": "<id>"} ]. Your methods come back to you every round in `notebook.methods`.',
+    "",
     "`surprises` lists, for your latest games, the turns where your own search's value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.",
     "",
     "Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: the mean value on positions from games you won and from games you lost; the AUC (the probability that a position from a won game scores higher than one from a lost game: 0.5 = no relation, 1 = always higher in won games, 0 = always higher in lost games); how many positions; and whether chance alone could produce a difference that large with that many positions. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the outcome belongs to the whole game: early positions of a lost game may have been fine.",
@@ -3522,6 +3558,7 @@ var Neurosym = (() => {
     const o = data && typeof data === "object" && !Array.isArray(data) ? data : null;
     const warnings = [];
     const notes = o ? parseNotes(o.notes, warnings) : [];
+    const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
     if (o && Array.isArray(o.investigate) && !o.observations && !o.rules) {
       const requests = [];
       for (const [i, r] of o.investigate.slice(0, context.maxRequests ?? 8).entries()) {
@@ -3573,9 +3610,9 @@ var Neurosym = (() => {
         } else warnings.push("request #" + i + " ignored: use view, inspect, try, play, measure or table");
       }
       if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push("only the first " + (context.maxRequests ?? 8) + " requests were run");
-      return { kind: "investigate", requests, notes, warnings };
+      return { kind: "investigate", requests, notes, methods, warnings };
     }
-    return { kind: "proposal", parse: parseExplorerProposal(content, context), notes };
+    return { kind: "proposal", parse: parseExplorerProposal(content, context), notes, methods };
   }
   var ID2 = /^[a-z][a-z0-9_]{0,47}$/;
   var TYPES = ["noul", "score", "choice"];

@@ -14,6 +14,8 @@ import { formulaHash } from '../core/formula.ts';
  *               evidence; a belief left without a stance is reported back.
  *   notes       what the explorer chose to write down (text, and references to positions
  *               of its own games - "game@turn"), and to forget.
+ *   methods     how it investigates: strategies it found for using its tools together
+ *               (what worked, what wasted its steps). Its own, never the world's rules.
  *   lessons     its own words and next experiment, returned verbatim.
  *   games       the index of games played: who chose the moves, the result, the length.
  *   rounds      the lineage of its formulas: what changed, what its probes said, how
@@ -48,6 +50,7 @@ export interface NoteOp {
 }
 
 export interface Note { readonly id: string; text: string; positions: string[]; readonly written: number; updated: number }
+export interface Method { readonly id: string; text: string; readonly written: number; updated: number }
 
 export interface GameRecord {
   readonly id: string;
@@ -99,6 +102,7 @@ function changesBetween(before: RoundRecord['formula'] | null, after: RoundRecor
 export class Notebook {
   readonly beliefs = new Map<string, NotebookBelief>();
   readonly notes = new Map<string, Note>();
+  readonly methods = new Map<string, Method>();
   readonly rounds: RoundRecord[] = [];
   readonly games: GameRecord[] = [];
   /** Rounds where it only looked back (no formula): what it concluded. */
@@ -152,6 +156,24 @@ export class Notebook {
     return warnings;
   }
 
+  /** Write or forget methods (no positions: a method is about investigating, not about one game). */
+  applyMethods(round: number, ops: readonly NoteOp[]): string[] {
+    const warnings: string[] = [];
+    for (const op of ops) {
+      if (!ID.test(op.id)) { warnings.push('method id "' + op.id + '" must be lowercase snake_case'); continue; }
+      if (op.do === 'forget') {
+        if (!this.methods.delete(op.id)) warnings.push('method "' + op.id + '" does not exist');
+        continue;
+      }
+      const text = (op.text ?? '').trim();
+      if (!text) { warnings.push('method "' + op.id + '" has no text'); continue; }
+      const old = this.methods.get(op.id);
+      if (old) { old.text = clip(text, 800); old.updated = round; }
+      else this.methods.set(op.id, { id: op.id, text: clip(text, 800), written: round, updated: round });
+    }
+    return warnings;
+  }
+
   addGames(games: readonly GameRecord[]): void { this.games.push(...games); }
 
   recordReflection(round: number, rationale: string, lessons: readonly string[], nextExperiment: string): void {
@@ -193,6 +215,7 @@ export class Notebook {
       beliefs_dropped: beliefs.filter((b) => b.status === 'dropped').map((b) => ({ id: b.id, statement: b.statement, why: b.history[b.history.length - 1].why })),
       ...(unaddressed.length ? { you_took_no_stance_on: [...unaddressed] } : {}),
       notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, positions: n.positions, written_round: n.written, updated_round: n.updated })),
+      methods: [...this.methods.values()].map((m) => ({ id: m.id, text: m.text, written_round: m.written, updated_round: m.updated })),
       games: this.games.map((g) => ({ game: g.id, round: g.round, moves_chosen_by: g.how, result: g.result, turns: g.turns })),
       rounds: this.rounds.map((r) => ({ round: r.round, fingerprint: r.fingerprint, formula: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes, games: r.games })),
       ...(this.reflections.length ? { reflections: this.reflections } : {}),
@@ -201,6 +224,6 @@ export class Notebook {
   }
 
   toJSON(): Record<string, unknown> {
-    return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], games: this.games, rounds: this.rounds, reflections: this.reflections };
+    return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], methods: [...this.methods.values()], games: this.games, rounds: this.rounds, reflections: this.reflections };
   }
 }

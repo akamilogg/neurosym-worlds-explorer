@@ -203,3 +203,23 @@ test('play: its best formula, one of its rounds, or a draft built and checked li
   assert.match(t.warnings[0], /draft formula of play was refused/);
   assert.match(EXPLORER_SYSTEM, /"play"/);
 });
+
+test('method guidance is strategy only: nothing in it names a feature of any world or game', () => {
+  const start = EXPLORER_SYSTEM.indexOf('METHOD.');
+  const method = EXPLORER_SYSTEM.slice(start, EXPLORER_SYSTEM.indexOf('`surprises`', start)).toLowerCase();
+  assert.ok(start >= 0 && method.includes('table') && method.includes('play') && method.includes('methods'));
+  for (const word of ['row', 'column', 'col,', 'edge', 'corner', 'piece', 'capture', 'trap', 'reach', 'immobil', 'block', 'diagonal', 'side', 'goal']) {
+    assert.ok(!method.includes(word), 'method guidance must not mention "' + word + '"');
+  }
+});
+
+test('methods: written and forgotten in any answer, carried in the notebook, never tied to positions', async () => {
+  const t = parseExplorerTurn(JSON.stringify({ investigate: [{ view: 'g1' }], methods: [{ do: 'write', id: 'm1', text: 'measure the exceptions', positions: ['g1@0'] }] }),
+    { world: world.id, senses: SENSES });
+  assert.deepEqual(t.methods, [{ do: 'write', id: 'm1', text: 'measure the exceptions' }]);
+  const { Notebook } = await import('../src/learn/notebook.ts');
+  const nb = new Notebook();
+  assert.deepEqual(nb.applyMethods(2, t.methods), []);
+  assert.deepEqual(nb.applyMethods(3, [{ do: 'write', id: 'm1', text: 'measure the exceptions with table' }, { do: 'forget', id: 'nope' }]), ['method "nope" does not exist']);
+  assert.deepEqual((nb.brief() as any).methods, [{ id: 'm1', text: 'measure the exceptions with table', written_round: 2, updated_round: 3 }]);
+});

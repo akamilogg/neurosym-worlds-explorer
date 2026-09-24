@@ -459,8 +459,12 @@ async function propose(from: Formula | null, directive: string | null = null, mo
       continue;
     }
     const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round });
-    const noteWarnings = notebook.applyNotes(round, turn.notes, (ref) => resolve(ref) !== null);
+    const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
     if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
+    if (turn.methods.length) {
+      say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', '));
+      log('methods', { round, methods: turn.methods });
+    }
     if (turn.kind === 'investigate') {
       if (stepsLeft <= 0) { refused = ['no investigation steps left this round: answer with your proposal now']; refusals++; continue; }
       const results: unknown[] = [];

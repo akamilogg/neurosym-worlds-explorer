@@ -44,6 +44,15 @@ export const EXPLORER_SYSTEM = [
   '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests) and whether that change ended the game (and who won). It never says why a change was refused or why a game ended: that is for you to work out. A try is how you TEST an idea about how games end, directly. Trying changes nothing in any game.',
   '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
   '  {"play": "<position>", "formula": <round> | { "observations": ..., "rules": ..., "weights": ... }}   PLAY a game again yourself: from any position of your games ("<game>@0" is its start, "<game>@<turn>" a moment of it, "try<n>" where a try left you), your side choosing with the formula of that round, or with a draft you write in the same shape as a proposal (without "formula", your best formula). The other side plays as it always does, so the same experiment can end differently. You get a new game (its name, how it ended, how many turns), to view and inspect like any other. Repeat an experiment, or change one thing and play it again: it is your laboratory, and nothing it plays counts on the scoreboard. At most `plays_left` games this round.',
+  '',
+  'METHOD. How you investigate is yours to design, and it is part of what you learn. Some general strategies (none of them says anything about this environment):',
+  '  - When a belief keeps collecting exceptions, stop patching it. Gather the exceptions and ask what they share that the confirming cases do not. Write code that measures that candidate property and run it with `table` or `measure` over the positions where it should matter, then read each value yourself.',
+  '  - Your reading of a picture can be wrong. Before one reading changes a belief, check it with code on that same position.',
+  '  - `try` tells you whether a change is allowed and whether it ends the game; `play` tells you how a whole game goes from a position. Repeat an experiment to see how much chance moves it; change one thing at a time to see what that one thing does.',
+  '  - Prefer a test whose result could prove you wrong over one that can only agree with you.',
+  '  - Every tool you have is for use: an investigation that only looks at pictures leaves your measuring and experimenting tools idle.',
+  'Build your own strategies from these tools. When you find a way of investigating that works, or one that wasted your steps, write it down as a METHOD in any answer: "methods": [ {"do": "write", "id": "<id>", "text": "..."} | {"do": "forget", "id": "<id>"} ]. Your methods come back to you every round in `notebook.methods`.',
+  '',
   '`surprises` lists, for your latest games, the turns where your own search\'s value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.',
   '',
   'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: the mean value on positions from games you won and from games you lost; the AUC (the probability that a position from a won game scores higher than one from a lost game: 0.5 = no relation, 1 = always higher in won games, 0 = always higher in lost games); how many positions; and whether chance alone could produce a difference that large with that many positions. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the outcome belongs to the whole game: early positions of a lost game may have been fine.',
@@ -142,8 +151,8 @@ export type ExplorerRequest =
   | { readonly play: string; readonly formula: number | Formula | null };
 
 export type ExplorerTurn =
-  | { kind: 'investigate'; requests: ExplorerRequest[]; notes: NoteOp[]; warnings: string[] }
-  | { kind: 'proposal'; parse: ExplorerParse; notes: NoteOp[] };
+  | { kind: 'investigate'; requests: ExplorerRequest[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
+  | { kind: 'proposal'; parse: ExplorerParse; notes: NoteOp[]; methods: NoteOp[] };
 
 function parseNotes(raw: unknown, warnings: string[]): NoteOp[] {
   const out: NoteOp[] = [];
@@ -162,6 +171,7 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
   const o = data && typeof data === 'object' && !Array.isArray(data) ? data as Record<string, unknown> : null;
   const warnings: string[] = [];
   const notes = o ? parseNotes(o.notes, warnings) : [];
+  const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
   if (o && Array.isArray(o.investigate) && !o.observations && !o.rules) {
     const requests: ExplorerRequest[] = [];
     for (const [i, r] of o.investigate.slice(0, context.maxRequests ?? 8).entries()) {
@@ -198,9 +208,9 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
       } else warnings.push('request #' + i + ' ignored: use view, inspect, try, play, measure or table');
     }
     if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push('only the first ' + (context.maxRequests ?? 8) + ' requests were run');
-    return { kind: 'investigate', requests, notes, warnings };
+    return { kind: 'investigate', requests, notes, methods, warnings };
   }
-  return { kind: 'proposal', parse: parseExplorerProposal(content, context), notes };
+  return { kind: 'proposal', parse: parseExplorerProposal(content, context), notes, methods };
 }
 
 /* --- Parsing: the explorer's text becomes a formula and probes, or a list of reasons ------ */
