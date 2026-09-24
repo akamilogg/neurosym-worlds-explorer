@@ -45,7 +45,7 @@ export interface NoteOp {
   readonly do: 'write' | 'forget';
   readonly id: string;
   readonly text?: string;
-  /** Positions of its own games, as "game@turn". */
+  /** Its own games ("g5") or positions of them ("g5@4", "try3"). */
   readonly positions?: readonly string[];
 }
 

@@ -459,7 +459,7 @@ async function propose(from: Formula | null, directive: string | null = null, mo
       continue;
     }
     const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round });
-    const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
+    const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => games.has(ref.trim()) || resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
     if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
     if (turn.methods.length) {
       say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', '));
