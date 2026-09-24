@@ -2,23 +2,21 @@ import type { Formula } from '../core/types.ts';
 import type { ProbeResult } from './experiments.ts';
 
 /* ============================================================================
- * The lab notebook: what the explorer carries from one hypothesis to the next.
+ * The lab notebook: the explorer's own, carried from one round to the next.
  *
- * A reasoning model carries its own trace from step to step. Here the trace is
- * external, structured and honest: the explorer writes its beliefs, lessons and
- * next experiment; the harness writes what actually happened (probe results, games,
- * the moment each game was thrown away). Nothing in it can be invented after the fact.
+ * The explorer knows it has a notebook and decides what goes in it. The harness only
+ * keeps the FACTS of what the explorer did and what happened, never curated
+ * experience and never anything the explorer could not have observed itself:
  *
- *   beliefs     every belief ever held, with its history. Each answer must take a
- *               stance on every belief still held (keep | revise | confirm | drop),
- *               citing evidence; a belief left without a stance is reported back.
- *   rounds      the formula's lineage: what changed, what the probes said, how the
- *               games went (wins AND partial credit), what the code alone did.
- *   lessons     the explorer's own words, returned verbatim next round.
- *   episodes    experience CURATED, not a sliding window: every win, the critical
- *               moment of every loss (the position before the move that threw the
- *               win away, and after it - never the move that would have kept it),
- *               the best losses, and the latest games.
+ *   beliefs     every belief ever held, with its history. Each answer must take a stance
+ *               on every belief still held (keep | revise | confirm | drop), citing
+ *               evidence; a belief left without a stance is reported back.
+ *   notes       what the explorer chose to write down (text, and references to positions
+ *               of its own games - "game@turn"), and to forget.
+ *   lessons     its own words and next experiment, returned verbatim.
+ *   games       the index of games played: who chose the moves, the result, the length.
+ *   rounds      the lineage of its formulas: what changed, what its probes said, how
+ *               the games went.
  * ========================================================================== */
 
 export type Stance = 'new' | 'keep' | 'revise' | 'confirm' | 'drop';
@@ -40,43 +38,23 @@ export interface NotebookBelief {
   readonly history: { round: number; stance: Stance; statement: string; why: string; evidence: string[] }[];
 }
 
-export interface EpisodeRecord {
+export interface NoteOp {
+  readonly do: 'write' | 'forget';
+  readonly id: string;
+  readonly text?: string;
+  /** Positions of its own games, as "game@turn". */
+  readonly positions?: readonly string[];
+}
+
+export interface Note { readonly id: string; text: string; positions: string[]; readonly written: number; updated: number }
+
+export interface GameRecord {
   readonly id: string;
   readonly round: number;
-  /** How the moves were chosen ("exploration: ...", "trial: ..."). */
+  /** Who chose the learner's moves ("exploration: at random", "your formula of round N"). */
   readonly how: string;
   readonly result: 'won' | 'lost' | 'draw';
-  /** One rendering per turn, from the first position to the last. */
-  readonly frames: readonly string[];
-  /** Index of the frame BEFORE the learner's move that threw a won position away (null: never happened or unknown). */
-  readonly critical?: number | null;
-  /** At the critical moment: how the learner's OWN formula scored the positions it could have moved to (no look-ahead).
-      Averages only - never which positions, nor how many. */
-  readonly criticalScores?: CriticalScores | null;
-  /** The learner's turns played while its position was still won (partial credit; null when unknown). */
-  readonly heldWinTurns?: number | null;
-  /** Whether the learner's side chose these moves itself (a trial) rather than at random. */
-  readonly ownPlay: boolean;
-}
-
-export interface CriticalScores {
-  /** The formula's direct value of the position it moved to. */
-  readonly chosen: number;
-  /** Mean direct value of the positions that would have kept the win. */
-  readonly keeping: number;
-  /** Mean direct value of the positions that throw it away (the chosen one among them). */
-  readonly losing: number;
-  /** Share of (keeping, losing) comparisons where the keeping position scored higher (ties count half). */
-  readonly ordered: number;
-}
-
-export interface TrialRecord {
-  readonly level: string | number;
-  readonly wins: number;
-  readonly total: number;
-  readonly results: readonly string[];
-  readonly held_win_turns: readonly (number | null)[];
-  readonly action_accuracy: number | null;
+  readonly turns: number;
 }
 
 export interface RoundRecord {
@@ -84,13 +62,13 @@ export interface RoundRecord {
   readonly formula: { observations: Record<string, string>; rules: Record<string, string>; weights: Record<string, number> };
   readonly changes: { added: string[]; removed: string[]; reweighted: string[] } | null;
   probes: { id: string; hypothesis: string; status: string; auc: number | null; tests: string[] }[];
-  readonly trials: TrialRecord[];
-  code_only?: { wins: number; total: number } | null;
+  readonly games: { results: string[]; wins: number; of: number }[];
   readonly lessons: string[];
   readonly next_experiment: string;
 }
 
 const clip = (text: string, n: number): string => (text.length > n ? text.slice(0, n - 1) + '…' : text);
+const ID = /^[a-z][a-z0-9_]{0,47}$/;
 
 function summarize(formula: Formula): RoundRecord['formula'] {
   const observations: Record<string, string> = {};
@@ -116,8 +94,9 @@ function changesBetween(before: RoundRecord['formula'] | null, after: RoundRecor
 
 export class Notebook {
   readonly beliefs = new Map<string, NotebookBelief>();
+  readonly notes = new Map<string, Note>();
   readonly rounds: RoundRecord[] = [];
-  readonly episodes: EpisodeRecord[] = [];
+  readonly games: GameRecord[] = [];
 
   /** Apply the explorer's stances. Returns what was refused (as warnings) and the beliefs it said nothing about. */
   applyStances(round: number, stances: readonly BeliefStance[]): { warnings: string[]; unaddressed: string[] } {
@@ -148,11 +127,32 @@ export class Notebook {
     return { warnings, unaddressed };
   }
 
+  /** Write or forget notes. `known(ref)` says whether a "game@turn" reference exists. */
+  applyNotes(round: number, ops: readonly NoteOp[], known: (ref: string) => boolean): string[] {
+    const warnings: string[] = [];
+    for (const op of ops) {
+      if (!ID.test(op.id)) { warnings.push('note id "' + op.id + '" must be lowercase snake_case'); continue; }
+      if (op.do === 'forget') {
+        if (!this.notes.delete(op.id)) warnings.push('note "' + op.id + '" does not exist');
+        continue;
+      }
+      const text = (op.text ?? '').trim();
+      if (!text) { warnings.push('note "' + op.id + '" has no text'); continue; }
+      const positions = (op.positions ?? []).filter((p) => { const ok = known(p); if (!ok) warnings.push('note "' + op.id + '": no position "' + p + '"'); return ok; });
+      const old = this.notes.get(op.id);
+      if (old) { old.text = clip(text, 1200); old.positions = positions; old.updated = round; }
+      else this.notes.set(op.id, { id: op.id, text: clip(text, 1200), positions, written: round, updated: round });
+    }
+    return warnings;
+  }
+
+  addGames(games: readonly GameRecord[]): void { this.games.push(...games); }
+
   recordRound(round: number, formula: Formula, lessons: readonly string[], nextExperiment: string): RoundRecord {
     const summary = summarize(formula);
     const previous = this.rounds.length ? this.rounds[this.rounds.length - 1].formula : null;
-    const record: RoundRecord = { round, formula: summary, changes: changesBetween(previous, summary), probes: [], trials: [],
-      code_only: null, lessons: [...lessons], next_experiment: nextExperiment };
+    const record: RoundRecord = { round, formula: summary, changes: changesBetween(previous, summary), probes: [], games: [],
+      lessons: [...lessons], next_experiment: nextExperiment };
     this.rounds.push(record);
     return record;
   }
@@ -164,20 +164,15 @@ export class Notebook {
     if (!r) return;
     r.probes = results.map((p) => ({
       id: p.id, hypothesis: clip(p.hypothesis, 200), status: p.status, auc: p.auc,
-      tests: p.tests.map((t) => t.by + ' on ' + (t.positions === 'siblings' ? 'choices from one position' : t.positions.replace('_', ' ') + ' positions') + ': ' + t.status + (t.auc === null ? '' : ' (auc ' + t.auc + ')'))
+      tests: p.tests.map((t) => t.by + ' on ' + t.positions.replace('_', ' ') + ' positions: ' + t.status + (t.auc === null ? '' : ' (auc ' + t.auc + ')'))
     }));
   }
 
-  recordTrial(round: number, trial: TrialRecord): void { this.round(round)?.trials.push(trial); }
-
-  recordCodeOnly(round: number, wins: number, total: number): void {
-    const r = this.round(round);
-    if (r) r.code_only = { wins, total };
+  recordGames(round: number, results: readonly string[]): void {
+    this.round(round)?.games.push({ results: [...results], wins: results.filter((r) => r === 'won').length, of: results.length });
   }
 
-  addEpisodes(episodes: readonly EpisodeRecord[]): void { this.episodes.push(...episodes); }
-
-  /** What the explorer reads about its own past: beliefs, lineage, its last lessons and plan. */
+  /** The notebook as the explorer reads it. */
   brief(unaddressed: readonly string[] = []): Record<string, unknown> {
     const beliefs = [...this.beliefs.values()];
     const last = this.rounds[this.rounds.length - 1];
@@ -186,65 +181,16 @@ export class Notebook {
         id: b.id, statement: b.statement, status: b.status, since_round: b.since,
         history: b.history.map((h) => 'round ' + h.round + ': ' + h.stance + (h.why ? ' - ' + clip(h.why, 200) : '') + (h.evidence.length ? ' [' + h.evidence.join(', ') + ']' : ''))
       })),
-      beliefs_dropped: beliefs.filter((b) => b.status === 'dropped').map((b) => ({
-        id: b.id, statement: b.statement, why: b.history[b.history.length - 1].why
-      })),
+      beliefs_dropped: beliefs.filter((b) => b.status === 'dropped').map((b) => ({ id: b.id, statement: b.statement, why: b.history[b.history.length - 1].why })),
       ...(unaddressed.length ? { you_took_no_stance_on: [...unaddressed] } : {}),
-      rounds: this.rounds.map((r) => ({
-        round: r.round, formula: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes,
-        games: r.trials.map((t) => ({ opponent_level: t.level, wins: t.wins, of: t.total, results: t.results,
-          turns_still_winning: t.held_win_turns, move_quality: t.action_accuracy })),
-        ...(r.code_only ? { observations_alone_won: r.code_only.wins + ' of ' + r.code_only.total } : {})
-      })),
+      notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, positions: n.positions, written_round: n.written, updated_round: n.updated })),
+      games: this.games.map((g) => ({ game: g.id, round: g.round, moves_chosen_by: g.how, result: g.result, turns: g.turns })),
+      rounds: this.rounds.map((r) => ({ round: r.round, formula: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes, games: r.games })),
       ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {})
     };
   }
 
-  /** Experience curated for the explorer. `keyframes` of a game: its start, its critical moment and its end. */
-  memory(options: { wins?: number; critical?: number; bestLosses?: number } = {}): Record<string, unknown> {
-    const eps = this.episodes;
-    const full = (e: EpisodeRecord) => ({ case: e.id, how: e.how, result: e.result, turns: e.frames.length - 1, frames: e.frames });
-    const keyframes = (e: EpisodeRecord) => {
-      const idx = [...new Set([0, ...(e.critical !== null && e.critical !== undefined ? [e.critical, e.critical + 1] : []), e.frames.length - 1])]
-        .filter((i) => i >= 0 && i < e.frames.length).sort((a, b) => a - b);
-      return { case: e.id, how: e.how, result: e.result, turns: e.frames.length - 1,
-        ...(e.heldWinTurns !== null && e.heldWinTurns !== undefined ? { turns_still_winning: e.heldWinTurns } : {}),
-        key_frames: idx.map((i) => ({ turn: i, frame: e.frames[i] })) };
-    };
-    const shown = new Set<string>();
-    const wins = eps.filter((e) => e.result === 'won').slice(-(options.wins ?? 3));
-    wins.forEach((e) => shown.add(e.id));
-    const critical = eps.filter((e) => e.ownPlay && e.result !== 'won' && e.critical !== null && e.critical !== undefined)
-      .slice(-(options.critical ?? 6)).map((e) => ({
-        case: e.id, turn: e.critical, before_your_move: e.frames[e.critical!], after_your_move: e.frames[e.critical! + 1],
-        note: 'before this move your position could still be won; after it, it could not',
-        ...(e.criticalScores ? { your_formula_scored: {
-          the_position_you_moved_to: e.criticalScores.chosen,
-          positions_that_would_have_kept_the_win_on_average: e.criticalScores.keeping,
-          positions_that_lose_it_on_average: e.criticalScores.losing,
-          share_of_comparisons_ordered_right: e.criticalScores.ordered,
-          note: 'direct scores of your formula, without looking ahead; the search that chose looks ahead'
-        } } : {})
-      }));
-    const bestLosses = eps.filter((e) => e.ownPlay && e.result !== 'won' && !shown.has(e.id) && (e.heldWinTurns ?? 0) > 0)
-      .sort((a, b) => (b.heldWinTurns ?? 0) - (a.heldWinTurns ?? 0)).slice(0, options.bestLosses ?? 1);
-    bestLosses.forEach((e) => shown.add(e.id));
-    const latestRound = eps.length ? eps[eps.length - 1].round : 0;
-    const latest = eps.filter((e) => e.round === latestRound && !shown.has(e.id));
-    /* Before the first trial there is nothing to curate: the exploration games are shown whole. */
-    const firstLook = !eps.some((e) => e.ownPlay);
-    return {
-      wins: wins.map(full),
-      critical_moments: critical,
-      best_losses: bestLosses.map(full),
-      /* Always one latest game WHOLE: key frames alone hide how things move, and that is what the rules are read from. */
-      latest_games: firstLook ? latest.map(full) : latest.map((e, i) => (i === latest.length - 1 ? full(e) : keyframes(e))),
-      total_games_played: eps.length
-    };
-  }
-
   toJSON(): Record<string, unknown> {
-    return { beliefs: [...this.beliefs.values()], rounds: this.rounds,
-      episodes: this.episodes.map((e) => ({ id: e.id, round: e.round, how: e.how, result: e.result, turns: e.frames.length - 1, critical: e.critical ?? null, held: e.heldWinTurns ?? null })) };
+    return { beliefs: [...this.beliefs.values()], notes: [...this.notes.values()], games: this.games, rounds: this.rounds };
   }
 }

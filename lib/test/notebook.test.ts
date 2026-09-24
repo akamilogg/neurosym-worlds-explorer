@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFormula } from '../src/core/formula.ts';
-import { Notebook, type EpisodeRecord } from '../src/learn/notebook.ts';
+import { Notebook } from '../src/learn/notebook.ts';
 import { explorerPayload, parseExplorerProposal } from '../src/learn/explorer.ts';
 
 /* The lab notebook: what the explorer carries from one hypothesis to the next. Its beliefs with their history,
@@ -36,41 +36,33 @@ test('beliefs: every one held needs a stance each round; the history keeps why i
   assert.match(brief.beliefs_held[0].history[1], /round 2: confirm - final positions \[probe edge_final\]/);
 });
 
-test('rounds: the lineage says what changed and how it went, and the lessons travel back verbatim', () => {
+test('rounds: the lineage says what changed and how its games went, and the lessons travel back verbatim', () => {
   const nb = new Notebook();
   nb.recordRound(1, formula({ a: 'A?' }), ['edges matter'], 'test the edge');
-  nb.recordTrial(1, { level: 2, wins: 0, total: 4, results: ['loss', 'loss', 'loss', 'loss'], held_win_turns: [1, 2, 0, 1], action_accuracy: 0.2 });
-  nb.recordCodeOnly(1, 3, 4);
+  nb.recordGames(1, ['lost', 'won', 'lost', 'draw']);
   nb.recordRound(2, formula({ a: 'A?', b: 'B?' }), ['blocking helps'], 'test blocking');
   const brief = nb.brief() as any;
   assert.equal(brief.rounds.length, 2);
-  assert.equal(brief.rounds[0].observations_alone_won, '3 of 4');
-  assert.deepEqual(brief.rounds[0].games[0].turns_still_winning, [1, 2, 0, 1]);
+  assert.deepEqual(brief.rounds[0].games, [{ results: ['lost', 'won', 'lost', 'draw'], wins: 1, of: 4 }]);
   assert.deepEqual(brief.rounds[1].changes, { added: ['rule b'], removed: [], reweighted: ['a'] });
   assert.deepEqual(brief.your_last_lessons, ['blocking helps']);
   assert.equal(brief.your_planned_next_experiment, 'test blocking');
-  assert.ok(!('picture' in brief.rounds[0].formula.observations), 'the sense is the host\'s, not part of the explorer\'s lineage');
+  assert.ok(!('picture' in brief.rounds[0].formula.observations), 'the sense is the host own, not part of the explorer lineage');
 });
 
-test('memory is curated: every win, the critical moments, the best loss - not a sliding window', () => {
+test('notes belong to the explorer: it writes, rewrites and forgets them; positions must exist in its own games', () => {
   const nb = new Notebook();
-  const game = (id: string, round: number, result: EpisodeRecord['result'], critical: number | null, held: number | null, ownPlay = true): EpisodeRecord =>
-    ({ id, round, how: 'h', result, frames: ['f0', 'f1', 'f2', 'f3', 'f4'], critical, heldWinTurns: held, ownPlay });
-  nb.addEpisodes([game('e0', 0, 'lost', null, null, false), game('e1', 0, 'lost', null, null, false)]);
-  const first = nb.memory() as any;
-  assert.equal(first.latest_games.length, 2);
-  assert.ok(first.latest_games[0].frames, 'before any trial the exploration games are shown whole');
-  nb.addEpisodes([game('r1g0', 1, 'won', null, 2), game('r1g1', 1, 'lost', 2, 1), game('r1g2', 1, 'lost', 1, 0)]);
-  for (let r = 2; r <= 9; r++) nb.addEpisodes([game('r' + r + 'g0', r, 'lost', 3, 1)]);
-  nb.addEpisodes([game('r10g0', 10, 'lost', 3, 2), game('r10g1', 10, 'lost', null, 0)]);
-  const m = nb.memory() as any;
-  assert.deepEqual(m.wins.map((w: any) => w.case), ['r1g0'], 'the win from round 1 is still there at round 10');
-  assert.equal(m.critical_moments.length, 6);
-  assert.deepEqual(m.critical_moments[0], { case: 'r5g0', turn: 3, before_your_move: 'f3', after_your_move: 'f4',
-    note: 'before this move your position could still be won; after it, it could not' });
-  assert.deepEqual(m.best_losses.map((b: any) => b.case), ['r10g0']);
-  assert.deepEqual(m.latest_games.map((g: any) => g.case), ['r10g1']);
-  assert.ok(m.latest_games[0].frames, 'the last game always travels whole');
+  nb.addGames([{ id: 'g1', round: 0, how: 'exploration: at random', result: 'lost', turns: 9 }]);
+  const exists = (ref: string) => /^g1@[0-9]$/.test(ref);
+  assert.deepEqual(nb.applyNotes(1, [{ do: 'write', id: 'edge', text: 'it ran to the edge', positions: ['g1@8', 'g7@1'] }], exists), ['note "edge": no position "g7@1"']);
+  nb.applyNotes(2, [{ do: 'write', id: 'edge', text: 'it ran to the right edge', positions: ['g1@9'] }, { do: 'write', id: 'Bad', text: 'x' }], exists);
+  let brief = nb.brief() as any;
+  assert.deepEqual(brief.notes, [{ id: 'edge', text: 'it ran to the right edge', positions: ['g1@9'], written_round: 1, updated_round: 2 }]);
+  assert.deepEqual(brief.games, [{ game: 'g1', round: 0, moves_chosen_by: 'exploration: at random', result: 'lost', turns: 9 }]);
+  assert.deepEqual(nb.applyNotes(3, [{ do: 'forget', id: 'edge' }, { do: 'forget', id: 'ghost' }], exists), ['note "ghost" does not exist']);
+  brief = nb.brief() as any;
+  assert.deepEqual(brief.notes, []);
+  assert.ok(!('experience' in brief), 'nothing is curated for the explorer');
 });
 
 test('the explorer answers with stances, lessons and a next experiment; the payload carries the notebook', () => {
@@ -93,8 +85,7 @@ test('the explorer answers with stances, lessons and a next experiment; the payl
   const nb = new Notebook();
   nb.applyStances(2, parsed.proposal.beliefs);
   nb.recordRound(2, parsed.proposal.formula, parsed.proposal.lessons, parsed.proposal.nextExperiment);
-  const payload = explorerPayload({ round: 3, perceptDoc: 'doc', notebook: nb.brief(['edge']), experience: nb.memory(), formula: parsed.proposal.formula, formulaRound: 2 }) as any;
+  const payload = explorerPayload({ round: 3, perceptDoc: 'doc', notebook: nb.brief(['edge']), formula: parsed.proposal.formula, formulaRound: 2 }) as any;
   assert.deepEqual(payload.notebook.you_took_no_stance_on, ['edge']);
   assert.equal(payload.your_best_formula.from_round, 2);
-  assert.deepEqual(Object.keys(payload.experience), ['wins', 'critical_moments', 'best_losses', 'latest_games', 'total_games_played']);
 });

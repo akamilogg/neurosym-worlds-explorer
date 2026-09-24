@@ -11,3 +11,4 @@ export * from './explorer.ts';
 export * from './episodes.ts';
 export * from './ablation.ts';
 export * from './notebook.ts';
+export * from './exploration.ts';

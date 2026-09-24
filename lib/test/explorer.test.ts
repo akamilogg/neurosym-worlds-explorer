@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Observer } from '../src/core/observer.ts';
 import { createPlanner } from '../src/core/truth.ts';
 import { replayOnEvidence } from '../src/learn/gates.ts';
-import { EXPLORER_SYSTEM, explorerPayload, parseExplorerProposal } from '../src/learn/explorer.ts';
+import { EXPLORER_SYSTEM, explorerPayload, parseExplorerProposal, parseExplorerTurn } from '../src/learn/explorer.ts';
 import { labelPositions, noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture, type GridState } from '../src/worlds/grid/index.ts';
 
@@ -56,15 +56,15 @@ test('a malformed answer is refused with every reason, never repaired', () => {
   assert.deepEqual(parseExplorerProposal('not json', { world: world.id, senses: SENSES }), { ok: false, errors: ['the answer was not a JSON object'] });
 });
 
-test('the explorer is told nothing about the world: the payload is pictures, results and its own words', async () => {
-  const planner = createPlanner(world, 'B', 2, { fallback: bFallback(spec) });
-  const rnd = mulberry32(1);
-  const ep = await playEpisode(world, (s, actor) => actor === 'B' ? planner.respond(s) : world.actions(s)[Math.floor(rnd() * world.actions(s).length)]);
+test('the explorer is told nothing about the world: the payload is its notebook, its own words and what it asked for', async () => {
   const parsed = parseExplorerProposal(JSON.stringify(answer), { world: world.id, senses: SENSES });
   assert.ok(parsed.ok);
+  const { Notebook } = await import('../src/learn/notebook.ts');
+  const nb = new Notebook();
+  nb.addGames([{ id: 'g1', round: 0, how: 'exploration: your side moved at random', result: 'lost', turns: 12 }]);
   const payload = explorerPayload({
-    round: 2, perceptDoc: GRID_PERCEPT_DOC, formula: parsed.ok ? parsed.proposal.formula : null,
-    experience: [{ id: 'e0', how: 'exploration', result: 'lost', frames: ep.states.map((s) => sense.render(s)) }]
+    round: 2, perceptDoc: GRID_PERCEPT_DOC, formula: parsed.ok ? parsed.proposal.formula : null, notebook: nb.brief(),
+    investigation: [{ step: 1, results: [{ view: 'g1', frames: [{ turn: 0, picture: sense.render(world.initial()) }] }] }], stepsLeft: 2
   });
   const text = (JSON.stringify(payload) + EXPLORER_SYSTEM).toLowerCase();
   for (const word of [spec.winA, spec.winB, 'grid@1', world.id.toLowerCase(), 'legal', 'fox', 'hound', 'cat', 'mouse']) {
@@ -72,7 +72,9 @@ test('the explorer is told nothing about the world: the payload is pictures, res
   }
   const own = (payload as any).your_best_formula;
   assert.deepEqual(Object.keys(own.observations), ['mine'], 'the sense is the host\'s, not echoed as the explorer\'s code');
-  assert.equal((payload as any).experience[0].frames[0], sense.render(world.initial()));
+  assert.equal((payload as any).investigation[0].results[0].frames[0].picture, sense.render(world.initial()));
+  assert.equal((payload as any).steps_left, 2);
+  assert.ok(!('experience' in payload), 'nothing is curated for it: it asks');
 });
 
 test('episodes: a noisy opponent replays exactly per seed, and positions are labelled by the truth', async () => {
@@ -113,18 +115,28 @@ test('ablation: the same observations read linearly, no Judge - the sign is fitt
   assert.ok(early.answers[CODE_ONLY_RULE]);
 });
 
-test('what System 2 reads about choices never counts them, and the ceiling heuristic never travels', async () => {
-  const { Notebook } = await import('../src/learn/notebook.ts');
-  const nb = new Notebook();
-  nb.addEpisodes([{ id: 'g', round: 1, how: 'trial', result: 'lost', frames: ['a', 'b', 'c'], critical: 0, heldWinTurns: 0, ownPlay: true,
-    criticalScores: { chosen: 0.7, keeping: 0.4, losing: 0.6, ordered: 0.25 } }]);
+test('what System 2 reads never carries the operator measurements, nor counts choices', () => {
   const probe = { id: 'p', hypothesis: 'h', round: 1, status: 'supported' as const, errors: [], tested_by: 'observation' as const, positions: 'siblings' as const,
     samples_win: 23, samples_loss: 51, mean_when_win: 0.6, mean_when_loss: 0.4, separation: 0.2, auc: 0.8,
     tests: [{ by: 'observation' as const, positions: 'siblings' as const, sets: 12, samples_win: 23, samples_loss: 51, mean_when_win: 0.6, mean_when_loss: 0.4, auc: 0.8, margin: 0.2, status: 'supported' as const }] };
-  const payload = explorerPayload({ round: 2, perceptDoc: GRID_PERCEPT_DOC, notebook: nb.brief(), experience: nb.memory(), hypotheses: [probe] }) as any;
+  const payload = explorerPayload({ round: 2, perceptDoc: GRID_PERCEPT_DOC, hypotheses: [probe] }) as any;
   const text = JSON.stringify(payload);
   assert.deepEqual(payload.probes_reported[0].tests[0].samples, { positions_compared: 12 });
   assert.ok(!text.includes('23') && !text.includes('51'), 'the number of choices is never shown');
-  assert.equal(payload.experience.critical_moments[0].your_formula_scored.share_of_comparisons_ordered_right, 0.25);
-  assert.ok(!/informed|ceiling|tightness/i.test(text + EXPLORER_SYSTEM));
+  assert.ok(!/informed|ceiling|tightness|operator|still winning|critical|kept the win/i.test(text + EXPLORER_SYSTEM));
+});
+
+test('an answer is either an investigation or a proposal; notes ride on both', () => {
+  const inv = parseExplorerTurn(JSON.stringify({
+    investigate: [{ view: 'g1', from: 2, to: 90 }, { inspect: 'g2@4' }, { measure: { source: '(p) => 1', range: [0, 1] }, on: ['g1@0'] }, { guess: 'x' }],
+    notes: [{ do: 'write', id: 'n1', text: 't', positions: ['g1@0'] }, { do: 'shout', id: 'n2' }]
+  }), { world: world.id, senses: SENSES });
+  assert.equal(inv.kind, 'investigate');
+  if (inv.kind !== 'investigate') return;
+  assert.deepEqual(inv.requests[0], { view: 'g1', from: 2, to: 31 }, 'at most 30 frames per request');
+  assert.equal(inv.requests.length, 3);
+  assert.equal(inv.notes.length, 1);
+  assert.equal(inv.warnings.length, 2);
+  const prop = parseExplorerTurn(JSON.stringify({ ...answer, notes: [{ do: 'forget', id: 'n1' }] }), { world: world.id, senses: SENSES });
+  assert.ok(prop.kind === 'proposal' && prop.parse.ok && prop.notes[0].do === 'forget');
 });

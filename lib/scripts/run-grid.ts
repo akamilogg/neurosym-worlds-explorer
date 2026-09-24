@@ -14,11 +14,14 @@
      --levels a,b,c      the opponent's planner depths, the curriculum (default 2,4)
      --epsilon X         the opponent errs with this probability, seeded per game (default 0.15)
      --probe-positions N labelled positions a probe is measured on, at most (default 40)
+     --steps N           investigation answers System 2 may give per round before proposing (default 3)
      --no-ablation       skip the code-only ablation (same observations, no Judge; information only)
      --flat              CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted
      --out FILE          the journal (default runs/grid-s<seed>-<time>.json)
 
-   The journal records the hidden spec for the operator; nothing of it is sent to System 2 or to Jev. */
+   System 2 learns ONLY from what it perceives, what its code measures, what its own search explored and how its games
+   ended. The journal also keeps OPERATOR-ONLY measurements (the hidden spec, the ceiling of a heuristic that knows the
+   rules, the truth's view of each move, the code-only ablation): they are for us, and never reach System 2 or Jev. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { Observer } from '../src/core/observer.ts';
@@ -30,12 +33,13 @@ import { nodeVmRunner } from '../src/runtime/node-vm.ts';
 import { openAiChatClient } from '../src/learn/system2.ts';
 import { replayOnEvidence } from '../src/learn/gates.ts';
 import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loop.ts';
-import { HypothesisRegistry, actionAccuracy, runProbes, siblingSets, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
+import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
 import { ceilingOf, tightness } from '../src/worlds/grid/informed.ts';
-import { EXPLORER_SYSTEM, explorerPayload, parseExplorerProposal, type ExplorerProposal } from '../src/learn/explorer.ts';
-import { Notebook, type CriticalScores, type EpisodeRecord } from '../src/learn/notebook.ts';
+import { EXPLORER_SYSTEM, explorerPayload, parseExplorerTurn, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
+import { Notebook, type GameRecord } from '../src/learn/notebook.ts';
+import { recordTurn, surprises, type TurnRecord } from '../src/learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
-import { labelPositions, noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
+import { noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
   type GridMove, type GridState } from '../src/worlds/grid/index.ts';
 import type { Formula, MeasureDecl } from '../src/core/types.ts';
@@ -56,7 +60,8 @@ const cfg = {
   epsilon: Number(arg('epsilon', '0.15')),
   probePositions: Number(arg('probe-positions', '40')),
   flat: flag('flat'),
-  ablation: !flag('no-ablation')
+  ablation: !flag('no-ablation'),
+  steps: Number(arg('steps', '3'))
 };
 const env = process.env;
 if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
@@ -94,7 +99,6 @@ const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env
 
 let level = 0;
 let planner = createPlanner(world, 'B', cfg.levels[level], { fallback: bFallback(spec) });
-let truthMemo = new Map<string, { winner: string | null; plies: number; reason: string | null }>();
 
 /* --- The journal ------------------------------------------------------------------ */
 
@@ -112,29 +116,39 @@ const log = (type: string, data: Record<string, unknown> = {}): void => {
 };
 const say = (text: string): void => console.log('[' + Math.round((Date.now() - started.getTime()) / 1000) + 's] ' + text);
 
-/* --- Playing ---------------------------------------------------------------------- */
+/* --- The learner's own experience ---------------------------------------------------
+   Games are kept whole (states) with what the learner's search did on each of its turns. System 2 reaches them only
+   through its requests; the truth never labels anything it sees. */
 
-const resultOf = (winner: string | null): EpisodeRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
-const pool: GridState[] = [];
+interface StoredGame {
+  readonly id: string;
+  readonly round: number;
+  readonly how: string;
+  readonly result: GameRecord['result'];
+  readonly states: GridState[];
+  readonly turns: Map<number, TurnRecord<GridState>>;
+}
+const games = new Map<string, StoredGame>();
 const notebook = new Notebook();
-/* Won positions the learner's own play rarely reaches: games where A picks at random AMONG the moves the truth says
-   keep the win. They are measured by probes only - never shown to System 2 (that would be a demonstration). */
-const bank: GridState[] = [];
+let gameCounter = 0;
+const resultOf = (winner: string | null): GameRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
+const valueOfResult = (r: GameRecord['result']): number => (r === 'won' ? 1 : r === 'lost' ? 0 : 0.5);
 
-async function fillBank(): Promise<void> {
-  for (let g = 0; g < 10; g++) {
-    const rnd = mulberry32(cfg.seed * 4001 + g + level * 97);
-    /* A noisier opponent than in the trials: the bank needs varied endings (a forced line tends to end in one place). */
-    const opponent = noisyOpponent(world, (s) => planner.respond(s), Math.max(cfg.epsilon, 0.5), rnd);
-    const ep = await playEpisode(world, (s, actor) => {
-      if (actor === 'B') return opponent(s);
-      const moves = winningMoves(world, s, 'A', (x) => planner.respond(x), 40000);
-      const pickFrom = moves && moves.length ? moves : world.actions(s);
-      return pickFrom[Math.floor(rnd() * pickFrom.length)];
-    });
-    bank.push(...ep.states);
-  }
-  log('probe_bank', { level: cfg.levels[level], positions: bank.length });
+function store(round: number, how: string, states: GridState[], winner: string | null, turns = new Map<number, TurnRecord<GridState>>()): StoredGame {
+  const g: StoredGame = { id: 'g' + (++gameCounter), round, how, result: resultOf(winner), states, turns };
+  games.set(g.id, g);
+  notebook.addGames([{ id: g.id, round, how, result: g.result, turns: states.length - 1 }]);
+  return g;
+}
+
+/** "g3@4" is the position at turn 4 of game g3; "g3@4/2" is the third position the search considered on that turn. */
+function resolve(ref: string): GridState | null {
+  const m = /^(g\d+)@(\d+)(?:\/(\d+))?$/.exec(ref.trim());
+  const g = m ? games.get(m[1]) : undefined;
+  if (!m || !g) return null;
+  const turn = Number(m[2]);
+  if (m[3] === undefined) return g.states[turn] ?? null;
+  return g.turns.get(turn)?.choices[Number(m[3])]?.state ?? null;
 }
 
 async function explore(): Promise<void> {
@@ -146,89 +160,60 @@ async function explore(): Promise<void> {
       const moves = world.actions(s);
       return moves[Math.floor(rnd() * moves.length)];
     });
-    pool.push(...ep.states);
-    notebook.addEpisodes([{ id: 'explore-' + g, round: 0, how: 'exploration: your side moved at random', result: resultOf(ep.outcome.winner),
-      frames: ep.states.map((s) => sense.render(s)), critical: null, heldWinTurns: null, ownPlay: false }]);
-    log('exploration_game', { game: g, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1 });
+    const stored = store(0, 'exploration: your side moved at random', ep.states, ep.outcome.winner);
+    log('exploration_game', { game: stored.id, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1 });
   }
-}
-
-/* How the formula ITSELF scored the choices at the moment the win was thrown away (direct values, no look-ahead).
-   Only averages leave this function: never which positions kept the win, nor how many there were. */
-async function scoreChoices(using: Evaluator<GridState>, formula: Formula, s: GridState, winners: GridMove[], chosen: GridMove): Promise<CriticalScores | null> {
-  const keepKeys = new Set(winners.map((m) => world.actionKey!(m)));
-  const keep: number[] = [], lose: number[] = [];
-  let chosenValue = NaN;
-  for (const m of world.actions(s)) {
-    let v: number;
-    try { v = (await using.eval(formula, world.step(s, m))).value; } catch { return null; }
-    (keepKeys.has(world.actionKey!(m)) ? keep : lose).push(v);
-    if (world.actionKey!(m) === world.actionKey!(chosen)) chosenValue = v;
-  }
-  if (!keep.length || !lose.length) return null;
-  let ordered = 0;
-  for (const k of keep) for (const l of lose) ordered += k > l ? 1 : k === l ? 0.5 : 0;
-  const avg = (xs: number[]) => Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 1000) / 1000;
-  return { chosen: Math.round(chosenValue * 1000) / 1000, keeping: avg(keep), losing: avg(lose), ordered: Math.round((ordered / (keep.length * lose.length)) * 100) / 100 };
 }
 
 interface Measured extends AttemptScore<Formula> {
-  readonly episodes: EpisodeRecord[];
+  readonly stored: StoredGame[];
+  /* Operator-only measurements (the truth watching): never shown to System 2. */
   readonly samples: ActionSample[];
   readonly held: (number | null)[];
+  readonly critical: (number | null)[];
 }
 
-/** One trial: the formula plays `cfg.games` games. The truth watches every one of A's turns: was the position won,
-    and did the chosen move keep it? The first move that threw a win away is the game's critical moment. */
+/** One trial: the formula plays `cfg.games` games. Its search's view of each of its turns is recorded for the learner;
+    the truth watches too, for the operator only. */
 async function trial(formula: Formula, attempt: number, using: Evaluator<GridState> = evaluator, tag = '', record = true): Promise<Measured> {
-  const games: TrialGame[] = [];
-  const episodes: EpisodeRecord[] = [];
+  const results: TrialGame[] = [];
+  const stored: StoredGame[] = [];
   const samples: ActionSample[] = [];
   const held: (number | null)[] = [];
+  const criticals: (number | null)[] = [];
   const round = roundOf.get(formula) ?? currentRound;
   for (let g = 0; g < cfg.games; g++) {
     const rnd = mulberry32(cfg.seed * 7717 + attempt * 101 + g * 7 + level * 1_000_003);
     const opponent = noisyOpponent(world, (s) => planner.respond(s), cfg.epsilon, rnd);
     const t0 = Date.now();
-    let stillWinning = 0;
-    let critical: number | null = null;
-    let criticalScores: CriticalScores | null = null;
-    let knownThroughout = true;
+    const turns = new Map<number, TurnRecord<GridState>>();
+    let stillWinning = 0, critical: number | null = null, knownThroughout = true;
     const ep = await playEpisode(world, async (s, actor) => {
       if (actor === 'B') return opponent(s);
       const r = await searchBestMove<GridState, GridMove>(using, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
       const chosen = r.best.bestMove ?? world.actions(s)[0];
+      if (record) turns.set(s.ply, await recordTurn(using, world, s, chosen, { formula, depth: cfg.depth, maximizer: 'A', turn: s.ply }));
+      /* OPERATOR ONLY: the truth's view of the same turn. */
       const winners = winningMoves(world, s, 'A', (x) => planner.respond(x), 40000);
       if (!winners) { if (critical === null) knownThroughout = false; return chosen; }
       const keeps = winners.some((m) => world.actionKey!(m) === world.actionKey!(chosen));
       samples.push({ winning: keeps, available: world.actions(s).length, keeping: winners.length });
-      if (critical === null && winners.length) {
-        if (keeps) stillWinning++;
-        else {
-          critical = s.ply;
-          if (record) criticalScores = await scoreChoices(using, formula, s, winners, chosen);
-        }
-      }
+      if (critical === null && winners.length) { if (keeps) stillWinning++; else critical = s.ply; }
       return chosen;
     });
-    const outcome = ep.outcome.winner === 'A' ? 'win' : ep.outcome.winner === 'B' ? 'loss' : 'draw';
-    games.push({ outcome, plies: ep.states.length - 1 });
-    const heldTurns = knownThroughout || critical !== null ? stillWinning : null;
-    held.push(heldTurns);
-    if (record) {
-      pool.push(...ep.states);
-      episodes.push({ id: 'r' + round + 'a' + attempt + 'g' + g, round, how: 'trial: your formula chose your moves (round ' + round + ')',
-        result: resultOf(ep.outcome.winner), frames: ep.states.map((s) => sense.render(s)), critical, criticalScores, heldWinTurns: heldTurns, ownPlay: true });
-    }
+    results.push({ outcome: ep.outcome.winner === 'A' ? 'win' : ep.outcome.winner === 'B' ? 'loss' : 'draw', plies: ep.states.length - 1 });
+    held.push(knownThroughout || critical !== null ? stillWinning : null);
+    criticals.push(critical);
+    if (record) stored.push(store(round, 'your formula of round ' + round, ep.states, ep.outcome.winner, turns));
     say(tag + 'attempt ' + attempt + ' game ' + g + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
-      ' turns, still winning for ' + (heldTurns ?? '?') + ' of your turns' + (critical !== null ? ' (thrown at turn ' + critical + ')' : '') +
+      ' turns [operator: still winning for ' + (held[held.length - 1] ?? '?') + ' turns' + (critical !== null ? ', thrown at ' + critical : '') + ']' +
       ' (' + Math.round((Date.now() - t0) / 1000) + ' s' + (record ? ', Jev calls ' + judge.stats.calls : '') + ')');
   }
-  const wins = games.filter((g) => g.outcome === 'win').length;
-  return { formula, wins, total: games.length, perfect: wins === games.length, games, episodes, samples, held };
+  const wins = results.filter((g) => g.outcome === 'win').length;
+  return { formula, wins, total: results.length, perfect: wins === results.length, games: results, stored, samples, held, critical: criticals };
 }
 
-/* Information, not a verdict: the same observations read linearly, no Judge, the same games. Never shown to System 2. */
+/* OPERATOR ONLY: the same observations read linearly, no Judge, the same games. Never shown to System 2. */
 async function ablate(formula: Formula, attempt: number, score: Measured): Promise<void> {
   const fit = fitCodeOnly(observer, formula, (await probeSet()).filter((p) => !p.final));
   const plain = new Evaluator<GridState>(observer, codeOnlyJudge(fit), { maximizer: 'A' });
@@ -236,13 +221,12 @@ async function ablate(formula: Formula, attempt: number, score: Measured): Promi
   const carrier = ablated.wins > score.wins ? 'the observations alone won MORE than the formula (' + ablated.wins + ' vs ' + score.wins + ')'
     : ablated.wins === score.wins ? (score.wins ? 'the observations carry it' : 'neither wins')
     : 'the rules of the Judge add ' + (score.wins - ablated.wins) + ' win(s)';
-  notebook.recordCodeOnly(roundOf.get(formula) ?? currentRound, ablated.wins, ablated.total);
-  log('ablation_code_only', { attempt, level: cfg.levels[level], fit, formula_wins: score.wins, code_only_wins: ablated.wins, total: score.total,
+  log('operator_ablation_code_only', { attempt, level: cfg.levels[level], fit, formula_wins: score.wins, code_only_wins: ablated.wins, total: score.total,
     formula_held: score.held, code_only_held: ablated.held, code_only_action_accuracy: actionAccuracy(ablated.samples), reading: carrier });
-  say('  ablation: formula ' + score.wins + '/' + score.total + ', observations alone ' + ablated.wins + '/' + ablated.total + ' -> ' + carrier);
+  say('  [operator] ablation: formula ' + score.wins + '/' + score.total + ', observations alone ' + ablated.wins + '/' + ablated.total + ' -> ' + carrier);
 }
 
-/* --- Proposing and experimenting ---------------------------------------------------- */
+/* --- Probes: labelled by how the learner's OWN games ended -------------------------------- */
 
 const registry = new HypothesisRegistry();
 let currentRound = 0;
@@ -251,69 +235,132 @@ let lastScore: Measured | null = null;
 let unaddressed: string[] = [];
 
 async function probeSet(): Promise<LabelledPosition<GridState>[]> {
-  if (!bank.length) await fillBank();
-  const labelled = labelPositions(world, [...bank, ...pool], 'A', (s) => planner.respond(s), { budget: 40000, memo: truthMemo, includeFinal: true });
-  /* Balanced and bounded: as many won as lost positions when it can be; finished positions are a separate, smaller set. */
+  const inPlay: LabelledPosition<GridState>[] = [], finals: LabelledPosition<GridState>[] = [];
+  const seen = new Set<string>();
+  for (const g of games.values()) {
+    const label = g.result === 'won' ? 'win' : 'loss';
+    for (const s of g.states) {
+      const over = world.outcome(s).over;
+      if (!over && s.turn !== 'A') continue;
+      const key = (over ? 'F' : 'P') + world.key(s) + label;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      (over ? finals : inPlay).push({ state: s, label, ...(over ? { final: true } : {}) });
+    }
+  }
+  /* Balanced and bounded: as many positions from won as from lost games when it can be. */
   const take = <T>(xs: T[], n: number) => { const step = Math.max(1, xs.length / n); return Array.from({ length: Math.min(n, xs.length) }, (_, i) => xs[Math.floor(i * step)]); };
   const half = Math.floor(cfg.probePositions / 2);
-  const pick = (final: boolean, n: number) => [
-    ...take(labelled.filter((p) => !!p.final === final && p.label === 'win'), n),
-    ...take(labelled.filter((p) => !!p.final === final && p.label === 'loss'), n)
-  ];
-  return [...pick(false, half), ...pick(true, Math.max(6, Math.floor(half / 2)))];
+  const pick = (xs: LabelledPosition<GridState>[], n: number) => [...take(xs.filter((p) => p.label === 'win'), n), ...take(xs.filter((p) => p.label === 'loss'), n)];
+  return [...pick(inPlay, half), ...pick(finals, Math.max(6, Math.floor(half / 2)))];
 }
 
 async function experiment(probes: Probe[], base: Formula): Promise<void> {
   if (!probes.length) return;
   const positions = await probeSet();
-  /* Choices from won positions of every origin: the bank, the learner's games, exploration. */
-  const siblings = siblingSets(world, [...bank, ...pool].filter((_, i, all) => i % Math.max(1, Math.floor(all.length / 120)) === 0), 'A', (s) => planner.respond(s), { max: 16 });
-  const results = await runProbes(probes, positions, { observer, judge, base, maximizer: 'A', siblings }, { round: currentRound });
+  const results = await runProbes(probes, positions, { observer, judge, base, maximizer: 'A' }, { round: currentRound });
   registry.record(results);
   notebook.recordProbes(currentRound, results);
   const count = (final: boolean, label: string) => positions.filter((p) => !!p.final === final && p.label === label).length;
-  log('probes', { round: currentRound, sibling_sets: siblings.length, positions: { in_play: { win: count(false, 'win'), loss: count(false, 'loss') }, final: { win: count(true, 'win'), loss: count(true, 'loss') } }, results });
+  log('probes', { round: currentRound, positions: { in_play: { win: count(false, 'win'), loss: count(false, 'loss') }, final: { win: count(true, 'win'), loss: count(true, 'loss') } }, results });
   for (const r of results) {
     say('  probe ' + r.id + ': ' + r.status + ' - ' + r.hypothesis);
     for (const t of r.tests) say('      ' + t.by + ' on ' + t.positions + ': ' + t.status + ' (auc ' + t.auc + ', ' + t.samples_win + '/' + t.samples_loss + ')');
   }
 }
 
+/* --- Investigation: System 2 queries its own experience ------------------------------ */
+
+const picture = (s: GridState): string => sense.render(s);
+
+function runRequest(req: ExplorerRequest): unknown {
+  if ('view' in req) {
+    const g = games.get(req.view);
+    if (!g) return { view: req.view, error: 'no such game' };
+    const frames = g.states.map((s, turn) => ({ turn, picture: picture(s) })).slice(Math.max(0, req.from), Math.max(0, req.to) + 1);
+    return { view: g.id, result: g.result, turns: g.states.length - 1, frames };
+  }
+  if ('inspect' in req) {
+    const m = /^(g\d+)@(\d+)$/.exec(req.inspect.trim());
+    const g = m ? games.get(m[1]) : undefined;
+    if (!m || !g) return { inspect: req.inspect, error: 'use "<game>@<turn>" with a game from your notebook' };
+    const t = g.turns.get(Number(m[2]));
+    if (!t) return { inspect: req.inspect, error: g.turns.size ? 'your search did not choose on that turn (it is not one of your turns); your turns here: ' + [...g.turns.keys()].join(', ') : 'in this game your side moved at random: nothing was searched' };
+    return {
+      inspect: req.inspect, position: picture(t.state), your_search_value: t.value,
+      considered: t.choices.map((c, k) => ({ name: req.inspect + '/' + k, picture: picture(c.state), chosen: c.chosen,
+        value_looking_ahead: c.lookahead, value_directly: c.direct,
+        finished_games_your_search_ran_into: { you_won: c.endingsWon, the_other_side_won: c.endingsLost } }))
+    };
+  }
+  const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, range: req.measure.range };
+  return {
+    measure: req.measure.source, values: req.on.map((ref) => {
+      const s = resolve(ref);
+      if (!s) return { position: ref, error: 'no such position' };
+      const o = observer.observe(s, { ...SENSES, m: decl });
+      const err = o.errors.find((e) => e.id === 'm');
+      return err ? { position: ref, error: err.error } : { position: ref, value: o.values.m };
+    })
+  };
+}
+
+function latestSurprises(): unknown {
+  const latest = [...games.values()].filter((g) => g.turns.size).slice(-cfg.games);
+  return latest.map((g) => ({ game: g.id, result: g.result, where_your_search_was_most_wrong: surprises([...g.turns.values()], valueOfResult(g.result)) }));
+}
+
 async function propose(from: Formula | null, directive: string | null = null): Promise<Formula | null> {
   currentRound++;
   const round = currentRound;
   let refused: string[] = [];
-  for (let tryNo = 0; tryNo < 3; tryNo++) {
+  const investigation: unknown[] = [];
+  let steps = 0, refusals = 0;
+  while (refusals < 3 && steps <= cfg.steps + 3) {
+    const stepsLeft = Math.max(0, cfg.steps - steps);
     const payload = explorerPayload({
-      round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), experience: notebook.memory(),
+      round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(),
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-      lastScore: lastScore ? { opponent_level: cfg.levels[level], wins: lastScore.wins, of: lastScore.total, results: lastScore.games.map((g) => g.outcome),
-        turns_still_winning: lastScore.held } : null,
-      hypotheses: registry.current(), actionAccuracy: lastScore ? actionAccuracy(lastScore.samples) : null, refused, directive
+      hypotheses: registry.current(), investigation, stepsLeft, refused, directive
     });
-    say('round ' + round + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
+    say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
+    steps++;
     let content = '';
     try {
       content = (await llm.complete({ system: EXPLORER_SYSTEM, user: payload })).content;
     } catch (error) {
-      log('proposal_failed', { round, try: tryNo, error: String((error as Error)?.message || error) });
+      refusals++;
+      log('proposal_failed', { round, error: String((error as Error)?.message || error) });
       continue;
     }
-    const parsed = parseExplorerProposal(content, { world: world.id, senses: SENSES, round });
+    const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round });
+    const noteWarnings = notebook.applyNotes(round, turn.notes, (ref) => resolve(ref) !== null);
+    if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
+    if (turn.kind === 'investigate') {
+      if (stepsLeft <= 0) { refused = ['no investigation steps left this round: answer with your proposal now']; refusals++; continue; }
+      const results = turn.requests.map((r) => runRequest(r));
+      investigation.push({ step: investigation.length + 1, requests: turn.requests, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
+      log('investigation', { round, requests: turn.requests, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
+      say('  investigates: ' + turn.requests.map((r) => 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect : 'measure on ' + r.on.length).join('; '));
+      refused = [];
+      continue;
+    }
+    const parsed = turn.parse;
     if (!parsed.ok) {
-      refused = parsed.errors;
-      log('proposal_refused', { round, try: tryNo, errors: parsed.errors, content });
+      refused = parsed.errors; refusals++;
+      log('proposal_refused', { round, errors: parsed.errors, content });
       say('  refused: ' + parsed.errors.slice(0, 3).join(' | '));
       continue;
     }
-    /* Executability over the positions seen so far: every observation computes, and repeats itself. */
-    const replay = replayOnEvidence(observer, parsed.proposal.formula.observations, pool.slice(-60).map((state) => ({ state })));
+    /* Executability over the positions of its own games: every observation computes, and repeats itself. */
+    const recent = [...games.values()].flatMap((g) => g.states).slice(-60);
+    const replay = replayOnEvidence(observer, parsed.proposal.formula.observations, recent.map((state) => ({ state })));
     const probeObs = Object.fromEntries(parsed.proposal.probes.filter((p) => p.observation).map((p) => ['probe_' + p.id, p.observation!]));
-    const probeReplay = replayOnEvidence(observer, { ...SENSES, ...probeObs }, pool.slice(-20).map((state) => ({ state })));
+    const probeReplay = replayOnEvidence(observer, { ...SENSES, ...probeObs }, recent.slice(-20).map((state) => ({ state })));
     const failures = [...replay.errors, ...probeReplay.errors].slice(0, 8).map((e) => (e.observation ?? '') + ': ' + e.error);
     if (failures.length) {
-      refused = ['an observation failed on positions you have seen: ' + failures.join(' | ')];
-      log('proposal_refused', { round, try: tryNo, errors: refused, content });
+      refused = ['an observation failed on positions of your games: ' + failures.join(' | ')]; refusals++;
+      log('proposal_refused', { round, errors: refused, content });
       say('  refused: ' + refused[0].slice(0, 200));
       continue;
     }
@@ -322,9 +369,9 @@ async function propose(from: Formula | null, directive: string | null = null): P
     unaddressed = stances.unaddressed;
     notebook.recordRound(round, proposal.formula, proposal.lessons, proposal.nextExperiment);
     roundOf.set(proposal.formula, round);
-    log('proposal', { round, try: tryNo, rationale: proposal.rationale, beliefs: proposal.beliefs, lessons: proposal.lessons,
-      next_experiment: proposal.nextExperiment, evidence_ref: proposal.evidenceRef, stance_warnings: stances.warnings, no_stance_on: stances.unaddressed,
-      formula: proposal.formula, probes: proposal.probes, warnings: proposal.warnings, variation: replay.variation });
+    log('proposal', { round, investigation_steps: investigation.length, rationale: proposal.rationale, beliefs: proposal.beliefs, notes: turn.notes,
+      lessons: proposal.lessons, next_experiment: proposal.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings,
+      no_stance_on: stances.unaddressed, formula: proposal.formula, probes: proposal.probes, warnings: proposal.warnings, variation: replay.variation });
     say('  proposal: ' + Object.keys(proposal.formula.observations).length + ' observations, ' + Object.keys(proposal.formula.rules).length +
       ' rules, ' + proposal.probes.length + ' probes; beliefs ' + proposal.beliefs.map((b) => b.id + ':' + b.stance).join(' ') +
       (stances.unaddressed.length ? '; NO STANCE on ' + stances.unaddressed.join(', ') : ''));
@@ -340,12 +387,12 @@ async function propose(from: Formula | null, directive: string | null = null): P
 say('seed ' + cfg.seed + ': ' + spec.width + 'x' + spec.height + ' ' + spec.shape + ', A ' + spec.A.count + ' vs B ' + spec.B.count +
   ', A wins by ' + spec.winA + ', B by ' + spec.winB + (cfg.flat ? '  [CONTROL: flat Judge]' : ''));
 log('start', { picture: sense.render(world.initial()) });
-/* The ceiling (operator only, never shown to System 2): can a heuristic that KNOWS the rules win this game at this depth? */
+/* OPERATOR ONLY: can a heuristic that KNOWS the rules win this game at this depth? Never shown to System 2. */
 {
   const ceiling = await ceilingOf(spec, { depth: cfg.depth, level: cfg.levels[0], epsilon: cfg.epsilon });
   journal.hidden_from_the_learner.ceiling = { informed_heuristic: ceiling, tightness: tightness(spec, cfg.levels[0]) };
-  say('ceiling (operator only): a heuristic that knows the rules wins ' + ceiling.wins + '/' + ceiling.total + ' at depth ' + cfg.depth);
-  if (ceiling.wins === 0) say('WARNING: not even an informed heuristic wins this game at this depth - pick a seed from calibrate-grid.ts');
+  say('[operator] ceiling: a heuristic that knows the rules wins ' + ceiling.wins + '/' + ceiling.total + ' at depth ' + cfg.depth);
+  if (ceiling.wins === 0) say('[operator] WARNING: not even an informed heuristic wins this game at this depth - pick a seed from calibrate-grid.ts');
 }
 await explore();
 const first = await propose(null);
@@ -358,12 +405,10 @@ const result = await runAttempts<Formula, Measured, never>(first, {
   measure: async (candidate, attempt) => {
     const score = await trial(candidate, attempt);
     lastScore = score;
-    notebook.addEpisodes(score.episodes);
-    const accuracy = actionAccuracy(score.samples);
-    notebook.recordTrial(roundOf.get(candidate) ?? currentRound, { level: cfg.levels[level], wins: score.wins, total: score.total,
-      results: score.games.map((g) => g.outcome), held_win_turns: score.held, action_accuracy: accuracy.rate });
-    log('trial', { attempt, round: roundOf.get(candidate) ?? currentRound, level: cfg.levels[level], wins: score.wins, total: score.total, games: score.games,
-      turns_still_winning: score.held, critical: score.episodes.map((e) => e.critical), action_accuracy: accuracy,
+    const round = roundOf.get(candidate) ?? currentRound;
+    notebook.recordGames(round, score.stored.map((g) => g.result));
+    log('trial', { attempt, round, level: cfg.levels[level], wins: score.wins, total: score.total, games: score.stored.map((g) => ({ id: g.id, result: g.result, turns: g.states.length - 1 })),
+      operator: { turns_still_winning: score.held, critical: score.critical, action_accuracy: actionAccuracy(score.samples) },
       jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
     if (cfg.ablation) await ablate(candidate, attempt, score);
     return score;
@@ -373,8 +418,6 @@ const result = await runAttempts<Formula, Measured, never>(first, {
     if (level >= cfg.levels.length - 1) return false;
     level++;
     planner = createPlanner(world, 'B', cfg.levels[level], { fallback: bFallback(spec) });
-    truthMemo = new Map();
-    bank.length = 0;
     evaluator.reset();
     log('escalate', { level: cfg.levels[level] });
     say('won every game: the opponent now plans ' + cfg.levels[level] + ' turns ahead');
