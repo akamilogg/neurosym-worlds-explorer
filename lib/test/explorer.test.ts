@@ -121,7 +121,11 @@ test('what System 2 reads never carries the operator measurements, nor counts ch
     tests: [{ by: 'observation' as const, positions: 'siblings' as const, sets: 12, samples_win: 23, samples_loss: 51, mean_when_win: 0.6, mean_when_loss: 0.4, auc: 0.8, margin: 0.2, status: 'supported' as const }] };
   const payload = explorerPayload({ round: 2, perceptDoc: GRID_PERCEPT_DOC, hypotheses: [probe] }) as any;
   const text = JSON.stringify(payload);
-  assert.deepEqual(payload.probes_reported[0].tests[0].samples, { positions_compared: 12 });
+  assert.deepEqual(payload.probes_reported[0].tests[0].positions, { compared: 12 });
+  /* Facts, no verdict: the explorer judges them against the direction of its own hypothesis. */
+  assert.ok(!/"status"|supported|inverted/.test(text), 'no verdict travels');
+  assert.equal(payload.probes_reported[0].tests[0].could_chance_explain_the_difference, 'no');
+  assert.equal(payload.probes_reported[0].tests[0].mean_in_won_games, 0.6);
   assert.ok(!text.includes('23') && !text.includes('51'), 'the number of choices is never shown');
   assert.ok(!/informed|ceiling|tightness|operator|still winning|critical|kept the win/i.test(text + EXPLORER_SYSTEM));
 });

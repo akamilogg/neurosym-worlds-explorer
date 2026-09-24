@@ -1,7 +1,7 @@
 import { parseJsonLoose } from '../core/net.ts';
 import { checkFormula, makeFormula, normalizeWeights, placeholdersOf } from '../core/formula.ts';
 import type { Formula, MeasureDecl, QuestionType, Rule } from '../core/types.ts';
-import type { Probe, ProbeResult } from './experiments.ts';
+import { describeTest, type Probe, type ProbeResult } from './experiments.ts';
 import { STANCES, type BeliefStance, type NoteOp, type Stance } from './notebook.ts';
 
 /* ============================================================================
@@ -45,9 +45,10 @@ export const EXPLORER_SYSTEM = [
   '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
   '`surprises` lists, for your latest games, the turns where your own search\'s value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.',
   '',
-  'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. Each test reports an AUC: the probability that a position from a game you won scores higher than one from a game you lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost); "supported" or "inverted" only when further from 0.5 than chance allows. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the labels come from whole games: early positions of a lost game may have been fine.',
+  'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: the mean value on positions from games you won and from games you lost; the AUC (the probability that a position from a won game scores higher than one from a lost game: 0.5 = no relation, 1 = always higher in won games, 0 = always higher in lost games); how many positions; and whether chance alone could produce a difference that large with that many positions. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the outcome belongs to the whole game: early positions of a lost game may have been fine.',
+  '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   (an investigation request) the value of that code on each position probes use, with how that game ended: the rows behind the facts, to inspect yourself',
   '',
-  '`scoreboard` shows how each of your formulas did. `your_best_formula` is the one that has won the most so far - not necessarily your latest. If your later changes did worse, consider going back to it and changing less at a time.',
+  '`scoreboard` shows how each of your formulas did; a formula\'s `fingerprint` is the same exactly when the formula is the same. `your_best_formula` is the one that has won the most so far - not necessarily your latest. Games have chance in them (the other side is not always the same, and new starting positions differ): how much a result would vary is something you can find out yourself.',
   '',
   'If the payload carries a `task`, it says what this consultation is for and what to answer instead of a proposal.',
   '',
@@ -104,8 +105,6 @@ function ownFormula(formula: Formula): Record<string, unknown> {
   return { observations, rules, weights: formula.weights };
 }
 
-const POSITION_LABEL = { siblings: 'choices from one position', in_play: 'positions in play', final: 'final positions' } as const;
-
 export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
   return {
     round: brief.round,
@@ -114,10 +113,10 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     ...(brief.surprises ? { surprises: brief.surprises } : {}),
     ...(brief.scoreboard ? { scoreboard: brief.scoreboard } : {}),
     ...(brief.formula ? { your_best_formula: { ...(brief.formulaRound ? { from_round: brief.formulaRound } : {}), ...ownFormula(brief.formula) } } : {}),
+    /* Facts only - no verdict: which direction confirms a hypothesis is for the explorer to say. */
     ...(brief.hypotheses && brief.hypotheses.length ? { probes_reported: brief.hypotheses.map((h) => ({
-      id: h.id, hypothesis: h.hypothesis, status: h.status, round: h.round,
-      tests: h.tests.map((t) => ({ tested: t.by, on: POSITION_LABEL[t.positions], status: t.status,
-        auc: t.auc, samples: t.positions === 'siblings' ? { positions_compared: t.sets ?? 0 } : { won: t.samples_win, lost: t.samples_loss } })),
+      id: h.id, hypothesis: h.hypothesis, round: h.round, ...(h.code ? { code: h.code } : {}),
+      tests: h.tests.map((t) => describeTest(t)),
       ...(h.errors.length ? { errors: h.errors } : {}) })) } : {}),
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
@@ -132,6 +131,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
 export type ExplorerRequest =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string }
+  | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'in_play' | 'final' }
   | { readonly try: string; readonly from: readonly [number, number]; readonly to: readonly [number, number] }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] }; readonly on: readonly string[] };
 
@@ -169,6 +169,11 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         const from = cell(q.from), to = cell(q.to);
         if (!from || !to) { warnings.push('request #' + i + ': try needs "from" and "to" as [row, col]'); continue; }
         requests.push({ try: q.try, from, to });
+      } else if (q.table && typeof q.table === 'object') {
+        const m = q.table as Record<string, unknown>;
+        const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
+        if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': table needs "source" and "range"'); continue; }
+        requests.push({ table: { source: m.source, range }, on: q.on === 'final' ? 'final' : 'in_play' });
       } else if (typeof q.inspect === 'string') {
         requests.push({ inspect: q.inspect });
       } else if (q.measure && typeof q.measure === 'object' && Array.isArray(q.on)) {
@@ -176,7 +181,7 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
         if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': measure needs "source" and "range"'); continue; }
         requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
-      } else warnings.push('request #' + i + ' ignored: use view, inspect, try or measure');
+      } else warnings.push('request #' + i + ' ignored: use view, inspect, try, measure or table');
     }
     if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push('only the first ' + (context.maxRequests ?? 8) + ' requests were run');
     return { kind: 'investigate', requests, notes, warnings };

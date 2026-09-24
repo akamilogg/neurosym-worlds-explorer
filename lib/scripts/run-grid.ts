@@ -266,24 +266,26 @@ const roundOf = new WeakMap<Formula, number>();
 let lastScore: Measured | null = null;
 let unaddressed: string[] = [];
 
-async function probeSet(): Promise<LabelledPosition<GridState>[]> {
-  const inPlay: LabelledPosition<GridState>[] = [], finals: LabelledPosition<GridState>[] = [];
+type Labelled = LabelledPosition<GridState> & { readonly ref: string };
+
+async function probeSet(): Promise<Labelled[]> {
+  const inPlay: Labelled[] = [], finals: Labelled[] = [];
   const seen = new Set<string>();
   for (const g of games.values()) {
     const label = g.result === 'won' ? 'win' : 'loss';
-    for (const s of g.states) {
+    for (const [turn, s] of g.states.entries()) {
       const over = world.outcome(s).over;
       if (!over && s.turn !== 'A') continue;
       const key = (over ? 'F' : 'P') + world.key(s) + label;
       if (seen.has(key)) continue;
       seen.add(key);
-      (over ? finals : inPlay).push({ state: s, label, ...(over ? { final: true } : {}) });
+      (over ? finals : inPlay).push({ state: s, label, ref: g.id + '@' + turn, ...(over ? { final: true } : {}) });
     }
   }
   /* Balanced and bounded: as many positions from won as from lost games when it can be. */
   const take = <T>(xs: T[], n: number) => { const step = Math.max(1, xs.length / n); return Array.from({ length: Math.min(n, xs.length) }, (_, i) => xs[Math.floor(i * step)]); };
   const half = Math.floor(cfg.probePositions / 2);
-  const pick = (xs: LabelledPosition<GridState>[], n: number) => [...take(xs.filter((p) => p.label === 'win'), n), ...take(xs.filter((p) => p.label === 'loss'), n)];
+  const pick = (xs: Labelled[], n: number) => [...take(xs.filter((p) => p.label === 'win'), n), ...take(xs.filter((p) => p.label === 'loss'), n)];
   return [...pick(inPlay, half), ...pick(finals, Math.max(6, Math.floor(half / 2)))];
 }
 
@@ -305,7 +307,7 @@ async function experiment(probes: Probe[], base: Formula): Promise<void> {
 
 const picture = (s: GridState): string => sense.render(s);
 
-function runRequest(req: ExplorerRequest): unknown {
+async function runRequest(req: ExplorerRequest): Promise<unknown> {
   if ('view' in req) {
     const g = games.get(req.view);
     if (!g) return { view: req.view, error: 'no such game' };
@@ -328,6 +330,16 @@ function runRequest(req: ExplorerRequest): unknown {
       /* Only with --reveal-choices: otherwise the learner finds out what was possible by trying. */
       ...(cfg.revealChoices ? { also_considered: t.choices.map((c, j) => ({ c, j })).filter(({ c }) => !c.chosen).map(({ c, j }) => describe(c, j)) } : {})
     };
+  }
+  if ('table' in req) {
+    /* The rows behind the probe facts: each position probes use, the code's value, and how that game ended. */
+    const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, range: req.table.range };
+    const rows = (await probeSet()).filter((p) => !!p.final === (req.on === 'final')).map((p) => {
+      const o = observer.observe(p.state, { ...SENSES, m: decl });
+      const err = o.errors.find((e) => e.id === 'm');
+      return { position: p.ref, game_result: p.label === 'win' ? 'won' : 'not won', ...(err ? { error: err.error } : { value: o.values.m }) };
+    });
+    return { table: req.table.source, on: req.on, rows };
   }
   if ('try' in req) {
     const s = resolve(req.try);
@@ -358,7 +370,7 @@ function runRequest(req: ExplorerRequest): unknown {
 
 /** How each of its formulas did (facts of its own games), with the best and the latest named. */
 function scoreboard(): unknown {
-  const rows = notebook.rounds.filter((r) => r.games.length).map((r) => ({ round: r.round,
+  const rows = notebook.rounds.filter((r) => r.games.length).map((r) => ({ round: r.round, fingerprint: r.fingerprint,
     wins: r.games.reduce((a, g) => a + g.wins, 0), of: r.games.reduce((a, g) => a + g.of, 0) }));
   if (!rows.length) return null;
   const best = rows.reduce((a, b) => (b.wins / b.of > a.wins / a.of ? b : a));
@@ -402,12 +414,13 @@ async function propose(from: Formula | null, directive: string | null = null, mo
     if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
     if (turn.kind === 'investigate') {
       if (stepsLeft <= 0) { refused = ['no investigation steps left this round: answer with your proposal now']; refusals++; continue; }
-      const results = turn.requests.map((r) => runRequest(r));
+      const results: unknown[] = [];
+      for (const r of turn.requests) results.push(await runRequest(r));
       investigation.push({ step: investigation.length + 1, requests: turn.requests, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
       log('investigation', { round, requests: turn.requests, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
       say('  investigates: ' + turn.requests.map((r, i) => 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
         : 'try' in r ? 'try ' + r.try + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { allowed?: boolean }).allowed ? ' allowed' : ' refused')
-        : 'measure on ' + r.on.length).join('; '));
+        : 'table' in r ? 'table on ' + r.on : 'measure on ' + r.on.length).join('; '));
       refused = [];
       continue;
     }

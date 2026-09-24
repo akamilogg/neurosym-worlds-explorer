@@ -1,5 +1,6 @@
 import type { Formula } from '../core/types.ts';
-import type { ProbeResult } from './experiments.ts';
+import { describeTest, type ProbeResult } from './experiments.ts';
+import { formulaHash } from '../core/formula.ts';
 
 /* ============================================================================
  * The lab notebook: the explorer's own, carried from one round to the next.
@@ -61,7 +62,10 @@ export interface RoundRecord {
   readonly round: number;
   readonly formula: { observations: Record<string, string>; rules: Record<string, string>; weights: Record<string, number> };
   readonly changes: { added: string[]; removed: string[]; reweighted: string[] } | null;
-  probes: { id: string; hypothesis: string; status: string; auc: number | null; tests: string[] }[];
+  /** Its probes as facts (no verdict), with their code. */
+  probes: { id: string; hypothesis: string; code: unknown; tests: Record<string, unknown>[] }[];
+  /** Same exactly when the formula is the same. */
+  readonly fingerprint: string;
   readonly games: { results: string[]; wins: number; of: number }[];
   readonly lessons: string[];
   readonly next_experiment: string;
@@ -157,7 +161,7 @@ export class Notebook {
   recordRound(round: number, formula: Formula, lessons: readonly string[], nextExperiment: string): RoundRecord {
     const summary = summarize(formula);
     const previous = this.rounds.length ? this.rounds[this.rounds.length - 1].formula : null;
-    const record: RoundRecord = { round, formula: summary, changes: changesBetween(previous, summary), probes: [], games: [],
+    const record: RoundRecord = { round, formula: summary, fingerprint: formulaHash(formula).slice(0, 10), changes: changesBetween(previous, summary), probes: [], games: [],
       lessons: [...lessons], next_experiment: nextExperiment };
     this.rounds.push(record);
     return record;
@@ -169,8 +173,7 @@ export class Notebook {
     const r = this.round(round);
     if (!r) return;
     r.probes = results.map((p) => ({
-      id: p.id, hypothesis: clip(p.hypothesis, 200), status: p.status, auc: p.auc,
-      tests: p.tests.map((t) => t.by + ' on ' + t.positions.replace('_', ' ') + ' positions: ' + t.status + (t.auc === null ? '' : ' (auc ' + t.auc + ')'))
+      id: p.id, hypothesis: clip(p.hypothesis, 200), code: p.code ?? null, tests: p.tests.map((t) => describeTest(t))
     }));
   }
 
@@ -191,7 +194,7 @@ export class Notebook {
       ...(unaddressed.length ? { you_took_no_stance_on: [...unaddressed] } : {}),
       notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, positions: n.positions, written_round: n.written, updated_round: n.updated })),
       games: this.games.map((g) => ({ game: g.id, round: g.round, moves_chosen_by: g.how, result: g.result, turns: g.turns })),
-      rounds: this.rounds.map((r) => ({ round: r.round, formula: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes, games: r.games })),
+      rounds: this.rounds.map((r) => ({ round: r.round, fingerprint: r.fingerprint, formula: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes, games: r.games })),
       ...(this.reflections.length ? { reflections: this.reflections } : {}),
       ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {})
     };

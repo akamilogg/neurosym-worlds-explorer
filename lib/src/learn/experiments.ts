@@ -86,6 +86,8 @@ export interface ProbeResult {
   readonly status: ProbeStatus;
   readonly round: number;
   readonly errors: string[];
+  /** What was measured and asked, so the explorer can read (and reuse) its own probe later. */
+  readonly code?: { observation?: string; range?: readonly [number, number]; question?: string };
 }
 
 export interface LabelledPosition<S> {
@@ -275,11 +277,27 @@ export async function runProbes<S>(probes: readonly Probe[], positions: readonly
       samples_win: head?.samples_win ?? 0, samples_loss: head?.samples_loss ?? 0,
       mean_when_win: head?.mean_when_win ?? null, mean_when_loss: head?.mean_when_loss ?? null,
       separation: head?.separation ?? null, auc: head?.auc ?? null, status: head?.status ?? 'inconclusive',
-      round: options.round ?? 0, errors
+      round: options.round ?? 0, errors,
+      code: { ...(probe.observation ? { observation: (probe.observation.spec as { source?: string }).source, range: probe.observation.range } : {}),
+        ...(probe.question ? { question: probe.question.instructions } : {}) }
     });
   }
   return results;
 }
+
+/** A test as FACTS, with no verdict: the explorer compares them with its own hypothesis (whose direction only it
+    knows). "Chance could explain it" is the one statistical fact it cannot see by itself in a handful of numbers. */
+export function describeTest(t: ProbeTest): Record<string, unknown> {
+  const where = t.positions === 'siblings' ? 'choices from one position' : t.positions === 'final' ? 'final positions' : 'positions in play';
+  return {
+    tested: t.by, on: where,
+    mean_in_won_games: t.mean_when_win, mean_in_lost_games: t.mean_when_loss,
+    auc: t.auc,
+    positions: t.positions === 'siblings' ? { compared: t.sets ?? 0 } : { from_won_games: t.samples_win, from_lost_games: t.samples_loss },
+    could_chance_explain_the_difference: t.status === 'inconclusive' ? 'too few positions to say' : t.status === 'unsupported' ? 'yes' : 'no'
+  };
+}
+
 
 /** Every hypothesis ever tested, latest result per id. */
 export class HypothesisRegistry {
