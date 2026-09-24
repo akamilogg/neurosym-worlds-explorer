@@ -24,6 +24,8 @@ export interface GridSense {
   /** Which of the 8 symmetries of the board the picture uses (0 = as stored). */
   readonly orientation: number;
   render(state: GridState): string;
+  /** The board square drawn at (row, col) of the picture, or null when nothing of the board is drawn there. */
+  locate(row: number, col: number): readonly [number, number] | null;
 }
 
 /* The picture is drawn under one of the 8 symmetries of the rectangle (rotations and reflections), drawn per seed:
@@ -54,6 +56,15 @@ export function asciiSense(spec: GridSpec): GridSense {
     glyphA,
     glyphB,
     orientation,
+    locate(row, col) {
+      for (let y = 0; y < spec.height; y++) {
+        for (let x = 0; x < spec.width; x++) {
+          const [X, Y] = orient(orientation, x, y, spec.width, spec.height);
+          if (X === col && Y === row) return exists(spec, x, y) ? [x, y] as const : null;
+        }
+      }
+      return null;
+    },
     render(state) {
       const cells: string[][] = Array.from({ length: H }, () => Array.from({ length: W }, () => ' '));
       for (let y = 0; y < spec.height; y++) {

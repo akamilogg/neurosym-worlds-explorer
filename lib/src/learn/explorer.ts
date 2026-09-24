@@ -40,7 +40,8 @@ export const EXPLORER_SYSTEM = [
   '',
   'INVESTIGATE before proposing. Instead of a proposal you may answer {"investigate": [ ...requests ], "notes": [ ...optional ]}; the results come back in `investigation`, and `steps_left` says how many more such answers you have this round. Requests:',
   '  {"view": "<game>", "from": <turn>, "to": <turn>}   the pictures of a stretch of one of your games (at most 30 per request)',
-  '  {"inspect": "<game>@<turn>"}   what YOUR search did on that turn of yours: the positions it considered (each named "<game>@<turn>/<k>", with its picture), the value your formula gave each looking ahead and directly, which one it chose, and how many finished games your search ran into after each within its horizon, and who won them',
+  '  {"inspect": "<game>@<turn>"}   what YOUR search did on that turn of yours: the position it chose to move to (named "<game>@<turn>/<k>", with its picture), the value your formula gave it looking ahead and directly, and the finished games your search ran into after it within its horizon, and who won them',
+  '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests). It never says why a change was refused: that is for you to work out. Trying changes nothing in any game.',
   '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
   '`surprises` lists, for your latest games, the turns where your own search\'s value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.',
   '',
@@ -121,6 +122,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
 export type ExplorerRequest =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string }
+  | { readonly try: string; readonly from: readonly [number, number]; readonly to: readonly [number, number] }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] }; readonly on: readonly string[] };
 
 export type ExplorerTurn =
@@ -152,6 +154,11 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         const from = Number.isInteger(q.from) ? q.from as number : 0;
         const to = Number.isInteger(q.to) ? q.to as number : from + 29;
         requests.push({ view: q.view, from, to: Math.min(to, from + 29) });
+      } else if (typeof q.try === 'string') {
+        const cell = (v: unknown) => Array.isArray(v) && v.length === 2 && v.every((n) => Number.isInteger(n)) ? [v[0] as number, v[1] as number] as const : null;
+        const from = cell(q.from), to = cell(q.to);
+        if (!from || !to) { warnings.push('request #' + i + ': try needs "from" and "to" as [row, col]'); continue; }
+        requests.push({ try: q.try, from, to });
       } else if (typeof q.inspect === 'string') {
         requests.push({ inspect: q.inspect });
       } else if (q.measure && typeof q.measure === 'object' && Array.isArray(q.on)) {
@@ -159,7 +166,7 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
         if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': measure needs "source" and "range"'); continue; }
         requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
-      } else warnings.push('request #' + i + ' ignored: use view, inspect or measure');
+      } else warnings.push('request #' + i + ' ignored: use view, inspect, try or measure');
     }
     if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push('only the first ' + (context.maxRequests ?? 8) + ' requests were run');
     return { kind: 'investigate', requests, notes, warnings };

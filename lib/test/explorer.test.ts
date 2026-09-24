@@ -140,3 +140,29 @@ test('an answer is either an investigation or a proposal; notes ride on both', (
   const prop = parseExplorerTurn(JSON.stringify({ ...answer, notes: [{ do: 'forget', id: 'n1' }] }), { world: world.id, senses: SENSES });
   assert.ok(prop.kind === 'proposal' && prop.parse.ok && prop.notes[0].do === 'forget');
 });
+
+test('try: a change named in picture coordinates maps back to the board under every orientation', () => {
+  const seen = new Set<number>();
+  for (let seed = 1; seed <= 40 && seen.size < 8; seed++) {
+    let generated;
+    try { generated = generateSpec(seed); } catch { continue; }
+    const sp = generated.spec;
+    const sn = asciiSense(sp);
+    seen.add(sn.orientation);
+    const w = createGridWorld(sp);
+    const s0 = w.initial();
+    const p = readPicture(sn.render(s0));
+    /* Every piece drawn in the picture is located back on the board square where the state has it. */
+    p.cells.forEach((row, r) => row.forEach((c, col) => {
+      if (c !== sn.glyphA && c !== sn.glyphB) return;
+      const at = sn.locate(r, col);
+      assert.ok(at, 'seed ' + seed + ': a drawn piece must be on the board');
+      const list = c === sn.glyphA ? s0.a : s0.b;
+      assert.ok(list.some((q) => q[0] === at![0] && q[1] === at![1]), 'seed ' + seed + ' orientation ' + sn.orientation);
+    }));
+    assert.equal(sn.locate(-1, 0), null);
+  }
+  assert.equal(seen.size, 8, 'all eight orientations were exercised');
+  const t = parseExplorerTurn(JSON.stringify({ investigate: [{ try: 'g1@0', from: [0, 4], to: [1, 4] }, { try: 'g1@0', from: [0] }] }), { world: world.id, senses: SENSES });
+  assert.ok(t.kind === 'investigate' && t.requests.length === 1 && t.warnings.length === 1);
+});

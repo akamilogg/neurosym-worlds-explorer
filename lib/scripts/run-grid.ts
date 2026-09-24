@@ -15,6 +15,8 @@
      --epsilon X         the opponent errs with this probability, seeded per game (default 0.15)
      --probe-positions N labelled positions a probe is measured on, at most (default 40)
      --steps N           investigation answers System 2 may give per round before proposing (default 3)
+     --reveal-choices    inspect also shows every position the search considered (default: only the one it chose; the
+                         learner finds out what else was possible by TRYING changes against the environment)
      --no-ablation       skip the code-only ablation (same observations, no Judge; information only)
      --flat              CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted
      --out FILE          the journal (default runs/grid-s<seed>-<time>.json)
@@ -61,7 +63,8 @@ const cfg = {
   probePositions: Number(arg('probe-positions', '40')),
   flat: flag('flat'),
   ablation: !flag('no-ablation'),
-  steps: Number(arg('steps', '3'))
+  steps: Number(arg('steps', '3')),
+  revealChoices: flag('reveal-choices')
 };
 const env = process.env;
 if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
@@ -141,14 +144,21 @@ function store(round: number, how: string, states: GridState[], winner: string |
   return g;
 }
 
-/** "g3@4" is the position at turn 4 of game g3; "g3@4/2" is the third position the search considered on that turn. */
+/* Positions the learner reached by TRYING a change against the environment (never part of a game). */
+const tries: GridState[] = [];
+
+/** "g3@4" is the position at turn 4 of game g3; "g3@4/2" a position its search considered on that turn (only the one
+    it chose, unless --reveal-choices); "try5" the result of the learner's fifth accepted try. */
 function resolve(ref: string): GridState | null {
+  const t = /^try(\d+)$/.exec(ref.trim());
+  if (t) return tries[Number(t[1]) - 1] ?? null;
   const m = /^(g\d+)@(\d+)(?:\/(\d+))?$/.exec(ref.trim());
   const g = m ? games.get(m[1]) : undefined;
   if (!m || !g) return null;
   const turn = Number(m[2]);
   if (m[3] === undefined) return g.states[turn] ?? null;
-  return g.turns.get(turn)?.choices[Number(m[3])]?.state ?? null;
+  const choice = g.turns.get(turn)?.choices[Number(m[3])];
+  return choice && (cfg.revealChoices || choice.chosen) ? choice.state : null;
 }
 
 async function explore(): Promise<void> {
@@ -286,12 +296,27 @@ function runRequest(req: ExplorerRequest): unknown {
     if (!m || !g) return { inspect: req.inspect, error: 'use "<game>@<turn>" with a game from your notebook' };
     const t = g.turns.get(Number(m[2]));
     if (!t) return { inspect: req.inspect, error: g.turns.size ? 'your search did not choose on that turn (it is not one of your turns); your turns here: ' + [...g.turns.keys()].join(', ') : 'in this game your side moved at random: nothing was searched' };
+    const describe = (c: TurnRecord<GridState>['choices'][number], k: number) => ({ name: req.inspect + '/' + k, picture: picture(c.state),
+      value_looking_ahead: c.lookahead, value_directly: c.direct,
+      finished_games_your_search_ran_into: { you_won: c.endingsWon, the_other_side_won: c.endingsLost } });
+    const k = t.choices.findIndex((c) => c.chosen);
     return {
       inspect: req.inspect, position: picture(t.state), your_search_value: t.value,
-      considered: t.choices.map((c, k) => ({ name: req.inspect + '/' + k, picture: picture(c.state), chosen: c.chosen,
-        value_looking_ahead: c.lookahead, value_directly: c.direct,
-        finished_games_your_search_ran_into: { you_won: c.endingsWon, the_other_side_won: c.endingsLost } }))
+      chose: k >= 0 ? describe(t.choices[k], k) : null,
+      /* Only with --reveal-choices: otherwise the learner finds out what was possible by trying. */
+      ...(cfg.revealChoices ? { also_considered: t.choices.map((c, j) => ({ c, j })).filter(({ c }) => !c.chosen).map(({ c, j }) => describe(c, j)) } : {})
     };
+  }
+  if ('try' in req) {
+    const s = resolve(req.try);
+    if (!s) return { try: req.try, error: 'no such position' };
+    if (world.outcome(s).over || s.turn !== 'A') return { try: req.try, error: 'it is not your turn in that position' };
+    const from = sense.locate(req.from[0], req.from[1]), to = sense.locate(req.to[0], req.to[1]);
+    /* The environment answers only allowed or not: never why. */
+    const move = from && to ? world.actions(s).find((m) => m.from[0] === from[0] && m.from[1] === from[1] && m.to[0] === to[0] && m.to[1] === to[1]) : undefined;
+    if (!move) return { try: req.try, from: req.from, to: req.to, allowed: false };
+    tries.push(world.step(s, move));
+    return { try: req.try, from: req.from, to: req.to, allowed: true, name: 'try' + tries.length, picture: picture(tries[tries.length - 1]) };
   }
   const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, range: req.measure.range };
   return {
@@ -341,7 +366,9 @@ async function propose(from: Formula | null, directive: string | null = null): P
       const results = turn.requests.map((r) => runRequest(r));
       investigation.push({ step: investigation.length + 1, requests: turn.requests, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
       log('investigation', { round, requests: turn.requests, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
-      say('  investigates: ' + turn.requests.map((r) => 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect : 'measure on ' + r.on.length).join('; '));
+      say('  investigates: ' + turn.requests.map((r, i) => 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
+        : 'try' in r ? 'try ' + r.try + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { allowed?: boolean }).allowed ? ' allowed' : ' refused')
+        : 'measure on ' + r.on.length).join('; '));
       refused = [];
       continue;
     }
