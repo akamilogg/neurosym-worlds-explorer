@@ -1,12 +1,12 @@
 /* The unknown-world experiment: System 2 in a generated game it has never seen, perceiving only an ASCII picture.
 
-     node --experimental-strip-types scripts/run-grid.ts --seed 16 [options]
+     node --experimental-strip-types scripts/run-grid.ts --seed 22 [options]
 
    Endpoints and keys come from the environment (never from the command line, never written to the journal):
      JEV_URL (default https://api.typesafe.ai/v1/systemone), JEV_KEY
      LLM_URL (an OpenAI-compatible /chat/completions URL), LLM_KEY, LLM_MODEL
    Options:
-     --seed N            the game (default 16: full board, forced win in 20, the flat control loses; see calibrate-grid.ts)
+     --seed N            the game (default 22: a heuristic that knows the rules wins it at depth 2, the flat control does not; see calibrate-grid.ts)
      --attempts N        proposal/trial rounds (default 8)
      --games N           trial games per attempt (default 4)
      --explore N         exploration games before the first proposal (default 4)
@@ -30,9 +30,10 @@ import { nodeVmRunner } from '../src/runtime/node-vm.ts';
 import { openAiChatClient } from '../src/learn/system2.ts';
 import { replayOnEvidence } from '../src/learn/gates.ts';
 import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loop.ts';
-import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
+import { HypothesisRegistry, actionAccuracy, runProbes, siblingSets, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
+import { ceilingOf, tightness } from '../src/worlds/grid/informed.ts';
 import { EXPLORER_SYSTEM, explorerPayload, parseExplorerProposal, type ExplorerProposal } from '../src/learn/explorer.ts';
-import { Notebook, type EpisodeRecord } from '../src/learn/notebook.ts';
+import { Notebook, type CriticalScores, type EpisodeRecord } from '../src/learn/notebook.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
 import { labelPositions, noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
@@ -46,7 +47,7 @@ const argv = process.argv.slice(2);
 const arg = (name: string, fallback: string): string => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback; };
 const flag = (name: string): boolean => argv.includes('--' + name);
 const cfg = {
-  seed: Number(arg('seed', '16')),
+  seed: Number(arg('seed', '22')),
   attempts: Number(arg('attempts', '8')),
   games: Number(arg('games', '4')),
   explore: Number(arg('explore', '4')),
@@ -152,6 +153,25 @@ async function explore(): Promise<void> {
   }
 }
 
+/* How the formula ITSELF scored the choices at the moment the win was thrown away (direct values, no look-ahead).
+   Only averages leave this function: never which positions kept the win, nor how many there were. */
+async function scoreChoices(using: Evaluator<GridState>, formula: Formula, s: GridState, winners: GridMove[], chosen: GridMove): Promise<CriticalScores | null> {
+  const keepKeys = new Set(winners.map((m) => world.actionKey!(m)));
+  const keep: number[] = [], lose: number[] = [];
+  let chosenValue = NaN;
+  for (const m of world.actions(s)) {
+    let v: number;
+    try { v = (await using.eval(formula, world.step(s, m))).value; } catch { return null; }
+    (keepKeys.has(world.actionKey!(m)) ? keep : lose).push(v);
+    if (world.actionKey!(m) === world.actionKey!(chosen)) chosenValue = v;
+  }
+  if (!keep.length || !lose.length) return null;
+  let ordered = 0;
+  for (const k of keep) for (const l of lose) ordered += k > l ? 1 : k === l ? 0.5 : 0;
+  const avg = (xs: number[]) => Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 1000) / 1000;
+  return { chosen: Math.round(chosenValue * 1000) / 1000, keeping: avg(keep), losing: avg(lose), ordered: Math.round((ordered / (keep.length * lose.length)) * 100) / 100 };
+}
+
 interface Measured extends AttemptScore<Formula> {
   readonly episodes: EpisodeRecord[];
   readonly samples: ActionSample[];
@@ -172,6 +192,7 @@ async function trial(formula: Formula, attempt: number, using: Evaluator<GridSta
     const t0 = Date.now();
     let stillWinning = 0;
     let critical: number | null = null;
+    let criticalScores: CriticalScores | null = null;
     let knownThroughout = true;
     const ep = await playEpisode(world, async (s, actor) => {
       if (actor === 'B') return opponent(s);
@@ -183,7 +204,10 @@ async function trial(formula: Formula, attempt: number, using: Evaluator<GridSta
       samples.push({ winning: keeps, available: world.actions(s).length, keeping: winners.length });
       if (critical === null && winners.length) {
         if (keeps) stillWinning++;
-        else critical = s.ply;
+        else {
+          critical = s.ply;
+          if (record) criticalScores = await scoreChoices(using, formula, s, winners, chosen);
+        }
       }
       return chosen;
     });
@@ -194,7 +218,7 @@ async function trial(formula: Formula, attempt: number, using: Evaluator<GridSta
     if (record) {
       pool.push(...ep.states);
       episodes.push({ id: 'r' + round + 'a' + attempt + 'g' + g, round, how: 'trial: your formula chose your moves (round ' + round + ')',
-        result: resultOf(ep.outcome.winner), frames: ep.states.map((s) => sense.render(s)), critical, heldWinTurns: heldTurns, ownPlay: true });
+        result: resultOf(ep.outcome.winner), frames: ep.states.map((s) => sense.render(s)), critical, criticalScores, heldWinTurns: heldTurns, ownPlay: true });
     }
     say(tag + 'attempt ' + attempt + ' game ' + g + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
       ' turns, still winning for ' + (heldTurns ?? '?') + ' of your turns' + (critical !== null ? ' (thrown at turn ' + critical + ')' : '') +
@@ -242,11 +266,13 @@ async function probeSet(): Promise<LabelledPosition<GridState>[]> {
 async function experiment(probes: Probe[], base: Formula): Promise<void> {
   if (!probes.length) return;
   const positions = await probeSet();
-  const results = await runProbes(probes, positions, { observer, judge, base, maximizer: 'A' }, { round: currentRound });
+  /* Choices from won positions of every origin: the bank, the learner's games, exploration. */
+  const siblings = siblingSets(world, [...bank, ...pool].filter((_, i, all) => i % Math.max(1, Math.floor(all.length / 120)) === 0), 'A', (s) => planner.respond(s), { max: 16 });
+  const results = await runProbes(probes, positions, { observer, judge, base, maximizer: 'A', siblings }, { round: currentRound });
   registry.record(results);
   notebook.recordProbes(currentRound, results);
   const count = (final: boolean, label: string) => positions.filter((p) => !!p.final === final && p.label === label).length;
-  log('probes', { round: currentRound, positions: { in_play: { win: count(false, 'win'), loss: count(false, 'loss') }, final: { win: count(true, 'win'), loss: count(true, 'loss') } }, results });
+  log('probes', { round: currentRound, sibling_sets: siblings.length, positions: { in_play: { win: count(false, 'win'), loss: count(false, 'loss') }, final: { win: count(true, 'win'), loss: count(true, 'loss') } }, results });
   for (const r of results) {
     say('  probe ' + r.id + ': ' + r.status + ' - ' + r.hypothesis);
     for (const t of r.tests) say('      ' + t.by + ' on ' + t.positions + ': ' + t.status + ' (auc ' + t.auc + ', ' + t.samples_win + '/' + t.samples_loss + ')');
@@ -314,6 +340,13 @@ async function propose(from: Formula | null, directive: string | null = null): P
 say('seed ' + cfg.seed + ': ' + spec.width + 'x' + spec.height + ' ' + spec.shape + ', A ' + spec.A.count + ' vs B ' + spec.B.count +
   ', A wins by ' + spec.winA + ', B by ' + spec.winB + (cfg.flat ? '  [CONTROL: flat Judge]' : ''));
 log('start', { picture: sense.render(world.initial()) });
+/* The ceiling (operator only, never shown to System 2): can a heuristic that KNOWS the rules win this game at this depth? */
+{
+  const ceiling = await ceilingOf(spec, { depth: cfg.depth, level: cfg.levels[0], epsilon: cfg.epsilon });
+  journal.hidden_from_the_learner.ceiling = { informed_heuristic: ceiling, tightness: tightness(spec, cfg.levels[0]) };
+  say('ceiling (operator only): a heuristic that knows the rules wins ' + ceiling.wins + '/' + ceiling.total + ' at depth ' + cfg.depth);
+  if (ceiling.wins === 0) say('WARNING: not even an informed heuristic wins this game at this depth - pick a seed from calibrate-grid.ts');
+}
 await explore();
 const first = await propose(null);
 if (!first) { log('end', { stoppedBy: 'no_first_proposal', notebook }); say('no usable first proposal'); process.exit(1); }

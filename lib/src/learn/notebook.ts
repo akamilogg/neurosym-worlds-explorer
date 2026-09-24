@@ -50,10 +50,24 @@ export interface EpisodeRecord {
   readonly frames: readonly string[];
   /** Index of the frame BEFORE the learner's move that threw a won position away (null: never happened or unknown). */
   readonly critical?: number | null;
+  /** At the critical moment: how the learner's OWN formula scored the positions it could have moved to (no look-ahead).
+      Averages only - never which positions, nor how many. */
+  readonly criticalScores?: CriticalScores | null;
   /** The learner's turns played while its position was still won (partial credit; null when unknown). */
   readonly heldWinTurns?: number | null;
   /** Whether the learner's side chose these moves itself (a trial) rather than at random. */
   readonly ownPlay: boolean;
+}
+
+export interface CriticalScores {
+  /** The formula's direct value of the position it moved to. */
+  readonly chosen: number;
+  /** Mean direct value of the positions that would have kept the win. */
+  readonly keeping: number;
+  /** Mean direct value of the positions that throw it away (the chosen one among them). */
+  readonly losing: number;
+  /** Share of (keeping, losing) comparisons where the keeping position scored higher (ties count half). */
+  readonly ordered: number;
 }
 
 export interface TrialRecord {
@@ -150,7 +164,7 @@ export class Notebook {
     if (!r) return;
     r.probes = results.map((p) => ({
       id: p.id, hypothesis: clip(p.hypothesis, 200), status: p.status, auc: p.auc,
-      tests: p.tests.map((t) => t.by + ' on ' + t.positions.replace('_', ' ') + ' positions: ' + t.status + (t.auc === null ? '' : ' (auc ' + t.auc + ')'))
+      tests: p.tests.map((t) => t.by + ' on ' + (t.positions === 'siblings' ? 'choices from one position' : t.positions.replace('_', ' ') + ' positions') + ': ' + t.status + (t.auc === null ? '' : ' (auc ' + t.auc + ')'))
     }));
   }
 
@@ -203,7 +217,14 @@ export class Notebook {
     const critical = eps.filter((e) => e.ownPlay && e.result !== 'won' && e.critical !== null && e.critical !== undefined)
       .slice(-(options.critical ?? 6)).map((e) => ({
         case: e.id, turn: e.critical, before_your_move: e.frames[e.critical!], after_your_move: e.frames[e.critical! + 1],
-        note: 'before this move your position could still be won; after it, it could not'
+        note: 'before this move your position could still be won; after it, it could not',
+        ...(e.criticalScores ? { your_formula_scored: {
+          the_position_you_moved_to: e.criticalScores.chosen,
+          positions_that_would_have_kept_the_win_on_average: e.criticalScores.keeping,
+          positions_that_lose_it_on_average: e.criticalScores.losing,
+          share_of_comparisons_ordered_right: e.criticalScores.ordered,
+          note: 'direct scores of your formula, without looking ahead; the search that chose looks ahead'
+        } } : {})
       }));
     const bestLosses = eps.filter((e) => e.ownPlay && e.result !== 'won' && !shown.has(e.id) && (e.heldWinTurns ?? 0) > 0)
       .sort((a, b) => (b.heldWinTurns ?? 0) - (a.heldWinTurns ?? 0)).slice(0, options.bestLosses ?? 1);
@@ -216,7 +237,8 @@ export class Notebook {
       wins: wins.map(full),
       critical_moments: critical,
       best_losses: bestLosses.map(full),
-      latest_games: firstLook ? latest.map(full) : latest.map(keyframes),
+      /* Always one latest game WHOLE: key frames alone hide how things move, and that is what the rules are read from. */
+      latest_games: firstLook ? latest.map(full) : latest.map((e, i) => (i === latest.length - 1 ? full(e) : keyframes(e))),
       total_games_played: eps.length
     };
   }

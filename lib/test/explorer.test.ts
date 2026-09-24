@@ -112,3 +112,19 @@ test('ablation: the same observations read linearly, no Judge - the sign is fitt
   assert.ok(early.value > late.value);
   assert.ok(early.answers[CODE_ONLY_RULE]);
 });
+
+test('what System 2 reads about choices never counts them, and the ceiling heuristic never travels', async () => {
+  const { Notebook } = await import('../src/learn/notebook.ts');
+  const nb = new Notebook();
+  nb.addEpisodes([{ id: 'g', round: 1, how: 'trial', result: 'lost', frames: ['a', 'b', 'c'], critical: 0, heldWinTurns: 0, ownPlay: true,
+    criticalScores: { chosen: 0.7, keeping: 0.4, losing: 0.6, ordered: 0.25 } }]);
+  const probe = { id: 'p', hypothesis: 'h', round: 1, status: 'supported' as const, errors: [], tested_by: 'observation' as const, positions: 'siblings' as const,
+    samples_win: 23, samples_loss: 51, mean_when_win: 0.6, mean_when_loss: 0.4, separation: 0.2, auc: 0.8,
+    tests: [{ by: 'observation' as const, positions: 'siblings' as const, sets: 12, samples_win: 23, samples_loss: 51, mean_when_win: 0.6, mean_when_loss: 0.4, auc: 0.8, margin: 0.2, status: 'supported' as const }] };
+  const payload = explorerPayload({ round: 2, perceptDoc: GRID_PERCEPT_DOC, notebook: nb.brief(), experience: nb.memory(), hypotheses: [probe] }) as any;
+  const text = JSON.stringify(payload);
+  assert.deepEqual(payload.probes_reported[0].tests[0].samples, { positions_compared: 12 });
+  assert.ok(!text.includes('23') && !text.includes('51'), 'the number of choices is never shown');
+  assert.equal(payload.experience.critical_moments[0].your_formula_scored.share_of_comparisons_ordered_right, 0.25);
+  assert.ok(!/informed|ceiling|tightness/i.test(text + EXPLORER_SYSTEM));
+});

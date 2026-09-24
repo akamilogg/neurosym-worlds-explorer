@@ -696,6 +696,8 @@ var Neurosym = (() => {
     settleWeights: () => settleWeights,
     shortenText: () => shortenText,
     siblingBatchWidth: () => siblingBatchWidth,
+    siblingSets: () => siblingSets,
+    siblingTest: () => siblingTest,
     solveAgainstModel: () => solveAgainstModel,
     specHash: () => specHash,
     stableStringify: () => stableStringify,
@@ -3035,31 +3037,106 @@ var Neurosym = (() => {
       separation: c.separation
     };
   }
+  function siblingTest(sets, options = {}) {
+    let score = 0, pairs = 0, used = 0;
+    const keep = [], lose = [];
+    for (const s of sets) {
+      if (!s.keep.length || !s.lose.length) continue;
+      used++;
+      keep.push(...s.keep);
+      lose.push(...s.lose);
+      for (const k of s.keep) for (const l of s.lose) {
+        score += k > l ? 1 : k === l ? 0.5 : 0;
+        pairs++;
+      }
+    }
+    const a = pairs ? score / pairs : null;
+    if (a === null || used < (options.minSamples ?? 6)) return { auc: a === null ? null : round(a, 4), margin: null, status: "inconclusive", sets: used, keep, lose };
+    const margin = (options.z ?? 1.96) * Math.sqrt((2 * used + 1) / (12 * used * used));
+    const status = a >= 0.5 + margin ? "supported" : a <= 0.5 - margin ? "inverted" : "unsupported";
+    return { auc: round(a, 4), margin: round(margin, 4), status, sets: used, keep, lose };
+  }
+  function siblingSets(world, positions, maximizer, respond, options = {}) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const s of positions) {
+      if (out.length >= (options.max ?? 16)) break;
+      if (world.outcome(s).over || world.toMove(s) !== maximizer) continue;
+      const key = world.key(s);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const moves = world.actions(s, maximizer);
+      const winners = winningMoves(world, s, maximizer, respond, options.budget ?? 4e4);
+      if (!winners || !winners.length || winners.length === moves.length) continue;
+      const kept = new Set(winners.map((m) => world.actionKey ? world.actionKey(m) : JSON.stringify(m)));
+      const keep = [], lose = [];
+      for (const m of moves) (kept.has(world.actionKey ? world.actionKey(m) : JSON.stringify(m)) ? keep : lose).push(world.step(s, m));
+      out.push({ keep, lose });
+    }
+    return out;
+  }
   async function runProbes(probes, positions, context, options = {}) {
     const results = [];
     const inPlay = positions.filter((p) => !p.final);
     const finals = positions.filter((p) => p.final);
+    const siblings = context.siblings ?? [];
     for (const probe of probes) {
       const errors = [];
       const tests = [];
+      const split = async (set, value) => {
+        const win = [], loss = [];
+        for (const p of set) {
+          const v = await value(p.state);
+          if (v !== null) (p.label === "win" ? win : loss).push(v);
+        }
+        return [win, loss];
+      };
+      const bySiblings = async (by, value) => {
+        if (!siblings.length) return;
+        const sets = [];
+        for (const set of siblings) {
+          const keep = [], lose = [];
+          for (const s of set.keep) {
+            const v = await value(s);
+            if (v !== null) keep.push(v);
+          }
+          for (const s of set.lose) {
+            const v = await value(s);
+            if (v !== null) lose.push(v);
+          }
+          sets.push({ keep, lose });
+        }
+        const t = siblingTest(sets, options);
+        const mk = mean(t.keep), ml = mean(t.lose);
+        tests.push({
+          by,
+          positions: "siblings",
+          sets: t.sets,
+          samples_win: t.keep.length,
+          samples_loss: t.lose.length,
+          mean_when_win: mk === null ? null : round(mk, 4),
+          mean_when_loss: ml === null ? null : round(ml, 4),
+          auc: t.auc,
+          margin: t.margin,
+          status: t.status,
+          separation: mk !== null && ml !== null ? round(mk - ml, 4) : null
+        });
+      };
       if (probe.observation) {
         const id = "probe_" + probe.id;
         const decl = probe.observation;
         const range = decl.range;
-        const measure = (set) => {
-          const win = [], loss = [];
-          for (const p of set) {
-            const o = context.observer.observe(p.state, { ...context.base.observations, [id]: decl });
-            const v = o.values[id];
-            const own = o.errors.find((e) => e.id === id);
-            if (own && errors.length < 3) errors.push(own.error);
-            if (!Number.isFinite(v) || !range || !(range[1] > range[0])) continue;
-            (p.label === "win" ? win : loss).push((v - range[0]) / (range[1] - range[0]));
-          }
-          return [win, loss];
+        const value = async (state) => {
+          const o = context.observer.observe(state, { ...context.base.observations, [id]: decl });
+          const v = o.values[id];
+          const own = o.errors.find((e) => e.id === id);
+          if (own && errors.length < 3) errors.push(own.error);
+          if (!Number.isFinite(v) || !range || !(range[1] > range[0])) return null;
+          return (v - range[0]) / (range[1] - range[0]);
         };
-        tests.push(testOf("observation", "in_play", ...measure(inPlay), options));
-        if (finals.length) tests.push(testOf("observation", "final", ...measure(finals), { ...options, minSamples: options.minFinalSamples ?? Math.min(3, options.minSamples ?? 6) }));
+        await bySiblings("observation", value);
+        tests.push(testOf("observation", "in_play", ...await split(inPlay, value), options));
+        if (finals.length) tests.push(testOf("observation", "final", ...await split(finals, value), { ...options, minSamples: options.minFinalSamples ?? Math.min(3, options.minSamples ?? 6) }));
       }
       if (probe.question) {
         const observations = { ...context.base.observations };
@@ -3072,22 +3149,23 @@ var Neurosym = (() => {
           meta: { source: "probe" }
         });
         const ev = new Evaluator(context.observer, context.judge, { maximizer: context.maximizer, strictMeasures: false });
-        const win = [], loss = [];
-        for (const p of inPlay) {
+        const value = async (state) => {
           try {
-            const r = await ev.eval(formula, p.state, options.signal);
+            const r = await ev.eval(formula, state, options.signal);
             const v = r.answers[probe.id]?.value;
-            if (Number.isFinite(v)) (p.label === "win" ? win : loss).push(v);
+            return Number.isFinite(v) ? v : null;
           } catch (error) {
             if (error?.kind === "aborted") throw error;
             if (errors.length < 3) errors.push(String(error?.message || error));
+            return null;
           }
-        }
-        tests.push(testOf("question", "in_play", win, loss, options));
+        };
+        await bySiblings("question", value);
+        tests.push(testOf("question", "in_play", ...await split(inPlay, value), options));
       }
       if (!tests.length) errors.push("a probe needs an observation or a question");
       const rank = { supported: 2, inverted: 2, unsupported: 1, inconclusive: 0 };
-      const decisiveness2 = (t) => rank[t.status] + (t.auc === null ? 0 : Math.abs(t.auc - 0.5));
+      const decisiveness2 = (t) => rank[t.status] + (t.positions === "siblings" && rank[t.status] === 2 ? 1 : 0) + (t.auc === null ? 0 : Math.abs(t.auc - 0.5));
       const head = tests.slice().sort((a, b) => decisiveness2(b) - decisiveness2(a))[0];
       results.push({
         id: probe.id,
@@ -3247,7 +3325,7 @@ var Neurosym = (() => {
         hypothesis: clip(p.hypothesis, 200),
         status: p.status,
         auc: p.auc,
-        tests: p.tests.map((t) => t.by + " on " + t.positions.replace("_", " ") + " positions: " + t.status + (t.auc === null ? "" : " (auc " + t.auc + ")"))
+        tests: p.tests.map((t) => t.by + " on " + (t.positions === "siblings" ? "choices from one position" : t.positions.replace("_", " ") + " positions") + ": " + t.status + (t.auc === null ? "" : " (auc " + t.auc + ")"))
       }));
     }
     recordTrial(round2, trial) {
@@ -3319,7 +3397,14 @@ var Neurosym = (() => {
         turn: e.critical,
         before_your_move: e.frames[e.critical],
         after_your_move: e.frames[e.critical + 1],
-        note: "before this move your position could still be won; after it, it could not"
+        note: "before this move your position could still be won; after it, it could not",
+        ...e.criticalScores ? { your_formula_scored: {
+          the_position_you_moved_to: e.criticalScores.chosen,
+          positions_that_would_have_kept_the_win_on_average: e.criticalScores.keeping,
+          positions_that_lose_it_on_average: e.criticalScores.losing,
+          share_of_comparisons_ordered_right: e.criticalScores.ordered,
+          note: "direct scores of your formula, without looking ahead; the search that chose looks ahead"
+        } } : {}
       }));
       const bestLosses = eps.filter((e) => e.ownPlay && e.result !== "won" && !shown.has(e.id) && (e.heldWinTurns ?? 0) > 0).sort((a, b) => (b.heldWinTurns ?? 0) - (a.heldWinTurns ?? 0)).slice(0, options.bestLosses ?? 1);
       bestLosses.forEach((e) => shown.add(e.id));
@@ -3330,7 +3415,8 @@ var Neurosym = (() => {
         wins: wins.map(full),
         critical_moments: critical,
         best_losses: bestLosses.map(full),
-        latest_games: firstLook ? latest.map(full) : latest.map(keyframes),
+        /* Always one latest game WHOLE: key frames alone hide how things move, and that is what the rules are read from. */
+        latest_games: firstLook ? latest.map(full) : latest.map((e, i) => i === latest.length - 1 ? full(e) : keyframes(e)),
         total_games_played: eps.length
       };
     }
@@ -3359,7 +3445,7 @@ var Neurosym = (() => {
     'Your EXPERIENCE (the `experience` field) is curated: every game you won, the critical moment of games you lost (the position before your move, when you could still win, and the position after it, when you no longer could; the move that would have kept the win is not shown), your best losses, and the latest games. "turns_still_winning" counts your turns played while your position could still be won: it grows when you improve, even before you win.',
     "",
     'Test ideas with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question. The observation and the question are tested SEPARATELY. The judge answering a probe question never knows how the game ended: ask it to describe the position (e.g. "is the other piece boxed in?"), and the outcome comparison is done for you.',
-    'Each test reports an AUC: the probability that a position that was won scores higher than one that was lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost). It is "supported" or "inverted" only when it is further from 0.5 than chance allows with that many samples. Observations are tested on two kinds of positions: "in play" (does it predict who will win?) and "final" (is it what the end of a won or lost game looks like? - this is how you can learn how games end).',
+    'Each test reports an AUC: the probability that a position that was won scores higher than one that was lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost). It is "supported" or "inverted" only when it is further from 0.5 than chance allows with that many samples. Tests run on three kinds of positions. "choices": from one position your side could still win, the positions your side could move to are compared - those that keep the win against those that throw it away; this is exactly what your formula must do for the search, so a probe that orders choices well is the one worth building on. "in play" (does it predict who will win? - careful: the won and lost positions come from different games, so a probe can separate them by resembling how good games look without helping to choose a move). "final" (only for observations: is it what the end of a won or lost game looks like? - this is how you can learn how games end).',
     "",
     "Answer with ONE JSON object and nothing else:",
     "{",
@@ -3387,6 +3473,7 @@ var Neurosym = (() => {
     for (const [id, r] of Object.entries(formula.rules)) rules[id] = { type: r.type, instructions: r.instructions, criteria: r.criteria };
     return { observations, rules, weights: formula.weights };
   }
+  var POSITION_LABEL = { siblings: "choices from one position", in_play: "positions in play", final: "final positions" };
   function explorerPayload(brief) {
     const experience = Array.isArray(brief.experience) ? brief.experience.map((t) => ({ case: t.id, how: t.how, result: t.result, turns: t.frames.length - 1, frames: t.frames })) : brief.experience;
     return {
@@ -3403,10 +3490,11 @@ var Neurosym = (() => {
         round: h.round,
         tests: h.tests.map((t) => ({
           tested: t.by,
-          on: t.positions === "final" ? "final positions" : "positions in play",
+          on: POSITION_LABEL[t.positions],
           status: t.status,
+          /* Choices: only how many positions were compared - counting the choices would tell how many moves exist. */
           auc: t.auc,
-          samples: { won: t.samples_win, lost: t.samples_loss }
+          samples: t.positions === "siblings" ? { positions_compared: t.sets ?? 0 } : { won: t.samples_win, lost: t.samples_loss }
         })),
         ...h.errors.length ? { errors: h.errors } : {}
       })) } : {},

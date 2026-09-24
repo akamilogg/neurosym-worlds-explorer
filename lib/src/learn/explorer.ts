@@ -51,7 +51,7 @@ export const EXPLORER_SYSTEM = [
   'Your EXPERIENCE (the `experience` field) is curated: every game you won, the critical moment of games you lost (the position before your move, when you could still win, and the position after it, when you no longer could; the move that would have kept the win is not shown), your best losses, and the latest games. "turns_still_winning" counts your turns played while your position could still be won: it grows when you improve, even before you win.',
   '',
   'Test ideas with PROBES before trusting them. A probe is a hypothesis plus an observation and/or a question. The observation and the question are tested SEPARATELY. The judge answering a probe question never knows how the game ended: ask it to describe the position (e.g. "is the other piece boxed in?"), and the outcome comparison is done for you.',
-  'Each test reports an AUC: the probability that a position that was won scores higher than one that was lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost). It is "supported" or "inverted" only when it is further from 0.5 than chance allows with that many samples. Observations are tested on two kinds of positions: "in play" (does it predict who will win?) and "final" (is it what the end of a won or lost game looks like? - this is how you can learn how games end).',
+  'Each test reports an AUC: the probability that a position that was won scores higher than one that was lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost). It is "supported" or "inverted" only when it is further from 0.5 than chance allows with that many samples. Tests run on three kinds of positions. "choices": from one position your side could still win, the positions your side could move to are compared - those that keep the win against those that throw it away; this is exactly what your formula must do for the search, so a probe that orders choices well is the one worth building on. "in play" (does it predict who will win? - careful: the won and lost positions come from different games, so a probe can separate them by resembling how good games look without helping to choose a move). "final" (only for observations: is it what the end of a won or lost game looks like? - this is how you can learn how games end).',
   '',
   'Answer with ONE JSON object and nothing else:',
   '{',
@@ -101,6 +101,8 @@ function ownFormula(formula: Formula): Record<string, unknown> {
   return { observations, rules, weights: formula.weights };
 }
 
+const POSITION_LABEL = { siblings: 'choices from one position', in_play: 'positions in play', final: 'final positions' } as const;
+
 export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
   const experience = Array.isArray(brief.experience)
     ? (brief.experience as readonly Trajectory[]).map((t) => ({ case: t.id, how: t.how, result: t.result, turns: t.frames.length - 1, frames: t.frames }))
@@ -114,8 +116,9 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     ...(brief.lastScore ? { last_trial: brief.lastScore } : {}),
     ...(brief.hypotheses && brief.hypotheses.length ? { probes_reported: brief.hypotheses.map((h) => ({
       id: h.id, hypothesis: h.hypothesis, status: h.status, round: h.round,
-      tests: h.tests.map((t) => ({ tested: t.by, on: t.positions === 'final' ? 'final positions' : 'positions in play', status: t.status,
-        auc: t.auc, samples: { won: t.samples_win, lost: t.samples_loss } })),
+      tests: h.tests.map((t) => ({ tested: t.by, on: POSITION_LABEL[t.positions], status: t.status,
+        /* Choices: only how many positions were compared - counting the choices would tell how many moves exist. */
+        auc: t.auc, samples: t.positions === 'siblings' ? { positions_compared: t.sets ?? 0 } : { won: t.samples_win, lost: t.samples_loss } })),
       ...(h.errors.length ? { errors: h.errors } : {}) })) } : {}),
     ...(brief.actionAccuracy ? { move_quality: brief.actionAccuracy } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),

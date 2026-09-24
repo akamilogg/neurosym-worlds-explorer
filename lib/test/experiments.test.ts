@@ -95,3 +95,41 @@ test('observation and question are reported separately, and finished positions t
   assert.equal(r.status, 'inverted', 'the headline is the most decisive test');
   assert.ok(stub.bodies.every((b) => /The clock reads \d+/.test(b.questions.both.instructions)));
 });
+
+test('siblings: choices from one won position are ordered by the probe, pairs compared only within a position', async () => {
+  const { siblingSets, siblingTest } = await import('../src/learn/experiments.ts');
+  /* Pairs never cross positions: a set whose values are all higher does not help another set. */
+  const t = siblingTest(Array.from({ length: 8 }, (_, i) => ({ keep: [i + 0.6], lose: [i + 0.4, i + 0.1] })));
+  assert.deepEqual([t.auc, t.status, t.sets], [1, 'supported', 8]);
+  assert.equal(siblingTest([{ keep: [0.9], lose: [0.1] }]).status, 'inconclusive', 'one position is not evidence');
+  /* Seed 16: a tight game (in seed 4 no choice ever throws the win away, so it has no sibling sets). */
+  const tight = generateSpec(16).spec;
+  const world16 = createGridWorld(tight);
+  const sense16 = asciiSense(tight);
+  const observer16 = new Observer<GridState>(world16, { kinds: ['sense', 'code'], senses: { ascii: (x) => sense16.render(x) }, perceive: (_s, p) => readPicture(Object.values(p)[0] ?? '') });
+  const planner = createPlanner(world16, 'B', 2, { fallback: bFallback(tight) });
+  const respond = (s: GridState) => planner.respond(s);
+  /* Positions from a few games where A moves at random: somewhere a choice keeps the win and another throws it. */
+  const line: GridState[] = [];
+  for (let g = 0; g < 6; g++) {
+    let s = world16.initial();
+    for (let i = 0; i < 12 && !world16.outcome(s).over; i++) {
+      line.push(s);
+      const moves = world16.actions(s);
+      s = s.turn === 'A' ? world16.step(s, moves[(i * 7 + g * 3) % moves.length]) : world16.step(s, respond(s)!);
+    }
+  }
+  const sets = siblingSets(world16, line, 'A', respond, { max: 4 });
+  assert.ok(sets.length >= 1);
+  for (const set of sets) {
+    assert.ok(set.keep.length && set.lose.length);
+    for (const k of set.keep) assert.equal(solveAgainstModel(world16, k, 'A', respond).winner, 'A');
+    for (const l of set.lose) assert.notEqual(solveAgainstModel(world16, l, 'A', respond).winner, 'A');
+  }
+  const stub = stubJev();
+  const [r] = await runProbes([{ id: 'clock', hypothesis: 'h', observation: { spec: { kind: 'code', lang: 'js', source: '(p) => p.move' }, range: [0, 40] } }],
+    positions(), { observer: observer16, judge: new JevJudge({ fetch: stub.fetch }), base: { ...base, world: world16.id }, maximizer: 'A', siblings: sets }, { minSamples: 1 });
+  const choice = r.tests.find((x) => x.positions === 'siblings')!;
+  assert.equal(choice.sets, sets.length);
+  assert.equal(choice.auc, 0.5, 'every choice from one position has the same move counter: it orders nothing');
+});

@@ -70,7 +70,7 @@ test('memory is curated: every win, the critical moments, the best loss - not a 
     note: 'before this move your position could still be won; after it, it could not' });
   assert.deepEqual(m.best_losses.map((b: any) => b.case), ['r10g0']);
   assert.deepEqual(m.latest_games.map((g: any) => g.case), ['r10g1']);
-  assert.deepEqual(m.latest_games[0].key_frames.map((k: any) => k.turn), [0, 4], 'the latest games travel as key frames');
+  assert.ok(m.latest_games[0].frames, 'the last game always travels whole');
 });
 
 test('the explorer answers with stances, lessons and a next experiment; the payload carries the notebook', () => {
