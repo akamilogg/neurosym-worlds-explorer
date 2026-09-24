@@ -166,3 +166,17 @@ test('try: a change named in picture coordinates maps back to the board under ev
   const t = parseExplorerTurn(JSON.stringify({ investigate: [{ try: 'g1@0', from: [0, 4], to: [1, 4] }, { try: 'g1@0', from: [0] }] }), { world: world.id, senses: SENSES });
   assert.ok(t.kind === 'investigate' && t.requests.length === 1 && t.warnings.length === 1);
 });
+
+test('a probe question that cites something not measured is refused at once, with the reason', () => {
+  const bad = { ...answer, probes: [
+    { id: 'lonely', hypothesis: 'h', question: { type: 'noul', instructions: 'Use {{probe_lonely}}', criteria: { yes: 'y', no: 'n' } } },
+    { id: 'ghost', hypothesis: 'h', question: { type: 'noul', instructions: 'Use {{nowhere}}', criteria: { yes: 'y', no: 'n' } } },
+    { id: 'fine', hypothesis: 'h', observation: { source: '(p) => 1', range: [0, 1] }, question: { type: 'noul', instructions: '{{probe_fine}} and {{mine}}', criteria: { yes: 'y', no: 'n' } } }
+  ] };
+  const parsed = parseExplorerProposal(JSON.stringify(bad), { world: world.id, senses: SENSES });
+  assert.equal(parsed.ok, false);
+  if (parsed.ok) return;
+  assert.equal(parsed.errors.length, 2);
+  assert.match(parsed.errors[0], /probe lonely question cites \{\{probe_lonely\}\}.*only when it declares its own observation/);
+  assert.match(parsed.errors[1], /probe ghost question cites \{\{nowhere\}\}/);
+});

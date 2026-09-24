@@ -337,8 +337,12 @@ function runRequest(req: ExplorerRequest): unknown {
     /* The environment answers only allowed or not: never why. */
     const move = from && to ? world.actions(s).find((m) => m.from[0] === from[0] && m.from[1] === from[1] && m.to[0] === to[0] && m.to[1] === to[1]) : undefined;
     if (!move) return { try: req.try, from: req.from, to: req.to, allowed: false };
-    tries.push(world.step(s, move));
-    return { try: req.try, from: req.from, to: req.to, allowed: true, name: 'try' + tries.length, picture: picture(tries[tries.length - 1]) };
+    const after = world.step(s, move);
+    tries.push(after);
+    /* What anyone who makes the move sees: whether the game ended there, and who won. Never why. */
+    const outcome = world.outcome(after);
+    return { try: req.try, from: req.from, to: req.to, allowed: true, name: 'try' + tries.length, picture: picture(after),
+      game_ended: outcome.over ? (outcome.winner === 'A' ? 'you won' : outcome.winner === 'B' ? 'you lost' : 'draw') : false };
   }
   const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, range: req.measure.range };
   return {
@@ -350,6 +354,15 @@ function runRequest(req: ExplorerRequest): unknown {
       return err ? { position: ref, error: err.error } : { position: ref, value: o.values.m };
     })
   };
+}
+
+/** How each of its formulas did (facts of its own games), with the best and the latest named. */
+function scoreboard(): unknown {
+  const rows = notebook.rounds.filter((r) => r.games.length).map((r) => ({ round: r.round,
+    wins: r.games.reduce((a, g) => a + g.wins, 0), of: r.games.reduce((a, g) => a + g.of, 0) }));
+  if (!rows.length) return null;
+  const best = rows.reduce((a, b) => (b.wins / b.of > a.wins / a.of ? b : a));
+  return { by_round: rows, best: best, latest: rows[rows.length - 1] };
 }
 
 function latestSurprises(): unknown {
@@ -370,7 +383,7 @@ async function propose(from: Formula | null, directive: string | null = null, mo
   while (refusals < 3 && steps <= cfg.steps + 3) {
     const stepsLeft = Math.max(0, cfg.steps - steps);
     const payload = explorerPayload({
-      round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(),
+      round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(), scoreboard: scoreboard(),
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
       hypotheses: registry.current(), investigation, stepsLeft, refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null
     });

@@ -1,5 +1,5 @@
 import { parseJsonLoose } from '../core/net.ts';
-import { checkFormula, makeFormula, normalizeWeights } from '../core/formula.ts';
+import { checkFormula, makeFormula, normalizeWeights, placeholdersOf } from '../core/formula.ts';
 import type { Formula, MeasureDecl, QuestionType, Rule } from '../core/types.ts';
 import type { Probe, ProbeResult } from './experiments.ts';
 import { STANCES, type BeliefStance, type NoteOp, type Stance } from './notebook.ts';
@@ -41,11 +41,13 @@ export const EXPLORER_SYSTEM = [
   'INVESTIGATE before proposing. Instead of a proposal you may answer {"investigate": [ ...requests ], "notes": [ ...optional ]}; the results come back in `investigation`, and `steps_left` says how many more such answers you have this round. Requests:',
   '  {"view": "<game>", "from": <turn>, "to": <turn>}   the pictures of a stretch of one of your games (at most 30 per request)',
   '  {"inspect": "<game>@<turn>"}   what YOUR search did on that turn of yours: the position it chose to move to (named "<game>@<turn>/<k>", with its picture), the value your formula gave it looking ahead and directly, and the finished games your search ran into after it within its horizon, and who won them',
-  '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests). It never says why a change was refused: that is for you to work out. Trying changes nothing in any game.',
+  '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests) and whether that change ended the game (and who won). It never says why a change was refused or why a game ended: that is for you to work out. A try is how you TEST an idea about how games end, directly. Trying changes nothing in any game.',
   '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
   '`surprises` lists, for your latest games, the turns where your own search\'s value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.',
   '',
   'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. Each test reports an AUC: the probability that a position from a game you won scores higher than one from a game you lost (0.5 = no relation, 1 = always higher when won, 0 = always higher when lost); "supported" or "inverted" only when further from 0.5 than chance allows. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the labels come from whole games: early positions of a lost game may have been fine.',
+  '',
+  '`scoreboard` shows how each of your formulas did. `your_best_formula` is the one that has won the most so far - not necessarily your latest. If your later changes did worse, consider going back to it and changing less at a time.',
   '',
   'If the payload carries a `task`, it says what this consultation is for and what to answer instead of a proposal.',
   '',
@@ -76,6 +78,8 @@ export interface ExplorerBrief {
   /** The formula the next one should build on (the best so far), and the round that wrote it. */
   readonly formula?: Formula | null;
   readonly formulaRound?: number | null;
+  /** How each of its formulas did, the best and the latest (facts of its own games). */
+  readonly scoreboard?: unknown;
   readonly hypotheses?: readonly ProbeResult[];
   /** This round's requests and their results so far. */
   readonly investigation?: readonly unknown[];
@@ -108,6 +112,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     percept: brief.perceptDoc,
     ...(brief.notebook ? { notebook: brief.notebook } : {}),
     ...(brief.surprises ? { surprises: brief.surprises } : {}),
+    ...(brief.scoreboard ? { scoreboard: brief.scoreboard } : {}),
     ...(brief.formula ? { your_best_formula: { ...(brief.formulaRound ? { from_round: brief.formulaRound } : {}), ...ownFormula(brief.formula) } } : {}),
     ...(brief.hypotheses && brief.hypotheses.length ? { probes_reported: brief.hypotheses.map((h) => ({
       id: h.id, hypothesis: h.hypothesis, status: h.status, round: h.round,
@@ -312,6 +317,17 @@ export function parseExplorerProposal(content: string, context: {
     const observation = p.observation ? parseObservation(p.observation, where + ' observation', lang, errors) : undefined;
     const question = p.question ? parseRule(p.question, where + ' question', errors) : undefined;
     if (!observation && !question) { errors.push(where + ': needs an observation or a question'); return; }
+    /* A question may cite the formula's observations and, when the probe has one, its own (probe_<id>): anything else
+       would only fail later, silently, when the probe is measured. */
+    if (question) {
+      const citable = [...Object.keys(observations), ...(observation ? ['probe_' + id] : [])];
+      const unknown = placeholdersOf(question).filter((ph) => !citable.includes(ph));
+      if (unknown.length) {
+        errors.push(where + ' question cites ' + unknown.map((u) => '{{' + u + '}}').join(', ') + ', which is not measured' +
+          (unknown.includes('probe_' + id) ? ' (a probe can cite {{probe_' + id + '}} only when it declares its own observation)' : ''));
+        return;
+      }
+    }
     probes.push({ id, hypothesis, ...(observation ? { observation } : {}), ...(question ? { question } : {}) });
   });
 
