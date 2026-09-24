@@ -38,3 +38,13 @@ test('keep-alive comments before the JSON (OpenRouter) are tolerated', async () 
   const r = await fetchJson('https://x', { fetch: (async () => ok(': OPENROUTER PROCESSING\n\n: OPENROUTER PROCESSING\n\n{"choices":[{"message":{"content":"{\\"v\\":1}"}}]}')) as any });
   assert.equal((r.data as any).choices[0].message.content, '{"v":1}');
 });
+
+test('a network-level failure is retried only when the host asks (a browser CORS failure never is)', async () => {
+  let n = 0;
+  const flaky = async () => { if (++n === 1) throw new TypeError('fetch failed'); return ok('{"fine":true}'); };
+  await assert.rejects(() => fetchJson('https://x', { fetch: flaky as any, retries: 2, sleep: async () => {} }), (e: ApiError) => e.kind === 'network');
+  n = 0;
+  const r = await fetchJson('https://x', { fetch: flaky as any, retries: 2, retryNetwork: true, sleep: async () => {} });
+  assert.deepEqual(r.data, { fine: true });
+  assert.equal(r.attempts, 2);
+});

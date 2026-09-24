@@ -8,16 +8,19 @@
    Options:
      --seed N            the game (default 22: a heuristic that knows the rules wins it at depth 2, the flat control does not; see calibrate-grid.ts)
      --attempts N        proposal/trial rounds (default 8)
-     --games N           trial games per attempt (default 4)
+     --games N           trial games per attempt from the usual start (default 1: the learner's side is deterministic, so
+                         more games from the same start are near-copies of one game, and would count it several times)
      --explore N         exploration games before the first proposal (default 4)
      --depth N           the learner's search depth (default 2)
      --levels a,b,c      the opponent's planner depths, the curriculum (default 2,4)
      --epsilon X         the opponent errs with this probability, seeded per game (default 0.15)
      --probe-positions N labelled positions a probe is measured on, at most (default 40)
      --steps N           investigation answers System 2 may give per round before proposing (default 3)
+     --plays N           games System 2 may play itself per round with the "play" request (default 4): its laboratory,
+                         from any position of its games, with any of its formulas or a draft; never on the scoreboard
      --reveal-choices    inspect also shows every position the search considered (default: only the one it chose; the
                          learner finds out what else was possible by TRYING changes against the environment)
-     --variants N        generalization: games from N starting positions never played, every trial (default 4; 0 = off).
+     --variants N        generalization: games from N starting positions never played, every trial (default 7; 0 = off).
                          Accepting a formula requires winning them too.
      --no-reflection     skip the final reflection round (beliefs, notes and lessons after the last trial; no formula)
      --no-ablation       skip the code-only ablation (same observations, no Judge; information only)
@@ -26,7 +29,12 @@
 
    System 2 learns ONLY from what it perceives, what its code measures, what its own search explored and how its games
    ended. The journal also keeps OPERATOR-ONLY measurements (the hidden spec, the ceiling of a heuristic that knows the
-   rules, the truth's view of each move, the code-only ablation): they are for us, and never reach System 2 or Jev. */
+   rules, the truth's view of each move, the code-only ablation): they are for us, and never reach System 2 or Jev.
+
+   Every round has a TRIAL (the same measure for every formula, what the scoreboard shows) and, before it, System 2's own
+   investigation, where it may play games itself. A line to explore when we move on to generalizing (option b, not
+   built): no fixed trial per round - System 2 experiments freely with "play" and asks for the trial only when it
+   presents a candidate formula, as a researcher would. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { Observer } from '../src/core/observer.ts';
@@ -41,7 +49,7 @@ import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loo
 import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
 import { ceilingOf, tightness } from '../src/worlds/grid/informed.ts';
 import { variantStarts } from '../src/worlds/grid/variants.ts';
-import { EXPLORER_SYSTEM, explorerPayload, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
+import { EXPLORER_SYSTEM, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
 import { Notebook, type GameRecord } from '../src/learn/notebook.ts';
 import { recordTurn, surprises, type TurnRecord } from '../src/learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
@@ -59,7 +67,7 @@ const flag = (name: string): boolean => argv.includes('--' + name);
 const cfg = {
   seed: Number(arg('seed', '22')),
   attempts: Number(arg('attempts', '8')),
-  games: Number(arg('games', '4')),
+  games: Number(arg('games', '1')),
   explore: Number(arg('explore', '4')),
   depth: Number(arg('depth', '2')),
   levels: arg('levels', '2,4').split(',').map(Number),
@@ -67,9 +75,10 @@ const cfg = {
   probePositions: Number(arg('probe-positions', '40')),
   flat: flag('flat'),
   ablation: !flag('no-ablation'),
-  variants: Number(arg('variants', '4')),
+  variants: Number(arg('variants', '7')),
   reflection: !flag('no-reflection'),
   steps: Number(arg('steps', '3')),
+  plays: Number(arg('plays', '4')),
   revealChoices: flag('reveal-choices')
 };
 const env = process.env;
@@ -102,7 +111,7 @@ const flatFetch = async (_u: string, init: { body?: string }) => {
 };
 const judge = new JevJudge(cfg.flat
   ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
-  : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 2, concurrency: 8 });
+  : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
 const evaluator = new Evaluator<GridState>(observer, judge, { maximizer: 'A' });
 const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1 });
 
@@ -263,6 +272,7 @@ async function ablate(formula: Formula, attempt: number, score: Measured): Promi
 const registry = new HypothesisRegistry();
 let currentRound = 0;
 const roundOf = new WeakMap<Formula, number>();
+const formulaOfRound = new Map<number, Formula>();
 let lastScore: Measured | null = null;
 let unaddressed: string[] = [];
 
@@ -307,7 +317,45 @@ async function experiment(probes: Probe[], base: Formula): Promise<void> {
 
 const picture = (s: GridState): string => sense.render(s);
 
-async function runRequest(req: ExplorerRequest): Promise<unknown> {
+/* Its own games, played on request: from a position of its games, with a formula it names or drafts. The opponent is
+   the usual one, with a fresh seed each time, so a repeated experiment can end differently - as the real one would. */
+let playCounter = 0;
+async function play(from: string, formula: Formula, how: string): Promise<unknown> {
+  const start = resolve(from);
+  if (!start) return { play: from, error: 'no such position' };
+  if (world.outcome(start).over) return { play: from, error: 'that game is already over there' };
+  const rnd = mulberry32(cfg.seed * 3571 + (++playCounter) * 131 + level * 1_000_003);
+  const opponent = noisyOpponent(world, (s) => planner.respond(s), cfg.epsilon, rnd);
+  const turns = new Map<number, TurnRecord<GridState>>();
+  const ep = await playEpisode(world, async (s, actor) => {
+    if (actor === 'B') return opponent(s);
+    const r = await searchBestMove<GridState, GridMove>(evaluator, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
+    const chosen = r.best.bestMove ?? world.actions(s)[0];
+    const turn = s.ply - start.ply;
+    turns.set(turn, await recordTurn(evaluator, world, s, chosen, { formula, depth: cfg.depth, maximizer: 'A', turn }));
+    return chosen;
+  }, { start });
+  const g = store(currentRound, 'you played it: ' + how + ', from ' + from, ep.states, ep.outcome.winner, turns);
+  log('played_by_the_learner', { round: currentRound, game: g.id, from, how, result: g.result, turns: ep.states.length - 1, reason: ep.outcome.reason,
+    ...(roundOf.has(formula) ? {} : { draft: formula }) });
+  return { play: from, with: how, game: g.id, result: g.result, turns: ep.states.length - 1 };
+}
+
+async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { left: number }): Promise<unknown> {
+  if ('play' in req) {
+    if (plays.left <= 0) return { play: req.play, error: 'no games left to play this round' };
+    const formula = req.formula === null ? base : typeof req.formula === 'number' ? formulaOfRound.get(req.formula) ?? null : req.formula;
+    if (!formula) return { play: req.play, error: req.formula === null ? 'you have no formula yet: write a draft' : 'no formula of round ' + req.formula };
+    if (typeof req.formula === 'object' && req.formula !== null) {
+      const recent = [...games.values()].flatMap((g) => g.states).slice(-60);
+      const failures = replayOnEvidence(observer, formula.observations, recent.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
+      if (failures.length) return { play: req.play, error: 'an observation of your draft failed on positions of your games: ' + failures.join(' | ') };
+    }
+    plays.left--;
+    const how = req.formula === null ? 'your best formula' + (base && roundOf.has(base) ? ' (round ' + roundOf.get(base) + ')' : '')
+      : typeof req.formula === 'number' ? 'your formula of round ' + req.formula : 'a draft formula';
+    return play(req.play, formula, how);
+  }
   if ('view' in req) {
     const g = games.get(req.view);
     if (!g) return { view: req.view, error: 'no such game' };
@@ -378,7 +426,7 @@ function scoreboard(): unknown {
 }
 
 function latestSurprises(): unknown {
-  const latest = [...games.values()].filter((g) => g.turns.size).slice(-cfg.games);
+  const latest = lastScore?.stored ?? [];
   return latest.map((g) => ({ game: g.id, result: g.result, where_your_search_was_most_wrong: surprises([...g.turns.values()], valueOfResult(g.result)) }));
 }
 
@@ -392,12 +440,13 @@ async function propose(from: Formula | null, directive: string | null = null, mo
   let refused: string[] = [];
   const investigation: unknown[] = [];
   let steps = 0, refusals = 0;
+  const plays = { left: cfg.plays };
   while (refusals < 3 && steps <= cfg.steps + 3) {
     const stepsLeft = Math.max(0, cfg.steps - steps);
     const payload = explorerPayload({
       round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(), scoreboard: scoreboard(),
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-      hypotheses: registry.current(), investigation, stepsLeft, refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null
+      hypotheses: registry.current(), investigation, stepsLeft, playsLeft: plays.left, refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null
     });
     say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
     steps++;
@@ -415,11 +464,14 @@ async function propose(from: Formula | null, directive: string | null = null, mo
     if (turn.kind === 'investigate') {
       if (stepsLeft <= 0) { refused = ['no investigation steps left this round: answer with your proposal now']; refusals++; continue; }
       const results: unknown[] = [];
-      for (const r of turn.requests) results.push(await runRequest(r));
-      investigation.push({ step: investigation.length + 1, requests: turn.requests, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
+      for (const r of turn.requests) results.push(await runRequest(r, from, plays));
+      /* A draft travels back as it wrote it, never as the host's formula object. */
+      const asWritten = turn.requests.map((r) => 'play' in r && r.formula !== null && typeof r.formula === 'object' ? { play: r.play, formula: ownFormula(r.formula) } : r);
+      investigation.push({ step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
       log('investigation', { round, requests: turn.requests, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
       say('  investigates: ' + turn.requests.map((r, i) => 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
         : 'try' in r ? 'try ' + r.try + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { allowed?: boolean }).allowed ? ' allowed' : ' refused')
+        : 'play' in r ? 'play from ' + r.play + ' -> ' + ((results[i] as { result?: string; error?: string }).result ?? (results[i] as { error?: string }).error)
         : 'table' in r ? 'table on ' + r.on : 'measure on ' + r.on.length).join('; '));
       refused = [];
       continue;
@@ -460,6 +512,7 @@ async function propose(from: Formula | null, directive: string | null = null, mo
     unaddressed = stances.unaddressed;
     notebook.recordRound(round, proposal.formula, proposal.lessons, proposal.nextExperiment);
     roundOf.set(proposal.formula, round);
+    formulaOfRound.set(round, proposal.formula);
     log('proposal', { round, investigation_steps: investigation.length, rationale: proposal.rationale, beliefs: proposal.beliefs, notes: turn.notes,
       lessons: proposal.lessons, next_experiment: proposal.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings,
       no_stance_on: stances.unaddressed, formula: proposal.formula, probes: proposal.probes, warnings: proposal.warnings, variation: replay.variation });

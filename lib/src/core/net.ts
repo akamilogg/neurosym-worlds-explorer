@@ -28,6 +28,9 @@ export interface FetchJsonOptions {
   readonly timeoutMs?: number;
   readonly retries?: number;
   readonly backoffMs?: number;
+  /** Retry network-level failures too. Off by default: in a browser they are usually CORS, which no retry fixes;
+      a long unattended run on a server host wants them retried (a dropped connection is transient there). */
+  readonly retryNetwork?: boolean;
   readonly signal?: AbortSignal | null;
   readonly fetch?: FetchLike;
   readonly sleep?: (ms: number) => Promise<void>;
@@ -137,8 +140,8 @@ export async function fetchJson(url: string, options: FetchJsonOptions = {}): Pr
       else if (raw && (raw as Error).name === 'AbortError') {
         error = external?.aborted ? new ApiError('aborted', 'Request aborted by the caller.') : new ApiError('timeout', 'Request aborted after ' + timeoutMs + ' ms.');
       } else error = new ApiError('network', (raw as Error)?.message || 'Network request failed (URL, CORS, connectivity).');
-      /* A network-level failure (typically a CORS preflight) is not retried: no retry can fix it. */
-      const retryable = error.kind === 'timeout' || (error.kind === 'http' && error.details?.retryable === true);
+      /* A network-level failure (typically a CORS preflight) is not retried unless the host asks: no retry fixes CORS. */
+      const retryable = error.kind === 'timeout' || (error.kind === 'http' && error.details?.retryable === true) || (error.kind === 'network' && options.retryNetwork === true);
       if (error.kind === 'aborted' || !retryable || attempt >= retries) throw error;
       const asked = error.details?.retryAfterMs;
       await sleep(typeof asked === 'number' ? asked : backoffMs * Math.pow(2, attempt));

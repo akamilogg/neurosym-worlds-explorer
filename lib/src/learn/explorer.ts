@@ -43,6 +43,7 @@ export const EXPLORER_SYSTEM = [
   '  {"inspect": "<game>@<turn>"}   what YOUR search did on that turn of yours: the position it chose to move to (named "<game>@<turn>/<k>", with its picture), the value your formula gave it looking ahead and directly, and the finished games your search ran into after it within its horizon, and who won them',
   '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests) and whether that change ended the game (and who won). It never says why a change was refused or why a game ended: that is for you to work out. A try is how you TEST an idea about how games end, directly. Trying changes nothing in any game.',
   '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
+  '  {"play": "<position>", "formula": <round> | { "observations": ..., "rules": ..., "weights": ... }}   PLAY a game again yourself: from any position of your games ("<game>@0" is its start, "<game>@<turn>" a moment of it, "try<n>" where a try left you), your side choosing with the formula of that round, or with a draft you write in the same shape as a proposal (without "formula", your best formula). The other side plays as it always does, so the same experiment can end differently. You get a new game (its name, how it ended, how many turns), to view and inspect like any other. Repeat an experiment, or change one thing and play it again: it is your laboratory, and nothing it plays counts on the scoreboard. At most `plays_left` games this round.',
   '`surprises` lists, for your latest games, the turns where your own search\'s value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.',
   '',
   'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: the mean value on positions from games you won and from games you lost; the AUC (the probability that a position from a won game scores higher than one from a lost game: 0.5 = no relation, 1 = always higher in won games, 0 = always higher in lost games); how many positions; and whether chance alone could produce a difference that large with that many positions. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the outcome belongs to the whole game: early positions of a lost game may have been fine.',
@@ -85,6 +86,8 @@ export interface ExplorerBrief {
   /** This round's requests and their results so far. */
   readonly investigation?: readonly unknown[];
   readonly stepsLeft?: number;
+  /** Games it may still play itself this round (the `play` request). */
+  readonly playsLeft?: number;
   /** Why the previous answer was refused. */
   readonly refused?: readonly string[];
   readonly directive?: string | null;
@@ -93,7 +96,7 @@ export interface ExplorerBrief {
 }
 
 /** Only what the explorer wrote travels back: its own code and words, never the host's internals. */
-function ownFormula(formula: Formula): Record<string, unknown> {
+export function ownFormula(formula: Formula): Record<string, unknown> {
   const observations: Record<string, unknown> = {};
   for (const [id, d] of Object.entries(formula.observations)) {
     const spec = d.spec as { kind?: string; source?: string };
@@ -120,6 +123,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
       ...(h.errors.length ? { errors: h.errors } : {}) })) } : {}),
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
+    ...(brief.playsLeft !== undefined ? { plays_left: brief.playsLeft } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
     ...(brief.directive ? { operator_directive: brief.directive } : {}),
     ...(brief.task ? { task: brief.task } : {})
@@ -133,7 +137,9 @@ export type ExplorerRequest =
   | { readonly inspect: string }
   | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'in_play' | 'final' }
   | { readonly try: string; readonly from: readonly [number, number]; readonly to: readonly [number, number] }
-  | { readonly measure: { readonly source: string; readonly range: readonly [number, number] }; readonly on: readonly string[] };
+  | { readonly measure: { readonly source: string; readonly range: readonly [number, number] }; readonly on: readonly string[] }
+  /** `formula`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its best formula. */
+  | { readonly play: string; readonly formula: number | Formula | null };
 
 export type ExplorerTurn =
   | { kind: 'investigate'; requests: ExplorerRequest[]; notes: NoteOp[]; warnings: string[] }
@@ -174,6 +180,14 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
         if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': table needs "source" and "range"'); continue; }
         requests.push({ table: { source: m.source, range }, on: q.on === 'final' ? 'final' : 'in_play' });
+      } else if (typeof q.play === 'string') {
+        if (q.formula === undefined || q.formula === null || q.formula === 'best') requests.push({ play: q.play, formula: null });
+        else if (Number.isInteger(q.formula)) requests.push({ play: q.play, formula: q.formula as number });
+        else if (obj(q.formula)) {
+          const built = buildFormula(q.formula as Record<string, unknown>, context);
+          if (built.errors.length) { warnings.push('request #' + i + ': the draft formula of play was refused: ' + built.errors.slice(0, 4).join(' | ')); continue; }
+          requests.push({ play: q.play, formula: built.formula });
+        } else { warnings.push('request #' + i + ': play needs "formula" as a round number or a draft { observations, rules, weights }'); continue; }
       } else if (typeof q.inspect === 'string') {
         requests.push({ inspect: q.inspect });
       } else if (q.measure && typeof q.measure === 'object' && Array.isArray(q.on)) {
@@ -181,7 +195,7 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
         if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': measure needs "source" and "range"'); continue; }
         requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
-      } else warnings.push('request #' + i + ' ignored: use view, inspect, try, measure or table');
+      } else warnings.push('request #' + i + ' ignored: use view, inspect, try, play, measure or table');
     }
     if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push('only the first ' + (context.maxRequests ?? 8) + ' requests were run');
     return { kind: 'investigate', requests, notes, warnings };
@@ -283,16 +297,12 @@ export function parseReflection(content: string, round: number): { ok: true; ref
   return { ok: true, reflection: { rationale: typeof data.rationale === 'string' ? data.rationale : '', beliefs, lessons, nextExperiment, warnings } };
 }
 
-/** `senses`: the observations every formula carries (what is perceived); the explorer never writes them. */
-export function parseExplorerProposal(content: string, context: {
-  world: string; senses: Readonly<Record<string, MeasureDecl>>; lang?: string; round?: number;
-}): ExplorerParse {
-  const data = obj(parseJsonLoose(content));
-  if (!data) return { ok: false, errors: ['the answer was not a JSON object'] };
+/** The formula part of an answer (observations, rules, weights), built and checked: a proposal's, or a draft to play. */
+function buildFormula(data: Record<string, unknown>, context: { world: string; senses: Readonly<Record<string, MeasureDecl>>; lang?: string; round?: number }):
+  { formula: Formula; observations: Record<string, MeasureDecl>; errors: string[]; warnings: string[] } {
   const lang = context.lang ?? 'js';
   const errors: string[] = [];
   const warnings: string[] = [];
-
   const observations: Record<string, MeasureDecl> = { ...context.senses };
   for (const [id, raw] of Object.entries(obj(data.observations) ?? {})) {
     if (!ID.test(id)) { errors.push('observation id "' + id + '" must be lowercase snake_case'); continue; }
@@ -308,6 +318,29 @@ export function parseExplorerProposal(content: string, context: {
   }
   const { weights, warnings: weightWarnings } = normalizeWeights(obj(data.weights) ?? {}, Object.keys(rules));
   warnings.push(...weightWarnings);
+
+  const formula = makeFormula({
+    world: context.world, observations, rules, weights,
+    meta: { source: 'explorer', round: context.round ?? 0, rationale: typeof data.rationale === 'string' ? data.rationale : '' }
+  });
+  const check = checkFormula(formula);
+  errors.push(...check.errors);
+  warnings.push(...check.warnings);
+  return { formula, observations, errors, warnings };
+}
+
+/** `senses`: the observations every formula carries (what is perceived); the explorer never writes them. */
+export function parseExplorerProposal(content: string, context: {
+  world: string; senses: Readonly<Record<string, MeasureDecl>>; lang?: string; round?: number;
+}): ExplorerParse {
+  const data = obj(parseJsonLoose(content));
+  if (!data) return { ok: false, errors: ['the answer was not a JSON object'] };
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const { formula, observations, errors: formulaErrors, warnings: formulaWarnings } = buildFormula(data, context);
+  errors.push(...formulaErrors);
+  warnings.push(...formulaWarnings);
+  const lang = context.lang ?? 'js';
 
   const probes: Probe[] = [];
   const rawProbes = Array.isArray(data.probes) ? data.probes : [];
@@ -337,14 +370,6 @@ export function parseExplorerProposal(content: string, context: {
   });
 
   const { beliefs, lessons, nextExperiment } = parseReflective(data, context.round ?? 0, warnings);
-
-  const formula = makeFormula({
-    world: context.world, observations, rules, weights,
-    meta: { source: 'explorer', round: context.round ?? 0, rationale: typeof data.rationale === 'string' ? data.rationale : '' }
-  });
-  const check = checkFormula(formula);
-  errors.push(...check.errors);
-  warnings.push(...check.warnings);
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,

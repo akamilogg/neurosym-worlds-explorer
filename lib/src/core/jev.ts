@@ -29,6 +29,8 @@ export interface JevJudgeOptions {
   readonly model?: string;
   readonly timeoutMs?: number;
   readonly retries?: number;
+  /** Retry network-level failures too (see FetchJsonOptions.retryNetwork). */
+  readonly retryNetwork?: boolean;
   /** Live calls at once (the harness default is 8). */
   readonly concurrency?: number;
   readonly fetch?: FetchLike;
@@ -208,6 +210,7 @@ export class JevJudge implements Judge {
         headers: this.options.apiKey ? { Authorization: 'Bearer ' + this.options.apiKey } : {},
         timeoutMs: this.options.timeoutMs ?? 20000,
         retries: this.options.retries ?? 2,
+        retryNetwork: this.options.retryNetwork ?? false,
         signal: signal ?? null,
         fetch: this.options.fetch,
         sleep: this.options.sleep

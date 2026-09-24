@@ -674,6 +674,7 @@ var Neurosym = (() => {
     opDialect: () => opDialect,
     openAiChatClient: () => openAiChatClient,
     orderMoves: () => orderMoves,
+    ownFormula: () => ownFormula,
     parseExplorerProposal: () => parseExplorerProposal,
     parseExplorerTurn: () => parseExplorerTurn,
     parseJevAnswers: () => parseJevAnswers,
@@ -1406,7 +1407,7 @@ var Neurosym = (() => {
         else if (raw && raw.name === "AbortError") {
           error = external?.aborted ? new ApiError("aborted", "Request aborted by the caller.") : new ApiError("timeout", "Request aborted after " + timeoutMs + " ms.");
         } else error = new ApiError("network", raw?.message || "Network request failed (URL, CORS, connectivity).");
-        const retryable = error.kind === "timeout" || error.kind === "http" && error.details?.retryable === true;
+        const retryable = error.kind === "timeout" || error.kind === "http" && error.details?.retryable === true || error.kind === "network" && options.retryNetwork === true;
         if (error.kind === "aborted" || !retryable || attempt >= retries) throw error;
         const asked = error.details?.retryAfterMs;
         await sleep(typeof asked === "number" ? asked : backoffMs * Math.pow(2, attempt));
@@ -1569,6 +1570,7 @@ var Neurosym = (() => {
           headers: this.options.apiKey ? { Authorization: "Bearer " + this.options.apiKey } : {},
           timeoutMs: this.options.timeoutMs ?? 2e4,
           retries: this.options.retries ?? 2,
+          retryNetwork: this.options.retryNetwork ?? false,
           signal: signal ?? null,
           fetch: this.options.fetch,
           sleep: this.options.sleep
@@ -3437,6 +3439,7 @@ var Neurosym = (() => {
     '  {"inspect": "<game>@<turn>"}   what YOUR search did on that turn of yours: the position it chose to move to (named "<game>@<turn>/<k>", with its picture), the value your formula gave it looking ahead and directly, and the finished games your search ran into after it within its horizon, and who won them',
     '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests) and whether that change ended the game (and who won). It never says why a change was refused or why a game ended: that is for you to work out. A try is how you TEST an idea about how games end, directly. Trying changes nothing in any game.',
     '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
+    '  {"play": "<position>", "formula": <round> | { "observations": ..., "rules": ..., "weights": ... }}   PLAY a game again yourself: from any position of your games ("<game>@0" is its start, "<game>@<turn>" a moment of it, "try<n>" where a try left you), your side choosing with the formula of that round, or with a draft you write in the same shape as a proposal (without "formula", your best formula). The other side plays as it always does, so the same experiment can end differently. You get a new game (its name, how it ended, how many turns), to view and inspect like any other. Repeat an experiment, or change one thing and play it again: it is your laboratory, and nothing it plays counts on the scoreboard. At most `plays_left` games this round.',
     "`surprises` lists, for your latest games, the turns where your own search's value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.",
     "",
     "Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games labelled by how THAT game ended. The judge answering a probe question never knows how the game ended: ask it to describe the position. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: the mean value on positions from games you won and from games you lost; the AUC (the probability that a position from a won game scores higher than one from a lost game: 0.5 = no relation, 1 = always higher in won games, 0 = always higher in lost games); how many positions; and whether chance alone could produce a difference that large with that many positions. Observations are also tested on final positions (what the end of a won or a lost game looks like - this is how you learn how games end). Remember the outcome belongs to the whole game: early positions of a lost game may have been fine.",
@@ -3491,6 +3494,7 @@ var Neurosym = (() => {
       })) } : {},
       ...brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {},
       ...brief.stepsLeft !== void 0 ? { steps_left: brief.stepsLeft } : {},
+      ...brief.playsLeft !== void 0 ? { plays_left: brief.playsLeft } : {},
       ...brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {},
       ...brief.directive ? { operator_directive: brief.directive } : {},
       ...brief.task ? { task: brief.task } : {}
@@ -3542,6 +3546,20 @@ var Neurosym = (() => {
             continue;
           }
           requests.push({ table: { source: m.source, range }, on: q.on === "final" ? "final" : "in_play" });
+        } else if (typeof q.play === "string") {
+          if (q.formula === void 0 || q.formula === null || q.formula === "best") requests.push({ play: q.play, formula: null });
+          else if (Number.isInteger(q.formula)) requests.push({ play: q.play, formula: q.formula });
+          else if (obj(q.formula)) {
+            const built = buildFormula(q.formula, context);
+            if (built.errors.length) {
+              warnings.push("request #" + i + ": the draft formula of play was refused: " + built.errors.slice(0, 4).join(" | "));
+              continue;
+            }
+            requests.push({ play: q.play, formula: built.formula });
+          } else {
+            warnings.push("request #" + i + ': play needs "formula" as a round number or a draft { observations, rules, weights }');
+            continue;
+          }
         } else if (typeof q.inspect === "string") {
           requests.push({ inspect: q.inspect });
         } else if (q.measure && typeof q.measure === "object" && Array.isArray(q.on)) {
@@ -3552,7 +3570,7 @@ var Neurosym = (() => {
             continue;
           }
           requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
-        } else warnings.push("request #" + i + " ignored: use view, inspect, try, measure or table");
+        } else warnings.push("request #" + i + " ignored: use view, inspect, try, play, measure or table");
       }
       if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push("only the first " + (context.maxRequests ?? 8) + " requests were run");
       return { kind: "investigate", requests, notes, warnings };
@@ -3651,9 +3669,7 @@ var Neurosym = (() => {
     if (!beliefs.length && !lessons.length) return { ok: false, errors: ["a reflection needs stances on your beliefs and/or lessons"] };
     return { ok: true, reflection: { rationale: typeof data.rationale === "string" ? data.rationale : "", beliefs, lessons, nextExperiment, warnings } };
   }
-  function parseExplorerProposal(content, context) {
-    const data = obj(parseJsonLoose(content));
-    if (!data) return { ok: false, errors: ["the answer was not a JSON object"] };
+  function buildFormula(data, context) {
     const lang = context.lang ?? "js";
     const errors = [];
     const warnings = [];
@@ -3681,6 +3697,27 @@ var Neurosym = (() => {
     }
     const { weights, warnings: weightWarnings } = normalizeWeights(obj(data.weights) ?? {}, Object.keys(rules));
     warnings.push(...weightWarnings);
+    const formula = makeFormula({
+      world: context.world,
+      observations,
+      rules,
+      weights,
+      meta: { source: "explorer", round: context.round ?? 0, rationale: typeof data.rationale === "string" ? data.rationale : "" }
+    });
+    const check = checkFormula(formula);
+    errors.push(...check.errors);
+    warnings.push(...check.warnings);
+    return { formula, observations, errors, warnings };
+  }
+  function parseExplorerProposal(content, context) {
+    const data = obj(parseJsonLoose(content));
+    if (!data) return { ok: false, errors: ["the answer was not a JSON object"] };
+    const errors = [];
+    const warnings = [];
+    const { formula, observations, errors: formulaErrors, warnings: formulaWarnings } = buildFormula(data, context);
+    errors.push(...formulaErrors);
+    warnings.push(...formulaWarnings);
+    const lang = context.lang ?? "js";
     const probes = [];
     const rawProbes = Array.isArray(data.probes) ? data.probes : [];
     rawProbes.forEach((raw, i) => {
@@ -3717,16 +3754,6 @@ var Neurosym = (() => {
       probes.push({ id, hypothesis, ...observation ? { observation } : {}, ...question ? { question } : {} });
     });
     const { beliefs, lessons, nextExperiment } = parseReflective(data, context.round ?? 0, warnings);
-    const formula = makeFormula({
-      world: context.world,
-      observations,
-      rules,
-      weights,
-      meta: { source: "explorer", round: context.round ?? 0, rationale: typeof data.rationale === "string" ? data.rationale : "" }
-    });
-    const check = checkFormula(formula);
-    errors.push(...check.errors);
-    warnings.push(...check.warnings);
     if (errors.length) return { ok: false, errors };
     return {
       ok: true,

@@ -184,3 +184,22 @@ test('a probe question that cites something not measured is refused at once, wit
   assert.match(parsed.errors[0], /probe lonely question cites \{\{probe_lonely\}\}.*only when it declares its own observation/);
   assert.match(parsed.errors[1], /probe ghost question cites \{\{nowhere\}\}/);
 });
+
+test('play: its best formula, one of its rounds, or a draft built and checked like a proposal; a bad draft is refused with the reason', () => {
+  const draft = { observations: answer.observations, rules: answer.rules, weights: answer.weights };
+  const t = parseExplorerTurn(JSON.stringify({ investigate: [
+    { play: 'g1@0' }, { play: 'g2@6', formula: 3 }, { play: 'try1', formula: draft },
+    { play: 'g1@0', formula: { rules: { r: { type: 'score', instructions: '{{nowhere}}', criteria: ['a', 'b'] } } } },
+    { play: 'g1@0', formula: 'yesterday' }
+  ] }), { world: world.id, senses: SENSES });
+  assert.ok(t.kind === 'investigate');
+  if (t.kind !== 'investigate') return;
+  assert.deepEqual(t.requests.slice(0, 2), [{ play: 'g1@0', formula: null }, { play: 'g2@6', formula: 3 }]);
+  const built = (t.requests[2] as { formula: { observations: Record<string, unknown>; weights: Record<string, number> } }).formula;
+  assert.ok('picture' in built.observations && 'mine' in built.observations, 'a draft carries the senses too');
+  assert.equal(built.weights.many, 1);
+  assert.equal(t.requests.length, 3);
+  assert.equal(t.warnings.length, 2);
+  assert.match(t.warnings[0], /draft formula of play was refused/);
+  assert.match(EXPLORER_SYSTEM, /"play"/);
+});
