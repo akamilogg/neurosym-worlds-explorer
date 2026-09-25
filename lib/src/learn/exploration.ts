@@ -23,6 +23,9 @@ export interface ChoiceRecord<S> {
   readonly lookahead: number;
   /** The formula's value of the position itself, without looking ahead. */
   readonly direct: number;
+  /** Behind `direct`: what each rule answered and what each code observation measured (empty on a finished game). */
+  readonly rules: Readonly<Record<string, number>>;
+  readonly measures: Readonly<Record<string, number>>;
   /** Finished games found inside the horizon after this choice: won by the learner / by the other side. */
   readonly endingsWon: number;
   readonly endingsLost: number;
@@ -61,12 +64,17 @@ export async function recordTurn<S, A>(evaluator: Evaluator<S>, world: World<S, 
   const key = (m: A) => (world.actionKey ? world.actionKey(m) : JSON.stringify(m));
   for (const m of world.actions(state, options.maximizer)) {
     const child = world.step(state, m);
-    const direct = (await evaluator.eval(options.formula, child)).value;
+    const ev = await evaluator.eval(options.formula, child);
+    const direct = ev.value;
+    const rules = Object.fromEntries(Object.entries(ev.answers).map(([id, a]) => [id, Math.round(a.value * 10000) / 10000]));
+    const measures = Object.fromEntries(Object.entries(options.formula.observations)
+      .filter(([id, d]) => d.spec.kind === 'code' && Number.isFinite(ev.observation.values[id]))
+      .map(([id]) => [id, Math.round(ev.observation.values[id] * 10000) / 10000]));
     const lookahead = options.depth > 1 && !world.outcome(child).over
       ? (await searchBestMove<S, A>(evaluator, child, { formula: options.formula, depth: options.depth - 1, profile: PLAY_PV_ALPHA_BETA })).best.value
       : direct;
     const endings = endingsWithin(world, child, Math.max(0, options.depth - 1), options.maximizer);
-    choices.push({ state: child, lookahead, direct, endingsWon: endings.won, endingsLost: endings.lost, chosen: key(m) === key(chosen) });
+    choices.push({ state: child, lookahead, direct, rules, measures, endingsWon: endings.won, endingsLost: endings.lost, chosen: key(m) === key(chosen) });
   }
   const pick = choices.find((c) => c.chosen);
   return { turn: options.turn, state, value: pick ? pick.lookahead : NaN, choices };

@@ -373,6 +373,9 @@ async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { l
     if (!t) return { inspect: req.inspect, error: g.turns.size ? 'your search did not choose on that turn (it is not one of your turns); your turns here: ' + [...g.turns.keys()].join(', ') : 'in this game your side moved at random: nothing was searched' };
     const describe = (c: TurnRecord<GridState>['choices'][number], k: number) => ({ name: req.inspect + '/' + k, picture: picture(c.state),
       value_looking_ahead: c.lookahead, value_directly: c.direct,
+      /* Its own formula taken apart: the answer of each rule and the value of each observation behind value_directly. */
+      ...(Object.keys(c.rules).length ? { each_rule_answered: c.rules } : {}),
+      ...(Object.keys(c.measures).length ? { your_observations_measured: c.measures } : {}),
       finished_games_your_search_ran_into: { you_won: c.endingsWon, the_other_side_won: c.endingsLost } });
     const k = t.choices.findIndex((c) => c.chosen);
     return {

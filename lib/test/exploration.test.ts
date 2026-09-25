@@ -32,6 +32,9 @@ test('a recorded turn holds every choice its search had, as its search valued th
     assert.equal(c.direct, 0.05, 'direct: the formula on the position itself (move 1 / 20)');
     assert.ok(Number.isFinite(c.lookahead));
     assert.ok(c.endingsWon >= 0 && c.endingsLost >= 0);
+    /* The parts behind the direct value: its own rule's answer and its own code observation, never the senses. */
+    assert.deepEqual(c.rules, { v: 0.05 });
+    assert.deepEqual(c.measures, { t: 1 });
   }
   assert.equal(t.value, t.choices[1].lookahead);
 });
