@@ -68,7 +68,9 @@ test('the explorer is told nothing about the world: the payload is its notebook,
   });
   const text = (JSON.stringify(payload) + EXPLORER_SYSTEM).toLowerCase();
   for (const word of [spec.winA, spec.winB, 'grid@1', world.id.toLowerCase(), 'legal', 'fox', 'hound', 'cat', 'mouse']) {
-    assert.ok(!text.includes(word), 'the payload must not say "' + word + '"');
+    /* Whole words: "predicate" is not "cat". */
+    const said = /^[a-z]+$/.test(word) ? new RegExp('(^|[^a-z])' + word + '($|[^a-z])').test(text) : text.includes(word);
+    assert.ok(!said, 'the payload must not say "' + word + '"');
   }
   const own = (payload as any).your_best_formula;
   assert.deepEqual(Object.keys(own.observations), ['mine'], 'the sense is the host\'s, not echoed as the explorer\'s code');
@@ -204,9 +206,9 @@ test('play: its best formula, one of its rounds, or a draft built and checked li
   assert.match(EXPLORER_SYSTEM, /"play"/);
 });
 
-test('method guidance is strategy only: nothing in it names a feature of any world or game', () => {
-  const start = EXPLORER_SYSTEM.indexOf('METHOD.');
-  const method = EXPLORER_SYSTEM.slice(start, EXPLORER_SYSTEM.indexOf('`surprises`', start)).toLowerCase();
+test('the thinking guidance is discipline and strategy only: nothing in it names a feature of any world or game', () => {
+  const start = EXPLORER_SYSTEM.indexOf('HOW YOU THINK.');
+  const method = EXPLORER_SYSTEM.slice(start, EXPLORER_SYSTEM.indexOf('`surprises` lists', start)).toLowerCase();
   assert.ok(start >= 0 && method.includes('table') && method.includes('play') && method.includes('methods'));
   for (const word of ['row', 'column', 'col,', 'edge', 'corner', 'piece', 'capture', 'trap', 'reach', 'immobil', 'block', 'diagonal', 'side', 'goal']) {
     assert.ok(!method.includes(word), 'method guidance must not mention "' + word + '"');
