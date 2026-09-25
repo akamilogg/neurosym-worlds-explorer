@@ -133,3 +133,24 @@ test('siblings: choices from one won position are ordered by the probe, pairs co
   assert.equal(choice.sets, sets.length);
   assert.equal(choice.auc, 0.5, 'every choice from one position has the same move counter: it orders nothing');
 });
+
+test('positions are compared by the score their game ended with: a draw is neither a win nor a loss', async () => {
+  const { classifyScored, concordance, describeTest } = await import('../src/learn/experiments.ts');
+  /* The value is 1 exactly in lost games: with draws lumped as losses it would look like a weak signal. */
+  const samples = [
+    ...Array.from({ length: 8 }, () => ({ value: 0, score: 1 })),
+    ...Array.from({ length: 8 }, () => ({ value: 0, score: 0 })),
+    ...Array.from({ length: 8 }, () => ({ value: 1, score: -1 }))];
+  assert.equal(concordance(samples), 1 / 6, 'lost vs the rest: always higher (0); won vs draw: ties (half) - 32 of 192 pairs');
+  assert.equal(classifyScored(samples).status, 'inverted');
+  assert.equal(classifyScored(samples, { minSamples: 9 }).status, 'inconclusive');
+  const stub = stubJev();
+  const ps = positions().slice(0, 12).map((p, i) => ({ ...p, final: true, score: [1, 0, -1][i % 3] }));
+  const probe = { id: 'x', hypothesis: 'h', observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.move' }, range: [0, 12] as [number, number] } };
+  const [r] = await runProbes([probe], ps, { observer, judge: new JevJudge({ fetch: stub.fetch }), base, maximizer: 'A' }, { minSamples: 3 });
+  const final = r.tests.find((t) => t.positions === 'final')!;
+  assert.deepEqual(final.by_score!.map((g) => [g.score, g.positions]), [[1, 4], [0, 4], [-1, 4]]);
+  const seen = describeTest(final) as any;
+  assert.deepEqual(seen.by_game_score.map((g: any) => g.game_score), [1, 0, -1]);
+  assert.ok(!('mean_in_won_games' in seen) && !/won|lost|draw/.test(JSON.stringify(seen)), 'only the score: its meaning is for the learner');
+});

@@ -282,21 +282,23 @@ async function probeSet(): Promise<Labelled[]> {
   const inPlay: Labelled[] = [], finals: Labelled[] = [];
   const seen = new Set<string>();
   for (const g of games.values()) {
-    const label = g.result === 'won' ? 'win' : 'loss';
+    /* The score the game ended with for the learner; the operator's code-only fit still reads won / not won. */
+    const score = g.result === 'won' ? 1 : g.result === 'lost' ? -1 : 0;
+    const label = score > 0 ? 'win' : 'loss';
     for (const [turn, s] of g.states.entries()) {
       const over = world.outcome(s).over;
       if (!over && s.turn !== 'A') continue;
-      const key = (over ? 'F' : 'P') + world.key(s) + label;
+      const key = (over ? 'F' : 'P') + world.key(s) + score;
       if (seen.has(key)) continue;
       seen.add(key);
-      (over ? finals : inPlay).push({ state: s, label, ref: g.id + '@' + turn, ...(over ? { final: true } : {}) });
+      (over ? finals : inPlay).push({ state: s, label, score, ref: g.id + '@' + turn, ...(over ? { final: true } : {}) });
     }
   }
-  /* Balanced and bounded: as many positions from won as from lost games when it can be. */
+  /* Balanced and bounded: as many positions from each game score as there can be. */
   const take = <T>(xs: T[], n: number) => { const step = Math.max(1, xs.length / n); return Array.from({ length: Math.min(n, xs.length) }, (_, i) => xs[Math.floor(i * step)]); };
-  const half = Math.floor(cfg.probePositions / 2);
-  const pick = (xs: Labelled[], n: number) => [...take(xs.filter((p) => p.label === 'win'), n), ...take(xs.filter((p) => p.label === 'loss'), n)];
-  return [...pick(inPlay, half), ...pick(finals, Math.max(6, Math.floor(half / 2)))];
+  const third = Math.floor(cfg.probePositions / 3);
+  const pick = (xs: Labelled[], n: number) => [1, 0, -1].flatMap((score) => take(xs.filter((p) => p.score === score), n));
+  return [...pick(inPlay, third), ...pick(finals, Math.max(5, Math.floor(third / 2)))];
 }
 
 async function experiment(probes: Probe[], base: Formula): Promise<void> {
@@ -305,8 +307,9 @@ async function experiment(probes: Probe[], base: Formula): Promise<void> {
   const results = await runProbes(probes, positions, { observer, judge, base, maximizer: 'A' }, { round: currentRound });
   registry.record(results);
   notebook.recordProbes(currentRound, results);
-  const count = (final: boolean, label: string) => positions.filter((p) => !!p.final === final && p.label === label).length;
-  log('probes', { round: currentRound, positions: { in_play: { win: count(false, 'win'), loss: count(false, 'loss') }, final: { win: count(true, 'win'), loss: count(true, 'loss') } }, results });
+  const count = (final: boolean, score: number) => positions.filter((p) => !!p.final === final && p.score === score).length;
+  const counts = (final: boolean) => ({ won: count(final, 1), draw: count(final, 0), lost: count(final, -1) });
+  log('probes', { round: currentRound, positions: { in_play: counts(false), final: counts(true) }, results });
   for (const r of results) {
     say('  probe ' + r.id + ': ' + r.status + ' - ' + r.hypothesis);
     for (const t of r.tests) say('      ' + t.by + ' on ' + t.positions + ': ' + t.status + ' (auc ' + t.auc + ', ' + t.samples_win + '/' + t.samples_loss + ')');
@@ -380,12 +383,12 @@ async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { l
     };
   }
   if ('table' in req) {
-    /* The rows behind the probe facts: each position probes use, the code's value, and how that game ended. */
+    /* The rows behind the probe facts: each position probes use, the code's value, and the score that game ended with. */
     const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, range: req.table.range };
     const rows = (await probeSet()).filter((p) => !!p.final === (req.on === 'final')).map((p) => {
       const o = observer.observe(p.state, { ...SENSES, m: decl });
       const err = o.errors.find((e) => e.id === 'm');
-      return { position: p.ref, game_result: p.label === 'win' ? 'won' : 'not won', ...(err ? { error: err.error } : { value: o.values.m }) };
+      return { position: p.ref, game_score: p.score, ...(err ? { error: err.error } : { value: o.values.m }) };
     });
     return { table: req.table.source, on: req.on, rows };
   }

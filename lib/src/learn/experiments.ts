@@ -62,11 +62,14 @@ export interface ProbeTest {
   readonly samples_loss: number;
   readonly mean_when_win: number | null;
   readonly mean_when_loss: number | null;
-  /** P(a won position scores higher than a lost one); 0.5 = no relation. */
+  /** P(a won position scores higher than a lost one); 0.5 = no relation. With game scores: of two positions from
+      games with different scores, P(the one from the higher-scored game has the higher value). */
   readonly auc: number | null;
   /** How far from 0.5 the AUC had to be, with these samples, to count. */
   readonly margin: number | null;
   readonly status: ProbeStatus;
+  /** In play and final: positions and mean value per game score (highest score first). */
+  readonly by_score?: readonly { readonly score: number; readonly positions: number; readonly mean: number | null }[];
 }
 
 export interface ProbeResult {
@@ -94,9 +97,14 @@ export interface LabelledPosition<S> {
   readonly state: S;
   /** From the maximizer's point of view, as the truth decided it. */
   readonly label: 'win' | 'loss';
+  /** How the game it comes from ended for the maximizer, from -1 to 1 (default: 1 for a win, -1 for a loss).
+      Probes compare positions by this score, so a draw is neither a win nor a loss. */
+  readonly score?: number;
   /** A finished position (its label is its outcome). */
   readonly final?: boolean;
 }
+
+export const scoreOf = (p: { label: 'win' | 'loss'; score?: number }): number => p.score ?? (p.label === 'win' ? 1 : -1);
 
 export interface ProbeOptions {
   readonly minSamples?: number;
@@ -136,13 +144,64 @@ export function classify(win: number[], loss: number[], options: { minSamples?: 
 
 type Tested = ProbeTest & { separation: number | null };
 
-function testOf(by: ProbeTest['by'], positions: ProbeTest['positions'], win: number[], loss: number[], options: ProbeOptions): Tested {
-  const c = classify(win, loss, options);
+/** A value measured on a position, with the score of the game it comes from. */
+export interface Scored { readonly value: number; readonly score: number }
+
+/** Of two samples with different scores, P(the higher-scored one has the higher value); ties count half. */
+export function concordance(samples: readonly Scored[]): number | null {
+  let hits = 0, pairs = 0;
+  for (let i = 0; i < samples.length; i++) for (let j = i + 1; j < samples.length; j++) {
+    const a = samples[i], b = samples[j];
+    if (a.score === b.score) continue;
+    const [hi, lo] = a.score > b.score ? [a, b] : [b, a];
+    hits += hi.value > lo.value ? 1 : hi.value === lo.value ? 0.5 : 0;
+    pairs++;
+  }
+  return pairs ? hits / pairs : null;
+}
+
+/** Like `classify`, over any number of game scores. Decisive needs two scores with minSamples each; the margin is
+    the 95th percentile of |AUC - 0.5| with the scores shuffled (seeded: the same samples give the same margin). */
+export function classifyScored(samples: readonly Scored[], options: { minSamples?: number; permutations?: number } = {}):
+  { auc: number | null; margin: number | null; status: ProbeStatus } {
+  const a = concordance(samples);
+  const counts = new Map<number, number>();
+  for (const x of samples) counts.set(x.score, (counts.get(x.score) ?? 0) + 1);
+  const minSamples = options.minSamples ?? 6;
+  if (a === null || [...counts.values()].filter((n) => n >= minSamples).length < 2) return { auc: a === null ? null : round(a, 4), margin: null, status: 'inconclusive' };
+  let seed = (samples.length * 7919 + 1) >>> 0;
+  const rnd = () => {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const scores = samples.map((x) => x.score);
+  const spread: number[] = [];
+  for (let k = 0; k < (options.permutations ?? 400); k++) {
+    for (let i = scores.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [scores[i], scores[j]] = [scores[j], scores[i]]; }
+    spread.push(Math.abs((concordance(samples.map((x, i) => ({ value: x.value, score: scores[i] }))) ?? 0.5) - 0.5));
+  }
+  spread.sort((x, y) => x - y);
+  const margin = Math.max(spread[Math.ceil(0.95 * spread.length) - 1], 1e-9);
+  const status: ProbeStatus = a >= 0.5 + margin ? 'supported' : a <= 0.5 - margin ? 'inverted' : 'unsupported';
+  return { auc: round(a, 4), margin: round(margin, 4), status };
+}
+
+function testOf(by: ProbeTest['by'], positions: ProbeTest['positions'], samples: readonly Scored[], options: ProbeOptions): Tested {
+  const c = classifyScored(samples, options);
+  const win = samples.filter((x) => x.score > 0).map((x) => x.value), loss = samples.filter((x) => x.score < 0).map((x) => x.value);
   const mw = mean(win), ml = mean(loss);
+  const by_score = [...new Set(samples.map((x) => x.score))].sort((a, b) => b - a).map((score) => {
+    const m = mean(samples.filter((x) => x.score === score).map((x) => x.value));
+    return { score, positions: samples.filter((x) => x.score === score).length, mean: m === null ? null : round(m, 4) };
+  });
   return {
     by, positions, samples_win: win.length, samples_loss: loss.length,
     mean_when_win: mw === null ? null : round(mw, 4), mean_when_loss: ml === null ? null : round(ml, 4),
-    auc: c.auc, margin: c.margin, status: c.status, separation: c.separation
+    auc: c.auc, margin: c.margin, status: c.status, by_score,
+    separation: mw !== null && ml !== null ? round(mw - ml, 4) : null
   };
 }
 
@@ -206,10 +265,10 @@ export async function runProbes<S>(probes: readonly Probe[], positions: readonly
   for (const probe of probes) {
     const errors: string[] = [];
     const tests: Tested[] = [];
-    const split = async (set: readonly LabelledPosition<S>[], value: (s: S) => Promise<number | null>): Promise<[number[], number[]]> => {
-      const win: number[] = [], loss: number[] = [];
-      for (const p of set) { const v = await value(p.state); if (v !== null) (p.label === 'win' ? win : loss).push(v); }
-      return [win, loss];
+    const split = async (set: readonly LabelledPosition<S>[], value: (s: S) => Promise<number | null>): Promise<Scored[]> => {
+      const out: Scored[] = [];
+      for (const p of set) { const v = await value(p.state); if (v !== null) out.push({ value: v, score: scoreOf(p) }); }
+      return out;
     };
     const bySiblings = async (by: ProbeTest['by'], value: (s: S) => Promise<number | null>): Promise<void> => {
       if (!siblings.length) return;
@@ -240,8 +299,8 @@ export async function runProbes<S>(probes: readonly Probe[], positions: readonly
         return (v - range[0]) / (range[1] - range[0]);
       };
       await bySiblings('observation', value);
-      tests.push(testOf('observation', 'in_play', ...await split(inPlay, value), options));
-      if (finals.length) tests.push(testOf('observation', 'final', ...await split(finals, value), { ...options, minSamples: options.minFinalSamples ?? Math.min(3, options.minSamples ?? 6) }));
+      tests.push(testOf('observation', 'in_play', await split(inPlay, value), options));
+      if (finals.length) tests.push(testOf('observation', 'final', await split(finals, value), { ...options, minSamples: options.minFinalSamples ?? Math.min(3, options.minSamples ?? 6) }));
     }
     if (probe.question) {
       const observations: Record<string, MeasureDecl> = { ...context.base.observations };
@@ -261,7 +320,7 @@ export async function runProbes<S>(probes: readonly Probe[], positions: readonly
         }
       };
       await bySiblings('question', value);
-      tests.push(testOf('question', 'in_play', ...await split(inPlay, value), options));
+      tests.push(testOf('question', 'in_play', await split(inPlay, value), options));
     }
     if (!tests.length) errors.push('a probe needs an observation or a question');
     /* Decisive first (a decisive ordering of siblings above all: it is what the search uses), then unsupported,
@@ -289,6 +348,13 @@ export async function runProbes<S>(probes: readonly Probe[], positions: readonly
     knows). "Chance could explain it" is the one statistical fact it cannot see by itself in a handful of numbers. */
 export function describeTest(t: ProbeTest): Record<string, unknown> {
   const where = t.positions === 'siblings' ? 'choices from one position' : t.positions === 'final' ? 'final positions' : 'positions in play';
+  const chance = t.status === 'inconclusive' ? 'too few positions to say' : t.status === 'unsupported' ? 'yes' : 'no';
+  /* By the score each game ended with: what the scores mean is for the explorer to work out. */
+  if (t.by_score) return {
+    tested: t.by, on: where,
+    by_game_score: t.by_score.map((g) => ({ game_score: g.score, positions: g.positions, mean: g.mean })),
+    auc: t.auc, could_chance_explain_the_difference: chance
+  };
   return {
     tested: t.by, on: where,
     mean_in_won_games: t.mean_when_win, mean_in_lost_games: t.mean_when_loss,
