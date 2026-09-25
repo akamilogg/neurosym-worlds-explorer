@@ -22,6 +22,11 @@
                          learner finds out what else was possible by TRYING changes against the environment)
      --variants N        generalization: games from N starting positions never played, every trial (default 7; 0 = off).
                          Accepting a formula requires winning them too.
+     --tools a,b,...     the instruments System 2 is given (default: all = view,inspect,try,measure,play,table,probes;
+                         "none" = none of them). The BASELINE: without them the prompt says nothing of them and any
+                         request for one is refused - to measure what the instruments add, the same seed, model and
+                         budget with and without.
+     --no-grade          skip the operator-only grading of recovered rules against the hidden ones (one LLM call)
      --no-reflection     skip the final reflection round (beliefs, notes and lessons after the last trial; no formula)
      --no-ablation       skip the code-only ablation (same observations, no Judge; information only)
      --flat              CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted
@@ -49,12 +54,13 @@ import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loo
 import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
 import { ceilingOf, tightness } from '../src/worlds/grid/informed.ts';
 import { variantStarts } from '../src/worlds/grid/variants.ts';
-import { EXPLORER_SYSTEM, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
+import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
 import { Notebook, type GameRecord } from '../src/learn/notebook.ts';
 import { recordTurn, surprises, type TurnRecord } from '../src/learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
 import { noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
-import type { ApiError } from '../src/core/net.ts';
+import { parseJsonLoose, type ApiError } from '../src/core/net.ts';
+import { describeGridTruth } from '../src/worlds/grid/describe.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
   type GridMove, type GridState } from '../src/worlds/grid/index.ts';
 import type { Formula, MeasureDecl } from '../src/core/types.ts';
@@ -78,13 +84,71 @@ const cfg = {
   ablation: !flag('no-ablation'),
   variants: Number(arg('variants', '7')),
   reflection: !flag('no-reflection'),
+  grade: !flag('no-grade'),
   steps: Number(arg('steps', '3')),
   plays: Number(arg('plays', '4')),
-  revealChoices: flag('reveal-choices')
+  revealChoices: flag('reveal-choices'),
+  tools: parseTools(arg('tools', 'all'))
 };
+function parseTools(value: string): ExplorerTool[] {
+  if (value === 'all') return [...EXPLORER_TOOLS];
+  if (value === 'none') return [];
+  const asked = value.split(',').map((t) => t.trim()).filter(Boolean);
+  const unknown = asked.filter((t) => !(EXPLORER_TOOLS as readonly string[]).includes(t));
+  if (unknown.length) { console.error('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + EXPLORER_TOOLS.join(', ') + ', or all / none)'); process.exit(2); }
+  return EXPLORER_TOOLS.filter((t) => asked.includes(t));
+}
+const tools: ReadonlySet<ExplorerTool> = new Set(cfg.tools);
+const investigative = INVESTIGATION_TOOLS.some((t) => tools.has(t));
+const SYSTEM_PROMPT = explorerSystem(tools);
 const env = process.env;
 if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
 if (!cfg.flat && !env.JEV_KEY) { console.error('JEV_KEY is required (or run the --flat control).'); process.exit(2); }
+
+/* --- Operator-only measures: logged for the operator, never shown to System 2 or the Judge ----------- */
+
+/** How much the formula's observations compress the positions its games went through: distinct observation vectors
+    (with the side to move - what the Judge's cache is keyed on) against distinct positions. Operator only. */
+function abstractionOf(formula: Formula, stored: readonly { states: GridState[] }[]): Record<string, number> {
+  const positions = new Set<string>();
+  const observed = new Set<string>();
+  let states = 0;
+  for (const g of stored) {
+    for (const st of g.states) {
+      if (world.outcome(st).over) continue;
+      states++;
+      positions.add(world.key(st));
+      observed.add(observer.observe(st, formula.observations).vector + '|T' + st.turn);
+    }
+  }
+  return { states, distinct_positions: positions.size, distinct_observations: observed.size,
+    positions_per_observation: Math.round(positions.size / Math.max(1, observed.size) * 100) / 100 };
+}
+
+/** Operator only: an LLM grades System 2's final beliefs, notes and reflection against the hidden rules, stated in the
+    coordinates of its picture. The result goes to the journal and nowhere else. */
+async function gradeRecovery(): Promise<void> {
+  const truth = describeGridTruth(spec, sense);
+  const brief = notebook.brief();
+  const learned = { beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: notebook.reflections };
+  const system = 'You grade how well a learner recovered the hidden rules of a game it could only watch as an ASCII picture. '
+    + 'For each TRUE rule, decide from the learner's own words whether it stated that rule: "exact" (stated correctly and completely, in any wording or coordinates equivalent to the picture), '
+    + '"partial" (the right idea but incomplete, too broad or too narrow), "wrong" (it states something that contradicts the rule), or "absent" (it says nothing about it). '
+    + 'Judge what the learner holds, not what it dropped, unless it holds nothing on that rule. Quote the learner briefly as evidence. '
+    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [learner claims about the rules that no true rule supports]}';
+  const user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: sense.glyphA, other: sense.glyphB }, learner: learned });
+  try {
+    const content = (await llm.complete({ system, user })).content;
+    const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string; evidence?: string }[]; false_beliefs?: unknown[] } | null;
+    const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
+    const points = grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0);
+    const score = Math.round(points / truth.length * 100) / 100;
+    log('operator_rule_recovery', { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, grader_model: env.LLM_MODEL });
+    say('operator: rule recovery ' + score + ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')');
+  } catch (e) {
+    log('operator_rule_recovery', { truth, error: String((e as Error).message ?? e) });
+  }
+}
 
 /* --- The world, as the operator knows it and as the learner perceives it ------------- */
 
@@ -346,6 +410,9 @@ async function play(from: string, formula: Formula, how: string): Promise<unknow
 }
 
 async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { left: number }): Promise<unknown> {
+  /* An instrument withheld by the experiment is refused, never run. */
+  const kind = (['view', 'inspect', 'try', 'measure', 'play', 'table'] as const).find((k) => k in req)!;
+  if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
   if ('play' in req) {
     if (plays.left <= 0) return { play: req.play, error: 'no games left to play this round' };
     const formula = req.formula === null ? base : typeof req.formula === 'number' ? formulaOfRound.get(req.formula) ?? null : req.formula;
@@ -437,7 +504,7 @@ function latestSurprises(): unknown {
   return latest.map((g) => ({ game: g.id, result: g.result, where_your_search_was_most_wrong: surprises([...g.turns.values()], valueOfResult(g.result)) }));
 }
 
-const REFLECTION_TASK = 'REFLECTION ROUND. Your formula is final: do not propose one. Look back at your games (you may investigate first) and '
+const REFLECTION_TASK = 'REFLECTION ROUND. Your formula is final: do not propose one. Look back at your games' + (investigative ? ' (you may investigate first)' : '') + ' and '
   + 'answer with {"rationale": ..., "beliefs": [stances on every belief you hold, and any new ones], "notes": [...], "lessons": [...], "next_experiment": ...}: '
   + 'what you now believe about this environment - how it works, how each side wins, and why your formula won or lost - citing your evidence.';
 
@@ -453,17 +520,18 @@ async function propose(from: Formula | null, directive: string | null = null, mo
   let steps = 0, refusals = 0;
   const plays = { left: cfg.plays };
   while (refusals < 3 && steps <= cfg.steps + 3) {
-    const stepsLeft = Math.max(0, cfg.steps - steps);
+    const stepsLeft = investigative ? Math.max(0, cfg.steps - steps) : 0;
     const payload = explorerPayload({
       round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(), scoreboard: scoreboard(),
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-      hypotheses: registry.current(), investigation, stepsLeft, playsLeft: plays.left, refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null
+      hypotheses: registry.current(), ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('play') ? { playsLeft: plays.left } : {}),
+      refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null
     });
     say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
     steps++;
     let content = '';
     try {
-      content = (await llm.complete({ system: EXPLORER_SYSTEM, user: payload })).content;
+      content = (await llm.complete({ system: SYSTEM_PROMPT, user: payload })).content;
     } catch (error) {
       const status = (error as ApiError)?.details?.status;
       if (status === 401 || status === 402 || status === 403) {
@@ -484,7 +552,7 @@ async function propose(from: Formula | null, directive: string | null = null, mo
       log('methods', { round, methods: turn.methods });
     }
     if (turn.kind === 'investigate') {
-      if (stepsLeft <= 0) { refused = ['no investigation steps left this round: answer with your proposal now']; refusals++; continue; }
+      if (stepsLeft <= 0) { refused = [investigative ? 'no investigation steps left this round: answer with your proposal now' : 'there is no investigating in this experiment: answer with your proposal']; refusals++; continue; }
       const results: unknown[] = [];
       for (const r of turn.requests) results.push(await runRequest(r, from, plays));
       /* A draft travels back as it wrote it, never as the host's formula object. */
@@ -542,7 +610,8 @@ async function propose(from: Formula | null, directive: string | null = null, mo
       ' rules, ' + proposal.probes.length + ' probes; beliefs ' + proposal.beliefs.map((b) => b.id + ':' + b.stance).join(' ') +
       (stances.unaddressed.length ? '; NO STANCE on ' + stances.unaddressed.join(', ') : ''));
     for (const l of proposal.lessons) say('  lesson: ' + l);
-    await experiment(proposal.probes, proposal.formula);
+    if (tools.has('probes')) await experiment(proposal.probes, proposal.formula);
+    else if (proposal.probes.length) log('probes_ignored', { round, reason: 'probes are not an instrument of this experiment', count: proposal.probes.length });
     return proposal.formula;
   }
   return null;
@@ -569,13 +638,16 @@ const result = await runAttempts<Formula, Measured, never>(first, {
   isRunning: () => true,
   onAttemptStart: (attempt) => say('attempt ' + attempt + ' against opponent level ' + cfg.levels[level] + (cfg.epsilon ? ' (errs ' + cfg.epsilon + ')' : '')),
   measure: async (candidate, attempt) => {
+    const callsBefore = judge.stats.calls;
     const score = await trial(candidate, attempt);
+    const trialCalls = judge.stats.calls - callsBefore;
     lastScore = score;
     const round = roundOf.get(candidate) ?? currentRound;
     notebook.recordGames(round, score.stored.map((g) => g.result));
     log('trial', { attempt, round, level: cfg.levels[level], wins: score.wins, total: score.total, usual_start_wins: score.wins - score.variantWins, new_start_wins: score.variantWins, new_starts: variantsFor(attempt).length, games: score.stored.map((g) => ({ id: g.id, result: g.result, turns: g.states.length - 1 })),
       operator: { turns_still_winning: score.held, critical: score.critical, action_accuracy: actionAccuracy(score.samples) },
-      jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+      jev: { calls: judge.stats.calls, errors: judge.stats.errors, trial_calls: trialCalls, calls_per_game: Math.round(trialCalls / Math.max(1, score.total) * 10) / 10 },
+      abstraction: abstractionOf(candidate, score.stored) });
     if (cfg.ablation) await ablate(candidate, attempt, score);
     return score;
   },
@@ -598,6 +670,7 @@ if (cfg.reflection && !llmFatal) {
   say('reflection round: the formula is final; System 2 looks back');
   await propose(result.accepted?.formula ?? result.best?.formula ?? null, null, 'reflect');
 }
+if (cfg.grade && !llmFatal) await gradeRecovery();
 
 log('end', {
   stoppedBy: llmFatal ? 'llm_error' : result.stoppedBy, ...(llmFatal ? { llm_error: llmFatal } : {}),

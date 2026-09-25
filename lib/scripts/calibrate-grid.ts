@@ -1,7 +1,8 @@
 /* OPERATOR TOOL. Which generated games leave room to LEARN? A seed is usable at a given opponent level when:
      - side A can force the win (the truth),
      - a heuristic that KNOWS the rules wins it at the experiment's depth (the ceiling: it can be learned),
-     - a formula that knows nothing (flat Judge) does not (the floor: it must be learned),
+     - a formula that knows nothing (flat Judge) does not (the floor: it must be learned) - neither from the usual
+       start nor from the new starts a run tests generalization on (a flat formula that wins those leaves nothing to show),
      - and it does not look like a known game (a checkerboard with diagonal pieces reads as draughts / Fox & Hounds).
    No network. Nothing here reaches System 2.
 
@@ -15,12 +16,15 @@ import { createPlanner, solveAgainstModel } from '../src/core/truth.ts';
 import { noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
 import { asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture, type GridMove, type GridState } from '../src/worlds/grid/index.ts';
 import { ceilingOf, tightness } from '../src/worlds/grid/informed.ts';
+import { variantStarts } from '../src/worlds/grid/variants.ts';
 import type { Judge } from '../src/core/types.ts';
 
 const [from, to, depth] = [Number(process.argv[2] || 1), Number(process.argv[3] || 12), Number(process.argv[4] || 2)];
 const levels = (process.argv[5] || '2,4').split(',').map(Number);
 const epsilon = Number(process.argv[6] ?? 0.15);
 const GAMES = 4;
+/* As run-grid's default --variants. */
+const VARIANTS = 7;
 
 const flat: Judge = {
   id: 'flat',
@@ -47,21 +51,27 @@ for (let seed = from; seed <= to; seed++) {
     const planner = createPlanner(world, 'B', level, { fallback: bFallback(spec) });
     const truth = solveAgainstModel(world, world.initial(), 'A', (s) => planner.respond(s), { budget: 300000 });
     const forced = truth.known && truth.winner === 'A';
-    let flatWins = 0;
-    for (let g = 0; g < GAMES; g++) {
+    const flatGame = async (g: number, start?: GridState): Promise<boolean> => {
       const evaluator = new Evaluator<GridState>(observer, flat, { maximizer: 'A' });
       const opponent = noisyOpponent(world, (s) => planner.respond(s), epsilon, mulberry32(seed * 31 + level * 7 + g));
       const ep = await playEpisode(world, async (s, actor) => actor === 'B' ? opponent(s)
-        : (await searchBestMove<GridState, GridMove>(evaluator, s, { formula, depth, profile: PLAY_PV_ALPHA_BETA })).best.bestMove ?? world.actions(s)[0]);
-      if (ep.outcome.winner === 'A') flatWins++;
-    }
+        : (await searchBestMove<GridState, GridMove>(evaluator, s, { formula, depth, profile: PLAY_PV_ALPHA_BETA })).best.bestMove ?? world.actions(s)[0], start ? { start } : {});
+      return ep.outcome.winner === 'A';
+    };
+    let flatWins = 0;
+    for (let g = 0; g < GAMES; g++) if (await flatGame(g)) flatWins++;
+    /* The new starts are drawn per attempt in a run (seed*1009 + attempt); attempt 1's stand for them here. */
+    const starts = forced ? variantStarts(spec, { count: VARIANTS, level, seed: seed * 1009 + 1 }) : [];
+    let flatNew = 0;
+    for (let g = 0; g < starts.length; g++) if (await flatGame(GAMES + g, starts[g])) flatNew++;
     const ceiling = forced ? await ceilingOf(spec, { depth, level, epsilon, games: GAMES }) : null;
     const tight = forced ? tightness(spec, level) : null;
-    const ok = forced && !known && ceiling!.wins >= Math.ceil(GAMES * 0.75) && flatWins <= Math.floor(GAMES / 4);
+    const ok = forced && !known && ceiling!.wins >= Math.ceil(GAMES * 0.75) && flatWins <= Math.floor(GAMES / 4) &&
+      flatNew <= Math.floor(starts.length * 2 / 7);
     if (ok) usable.push(seed + '@L' + level);
     rows.push('L' + level + ': forced ' + (forced ? 'A in ' + truth.plies : truth.known ? 'no' : '?') +
       (ceiling ? ' | informed ' + ceiling.wins + '/' + GAMES + ' (still winning ' + ceiling.turnsStillWinning.join(',') + ')' : '') +
-      ' | flat ' + flatWins + '/' + GAMES +
+      ' | flat ' + flatWins + '/' + GAMES + (starts.length ? ', new starts ' + flatNew + '/' + starts.length : '') +
       (tight ? ' | keep/legal ' + tight.perTurn.join(' ') : '') + (ok ? '   <== room to learn' : ''));
   }
   console.log('seed ' + seed + ' (' + spec.width + 'x' + spec.height + ' ' + spec.shape + ', A' + spec.A.count + ' ' + spec.winA + ' / B' + spec.B.count + ' ' + spec.winB +

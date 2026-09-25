@@ -231,3 +231,19 @@ test('a note without "do" but with an id and a text is a write; without an id it
   assert.deepEqual(t.notes.map((n) => [n.do, n.id]), [['write', 'n1']]);
   assert.equal((t as any).warnings.length, 1);
 });
+
+test('the baseline: a withheld instrument is never mentioned in the prompt, and everything else stays the same', async () => {
+  const { explorerSystem, EXPLORER_TOOLS } = await import('../src/learn/explorer.ts');
+  assert.equal(explorerSystem(), EXPLORER_SYSTEM, 'all instruments: the prompt of the full experiment');
+  const none = explorerSystem(new Set());
+  for (const t of EXPLORER_TOOLS.filter((x) => x !== 'probes')) {
+    assert.ok(!none.includes('{"' + t + '"') && !none.includes('`' + t + '`'), 'no request and no lens example for ' + t);
+  }
+  assert.ok(!/INVESTIGATE before proposing|PROBES|"probes"|steps_left|plays_left/.test(none));
+  for (const kept of ['HOW YOU THINK.', 'YOUR NOTEBOOK', 'When you propose, answer with ONE JSON object', 'sufficiency', 'minimum description length']) {
+    assert.ok(none.includes(kept), 'kept: ' + kept);
+  }
+  const viewOnly = explorerSystem(new Set(['view'] as const));
+  assert.ok(viewOnly.includes('{"view"') && viewOnly.includes('INVESTIGATE before proposing'));
+  assert.ok(!viewOnly.includes('{"try"') && !viewOnly.includes('`table`') && !viewOnly.includes('`play`'));
+});

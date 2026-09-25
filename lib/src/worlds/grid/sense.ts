@@ -30,7 +30,7 @@ export interface GridSense {
 
 /* The picture is drawn under one of the 8 symmetries of the rectangle (rotations and reflections), drawn per seed:
    "one side starts at the top and runs down" would otherwise be a cue shared by every game of the family. */
-function orient(o: number, x: number, y: number, w: number, h: number): [number, number] {
+export function orient(o: number, x: number, y: number, w: number, h: number): [number, number] {
   switch (o) {
     case 1: return [w - 1 - x, y];
     case 2: return [x, h - 1 - y];
