@@ -43,7 +43,7 @@ test('a hypothesis is classified by its AUC, against what chance gives with that
   assert.equal(classify(a.slice(0, 2), b.slice(0, 2), { minSamples: 2 }).status, 'unsupported');
 });
 
-test('an observation probe costs nothing; a question probe asks the Judge and is cached per picture', async () => {
+test('an observation probe costs nothing; a question probe asks the Judge and is cached per observed facts', async () => {
   const stub = stubJev();
   const ps = positions();
   const probes = [
@@ -59,7 +59,7 @@ test('an observation probe costs nothing; a question probe asks the Judge and is
   assert.equal(ask.tested_by, 'question');
   assert.ok(ask.samples_win + ask.samples_loss >= ps.length - 1);
   assert.ok(stub.bodies.length > 0 && stub.bodies.length <= ps.length);
-  assert.ok(stub.bodies.every((b) => b.state.perception && !b.state.rules_of_the_game));
+  assert.ok(stub.bodies.every((b) => !b.state.perception && !b.state.rules_of_the_game), 'the Judge never perceives: it reads the observations');
   const registry = new HypothesisRegistry();
   registry.record(results);
   registry.record([{ ...clock, status: 'unsupported', round: 2 }]);

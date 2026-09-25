@@ -42,7 +42,7 @@ test('a well-formed answer becomes a formula that carries the senses, and probes
 
 test('a malformed answer is refused with every reason, never repaired', () => {
   const bad = {
-    observations: { Mine: { source: '(p) => 1', range: [0, 1] }, picture: { source: '(p) => 1', range: [0, 1] }, norange: { source: '(p) => 1' } },
+    observations: { Mine: { source: '(p) => 1', range: [0, 1] }, picture: { source: '(p) => 1', range: [0, 1] }, badrange: { source: '(p) => 1', range: [1, 0] } },
     rules: { r: { type: 'vibes', instructions: 'x', criteria: {} }, q: { type: 'noul', instructions: 'reads {{ghost}}', criteria: { yes: 'y', no: 'n' } } },
     probes: [{ id: 'p', hypothesis: 'nothing to test it with' }]
   };
@@ -50,7 +50,7 @@ test('a malformed answer is refused with every reason, never repaired', () => {
   assert.equal(parsed.ok, false);
   if (parsed.ok) return;
   const all = parsed.errors.join('\n');
-  for (const reason of [/"Mine" must be lowercase/, /"picture" is taken by a sense/, /norange.*range/, /rule "r".*type/, /undeclared observation\(s\): ghost/, /probe p: needs an observation or a question/]) {
+  for (const reason of [/"Mine" must be lowercase/, /"picture" is taken by a sense/, /badrange.*range/, /rule "r".*type/, /undeclared observation\(s\): ghost/, /probe p: needs an observation or a question/]) {
     assert.match(all, reason);
   }
   assert.deepEqual(parseExplorerProposal('not json', { world: world.id, senses: SENSES }), { ok: false, errors: ['the answer was not a JSON object'] });
@@ -224,4 +224,10 @@ test('methods: written and forgotten in any answer, carried in the notebook, nev
   assert.deepEqual(nb.applyMethods(2, t.methods), []);
   assert.deepEqual(nb.applyMethods(3, [{ do: 'write', id: 'm1', text: 'measure the exceptions with table' }, { do: 'forget', id: 'nope' }]), ['method "nope" does not exist']);
   assert.deepEqual((nb.brief() as any).methods, [{ id: 'm1', text: 'measure the exceptions with table', written_round: 2, updated_round: 3 }]);
+});
+
+test('a note without "do" but with an id and a text is a write; without an id it is still refused', () => {
+  const t = parseExplorerTurn(JSON.stringify({ investigate: [{ view: 'g1', from: 0, to: 2 }], notes: [{ id: 'n1', text: 'kept' }, { text: 'no id' }] }), { world: 'w', senses: {}, round: 1 } as any);
+  assert.deepEqual(t.notes.map((n) => [n.do, n.id]), [['write', 'n1']]);
+  assert.equal((t as any).warnings.length, 1);
 });

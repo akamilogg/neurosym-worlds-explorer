@@ -30,8 +30,8 @@ export const EXPLORER_SYSTEM = [
   'You face an environment nobody has described to you. It is a turn-based game between two players. You control one of them, marked "you" in what you perceive; the other is controlled by someone else.',
   'You perceive it ONLY through a text picture, rendered after every turn. You are told nothing else: not the rules, not what the symbols mean, not which changes are allowed, not how a game is won. At the end of each game you learn how it ended for your side. Nobody will tell you what a good move was: everything you learn, you find out yourself.',
   'Your side\'s moves are chosen by a search that looks a few turns ahead and values each imagined position with a FORMULA that you write:',
-  '  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived (the object described in `percept`), each returning a number inside its declared range. They can only compute from the picture.',
-  '  - RULES: questions a semantic judge answers about a position. The judge sees the picture AND the values of your observations (cite an observation inside a rule as {{observation_id}}). A rule\'s answer, 0..1, means "good for my side" when high. The judge knows nothing about this environment either.',
+  '  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge. They can only compute from the picture.',
+  '  - RULES: questions a semantic judge answers about a position. The judge does NOT see the picture: it sees only the words of your rules, your observations and whether it is your turn. Whatever the judge needs to know about a position, an observation of yours must give it: a number (cite it inside a rule as {{observation_id}}), or a text - an observation declared WITHOUT a range returns a string, which the judge receives as written, whether or not a rule cites it (any representation of the position you choose to compose). A rule\'s answer, 0..1, means "good for my side" when high. The judge knows nothing about this environment either.',
   '  - WEIGHTS over the rules (they are normalised to sum 1).',
   'Both carriers of judgement are welcome: code is deterministic and readable, the judge understands plain words. Put each part of your understanding where it is clearest.',
   '',
@@ -42,7 +42,7 @@ export const EXPLORER_SYSTEM = [
   '  {"view": "<game>", "from": <turn>, "to": <turn>}   the pictures of a stretch of one of your games (at most 30 per request)',
   '  {"inspect": "<game>@<turn>"}   what YOUR search did on that turn of yours: the position it chose to move to (named "<game>@<turn>/<k>", with its picture), the value your formula gave it looking ahead and directly, what each of its rules answered and what each of its code observations measured there (the parts behind the direct value), and the finished games your search ran into after it within its horizon, and who won them',
   '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests) and whether that change ended the game (and who won). It never says why a change was refused or why a game ended: that is for you to work out. A try is how you TEST an idea about how games end, directly. Trying changes nothing in any game.',
-  '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
+  '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions (without "range": the text it composes, as the judge would read it)',
   '  {"play": "<position>", "formula": <round> | { "observations": ..., "rules": ..., "weights": ... }}   PLAY a game again yourself: from any position of your games ("<game>@0" is its start, "<game>@<turn>" a moment of it, "try<n>" where a try left you), your side choosing with the formula of that round, or with a draft you write in the same shape as a proposal (without "formula", your best formula). The other side plays as it always does, so the same experiment can end differently. You get a new game (its name, how it ended, how many turns), to view and inspect like any other. Repeat an experiment, or change one thing and play it again: it is your laboratory, and nothing it plays counts on the scoreboard. At most `plays_left` games this round.',
   '',
   'HOW YOU THINK. What follows are lenses from your disciplines, each with examples of how your instruments can serve it. They are examples, not a procedure, and they describe nothing about this environment. Combine the instruments in any way you judge useful, use them for purposes not mentioned here, bring in anything else you know that applies, and when the environment does not fit a model, change the model.',
@@ -78,7 +78,7 @@ export const EXPLORER_SYSTEM = [
   '',
   '`surprises` lists, for your latest games, the turns where your own search\'s value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.',
   '',
-  'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games, each labelled with the SCORE that game ended with for you: a number from -1 to 1. The judge answering a probe question never knows the score: ask it to describe the position. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: for each game score, how many positions and their mean value; the AUC (of two positions from games with different scores, the probability that the one from the higher-scored game has the higher value: 0.5 = no relation, 1 = always higher, 0 = always lower); and whether chance alone could put the AUC that far from 0.5 with that many positions. Observations are also tested on final positions (what the end of a game looks like, by its score - this is how you learn how games end). Remember the score belongs to the whole game: early positions of a low-scored game may have been fine.',
+  'Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games, each labelled with the SCORE that game ended with for you: a number from -1 to 1. The judge answering a probe question never knows the score and, as with rules, sees only your observations: ask it about their values. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: for each game score, how many positions and their mean value; the AUC (of two positions from games with different scores, the probability that the one from the higher-scored game has the higher value: 0.5 = no relation, 1 = always higher, 0 = always lower); and whether chance alone could put the AUC that far from 0.5 with that many positions. Observations are also tested on final positions (what the end of a game looks like, by its score - this is how you learn how games end). Remember the score belongs to the whole game: early positions of a low-scored game may have been fine.',
   '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   (an investigation request) the value of that code on each position probes use, with the score that game ended with: the rows behind the facts, to inspect yourself',
   '',
   '`scoreboard` shows how each of your formulas did; a formula\'s `fingerprint` is the same exactly when the formula is the same. `your_best_formula` is the one that has won the most so far - not necessarily your latest. Games have chance in them (the other side is not always the same, and new starting positions differ): how much a result would vary is something you can find out yourself.',
@@ -90,7 +90,7 @@ export const EXPLORER_SYSTEM = [
   '  "rationale": "what you believe now and why, citing the evidence",',
   '  "beliefs": [ { "id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "the belief (required for new and revise)", "why": "...", "evidence": ["<game, position, probe or round>"] } ],',
   '  "notes": [ { "do": "write", "id": "<id>", "text": "...", "positions": ["<game>@<turn>"] } | { "do": "forget", "id": "<id>" } ],',
-  '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } },',
+  '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } | { "definition": "what it shows the judge", "source": "(p) => <text>" } },',
   '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
   '  "weights": { "<rule id>": number },',
   '  "probes": [ { "id": "<id>", "hypothesis": "...", "observation": { "definition": "...", "source": "(p) => ...", "range": [min, max] } , "question": { "type": ..., "instructions": ..., "criteria": ... } } ],',
@@ -169,7 +169,7 @@ export type ExplorerRequest =
   | { readonly inspect: string }
   | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'in_play' | 'final' }
   | { readonly try: string; readonly from: readonly [number, number]; readonly to: readonly [number, number] }
-  | { readonly measure: { readonly source: string; readonly range: readonly [number, number] }; readonly on: readonly string[] }
+  | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   /** `formula`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its best formula. */
   | { readonly play: string; readonly formula: number | Formula | null };
 
@@ -181,8 +181,10 @@ function parseNotes(raw: unknown, warnings: string[]): NoteOp[] {
   const out: NoteOp[] = [];
   (Array.isArray(raw) ? raw : []).forEach((n, i) => {
     const o = n && typeof n === 'object' ? n as Record<string, unknown> : null;
-    if (!o || (o.do !== 'write' && o.do !== 'forget') || typeof o.id !== 'string') { warnings.push('note #' + i + ' ignored: needs "do" (write | forget) and "id"'); return; }
-    out.push({ do: o.do, id: o.id, ...(typeof o.text === 'string' ? { text: o.text } : {}),
+    /* Without "do", a note with an id and a text is a write: the intent is plain, and dropping it loses the record. */
+    const act = o && o.do === undefined && typeof o.text === 'string' ? 'write' : o?.do;
+    if (!o || (act !== 'write' && act !== 'forget') || typeof o.id !== 'string') { warnings.push('note #' + i + ' ignored: needs "id" (and "do": write | forget)'); return; }
+    out.push({ do: act, id: o.id, ...(typeof o.text === 'string' ? { text: o.text } : {}),
       ...(Array.isArray(o.positions) ? { positions: o.positions.map(String) } : {}) });
   });
   return out;
@@ -226,7 +228,8 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
       } else if (q.measure && typeof q.measure === 'object' && Array.isArray(q.on)) {
         const m = q.measure as Record<string, unknown>;
         const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
-        if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': measure needs "source" and "range"'); continue; }
+        /* Without a range, the code composes a text: what the judge would read. */
+        if (typeof m.source !== 'string' || (m.range !== undefined && !range)) { warnings.push('request #' + i + ': measure needs "source" (and a valid "range" for a number)'); continue; }
         requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
       } else warnings.push('request #' + i + ' ignored: use view, inspect, try, play, measure or table');
     }
@@ -261,9 +264,11 @@ function parseObservation(raw: unknown, where: string, lang: string, errors: str
   if (!o) { errors.push(where + ': an observation must be an object'); return null; }
   const source = typeof o.source === 'string' ? o.source.trim() : '';
   if (!source) { errors.push(where + ': "source" (a JavaScript function over the percept) is required'); return null; }
+  /* No range: the code composes a text for the judge's context. A range that is there must be valid. */
+  if (o.range === undefined || o.range === null) return { definition: typeof o.definition === 'string' ? o.definition : '', spec: { kind: 'code', lang, source } };
   const range = Array.isArray(o.range) && o.range.length === 2 && o.range.every((n) => typeof n === 'number' && Number.isFinite(n)) && (o.range[1] as number) > (o.range[0] as number)
     ? [o.range[0] as number, o.range[1] as number] as const : null;
-  if (!range) { errors.push(where + ': "range" must be [min, max] with max > min'); return null; }
+  if (!range) { errors.push(where + ': "range" must be [min, max] with max > min (or absent, for a text)'); return null; }
   return { definition: typeof o.definition === 'string' ? o.definition : '', spec: { kind: 'code', lang, source }, range };
 }
 
@@ -386,6 +391,7 @@ export function parseExplorerProposal(content: string, context: {
     const hypothesis = typeof p.hypothesis === 'string' ? p.hypothesis.trim() : '';
     if (!hypothesis) { errors.push(where + ': "hypothesis" is required'); return; }
     const observation = p.observation ? parseObservation(p.observation, where + ' observation', lang, errors) : undefined;
+    if (observation && !observation.range) { errors.push(where + ' observation: a probe measures a number - declare its "range"'); return; }
     const question = p.question ? parseRule(p.question, where + ' question', errors) : undefined;
     if (!observation && !question) { errors.push(where + ': needs an observation or a question'); return; }
     /* A question may cite the formula's observations and, when the probe has one, its own (probe_<id>): anything else

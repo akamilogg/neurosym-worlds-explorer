@@ -62,3 +62,26 @@ test('generalization starts: never the usual one, each side in its own band, and
   }
   assert.notDeepEqual(variantStarts(spec, { count: 4, level: 2, seed: 8 }).map((s) => world.key(s)), [...keys], 'a new attempt, new starts');
 });
+
+test('the Judge reads only the observations: numbers, and texts composed by code without a range - never the picture', async () => {
+  const seen: any[] = [];
+  const spy: Judge = { id: 'spy', async judge(r) { seen.push(r); return { v: { value: 0.5, confidence: null } }; } };
+  const board = "(p) => p.cells.map((r) => r.join('')).join('/')";
+  const f = makeFormula({ world: world.id, observations: { ...formula.observations, board: { definition: 'my own drawing', spec: { kind: 'code', lang: 'js', source: board } } },
+    rules: { v: { type: 'noul', used_as: 'value', instructions: 'clock {{t}} board {{board}} picture {{picture}}', criteria: { yes: '', no: '' } } }, weights: { v: 1 } });
+  const s0 = world.initial();
+  const o = observer.observe(s0, f.observations);
+  assert.equal(typeof o.texts.board, 'string', 'a code measure without a range composes a text');
+  assert.equal(o.values.board, undefined);
+  await new Evaluator<GridState>(observer, spy, { maximizer: 'A' }).eval(f, s0);
+  const r = seen[0];
+  assert.equal(r.percepts, undefined, 'the picture never reaches the Judge');
+  assert.equal(r.position, undefined);
+  assert.equal(r.sideToMove, 'you');
+  assert.deepEqual(r.texts, { board: o.texts.board }, 'the composed text reaches its context, cited or not');
+  assert.equal(r.questions.v.instructions, 'clock 0 board ' + o.texts.board + ' picture {{picture}}', 'numbers and texts are substituted, the picture is not');
+  assert.ok(!JSON.stringify(r).includes(sense.render(s0).split('\n')[1]), 'no row of the rendered picture anywhere in the request');
+  /* A number without a range, or a text with one, is an error, not a silent coercion. */
+  const bad = observer.observe(s0, { ...formula.observations, n: { spec: { kind: 'code', lang: 'js', source: '(p) => 3' } }, x: { spec: { kind: 'code', lang: 'js', source: board }, range: [0, 1] } });
+  assert.deepEqual(bad.errors.map((e) => e.id).sort(), ['n', 'x']);
+});

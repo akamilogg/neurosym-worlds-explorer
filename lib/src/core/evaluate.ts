@@ -110,6 +110,13 @@ export class Evaluator<S = unknown> {
     this.maximizer = options.maximizer ?? observer.world.actors[0];
   }
 
+  /** Whose turn it is. A world that describes its rules names its sides there, so the name means something to the
+      Judge; a world that describes nothing leaves the name meaningless, and the Judge learns it from the maximizer's side. */
+  private sideLabel(side: string): string {
+    if (this.world.describeRules()) return side;
+    return side === this.maximizer ? 'you' : 'the other player';
+  }
+
   get world(): World<S> { return this.observer.world; }
 
   /** Forget every judgment (e.g. the opponent changed: a new measurement world). */
@@ -173,13 +180,16 @@ export class Evaluator<S = unknown> {
     const context = this.options.context ? this.options.context(state) : { id: '', facts: {} };
     const ids = valueRuleIds(formula);
     const key = jHash + '|' + side + '|' + context.id + '|' + observation.vector;
+    const texts = observation.texts ?? {};
+    /* What the Judge reads is exactly what the formula observes: the measured numbers and the texts its code composed.
+       What the senses perceive feeds that code, never the Judge. */
     const { answers, live } = await this.ask(key, 'value', state, {
       world: world.id,
       rulesOfTheWorld: world.describeRules(),
-      sideToMove: side,
+      sideToMove: this.sideLabel(side),
       measurements: observation.values,
-      questions: materializeRules(formula.rules, { ...observation.values, ...observation.percepts }, ids),
-      ...(Object.keys(observation.percepts || {}).length ? { percepts: observation.percepts } : {}),
+      questions: materializeRules(formula.rules, { ...observation.values, ...texts }, ids),
+      ...(Object.keys(texts).length ? { texts } : {}),
       ...(observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ': ' + e.error) } : {}),
       context: { ...context.facts, judgment_hash: jHash }
     }, signal);
@@ -208,7 +218,8 @@ export class Evaluator<S = unknown> {
     if (world.outcome(state).over) { this.priors.set(memo, null); return null; }
     const side = world.toMove(state);
     const observation = this.observer.observe(state, formula.observations);
-    const questions: Record<string, Rule> = materializeRules(formula.rules, observation.values, valueRuleIds(formula));
+    const texts = observation.texts ?? {};
+    const questions: Record<string, Rule> = materializeRules(formula.rules, { ...observation.values, ...texts }, valueRuleIds(formula));
     for (const id of policyIds) {
       const rule = formula.rules[id];
       const subject = rule.subject ?? 'side_to_move';
@@ -218,15 +229,15 @@ export class Evaluator<S = unknown> {
       if (!actions.length) continue;
       const criteria: Record<string, null> = {};
       for (const a of actions) criteria[world.actionKey(a)] = null;
-      questions[id] = { ...materializeRules({ [id]: rule }, observation.values)[id], type: 'choice', criteria };
+      questions[id] = { ...materializeRules({ [id]: rule }, { ...observation.values, ...texts })[id], type: 'choice', criteria };
     }
     if (!Object.keys(questions).some((id) => policyIds.includes(id))) { this.priors.set(memo, null); return null; }
     this.stats.priorCalls++;
     const { answers } = await this.ask(memo + '|policy', 'policy', state, {
-      world: world.id, rulesOfTheWorld: world.describeRules(), sideToMove: side,
+      world: world.id, rulesOfTheWorld: world.describeRules(), sideToMove: this.sideLabel(side),
       measurements: observation.values, questions,
+      ...(Object.keys(texts).length ? { texts } : {}),
       ...(observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ': ' + e.error) } : {}),
-      position: world.describeState ? world.describeState(state, context.facts) : { view: observation.view },
       context: { ...context.facts, judgment_hash: jHash }
     }, signal);
     const weighted = policyIds.some((id) => formula.rules[id].aggregate === 'weighted_mean');

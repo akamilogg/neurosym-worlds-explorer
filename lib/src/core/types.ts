@@ -96,7 +96,8 @@ export interface MeasureDecl {
   /** Reproducible human definition: the Judge and the reader rely on it. */
   readonly definition?: string;
   readonly spec: MeasureSpec;
-  /** Declared [min, max]. Required for code and expressions; op dialects bring their own. */
+  /** Declared [min, max]. Required for a number; op dialects bring their own. A code measure declared WITHOUT a
+      range composes a text instead, which goes to the Judge's context as written. */
   readonly range?: readonly [number, number];
 }
 
@@ -162,11 +163,9 @@ export interface JudgeRequest {
   /** The rules with every {{id}} already replaced by its measured value. Policy rules arrive
       materialised: one criterion per legal action key, each with a null rubric. */
   readonly questions: Readonly<Record<string, Rule>>;
-  /** What the declared senses perceived (e.g. an ASCII picture): the Judge judges it WITH the measured facts. */
-  readonly percepts?: Readonly<Record<string, string>>;
-  /** Present only when a question denotes concrete actions: the Judge then needs the position itself.
-      Value-only requests are judged from the measurements alone (that is what makes the vector cache valid). */
-  readonly position?: Readonly<Record<string, unknown>>;
+  /** Observations whose code composed a text (a code measure declared without a range): they reach the Judge as
+      written, in its context, whether or not a rule cites them. Nothing else about the position ever does. */
+  readonly texts?: Readonly<Record<string, string>>;
   /** Declared measures that could not be computed on this state ("id: reason"): the Judge sees the gap. */
   readonly measurementErrors?: readonly string[];
   readonly context?: Readonly<Record<string, unknown>>;

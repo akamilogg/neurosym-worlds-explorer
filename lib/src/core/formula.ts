@@ -141,9 +141,13 @@ export function checkFormula(formula: Formula): FormulaCheck {
     const missing = placeholdersOf(formula.rules[id]).filter((p) => !obsIds.includes(p));
     if (missing.length) errors.push('rule "' + id + '" references undeclared observation(s): ' + missing.join(', '));
   }
-  /* A sense reaches the Judge whether a rule cites it or not; every other fact needs a rule that reads it. */
-  const unread = obsIds.filter((o) => (formula.observations[o]?.spec as { kind?: string } | undefined)?.kind !== 'sense' &&
-    !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o)));
+  /* A sense feeds the code, never the Judge; a text (a code measure without a range) reaches the Judge's context
+     whether a rule cites it or not; a number needs a rule that reads it. */
+  const unread = obsIds.filter((o) => {
+    const decl = formula.observations[o];
+    const kind = (decl?.spec as { kind?: string } | undefined)?.kind;
+    return kind !== 'sense' && !(kind === 'code' && !decl?.range) && !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o));
+  });
   if (unread.length) warnings.push('observation(s) no rule reads: ' + unread.join(', '));
   for (const id of Object.keys(formula.weights || {})) if (!values.includes(id)) errors.push('weight "' + id + '" has no value rule');
   return { ok: errors.length === 0, errors, warnings };

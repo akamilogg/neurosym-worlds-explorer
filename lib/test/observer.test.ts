@@ -95,7 +95,7 @@ test('the experiment admits only the kinds it declares, and refuses the rest WIT
   const o3 = dslOnly.observe(s, { c: dsl('mouse_row') });
   assert.match(o3.errors[0].error, /dialect "foxhounds@1" is not registered/);
   const both = new Observer(foxhounds);
-  assert.match(both.observe(s, { d: { spec: { kind: 'code', lang: 'js', source: '() => 1' } } }).errors[0].error, /must declare a finite range/);
+  assert.match(both.observe(s, { d: { spec: { kind: 'code', lang: 'js', source: '() => 1' } } }).errors[0].error, /without a range must return a text/);
   assert.match(both.observe(s, { e: { spec: { kind: 'code', lang: 'py', source: 'lambda c: 1' }, range: [0, 1] } }).errors[0].error, /no runner for language "py"/);
   assert.match(both.observe(s, { f: { spec: { kind: 'dsl', dialect: 'core@1', expr: { op: 'const', value: 1 } } } }).errors[0].error, /declared finite range/);
 });

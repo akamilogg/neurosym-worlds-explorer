@@ -153,7 +153,14 @@ test('a policy rule orders the search through the Judge and never removes a lega
   assert.ok(prior && Object.keys(prior.prior).length === foxhounds.actions(s).length);
   const policyRequest = stub.bodies.find((b) => b.questions.cat_plan);
   assert.deepEqual(Object.keys(policyRequest.questions.cat_plan.criteria).sort(), foxhounds.actions(s).map(moveKey).sort());
-  assert.ok(policyRequest.state.board_ascii, 'a question about concrete moves carries the board');
+  assert.equal(policyRequest.state.board_ascii, undefined, 'the Judge sees no position that no observation shows it');
+  /* If the author wants the Judge to see the board, its own code composes it: a measure without a range is a text. */
+  const drawn = makeFormula({ ...formula, observations: { ...formula.observations,
+    board: { definition: 'the board as I draw it', spec: { kind: 'code', lang: 'js', source: '(ctx) => JSON.stringify(ctx.state.cats) + " " + JSON.stringify(ctx.state.mouse)' } } } });
+  const before = stub.bodies.length;
+  await ev.prior(drawn, s);
+  const drawnRequest = stub.bodies.slice(before).find((b) => b.questions.cat_plan);
+  assert.match(drawnRequest.state.observed_texts.board, /\[/, 'the text reaches the Judge as written');
   const result = await searchBestMove<FoxState, FoxMove>(ev, s, { formula, depth: 2, respond: (st) => model.respond(st) });
   assert.equal(result.passes[1].stats.rootFanout, foxhounds.actions(s).length);
   assert.ok(result.passes[0].stats.priorCalls >= 1);

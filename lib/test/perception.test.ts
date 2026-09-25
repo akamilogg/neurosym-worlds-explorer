@@ -43,17 +43,18 @@ test('a perception-only measure cannot reach the hidden state, the rules or the 
   assert.match(ghost.errors[0].error, /sense "sonar" does not exist/);
 });
 
-test('Jev receives the picture AND the measured values, under a contract that names nothing about the world', async () => {
+test('Jev never receives the picture: only the measured values, under a contract that names nothing about the world', async () => {
   const stub = stubJev();
   const ev = new Evaluator<GridState>(observer, new JevJudge({ fetch: stub.fetch }), { maximizer: 'A' });
   const r = await ev.eval(formula, world.initial());
   assert.equal(r.provenance, 'live');
   const body = stub.bodies[0];
-  assert.equal(body.state.perception.board, sense.render(world.initial()));
+  assert.equal(body.state.perception, undefined);
+  assert.ok(!JSON.stringify(body).includes(sense.render(world.initial()).split('\n')[1]), 'no row of the picture anywhere');
   assert.equal(body.state.measurements.my_pieces, spec.A.start.length);
-  assert.match(body.state.evaluation_contract, /Nothing else about this world is known/);
-  assert.equal(body.state.rules_of_the_game, undefined);
+  assert.match(body.state.evaluation_contract, /Judge only the declared measurements/);
+  assert.equal(body.state.rules_of_the_game, '');
   assert.match(body.questions.good.instructions, new RegExp('I have ' + spec.A.start.length + ' pieces'));
   await ev.eval(formula, world.initial());
-  assert.equal(stub.bodies.length, 1, 'the same picture with the same facts is one question');
+  assert.equal(stub.bodies.length, 1, 'the same facts are one question');
 });

@@ -39,6 +39,8 @@ export interface MeasureError {
 
 export interface Observation {
   readonly values: Readonly<Record<string, number>>;
+  /** Texts composed by code measures declared without a range (id -> text): for the Judge's context. */
+  readonly texts: Readonly<Record<string, string>>;
   /** What the declared senses perceived (sense observation id -> text). */
   readonly percepts: Readonly<Record<string, string>>;
   readonly errors: readonly MeasureError[];
@@ -55,6 +57,9 @@ export interface ObserverStats {
   computations: number;
   errors: number;
 }
+
+/** The longest text a measure may hand the Judge (characters). */
+const TEXT_LIMIT = 4000;
 
 const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -102,7 +107,7 @@ export class Observer<S = unknown> {
     const parts: string[] = ['Admitted measure kinds: ' + this.kinds.join(', ') + '.'];
     if (this.kinds.includes('code')) {
       parts.push('code: {kind:"code", lang:' + this.languages().map((l) => '"' + l + '"').join('|') +
-        ', source:"(ctx) => number"} with ctx = {view, state, world}; pure and deterministic; declare a range.');
+        ', source:"(ctx) => number | text"} with ctx = {view, state, world}; pure and deterministic; declare a range for a number, none for a text (the Judge reads it as written).');
     }
     if (this.kinds.includes('dsl')) {
       for (const d of this.dialects.values()) parts.push('dsl ' + d.id + ':\n' + d.describe());
@@ -146,7 +151,6 @@ export class Observer<S = unknown> {
     if (kind === 'code') {
       const runner = this.runners.get(spec.lang);
       if (!runner) return { ok: false, kind, hash, error: 'no runner for language "' + spec.lang + '" in this host (it runs: ' + this.languages().join(', ') + ')' };
-      if (!range) return { ok: false, kind, hash, error: 'a code measure must declare a finite range [min,max]' };
       try {
         return { ok: true, kind, fn: runner.compile(spec.source), range, hash, warnings: [] };
       } catch (error) {
@@ -168,6 +172,7 @@ export class Observer<S = unknown> {
     const frozen = deepFreeze(cloneJson(state));
     const view = deepFreeze(this.world.view(frozen));
     const values: Record<string, number> = {};
+    const texts: Record<string, string> = {};
     const percepts: Record<string, string> = {};
     const errors: MeasureError[] = [];
     const timings: Record<string, number> = {};
@@ -179,9 +184,8 @@ export class Observer<S = unknown> {
       if (!spec || spec.kind !== 'sense') continue;
       const render = this.senses[String(spec.sense)];
       if (!render) { errors.push({ id, error: 'sense "' + String(spec.sense) + '" does not exist in this world' }); this.stats.errors++; continue; }
-      const text = render(frozen);
-      percepts[id] = text;
-      parts.push(id + '=#' + hashString(text));
+      /* Not part of the vector: the Judge never reads a percept, only what the code made of it. */
+      percepts[id] = render(frozen);
     }
     /* Built lazily, and only once: a world perceived through senses hands its measures what was perceived. */
     let ctx: object | null = null;
@@ -207,19 +211,32 @@ export class Observer<S = unknown> {
       if (!measureContext) { errors.push({ id, error: perceiveError || 'no context' }); this.stats.errors++; continue; }
       try { value = compiled.fn(measureContext as unknown as MeasureContext); } catch (error) { failure = message(error); }
       timings[id] = round(now() - started, 3);
+      /* Without a range, a code measure composes a text for the Judge; with one, it measures a number. */
+      if (!compiled.range) {
+        if (typeof value !== 'string') {
+          errors.push({ id, error: failure ?? 'a measure without a range must return a text (declare a range to return a number)' });
+          this.stats.errors++;
+          continue;
+        }
+        const text = value.length > TEXT_LIMIT ? value.slice(0, TEXT_LIMIT) + '…' : value;
+        texts[id] = text;
+        parts.push(id + '=#' + hashString(text) + '#' + compiled.hash);
+        this.stats.computations++;
+        continue;
+      }
       if (typeof value !== 'number' || !Number.isFinite(value)) {
         errors.push({ id, error: failure ?? 'the measure produced no finite number' });
         this.stats.errors++;
         continue;
       }
-      const r = compiled.range!;
+      const r = compiled.range;
       const bounded = round(clamp(value, r[0], r[1]), 4);
       values[id] = bounded;
       parts.push(id + '=' + bounded + '#' + compiled.hash);
       this.stats.computations++;
     }
     parts.sort();
-    return { values, percepts, errors, vector: parts.join('|'), count: parts.length, view, timings };
+    return { values, texts, percepts, errors, vector: parts.join('|'), count: parts.length + Object.keys(percepts).length, view, timings };
   }
 }
 

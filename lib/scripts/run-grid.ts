@@ -54,6 +54,7 @@ import { Notebook, type GameRecord } from '../src/learn/notebook.ts';
 import { recordTurn, surprises, type TurnRecord } from '../src/learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../src/learn/ablation.ts';
 import { noisyOpponent, playEpisode } from '../src/learn/episodes.ts';
+import type { ApiError } from '../src/core/net.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
   type GridMove, type GridState } from '../src/worlds/grid/index.ts';
 import type { Formula, MeasureDecl } from '../src/core/types.ts';
@@ -410,14 +411,14 @@ async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { l
     return { try: req.try, from: req.from, to: req.to, allowed: true, name: 'try' + tries.length, picture: picture(after),
       game_ended: outcome.over ? (outcome.winner === 'A' ? 'you won' : outcome.winner === 'B' ? 'you lost' : 'draw') : false };
   }
-  const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, range: req.measure.range };
+  const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, ...(req.measure.range ? { range: req.measure.range } : {}) };
   return {
     measure: req.measure.source, values: req.on.map((ref) => {
       const s = resolve(ref);
       if (!s) return { position: ref, error: 'no such position' };
       const o = observer.observe(s, { ...SENSES, m: decl });
       const err = o.errors.find((e) => e.id === 'm');
-      return err ? { position: ref, error: err.error } : { position: ref, value: o.values.m };
+      return err ? { position: ref, error: err.error } : { position: ref, value: o.values.m ?? o.texts.m };
     })
   };
 }
@@ -440,7 +441,11 @@ const REFLECTION_TASK = 'REFLECTION ROUND. Your formula is final: do not propose
   + 'answer with {"rationale": ..., "beliefs": [stances on every belief you hold, and any new ones], "notes": [...], "lessons": [...], "next_experiment": ...}: '
   + 'what you now believe about this environment - how it works, how each side wins, and why your formula won or lost - citing your evidence.';
 
+/* Set when the LLM service refuses the account itself (no credit, bad key): nothing further can be asked of System 2. */
+let llmFatal: string | null = null;
+
 async function propose(from: Formula | null, directive: string | null = null, mode: 'propose' | 'reflect' = 'propose'): Promise<Formula | null> {
+  if (llmFatal) return null;
   currentRound++;
   const round = currentRound;
   let refused: string[] = [];
@@ -460,6 +465,13 @@ async function propose(from: Formula | null, directive: string | null = null, mo
     try {
       content = (await llm.complete({ system: EXPLORER_SYSTEM, user: payload })).content;
     } catch (error) {
+      const status = (error as ApiError)?.details?.status;
+      if (status === 401 || status === 402 || status === 403) {
+        llmFatal = String((error as Error)?.message || error);
+        log('llm_fatal', { round, status, error: llmFatal });
+        say('the LLM service refused the account (HTTP ' + status + '): stopping');
+        return null;
+      }
       refusals++;
       log('proposal_failed', { round, error: String((error as Error)?.message || error) });
       continue;
@@ -550,7 +562,7 @@ log('start', { picture: sense.render(world.initial()) });
 }
 await explore();
 const first = await propose(null);
-if (!first) { log('end', { stoppedBy: 'no_first_proposal', notebook }); say('no usable first proposal'); process.exit(1); }
+if (!first) { log('end', { stoppedBy: llmFatal ? 'llm_error' : 'no_first_proposal', ...(llmFatal ? { llm_error: llmFatal } : {}), notebook }); say('no usable first proposal'); process.exit(1); }
 
 const result = await runAttempts<Formula, Measured, never>(first, {
   budget: cfg.attempts,
@@ -582,13 +594,14 @@ const result = await runAttempts<Formula, Measured, never>(first, {
   onNoHypothesis: (attempt) => say('attempt ' + attempt + ': System 2 gave no usable proposal')
 });
 
-if (cfg.reflection) {
+if (cfg.reflection && !llmFatal) {
   say('reflection round: the formula is final; System 2 looks back');
   await propose(result.accepted?.formula ?? result.best?.formula ?? null, null, 'reflect');
 }
 
 log('end', {
-  stoppedBy: result.stoppedBy, attempts: result.attempts, escalations: result.escalations,
+  stoppedBy: llmFatal ? 'llm_error' : result.stoppedBy, ...(llmFatal ? { llm_error: llmFatal } : {}),
+  attempts: result.attempts, escalations: result.escalations,
   accepted: result.accepted ? { formula: result.accepted.formula, wins: result.accepted.wins, total: result.accepted.total } : null,
   best: result.best ? { formula: result.best.formula, round: roundOf.get(result.best.formula) ?? null, wins: result.best.wins, total: result.best.total } : null,
   hypotheses: registry.all(), summary: registry.summary(), notebook,

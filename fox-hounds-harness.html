@@ -598,7 +598,7 @@ var Neurosym = (() => {
     HypothesisRegistry: () => HypothesisRegistry,
     JEV_DEFAULT_URL: () => JEV_DEFAULT_URL,
     JEV_EVALUATION_CONTRACT: () => JEV_EVALUATION_CONTRACT,
-    JEV_PERCEPTION_CONTRACT: () => JEV_PERCEPTION_CONTRACT,
+    JEV_OBSERVED_TEXTS_CONTRACT: () => JEV_OBSERVED_TEXTS_CONTRACT,
     JUDGE_CONSENSUS: () => JUDGE_CONSENSUS,
     JUDGE_MEASURED: () => JUDGE_MEASURED,
     JevJudge: () => JevJudge,
@@ -1009,6 +1009,7 @@ var Neurosym = (() => {
   }
 
   // src/core/observer.ts
+  var TEXT_LIMIT = 4e3;
   var now = () => typeof performance !== "undefined" ? performance.now() : Date.now();
   var Observer = class {
     constructor(world, options = {}) {
@@ -1052,7 +1053,7 @@ var Neurosym = (() => {
     describe() {
       const parts = ["Admitted measure kinds: " + this.kinds.join(", ") + "."];
       if (this.kinds.includes("code")) {
-        parts.push('code: {kind:"code", lang:' + this.languages().map((l) => '"' + l + '"').join("|") + ', source:"(ctx) => number"} with ctx = {view, state, world}; pure and deterministic; declare a range.');
+        parts.push('code: {kind:"code", lang:' + this.languages().map((l) => '"' + l + '"').join("|") + ', source:"(ctx) => number | text"} with ctx = {view, state, world}; pure and deterministic; declare a range for a number, none for a text (the Judge reads it as written).');
       }
       if (this.kinds.includes("dsl")) {
         for (const d of this.dialects.values()) parts.push("dsl " + d.id + ":\n" + d.describe());
@@ -1094,7 +1095,6 @@ var Neurosym = (() => {
       if (kind === "code") {
         const runner = this.runners.get(spec.lang);
         if (!runner) return { ok: false, kind, hash, error: 'no runner for language "' + spec.lang + '" in this host (it runs: ' + this.languages().join(", ") + ")" };
-        if (!range) return { ok: false, kind, hash, error: "a code measure must declare a finite range [min,max]" };
         try {
           return { ok: true, kind, fn: runner.compile(spec.source), range, hash, warnings: [] };
         } catch (error) {
@@ -1115,6 +1115,7 @@ var Neurosym = (() => {
       const frozen = deepFreeze(cloneJson(state));
       const view = deepFreeze(this.world.view(frozen));
       const values = {};
+      const texts = {};
       const percepts = {};
       const errors = [];
       const timings = {};
@@ -1129,9 +1130,7 @@ var Neurosym = (() => {
           this.stats.errors++;
           continue;
         }
-        const text = render(frozen);
-        percepts[id] = text;
-        parts.push(id + "=#" + hashString(text));
+        percepts[id] = render(frozen);
       }
       let ctx = null;
       let perceiveError = null;
@@ -1168,6 +1167,18 @@ var Neurosym = (() => {
           failure = message(error);
         }
         timings[id] = round(now() - started, 3);
+        if (!compiled.range) {
+          if (typeof value !== "string") {
+            errors.push({ id, error: failure ?? "a measure without a range must return a text (declare a range to return a number)" });
+            this.stats.errors++;
+            continue;
+          }
+          const text = value.length > TEXT_LIMIT ? value.slice(0, TEXT_LIMIT) + "…" : value;
+          texts[id] = text;
+          parts.push(id + "=#" + hashString(text) + "#" + compiled.hash);
+          this.stats.computations++;
+          continue;
+        }
         if (typeof value !== "number" || !Number.isFinite(value)) {
           errors.push({ id, error: failure ?? "the measure produced no finite number" });
           this.stats.errors++;
@@ -1180,7 +1191,7 @@ var Neurosym = (() => {
         this.stats.computations++;
       }
       parts.sort();
-      return { values, percepts, errors, vector: parts.join("|"), count: parts.length, view, timings };
+      return { values, texts, percepts, errors, vector: parts.join("|"), count: parts.length + Object.keys(percepts).length, view, timings };
     }
   };
   function validRange(range) {
@@ -1293,7 +1304,11 @@ var Neurosym = (() => {
       const missing = placeholdersOf(formula.rules[id]).filter((p) => !obsIds.includes(p));
       if (missing.length) errors.push('rule "' + id + '" references undeclared observation(s): ' + missing.join(", "));
     }
-    const unread = obsIds.filter((o) => formula.observations[o]?.spec?.kind !== "sense" && !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o)));
+    const unread = obsIds.filter((o) => {
+      const decl = formula.observations[o];
+      const kind = decl?.spec?.kind;
+      return kind !== "sense" && !(kind === "code" && !decl?.range) && !Object.values(formula.rules || {}).some((r) => placeholdersOf(r).includes(o));
+    });
     if (unread.length) warnings.push("observation(s) no rule reads: " + unread.join(", "));
     for (const id of Object.keys(formula.weights || {})) if (!values.includes(id)) errors.push('weight "' + id + '" has no value rule');
     return { ok: errors.length === 0, errors, warnings };
@@ -1424,7 +1439,7 @@ var Neurosym = (() => {
   // src/core/jev.ts
   var JEV_DEFAULT_URL = "https://api.typesafe.ai/v1/systemone";
   var JEV_EVALUATION_CONTRACT = "Judge only the declared measurements. The board coordinates are intentionally absent; System 2 chose O(s).";
-  var JEV_PERCEPTION_CONTRACT = "Judge from what is perceived and from the declared measurements only. Nothing else about this world is known: no rules, no names, no strategy.";
+  var JEV_OBSERVED_TEXTS_CONTRACT = "Judge only the declared measurements and the observed texts: they are everything System 2 chose to show of the position, O(s).";
   function pickNumber(value) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
@@ -1515,24 +1530,11 @@ var Neurosym = (() => {
   function jevWireState(request) {
     const ctx = request.context ?? {};
     const errors = request.measurementErrors && request.measurementErrors.length ? { measurement_errors: request.measurementErrors.slice() } : {};
-    if (request.position) {
-      return { ...request.position, measurements: { ...request.measurements }, ...errors };
-    }
-    if (request.percepts && Object.keys(request.percepts).length) {
-      return {
-        evaluation_contract: JEV_PERCEPTION_CONTRACT,
-        perception: { ...request.percepts },
-        measurements: { ...request.measurements },
-        side_to_move: request.sideToMove,
-        ...ctx.opponent !== void 0 ? { opponent: ctx.opponent } : {},
-        judgment_formula_hash: ctx.judgment_hash ?? null,
-        ...errors
-      };
-    }
     const wire = {
       rules_of_the_game: request.rulesOfTheWorld,
-      evaluation_contract: JEV_EVALUATION_CONTRACT,
+      evaluation_contract: request.texts && Object.keys(request.texts).length ? JEV_OBSERVED_TEXTS_CONTRACT : JEV_EVALUATION_CONTRACT,
       measurements: { ...request.measurements },
+      ...request.texts && Object.keys(request.texts).length ? { observed_texts: { ...request.texts } } : {},
       side_to_move: request.sideToMove,
       opponent: ctx.opponent ?? null,
       rules_engine_says: "the game is in progress",
@@ -1658,6 +1660,12 @@ var Neurosym = (() => {
       this.priors = options.priorCache ?? /* @__PURE__ */ new Map();
       this.maximizer = options.maximizer ?? observer.world.actors[0];
     }
+    /** Whose turn it is. A world that describes its rules names its sides there, so the name means something to the
+        Judge; a world that describes nothing leaves the name meaningless, and the Judge learns it from the maximizer's side. */
+    sideLabel(side) {
+      if (this.world.describeRules()) return side;
+      return side === this.maximizer ? "you" : "the other player";
+    }
     get world() {
       return this.observer.world;
     }
@@ -1731,13 +1739,14 @@ var Neurosym = (() => {
       const context = this.options.context ? this.options.context(state) : { id: "", facts: {} };
       const ids = valueRuleIds(formula);
       const key = jHash + "|" + side + "|" + context.id + "|" + observation.vector;
+      const texts = observation.texts ?? {};
       const { answers, live } = await this.ask(key, "value", state, {
         world: world.id,
         rulesOfTheWorld: world.describeRules(),
-        sideToMove: side,
+        sideToMove: this.sideLabel(side),
         measurements: observation.values,
-        questions: materializeRules(formula.rules, { ...observation.values, ...observation.percepts }, ids),
-        ...Object.keys(observation.percepts || {}).length ? { percepts: observation.percepts } : {},
+        questions: materializeRules(formula.rules, { ...observation.values, ...texts }, ids),
+        ...Object.keys(texts).length ? { texts } : {},
         ...observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ": " + e.error) } : {},
         context: { ...context.facts, judgment_hash: jHash }
       }, signal);
@@ -1775,7 +1784,8 @@ var Neurosym = (() => {
       }
       const side = world.toMove(state);
       const observation = this.observer.observe(state, formula.observations);
-      const questions = materializeRules(formula.rules, observation.values, valueRuleIds(formula));
+      const texts = observation.texts ?? {};
+      const questions = materializeRules(formula.rules, { ...observation.values, ...texts }, valueRuleIds(formula));
       for (const id of policyIds) {
         const rule = formula.rules[id];
         const subject = rule.subject ?? "side_to_move";
@@ -1785,7 +1795,7 @@ var Neurosym = (() => {
         if (!actions.length) continue;
         const criteria = {};
         for (const a of actions) criteria[world.actionKey(a)] = null;
-        questions[id] = { ...materializeRules({ [id]: rule }, observation.values)[id], type: "choice", criteria };
+        questions[id] = { ...materializeRules({ [id]: rule }, { ...observation.values, ...texts })[id], type: "choice", criteria };
       }
       if (!Object.keys(questions).some((id) => policyIds.includes(id))) {
         this.priors.set(memo, null);
@@ -1795,11 +1805,11 @@ var Neurosym = (() => {
       const { answers } = await this.ask(memo + "|policy", "policy", state, {
         world: world.id,
         rulesOfTheWorld: world.describeRules(),
-        sideToMove: side,
+        sideToMove: this.sideLabel(side),
         measurements: observation.values,
         questions,
+        ...Object.keys(texts).length ? { texts } : {},
         ...observation.errors.length ? { measurementErrors: observation.errors.map((e) => e.id + ": " + e.error) } : {},
-        position: world.describeState ? world.describeState(state, context.facts) : { view: observation.view },
         context: { ...context.facts, judgment_hash: jHash }
       }, signal);
       const weighted = policyIds.some((id) => formula.rules[id].aggregate === "weighted_mean");
@@ -3510,8 +3520,8 @@ var Neurosym = (() => {
     'You face an environment nobody has described to you. It is a turn-based game between two players. You control one of them, marked "you" in what you perceive; the other is controlled by someone else.',
     "You perceive it ONLY through a text picture, rendered after every turn. You are told nothing else: not the rules, not what the symbols mean, not which changes are allowed, not how a game is won. At the end of each game you learn how it ended for your side. Nobody will tell you what a good move was: everything you learn, you find out yourself.",
     "Your side's moves are chosen by a search that looks a few turns ahead and values each imagined position with a FORMULA that you write:",
-    "  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived (the object described in `percept`), each returning a number inside its declared range. They can only compute from the picture.",
-    `  - RULES: questions a semantic judge answers about a position. The judge sees the picture AND the values of your observations (cite an observation inside a rule as {{observation_id}}). A rule's answer, 0..1, means "good for my side" when high. The judge knows nothing about this environment either.`,
+    "  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge. They can only compute from the picture.",
+    `  - RULES: questions a semantic judge answers about a position. The judge does NOT see the picture: it sees only the words of your rules, your observations and whether it is your turn. Whatever the judge needs to know about a position, an observation of yours must give it: a number (cite it inside a rule as {{observation_id}}), or a text - an observation declared WITHOUT a range returns a string, which the judge receives as written, whether or not a rule cites it (any representation of the position you choose to compose). A rule's answer, 0..1, means "good for my side" when high. The judge knows nothing about this environment either.`,
     "  - WEIGHTS over the rules (they are normalised to sum 1).",
     "Both carriers of judgement are welcome: code is deterministic and readable, the judge understands plain words. Put each part of your understanding where it is clearest.",
     "",
@@ -3522,7 +3532,7 @@ var Neurosym = (() => {
     '  {"view": "<game>", "from": <turn>, "to": <turn>}   the pictures of a stretch of one of your games (at most 30 per request)',
     '  {"inspect": "<game>@<turn>"}   what YOUR search did on that turn of yours: the position it chose to move to (named "<game>@<turn>/<k>", with its picture), the value your formula gave it looking ahead and directly, what each of its rules answered and what each of its code observations measured there (the parts behind the direct value), and the finished games your search ran into after it within its horizon, and who won them',
     '  {"try": "<position>", "from": [row, col], "to": [row, col]}   on a position of your games where it is your turn, TRY a change you imagine: move what is at (row, col) of the picture to (row, col). The environment only answers whether it allowed it and, if so, shows the picture that results (named "try<n>", usable in later requests) and whether that change ended the game (and who won). It never says why a change was refused or why a game ended: that is for you to work out. A try is how you TEST an idea about how games end, directly. Trying changes nothing in any game.',
-    '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions',
+    '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<game>@<turn>", "<game>@<turn>/<k>", ...]}   the value of that code on those positions (without "range": the text it composes, as the judge would read it)',
     '  {"play": "<position>", "formula": <round> | { "observations": ..., "rules": ..., "weights": ... }}   PLAY a game again yourself: from any position of your games ("<game>@0" is its start, "<game>@<turn>" a moment of it, "try<n>" where a try left you), your side choosing with the formula of that round, or with a draft you write in the same shape as a proposal (without "formula", your best formula). The other side plays as it always does, so the same experiment can end differently. You get a new game (its name, how it ended, how many turns), to view and inspect like any other. Repeat an experiment, or change one thing and play it again: it is your laboratory, and nothing it plays counts on the scoreboard. At most `plays_left` games this round.',
     "",
     "HOW YOU THINK. What follows are lenses from your disciplines, each with examples of how your instruments can serve it. They are examples, not a procedure, and they describe nothing about this environment. Combine the instruments in any way you judge useful, use them for purposes not mentioned here, bring in anything else you know that applies, and when the environment does not fit a model, change the model.",
@@ -3558,7 +3568,7 @@ var Neurosym = (() => {
     "",
     "`surprises` lists, for your latest games, the turns where your own search's value of your position fell the most before your next turn (or the end): where your formula was most wrong. They are good places to inspect.",
     "",
-    "Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games, each labelled with the SCORE that game ended with for you: a number from -1 to 1. The judge answering a probe question never knows the score: ask it to describe the position. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: for each game score, how many positions and their mean value; the AUC (of two positions from games with different scores, the probability that the one from the higher-scored game has the higher value: 0.5 = no relation, 1 = always higher, 0 = always lower); and whether chance alone could put the AUC that far from 0.5 with that many positions. Observations are also tested on final positions (what the end of a game looks like, by its score - this is how you learn how games end). Remember the score belongs to the whole game: early positions of a low-scored game may have been fine.",
+    "Test ideas with PROBES. A probe is a hypothesis plus an observation and/or a question; the observation and the question are tested SEPARATELY, on positions from your own games, each labelled with the SCORE that game ended with for you: a number from -1 to 1. The judge answering a probe question never knows the score and, as with rules, sees only your observations: ask it about their values. You get FACTS, not verdicts - whether they confirm your hypothesis is for you to judge, in the direction you stated it: for each game score, how many positions and their mean value; the AUC (of two positions from games with different scores, the probability that the one from the higher-scored game has the higher value: 0.5 = no relation, 1 = always higher, 0 = always lower); and whether chance alone could put the AUC that far from 0.5 with that many positions. Observations are also tested on final positions (what the end of a game looks like, by its score - this is how you learn how games end). Remember the score belongs to the whole game: early positions of a low-scored game may have been fine.",
     '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   (an investigation request) the value of that code on each position probes use, with the score that game ended with: the rows behind the facts, to inspect yourself',
     "",
     "`scoreboard` shows how each of your formulas did; a formula's `fingerprint` is the same exactly when the formula is the same. `your_best_formula` is the one that has won the most so far - not necessarily your latest. Games have chance in them (the other side is not always the same, and new starting positions differ): how much a result would vary is something you can find out yourself.",
@@ -3570,7 +3580,7 @@ var Neurosym = (() => {
     '  "rationale": "what you believe now and why, citing the evidence",',
     '  "beliefs": [ { "id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "the belief (required for new and revise)", "why": "...", "evidence": ["<game, position, probe or round>"] } ],',
     '  "notes": [ { "do": "write", "id": "<id>", "text": "...", "positions": ["<game>@<turn>"] } | { "do": "forget", "id": "<id>" } ],',
-    '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } },',
+    '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } | { "definition": "what it shows the judge", "source": "(p) => <text>" } },',
     '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
     '  "weights": { "<rule id>": number },',
     '  "probes": [ { "id": "<id>", "hypothesis": "...", "observation": { "definition": "...", "source": "(p) => ...", "range": [min, max] } , "question": { "type": ..., "instructions": ..., "criteria": ... } } ],',
@@ -3620,12 +3630,13 @@ var Neurosym = (() => {
     const out = [];
     (Array.isArray(raw) ? raw : []).forEach((n, i) => {
       const o = n && typeof n === "object" ? n : null;
-      if (!o || o.do !== "write" && o.do !== "forget" || typeof o.id !== "string") {
-        warnings.push("note #" + i + ' ignored: needs "do" (write | forget) and "id"');
+      const act = o && o.do === void 0 && typeof o.text === "string" ? "write" : o?.do;
+      if (!o || act !== "write" && act !== "forget" || typeof o.id !== "string") {
+        warnings.push("note #" + i + ' ignored: needs "id" (and "do": write | forget)');
         return;
       }
       out.push({
-        do: o.do,
+        do: act,
         id: o.id,
         ...typeof o.text === "string" ? { text: o.text } : {},
         ...Array.isArray(o.positions) ? { positions: o.positions.map(String) } : {}
@@ -3682,8 +3693,8 @@ var Neurosym = (() => {
         } else if (q.measure && typeof q.measure === "object" && Array.isArray(q.on)) {
           const m = q.measure;
           const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === "number") ? [m.range[0], m.range[1]] : null;
-          if (typeof m.source !== "string" || !range) {
-            warnings.push("request #" + i + ': measure needs "source" and "range"');
+          if (typeof m.source !== "string" || m.range !== void 0 && !range) {
+            warnings.push("request #" + i + ': measure needs "source" (and a valid "range" for a number)');
             continue;
           }
           requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
@@ -3708,9 +3719,10 @@ var Neurosym = (() => {
       errors.push(where + ': "source" (a JavaScript function over the percept) is required');
       return null;
     }
+    if (o.range === void 0 || o.range === null) return { definition: typeof o.definition === "string" ? o.definition : "", spec: { kind: "code", lang, source } };
     const range = Array.isArray(o.range) && o.range.length === 2 && o.range.every((n) => typeof n === "number" && Number.isFinite(n)) && o.range[1] > o.range[0] ? [o.range[0], o.range[1]] : null;
     if (!range) {
-      errors.push(where + ': "range" must be [min, max] with max > min');
+      errors.push(where + ': "range" must be [min, max] with max > min (or absent, for a text)');
       return null;
     }
     return { definition: typeof o.definition === "string" ? o.definition : "", spec: { kind: "code", lang, source }, range };
@@ -3855,6 +3867,10 @@ var Neurosym = (() => {
         return;
       }
       const observation = p.observation ? parseObservation(p.observation, where + " observation", lang, errors) : void 0;
+      if (observation && !observation.range) {
+        errors.push(where + ' observation: a probe measures a number - declare its "range"');
+        return;
+      }
       const question = p.question ? parseRule(p.question, where + " question", errors) : void 0;
       if (!observation && !question) {
         errors.push(where + ": needs an observation or a question");
@@ -4028,6 +4044,7 @@ var Neurosym = (() => {
       const direct = ev.value;
       const rules = Object.fromEntries(Object.entries(ev.answers).map(([id, a]) => [id, Math.round(a.value * 1e4) / 1e4]));
       const measures = Object.fromEntries(Object.entries(options.formula.observations).filter(([id, d]) => d.spec.kind === "code" && Number.isFinite(ev.observation.values[id])).map(([id]) => [id, Math.round(ev.observation.values[id] * 1e4) / 1e4]));
+      Object.assign(measures, ev.observation.texts ?? {});
       const lookahead = options.depth > 1 && !world.outcome(child).over ? (await searchBestMove(evaluator, child, { formula: options.formula, depth: options.depth - 1, profile: PLAY_PV_ALPHA_BETA })).best.value : direct;
       const endings = endingsWithin(world, child, Math.max(0, options.depth - 1), options.maximizer);
       choices.push({ state: child, lookahead, direct, rules, measures, endingsWon: endings.won, endingsLost: endings.lost, chosen: key(m) === key(chosen) });
