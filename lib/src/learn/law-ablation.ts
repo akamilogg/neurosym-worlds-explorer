@@ -1,5 +1,5 @@
 import type { ObserverLike } from '../core/evaluate.ts';
-import { lawFormula, type Law, type PredictionSample, type Vec2 } from '../core/predict.ts';
+import { judged, lawFormula, type Law, type PredictionSample, type Vec2 } from '../core/predict.ts';
 import { jsFunctionRunner } from '../core/code-runner.ts';
 import type { Rule } from '../core/types.ts';
 
@@ -7,9 +7,10 @@ import type { Rule } from '../core/types.ts';
  * Ablations of a LAW: how much of the prediction do the observations carry on their
  * own, and what does the Judge add? Information, not a verdict (see ablation.ts).
  *
- *   code-only  the same directions and numeric observations, no Judge: each component's
- *              magnitude is a linear function of the observations (each scaled to [0,1]
- *              by its range), fitted by least squares on samples
+ *   code-only  the same directions and numeric observations, no Judge: each Judge-carried
+ *              component's magnitude is a linear function of the observations (each scaled
+ *              to [0,1] by its range), fitted by least squares on samples; a component whose
+ *              magnitude the learner already wrote in code stays as it is
  *   flat       the same directions, a constant magnitude per component (fitted): the floor
  *   delegated  no observation of the learner's: the Judge reads the whole table as text
  *              and places each magnitude in the component's range (the other mode of the
@@ -20,6 +21,15 @@ import type { Rule } from '../core/types.ts';
  * ========================================================================== */
 
 type Direction = (percept: unknown) => Vec2;
+
+/** The magnitudes the learner wrote in code, by component. */
+function codeMagnitudes(law: Law): Record<string, (percept: unknown) => number> {
+  const runner = jsFunctionRunner();
+  return Object.fromEntries(Object.entries(law.components).filter(([, c]) => !judged(c)).map(([id, c]) => {
+    const fn = runner.compile(c.magnitude!.source) as unknown as (p: unknown) => unknown;
+    return [id, (p: unknown) => Number(fn(p))];
+  }));
+}
 
 function directions(law: Law): Record<string, Direction> {
   const runner = jsFunctionRunner();
@@ -70,10 +80,11 @@ export interface LawFit<S> {
 export function fitLawCodeOnly<S>(observer: ObserverLike<S>, perceive: (state: S) => unknown, law: Law, samples: readonly PredictionSample<S>[],
   options: { flat?: boolean; iterations?: number } = {}): LawFit<S> {
   const dirs = directions(law);
-  const comps = Object.keys(law.components);
+  const fixed = codeMagnitudes(law);
+  const comps = Object.keys(law.components).filter((id) => judged(law.components[id]));
   const numeric = options.flat ? [] : Object.entries(law.observations).filter(([, d]) => d.range && d.range[1] > d.range[0]).map(([id]) => id);
   const width = numeric.length + 1;
-  const features = (state: S): { dirs: Vec2[]; x: number[] } => {
+  const features = (state: S): { dirs: Vec2[]; x: number[]; base: Vec2 } => {
     const o = observer.observe(state, lawFormula(law).observations);
     const x = [1, ...numeric.map((id) => {
       const [lo, hi] = law.observations[id].range!;
@@ -81,16 +92,18 @@ export function fitLawCodeOnly<S>(observer: ObserverLike<S>, perceive: (state: S
       return typeof v === 'number' ? (v - lo) / (hi - lo) : 0.5;
     })];
     const p = perceive(state);
-    return { dirs: comps.map((id) => dirs[id](p)), x };
+    /* What the learner's own code magnitudes predict: kept, not fitted. */
+    const base = Object.entries(fixed).reduce<Vec2>((acc, [id, m]) => { const d = dirs[id](p), v = m(p); return [acc[0] + v * d[0], acc[1] + v * d[1]]; }, [0, 0]);
+    return { dirs: comps.map((id) => dirs[id](p)), x, base };
   };
   /* The magnitude of a component for a (not clamped) V, and its derivative: the fit may pass through V outside [0,1]. */
   const mag = (k: number, v: number): [number, number] => {
     const c = law.components[comps[k]];
-    const [lo, hi] = c.range;
+    const [lo, hi] = c.range ?? [0, 1];
     if (c.scale === 'log') { const m = Math.exp(Math.log(lo) + v * (Math.log(hi) - Math.log(lo))); return [m, m * (Math.log(hi) - Math.log(lo))]; }
     return [lo + v * (hi - lo), hi - lo];
   };
-  const data: { f: { dirs: Vec2[]; x: number[] }; t: Vec2 }[] = [];
+  const data: { f: { dirs: Vec2[]; x: number[]; base: Vec2 }; t: Vec2 }[] = [];
   for (const s of samples) { try { data.push({ f: features(s.state), t: s.target }); } catch { /* a point the observations cannot read */ } }
   const c = new Array<number>(comps.length * width).fill(0);
   for (let k = 0; k < comps.length; k++) c[k * width] = 0.5;
@@ -98,7 +111,7 @@ export function fitLawCodeOnly<S>(observer: ObserverLike<S>, perceive: (state: S
     const rows: number[][] = [];
     const res: number[] = [];
     for (const { f, t } of data) {
-      const pred: [number, number] = [0, 0];
+      const pred: [number, number] = [f.base[0], f.base[1]];
       const grads: number[][] = [new Array<number>(params.length).fill(0), new Array<number>(params.length).fill(0)];
       f.dirs.forEach((d, k) => {
         const v = f.x.reduce((acc, xj, j) => acc + params[k * width + j] * xj, 0);
@@ -129,7 +142,7 @@ export function fitLawCodeOnly<S>(observer: ObserverLike<S>, perceive: (state: S
     coefficients,
     predict: (state) => {
       const f = features(state);
-      let v: Vec2 = [0, 0];
+      let v: Vec2 = f.base;
       f.dirs.forEach((d, k) => {
         const [m] = mag(k, f.x.reduce((acc, xj, j) => acc + c[k * width + j] * xj, 0));
         v = [v[0] + m * d[0], v[1] + m * d[1]];
@@ -146,6 +159,8 @@ export function delegatedLaw(law: Law, tableSource = RECENT_ROWS): Law {
   const rules: Record<string, Rule> = {};
   const components: Record<string, Law['components'][string]> = {};
   for (const [id, c] of Object.entries(law.components)) {
+    /* A magnitude the learner wrote in code is not the Judge's to take over: it stays. */
+    if (!judged(c)) { components[id] = c; continue; }
     const rule = 'delegated_' + id;
     rules[rule] = {
       type: 'noul', used_as: 'value',

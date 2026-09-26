@@ -14,13 +14,18 @@
      --steps N           investigation answers System 2 may give per round before proposing (default 3)
      --launches N        bodies System 2 may launch itself per round (default 6)
      --sampling S        grid: the test launches are the same fixed lattice every round (the same points recur: cheap);
-                         free: new test launches every round (default grid)
+                         free: new test launches every round (default grid). With grid the learner has studied the test
+                         launches by the time a law passes, so a law that passes is CONFIRMED on fresh launches it has
+                         never seen (never shown to it) before it is accepted.
      --resolution X      round every perceived position to X, in the table's units (default 0: continuous)
      --test-view N       test launches from inside the observable region (default 6)
      --test-beyond N     test launches from beyond it: the extrapolation band (default 3)
      --every N           take every N-th usable row of a launch as a test point (default 8)
-     --accept X          accept a law whose error is within X times the noise floor of the same points, in both bands
-                         (default 1.2; the floor is the operator's - System 2 only learns whether it was accepted)
+     --accept X          accept a law whose error is within X times what the HIDDEN LAW ITSELF scores on the same points
+                         (or the noise floor, if larger), in both bands (default 1.2). The table's d is a second difference
+                         over two rows, which departs from the law at an instant where the pull changes within a row: the
+                         hidden law does not score 0 either. Both references are the operator's: System 2 only learns
+                         whether it was accepted.
      --tools a,b,...     the instruments System 2 is given (default: all = view,inspect,launch,measure,simulate,table;
                          "none" = none of them): the BASELINE, as in run-grid.ts
      --delegated         also run the delegated arm of the ablation every round (the Judge reads the table; one call per point)
@@ -285,6 +290,27 @@ function describeTest(round: number, r: TestResult): unknown {
   };
 }
 
+/** Does a result meet the acceptance criterion: within --accept times what the hidden law itself scores on the same
+    points (or the noise floor, if larger), per band? */
+function meetsCriterion(result: TestResult, samples: readonly PredictionSample<OrbitPoint>[]): boolean {
+  if (result.floor === null || result.failed.length) return false;
+  return ['view', 'outer'].every((band) => {
+    if (!result.samples.some((s) => s.band === band)) return true;
+    const own = samples.filter((s) => s.band === band);
+    return (result.byBand[band] ?? Infinity) <= cfg.accept * Math.max(referenceOf(own, 'truth'), referenceOf(own, 'reference'));
+  });
+}
+
+/** With --sampling grid the learner has studied the test launches: a law that passes them is confirmed on fresh launches
+    it has never seen, drawn once per round and never shown to it (nor stored as its launches). */
+async function confirmBlind(law: Law, round: number): Promise<{ ok: boolean; result: TestResult; calls: number }> {
+  const trajectories = trialLaunches(spec, { sampling: 'free', attempt: 100000 + round, inView: cfg.testView, beyond: cfg.testBeyond });
+  const samples = predictionSamples(spec, trajectories, { resolution: cfg.resolution, every: cfg.every });
+  const before = judge.stats.calls;
+  const result = await testPredictions(samples, async (s) => (await predictor.predict(law, s)).vector);
+  return { ok: meetsCriterion(result, samples), result, calls: judge.stats.calls - before };
+}
+
 /* --- Operator-only measures ---------------------------------------------------------- */
 
 /** The prior a model brings: the best Newtonian law, fitted on what the learner could see, judged against the truth. */
@@ -312,6 +338,7 @@ async function ablate(law: Law, round: number, lawResult: TestResult): Promise<v
   const fitOn = ownSamples();
   const arms: Record<string, unknown> = { law: { error: round2(lawResult.error), median: round2(lawResult.median), truth_error: lawResult.truthError !== null ? round2(lawResult.truthError) : null, by_band: lawResult.byBand } };
   const summary = (r: TestResult) => ({ error: round2(r.error), median: round2(r.median), truth_error: r.truthError !== null ? round2(r.truthError) : null, by_band: r.byBand });
+  arms.carried_by = Object.fromEntries(Object.entries(law.components).map(([id, c]) => [id, c.magnitude ? 'code' : 'judge']));
   if (cfg.ablation && fitOn.length) {
     const codeOnly = fitLawCodeOnly(observer, perceivePoint, law, fitOn);
     const flat = fitLawCodeOnly(observer, perceivePoint, law, fitOn, { flat: true });
@@ -387,9 +414,12 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
       const pr = await predictor.predict(law, p);
       return {
         inspect: req.inspect, predicted_d: pr.vector.map(round2), observed_d: observedD(req.inspect),
-        components: Object.fromEntries(Object.entries(pr.components).map(([id, c]) => [id, { direction: c.direction.map(round2), judge_value: round2(c.value), magnitude: round2(c.magnitude) }])),
-        each_rule_answered: Object.fromEntries(Object.entries(pr.evaluation.answers).map(([id, a]) => [id, round2(a.value)])),
-        your_observations_measured: { ...pr.evaluation.observation.values, ...pr.evaluation.observation.texts }
+        components: Object.fromEntries(Object.entries(pr.components).map(([id, c]) => [id, { direction: c.direction.map(round2),
+          ...(c.value === null ? { magnitude_from: 'your code' } : { judge_value: round2(c.value) }), magnitude: round2(c.magnitude) }])),
+        ...(pr.evaluation ? {
+          each_rule_answered: Object.fromEntries(Object.entries(pr.evaluation.answers).map(([id, a]) => [id, round2(a.value)])),
+          your_observations_measured: { ...pr.evaluation.observation.values, ...pr.evaluation.observation.texts }
+        } : { the_judge_was_not_asked: true })
       };
     } catch (e) { return { inspect: req.inspect, error: String((e as Error).message ?? e) }; }
   }
@@ -585,25 +615,30 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   record.test = { error: result.error, median: result.median };
   lastTest = describeTest(record.round, result);
   const samples = testSamples(record.round);
-  const ok = result.floor !== null && ['view', 'outer'].every((band) => {
-    const pts = result.samples.filter((s) => s.band === band);
-    if (!pts.length) return true;
-    const floorBand = testPredictionsFloor(samples.filter((s) => s.band === band));
-    return (result.byBand[band] ?? Infinity) <= cfg.accept * floorBand;
-  });
+  const passed = meetsCriterion(result, samples);
+  let confirmation: Record<string, unknown> | null = null;
+  let ok = passed;
+  if (passed && cfg.sampling === 'grid') {
+    const c = await confirmBlind(record.law, record.round);
+    ok = c.ok;
+    confirmation = { confirmed: c.ok, error: round2(c.result.error), by_band: c.result.byBand, floor: c.result.floor, hidden_law: c.result.reference, truth_error: c.result.truthError, points: c.result.samples.length, jev_calls: c.calls };
+    log('confirmation', { round: record.round, ...confirmation });
+    say('  passed the grid test; blind confirmation on fresh launches: error ' + round2(c.result.error) + ' (noise floor ' + (c.result.floor !== null ? round2(c.result.floor) : '-') + ', hidden law ' + (c.result.reference !== null ? round2(c.result.reference) : '-') + ')' + (c.ok ? ' CONFIRMED' : ' NOT confirmed'));
+  }
   log('test', { round: record.round, error: result.error, median: result.median, by_band: result.byBand, points: result.samples.length, failed: result.failed.length,
-    operator: { floor: result.floor, truth_error: result.truthError, accepted: ok },
+    operator: { floor: result.floor, hidden_law: result.reference, truth_error: result.truthError, passed_test: passed, ...(confirmation ? { blind_confirmation: confirmation } : {}), accepted: ok },
     jev: { calls: judge.stats.calls, errors: judge.stats.errors, test_calls: calls, calls_per_point: round2(calls / Math.max(1, result.samples.length)) },
     abstraction: abstractionOf(record.law, samples) });
-  say('  test: error ' + round2(result.error) + ' (median ' + round2(result.median) + '; floor ' + (result.floor !== null ? round2(result.floor) : '-') + ', vs truth ' +
+  say('  test: error ' + round2(result.error) + ' (median ' + round2(result.median) + '; noise floor ' + (result.floor !== null ? round2(result.floor) : '-') + ', hidden law ' + (result.reference !== null ? round2(result.reference) : '-') + ', vs truth ' +
     (result.truthError !== null ? round2(result.truthError) : '-') + '), Jev calls ' + calls + (ok ? '  ACCEPTED' : ''));
   if (cfg.ablation || cfg.delegated) await ablate(record.law, record.round, result);
   if (ok) { accepted = record; log('accepted', { round: record.round }); break; }
 }
 
-function testPredictionsFloor(samples: readonly PredictionSample<OrbitPoint>[]): number {
+/** The error of the noise-free truth ('truth': the noise floor) or of the hidden law ('reference') on these samples. */
+function referenceOf(samples: readonly PredictionSample<OrbitPoint>[], which: 'truth' | 'reference'): number {
   let e = 0, n = 0;
-  for (const s of samples) { if (!s.truth) continue; e += (s.truth[0] - s.target[0]) ** 2 + (s.truth[1] - s.target[1]) ** 2; n += s.target[0] ** 2 + s.target[1] ** 2; }
+  for (const s of samples) { const r = s[which]; if (!r) continue; e += (r[0] - s.target[0]) ** 2 + (r[1] - s.target[1]) ** 2; n += s.target[0] ** 2 + s.target[1] ** 2; }
   return n > 0 ? Math.sqrt(e / n) : 0;
 }
 

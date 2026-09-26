@@ -17,8 +17,11 @@ import { acceleration, simulate, toPercept, type OrbitSpec, type Trajectory, typ
  *     d(i) = p(i+1) - 2 p(i) + p(i-1)          (read from the table itself, noise included)
  * It is a definition over what is perceived, not a law: what the learner predicts,
  * a law of motion must explain. The operator also keeps the same quantity without
- * noise (the truth: a · Δt² in the learner's frame) to report how far the noise alone
- * puts even a perfect law.
+ * noise (the truth: the same second difference of the noise-free positions) to report
+ * how far the noise alone puts even a perfect law. It is NOT a · Δt²: over one row a
+ * body moves, and near a source the pull changes along the way; that difference is
+ * part of what the learner has to predict, not noise. The REFERENCE is what the hidden law
+ * itself predicts (a · Δt² at the row): a learner that recovers the law scores about that.
  * ========================================================================== */
 
 export interface OrbitPoint {
@@ -101,12 +104,13 @@ export function predictionSamples(spec: OrbitSpec, trajectories: readonly Trajec
       const xs = [probe.x[i - 1], probe.x[i], probe.x[i + 1]], ys = [probe.y[i - 1], probe.y[i], probe.y[i + 1]];
       if ([...xs, ...ys].some((v) => v === null)) continue;
       if (taken++ % every !== 0) continue;
-      const s = tr.states[i];
-      const a = toPercept.acc(spec.frame, acceleration(spec, s.pos, s.vel, tr.launch.mass));
+      const [p0, p1, p2] = [i - 1, i, i + 1].map((k) => toPercept.pos(spec.frame, tr.states[k].pos));
+      const a = toPercept.acc(spec.frame, acceleration(spec, tr.states[i].pos, tr.states[i].vel, tr.launch.mass));
       out.push({
         state: { table: lines.slice(0, i + 2).join('\n'), row: i },
         target: [xs[2]! - 2 * xs[1]! + xs[0]!, ys[2]! - 2 * ys[1]! + ys[0]!],
-        truth: [a[0] * dtSeen * dtSeen, a[1] * dtSeen * dtSeen],
+        truth: [p2[0] - 2 * p1[0] + p0[0], p2[1] - 2 * p1[1] + p0[1]],
+        reference: [a[0] * dtSeen * dtSeen, a[1] * dtSeen * dtSeen],
         band: outer ? 'outer' : 'view',
         ref: tr.id + '@' + i
       });

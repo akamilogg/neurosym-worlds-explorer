@@ -72,9 +72,11 @@ test('the exact law, written in the learner\'s frame, predicts to the noise; the
   const twoParts: Law = { ...exact, components: { toward: exact.components.toward, again: { ...exact.components.toward, range: [lo * 1e-6, lo * 1e-5] } } };
   const r = await testPredictions(samples, async (s) => (await predictor.predict(twoParts, s)).vector);
   assert.deepEqual(r.failed, []);
-  assert.ok(r.truthError! < 0.02, 'against the truth: ' + r.truthError);
+  /* The law at an instant scores what the hidden law itself scores; the rest of its miss is not noise (the noise floor is
+     small) but the second difference over two rows, which departs from the law where the pull changes within a row. */
+  assert.ok(Math.abs(r.error - r.reference!) < 0.02 * r.reference! + 1e-3, 'the exact law scores the reference: ' + r.error + ' vs ' + r.reference);
+  assert.ok(r.floor! < 0.03 && r.floor! < r.reference!, 'noise floor ' + r.floor + ' below the hidden law\'s own miss ' + r.reference);
   assert.ok(r.error < 0.2, 'against what was observed: ' + r.error);
-  assert.ok(Math.abs(r.error - r.floor!) < 0.02 * r.floor! + 1e-3, 'a perfect law scores the floor: ' + r.error + ' vs ' + r.floor);
   assert.equal(calls, samples.length, 'two components, one question per point');
   await testPredictions(samples, async (s) => (await predictor.predict(twoParts, s)).vector);
   assert.equal(calls, samples.length, 'the same points again: every answer from the cache');
@@ -110,4 +112,30 @@ test('--sampling: the grid repeats its launches every attempt; free draws new on
   const ids = (sampling: 'grid' | 'free', attempt: number) => trialLaunches(spec, { sampling, attempt, inView: 3, beyond: 1 }).map((t) => t.launch.pos.join(','));
   assert.deepEqual(ids('grid', 1), ids('grid', 2));
   assert.notDeepEqual(ids('free', 1), ids('free', 2));
+});
+
+test('a magnitude in code: the Judge is never asked for it, the ablation keeps it, and the delegated mode leaves it alone', async () => {
+  const codeOnlyLaw: Law = {
+    world: 'orbit@1', observations: {}, rules: {},
+    components: { toward: { direction: exact.components.toward.direction, magnitude: { kind: 'code', lang: 'js',
+      source: '(p) => { ' + last + ' const r = Math.hypot(q.x[i] - s.x[i], q.y[i] - s.y[i]) / ' + spec.frame.scale + '; return ' + K + ' * Math.pow(r, -' + p + '); }' } } }
+  };
+  assert.deepEqual(checkLaw(codeOnlyLaw).errors, []);
+  calls = 0;
+  const predictor = new Predictor(new Evaluator<OrbitPoint>(observer, echo, { maximizer: 'nature' }), perceivePoint);
+  const r = await testPredictions(samples, async (s) => (await predictor.predict(codeOnlyLaw, s)).vector);
+  assert.equal(calls, 0, 'no rule, no question');
+  assert.ok(Math.abs(r.error - r.reference!) < 0.02 * r.reference! + 1e-3, 'the law in code scores the hidden law: ' + r.error);
+  const pr = await predictor.predict(codeOnlyLaw, samples[0].state);
+  assert.equal(pr.evaluation, null);
+  assert.equal(pr.components.toward.value, null);
+  /* Mixed: a code component and a Judge component; code-only keeps the first and fits the second. */
+  const mixed: Law = { ...exact, components: { toward: codeOnlyLaw.components.toward, extra: { ...exact.components.toward, range: [lo * 1e-6, lo * 1e-5] } } };
+  assert.deepEqual(checkLaw(mixed).errors, []);
+  const fit = fitLawCodeOnly(observer, perceivePoint, mixed, samples);
+  assert.deepEqual(Object.keys(fit.coefficients), ['extra']);
+  assert.ok((await testPredictions(samples, fit.predict)).error < 0.2);
+  assert.deepEqual(delegatedLaw(mixed).components.toward, mixed.components.toward);
+  const both = { ...codeOnlyLaw.components.toward, weights: { pull: 1 } };
+  assert.match(checkLaw({ ...exact, components: { both } }).errors.join(' '), /weighs no rule/);
 });

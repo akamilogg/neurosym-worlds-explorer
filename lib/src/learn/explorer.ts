@@ -250,7 +250,7 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         /* Without a range, the code composes a text: what the judge would read. */
         if (typeof m.source !== 'string' || (m.range !== undefined && !range)) { warnings.push('request #' + i + ': measure needs "source" (and a valid "range" for a number)'); continue; }
         requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
-      } else warnings.push('request #' + i + ' ignored: use view, inspect, try, play, measure or table');
+      } else { const t = JSON.stringify(r) ?? String(r); warnings.push('request #' + i + ' ignored (' + (t.length > 200 ? t.slice(0, 199) + '…' : t) + '): use view, inspect, try, play, measure or table'); }
     }
     if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push('only the first ' + (context.maxRequests ?? 8) + ' requests were run');
     return { kind: 'investigate', requests, notes, methods, warnings };

@@ -101,7 +101,7 @@ test('operator: the law stated in the learner\'s terms is the law the tables sho
     const src = toPercept.pos(spec.frame, spec.sources[0].pos);
     const probe: Vec2 = [seen.bodies[sense.probeGlyph].x[row]!, seen.bodies[sense.probeGlyph].y[row]!];
     const r = Math.hypot(probe[0] - src[0], probe[1] - src[1]);
-    const size = Math.hypot(s.truth![0], s.truth![1]);
+    const size = Math.hypot(s.reference![0], s.reference![1]);
     assert.ok(close(size, C * Math.pow(r, -p), 0.02 + 5 * spec.noise * spec.frame.scale / r), 'at r = ' + r.toFixed(2) + ': ' + size + ' vs ' + C * Math.pow(r, -p));
   }
   assert.ok(truth.some((t) => t.id === 'launch_property' && /does not matter/.test(t.statement)));

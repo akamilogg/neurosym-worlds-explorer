@@ -11,6 +11,8 @@ import type { OrbitSpec } from './world.ts';
  * In the learner's frame (scale s, rotation θ, mirror F) a pull a(r) of the true frame,
  * over one row of true time dt, departs the next position by d = s · dt² · a(r' / s),
  * where r' is the distance in table units: the time unit of the table cancels out.
+ * That is the law at an instant; the d a table shows is a second difference over two
+ * rows, which departs from it where the pull changes much within a row (close passes).
  * ========================================================================== */
 
 export interface TruthStatement {

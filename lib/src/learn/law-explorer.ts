@@ -20,6 +20,9 @@ import type { BeliefStance, NoteOp } from './notebook.ts';
  * comes from the sense.
  * ========================================================================== */
 
+/** What an ignored request looked like, so the learner and the journal can see what was asked. */
+const clipJson = (v: unknown): string => { const t = JSON.stringify(v) ?? String(v); return t.length > 200 ? t.slice(0, 199) + '…' : t; };
+
 export const LAW_TOOLS = ['view', 'inspect', 'launch', 'measure', 'simulate', 'table'] as const;
 export type LawTool = typeof LAW_TOOLS[number];
 type Tools = ReadonlySet<LawTool>;
@@ -34,8 +37,8 @@ const LAW_LINES: readonly PromptLine[] = [
   'A law has three parts:',
   '  - OBSERVATIONS: small deterministic JavaScript functions over the table up to the current row (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge.',
   '  - RULES: questions a semantic judge answers. The judge does NOT see the table: it sees only the words of your rules and your observations (cite a number inside a rule as {{observation_id}}; a text observation reaches it as written). A rule\'s answer is a number from 0 to 1. The judge knows nothing about this environment either.',
-  '  - COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders).',
-  'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest.',
+  '  - COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is carried by one of two: either the JUDGE - it is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders) - or CODE, `(p) => number`, in the units of the table, and then the judge is not asked for that component.',
+  'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your law says.',
   '',
   'Every round your law is TESTED on launches you have never seen - some of them starting beyond the region you observe - and you get its errors on each of them. After the test, those launches are yours to study like any other.',
   '',
@@ -83,7 +86,7 @@ const LAW_LINES: readonly PromptLine[] = [
   '  "notes": [ { "do": "write", "id": "<id>", "text": "...", "positions": ["<launch>@<row>"] } | { "do": "forget", "id": "<id>" } ],',
   '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } | { "definition": "what it shows the judge", "source": "(p) => <text>" } },',
   '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
-  '  "components": { "<id>": { "definition": "what this part of the prediction is", "direction": "(p) => [x, y]", "weights": { "<rule id>": number }, "range": [low, high], "scale": "linear" | "log" } },',
+  '  "components": { "<id>": { "definition": "what this part of the prediction is", "direction": "(p) => [x, y]", "weights": { "<rule id>": number }, "range": [low, high], "scale": "linear" | "log" } | { "definition": "...", "direction": "(p) => [x, y]", "magnitude": "(p) => <number>" } },',
   '  "lessons": ["what this round taught you, in a sentence each"],',
   '  "next_experiment": "what you intend to test next round, and why"',
   '}',
@@ -125,7 +128,9 @@ export function ownLaw(law: Law): Record<string, unknown> {
   for (const [id, r] of Object.entries(law.rules)) rules[id] = { type: r.type, instructions: r.instructions, criteria: r.criteria };
   const components: Record<string, unknown> = {};
   for (const [id, c] of Object.entries(law.components)) {
-    components[id] = { definition: c.definition ?? '', direction: c.direction.source, weights: c.weights, range: c.range, scale: c.scale };
+    components[id] = c.magnitude
+      ? { definition: c.definition ?? '', direction: c.direction.source, magnitude: c.magnitude.source }
+      : { definition: c.definition ?? '', direction: c.direction.source, weights: c.weights, range: c.range, scale: c.scale };
   }
   return { observations, rules, components };
 }
@@ -174,6 +179,13 @@ export function buildLaw(data: Record<string, unknown>, context: { world: string
     if (!c) { errors.push(where + ': a component must be an object'); continue; }
     const source = typeof c.direction === 'string' ? c.direction.trim() : typeof obj(c.direction)?.source === 'string' ? String(obj(c.direction)!.source).trim() : '';
     if (!source) { errors.push(where + ': "direction" (a JavaScript function (p) => [x, y]) is required'); continue; }
+    const magnitude = typeof c.magnitude === 'string' ? c.magnitude.trim() : typeof obj(c.magnitude)?.source === 'string' ? String(obj(c.magnitude)!.source).trim() : '';
+    if (magnitude) {
+      if (c.weights !== undefined || c.range !== undefined) warnings.push(where + ': a magnitude in code: its "weights" and "range" are ignored');
+      components[id] = { direction: { kind: 'code', lang, source }, magnitude: { kind: 'code', lang, source: magnitude }, ...(typeof c.definition === 'string' ? { definition: c.definition } : {}) };
+      continue;
+    }
+    if (c.magnitude !== undefined) { errors.push(where + ': "magnitude" must be a JavaScript function (p) => number'); continue; }
     const range = Array.isArray(c.range) && c.range.length === 2 && c.range.every((n) => typeof n === 'number' && Number.isFinite(n)) ? [c.range[0] as number, c.range[1] as number] as const : null;
     if (!range) { errors.push(where + ': "range" must be [low, high]'); continue; }
     const scale = c.scale === undefined ? 'linear' : c.scale;
@@ -279,7 +291,7 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
         const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
         if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': table needs "source" and "range"'); continue; }
         requests.push({ table: { source: m.source, range }, on: q.on === 'tests' ? 'tests' : 'launches' });
-      } else warnings.push('request #' + i + ' ignored: use view, launch, inspect, measure, simulate or table');
+      } else warnings.push('request #' + i + ' ignored (' + clipJson(r) + '): use view, launch, inspect, measure, simulate or table');
     }
     if (o.investigate.length > max) warnings.push('only the first ' + max + ' requests were run');
     return { kind: 'investigate', requests, notes, methods, warnings };

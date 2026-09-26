@@ -65,3 +65,14 @@ test('only what the explorer wrote travels back, and the payload carries the per
   assert.equal(payload.launches_left, 5);
   assert.equal((payload.your_best_law as { from_round: number }).from_round, 2);
 });
+
+test('a component may carry its magnitude in code; an ignored request is echoed back so it can be read', () => {
+  const t = parseLawTurn(JSON.stringify({ observations: {}, rules: {}, components: { toward: { direction: draft.components.toward.direction, magnitude: '(p) => 0.5' } } }), { world: 'orbit@1' });
+  if (t.kind !== 'proposal' || !t.parse.ok) throw new Error('not parsed: ' + JSON.stringify(t));
+  assert.equal(t.parse.proposal.law.components.toward.magnitude?.source, '(p) => 0.5');
+  assert.deepEqual(ownLaw(t.parse.proposal.law).components, { toward: { definition: '', direction: draft.components.toward.direction, magnitude: '(p) => 0.5' } });
+  const bad = parseLawTurn(JSON.stringify({ ...draft, components: { toward: { ...draft.components.toward, magnitude: 3 } } }), { world: 'orbit@1' });
+  assert.ok(bad.kind === 'proposal' && !bad.parse.ok);
+  const inv = parseLawTurn(JSON.stringify({ investigate: [{ plot: 'launch1', from: 2 }] }), { world: 'orbit@1' });
+  assert.ok(inv.kind === 'investigate' && /ignored \(\{"plot":"launch1","from":2\}\)/.test(inv.warnings[0]), JSON.stringify(inv));
+});

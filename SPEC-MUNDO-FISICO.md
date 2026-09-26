@@ -243,6 +243,39 @@ Sobre las mismas muestras de la prueba:
   356 % fuera. En las peticiones a System 2 no aparece ninguna palabra delatora ni el exponente de la ley.
 - **Lanzadores:** `run-orbit.example.ps1` / `.sh`; las copias con claves (`run-orbit.ps1` / `.sh`) están en `.gitignore`.
 
+### 8.2 Primer run real y correcciones (26/09/2026)
+
+**Run orbit 1** (semilla 3, L1, gpt-6-sol): aceptado en la ronda 5.
+- **La física:** el exponente fue de 3 a 2,5, a 2,65 y a (r²+2)^-1,325 ≈ r^-2,65 (real 2,66), con coeficiente 640
+  (real 656).
+- **El método:** |d|·r^k constante a lo largo de las distancias; pares de lanzamientos para descartar que la masa importe.
+- **Resultados:** abandonó Newton en la ronda 1 por los datos; nota de recuperación 0,9.
+- **Tres problemas del harness:**
+  1. **Esquivó a Jev.** Lo usó como calculadora ("probabilidad de U < x") y resultó mal calibrado (suelo ~0,1,
+     sesgos de hasta 0,2), lo que explica casi todo el error de las rondas 1 a 4. En la ronda 5 escondió la magnitud en
+     las direcciones: dos componentes fijos de 80 cuya parte lateral se cancela. Jev dejó de importar (1 llamada) y la
+     ablación perdió sentido.
+  2. **Con `--sampling grid` la prueba dejó de ser ciega.** Los lanzamientos de prueba se repiten y System 2 los
+     estudió y ajustó el coeficiente con ellos.
+  3. **El "suelo de ruido" no era ruido.** Era la diferencia entre la segunda diferencia sobre dos filas y la ley en un
+     instante (a·Δt²), que crece en los pasos cercanos. System 2 lo detectó y lo atribuyó bien ("la fuerza varía dentro
+     de la fila"); su "+2" en parte lo modela.
+
+**Correcciones aplicadas:**
+- **Magnitud en código.** Un componente puede declarar `magnitude: "(p) => number"` en lugar de pesos y rango. Jev no
+  se consulta para ese componente, ni en absoluto si la ley no tiene reglas. La elección queda escrita en la ley, y la
+  ablación registra qué componente lleva quién (`carried_by`).
+- **Confirmación ciega en modo grid.** Una ley que pasa la prueba de la grid se confirma con lanzamientos nuevos que
+  System 2 no ha visto ni verá, antes de aceptarse (evento `confirmation`).
+- **Verdad = segunda diferencia sin ruido.** El `floor` es ahora solo ruido: 0,009 en la semilla 3, frente al 0,136
+  anterior. Se añade la **referencia**: lo que la ley oculta misma puntúa en esos puntos (0,136).
+- **Aceptación relativa a la referencia:** error ≤ `--accept` × max(referencia, suelo) por banda. Con el suelo de ruido
+  puro ni siquiera la ley oculta se aceptaría: habría que modelar la integración numérica, que no es lo que se mide.
+- **Peticiones ignoradas visibles.** El aviso incluye la petición tal como llegó (también en la cuadrícula).
+
+Con la ley del run escrita en código, el ensayo reproduce su error (0,1329), la acepta tras la confirmación ciega
+(0,19 en lanzamientos nuevos) y no hace ninguna llamada a Jev.
+
 ## 9. Métricas del operador (solo en el journal)
 
 - La ley verdadera y sus parámetros, en el marco percibido.
