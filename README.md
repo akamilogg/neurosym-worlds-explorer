@@ -170,7 +170,9 @@ node --experimental-strip-types scripts/calibrate-orbit.ts 1 20 1
 ```
 
 Its options include `--level 1..4`, `--sampling grid|free` (test points that repeat, or new ones every round),
-`--resolution X` (rounded perception), `--tools` and `--delegated`; the header of `run-orbit.ts` documents them.
+`--resolution X` (rounded perception), `--tools`, `--delegated` and `--quick` (stop the first time System 2 judges its
+law good, without validating it, to see whether a change makes the exploration promising); the header of `run-orbit.ts`
+documents them.
 
 ## License
 

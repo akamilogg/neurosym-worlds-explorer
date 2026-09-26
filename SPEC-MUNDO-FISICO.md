@@ -493,6 +493,15 @@ y la confirmación ciega.
 | 3 | La misma ley falla en los nuevos laboratorios (18 a 632) → validación rechazada |
 | 4 | Ley sumada sobre todos los cuerpos: se sostiene en los 4 laboratorios → valida: `setup3` se sostiene → confirmación ciega en 6 montajes nuevos (todos ≤ 0,70) → **aceptada** |
 
+### 8.7 Runs rápidos: `--quick` (26/09/2026)
+
+Para ver si un cambio produce una exploración prometedora sin pagar toda la verificación. El run **para la primera vez que
+System 2 pide validar** (da su ley por buena): no hay validación en la familia ni confirmación ciega. La comprobación en su
+laboratorio sigue cada ronda, porque es de lo que aprende. La ley se imprime al terminar y queda en el journal (`quick_stop`,
+con si se sostenía en sus laboratorios; `end.stoppedBy = "quick_stop"`). Implica `--no-ablation` y `--no-reflection`; la
+calificación del operador se mantiene (`--no-grade` para quitarla). El prompt es el del protocolo completo, así que la
+exploración es la misma que vería un run completo hasta ese punto.
+
 ## 9. Métricas del operador (solo en el journal)
 
 - La ley verdadera y sus parámetros, en el marco percibido.

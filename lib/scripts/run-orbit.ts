@@ -39,6 +39,12 @@
      --no-ablation       skip the code-only and flat arms
      --no-grade          skip the operator-only grading of the recovered law against the hidden one (one LLM call)
      --no-reflection     skip the final reflection round
+     --quick             a QUICK run, to see whether a change makes the exploration promising: the run stops the first time
+                         System 2 asks to validate (it judges its law good), with no validation in the family and no blind
+                         confirmation. The law is printed and kept in the journal; the check in its laboratory still runs
+                         every round (it is what System 2 learns from). Implies --no-ablation and --no-reflection; the
+                         grading still runs (--no-grade to skip it). The prompt is the full protocol's, so the exploration
+                         is the one a full run would see up to that point.
      --flat              CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted
      --out FILE          the journal (default runs/orbit-s<seed>L<level>-<time>.json)
 
@@ -114,9 +120,10 @@ const cfg = {
   accept: Number(arg('accept', '2')),
   precision: Number(arg('precision', '0.01')),
   delegated: flag('delegated'),
-  ablation: !flag('no-ablation'),
+  quick: flag('quick'),
+  ablation: !flag('no-ablation') && !flag('quick'),
   grade: !flag('no-grade'),
-  reflection: !flag('no-reflection'),
+  reflection: !flag('no-reflection') && !flag('quick'),
   flat: flag('flat'),
   tools: parseTools(arg('tools', 'all')),
   labs: Math.max(1, Number(arg('labs', '1'))),
@@ -681,6 +688,8 @@ say('orbit@1 seed ' + cfg.seed + ' level ' + cfg.level + ' (' + lawSummary(spec)
 log('start', { operator: { newton_prior: newtonPrior, stays_in_view: report.staysInView } });
 explore();
 let accepted: LawRecord | null = null;
+/** --quick: the law System 2 judged good, where the run stopped. */
+let satisfied: LawRecord | null = null;
 for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   const record = await consult('propose');
   if (!record) { if (llmFatal) break; continue; }
@@ -693,8 +702,10 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   let validation: Record<string, unknown> | null = null;
   let validationView: unknown = null;
   let ok = false;
+  /* --quick: System 2 judges its law good; stop here, before any validation, to analyze the run. */
+  const quickStop = cfg.quick && record.validate;
   /* 2. The validation, when System 2 asks for it and its law holds where it was born. */
-  if (record.validate) {
+  if (record.validate && !quickStop) {
     if (!allHeld(labHeld)) validationView = { refused: 'your law does not yet hold in every one of your laboratories: nothing was spent' };
     else if (validationsLeft <= 0) validationView = { refused: 'you have no validations left' };
     else {
@@ -726,7 +737,13 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
     judgment_hash: judgmentHash(lawFormula(record.law)),
     abstraction: abstractionOf(record.law, testPoints.get(round) ?? []) });
   say('  check in the laboratories: ' + chi2Text(labCheck.result) + ' (accept <= ' + cfg.accept + '; operator: hidden law ' + round2(labCheck.result.scores.reference ?? 0) + ' vs law ' + round2(labCheck.result.scores.law) + ')' +
-    (record.validate && !validation ? '; validation refused' : '') + (ok ? '  ACCEPTED' : ''));
+    (record.validate && !validation && !quickStop ? '; validation refused' : '') + (ok ? '  ACCEPTED' : ''));
+  if (quickStop) {
+    satisfied = record;
+    log('quick_stop', { round, held_in_laboratories: labHeld, law: ownLaw(record.law) });
+    say('  --quick: System 2 judges its law good in round ' + round + ' (in its laboratories: ' + (allHeld(labHeld) ? 'holds' : 'does NOT hold') + '); stopping without validation');
+    break;
+  }
   if (cfg.ablation || cfg.delegated) await ablate(record.law, round, labCheck.result);
   if (ok) { accepted = record; log('accepted', { round }); break; }
 }
@@ -739,9 +756,10 @@ if (cfg.grade && !llmFatal) await gradeRecovery();
 const final = accepted ?? latest();
 const top = bestForOperator();
 log('end', {
-  stoppedBy: llmFatal ? 'llm_error' : accepted ? 'accepted' : 'budget', ...(llmFatal ? { llm_error: llmFatal } : {}),
+  stoppedBy: llmFatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : 'budget', ...(llmFatal ? { llm_error: llmFatal } : {}),
   final: final ? { round: final.round, fingerprint: final.fingerprint, test: final.test, law: ownLaw(final.law) } : null,
   best_for_the_operator: top ? { round: top.round, fingerprint: top.fingerprint, test: top.test } : null,
   notebook, launches: launchIndex(), jev: { calls: judge.stats.calls, errors: judge.stats.errors, cache: cacheStats() }
 });
-say('done: ' + (accepted ? 'accepted in round ' + accepted.round : 'not accepted; best score ' + (top?.test ? round2(top.test.score) : '-')) + '; journal ' + outFile);
+if (satisfied) say('the law System 2 judged good (round ' + satisfied.round + '):\n' + JSON.stringify(ownLaw(satisfied.law), null, 2));
+say('done: ' + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted; best score ' + (top?.test ? round2(top.test.score) : '-')) + '; journal ' + outFile);

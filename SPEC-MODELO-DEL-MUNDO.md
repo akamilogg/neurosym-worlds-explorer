@@ -155,7 +155,7 @@ mundo físico su ley es su modelo. Entonces unas reglas equivocadas harían perd
 |---|---|---|
 | G1 | Familia de tableros: `boardOf(spec, index)` con tamaño, salida y número de piezas propios, filtrado por jugabilidad | `lib/src/worlds/grid/family.ts` |
 | G2 | El artefacto de reglas en el protocolo del explorador: parseo, comprobación sobre sus partidas, prompt sin ejemplos del entorno | `lib/src/learn/explorer.ts` |
-| G3 | Prueba de reglas y veredicto por posición; aceptación exacta con confirmación ciega | `lib/scripts/run-grid.ts`, `lib/src/learn/rules-test.ts` |
+| G3 | Prueba de reglas y veredicto por posición; aceptación exacta con confirmación ciega; `--quick` como en orbit (parar cuando System 2 da sus reglas por buenas) | `lib/scripts/run-grid.ts`, `lib/src/learn/rules-test.ts` |
 | G4 | La fórmula en tableros de la familia y la regresión emparejada | `lib/scripts/run-grid.ts` |
 | G5 | Tests de calibración de §7 y medidas del operador en el journal | `lib/test/grid-rules.test.ts` |
 
