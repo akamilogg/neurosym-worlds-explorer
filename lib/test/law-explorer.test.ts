@@ -76,3 +76,14 @@ test('a component may carry its magnitude in code; an ignored request is echoed 
   const inv = parseLawTurn(JSON.stringify({ investigate: [{ plot: 'launch1', from: 2 }] }), { world: 'orbit@1' });
   assert.ok(inv.kind === 'investigate' && /ignored \(\{"plot":"launch1","from":2\}\)/.test(inv.warnings[0]), JSON.stringify(inv));
 });
+
+test('System 2 decides when to validate: "validate": true on a proposal, false otherwise; the prompt explains the protocol', () => {
+  const yes = parseLawTurn(JSON.stringify({ ...draft, validate: true }), { world: 'orbit@1' });
+  const no = parseLawTurn(JSON.stringify(draft), { world: 'orbit@1' });
+  assert.ok(yes.kind === 'proposal' && yes.parse.ok && yes.parse.proposal.validate === true);
+  assert.ok(no.kind === 'proposal' && no.parse.ok && no.parse.proposal.validate === false);
+  const prompt = lawExplorerSystem();
+  assert.match(prompt, /"validate": true/);
+  assert.match(prompt, /becomes one of your laboratories/);
+  assert.equal(lawExplorerPayload({ round: 1, perceptDoc: '', validationsLeft: 2 }).validations_left, 2);
+});

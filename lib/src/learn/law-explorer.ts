@@ -33,7 +33,7 @@ type PromptLine = string | readonly [readonly LawTool[], string] | ((t: Tools) =
 const LAW_LINES: readonly PromptLine[] = [
   'You are a research scientist and mathematician. Your working disciplines include analysis and algebra, statistics and information theory - and whatever else proves applicable - and you use them explicitly: you name the formal object you are reasoning about, you state hypotheses as claims that can be checked, and you choose each experiment for the information it will yield.',
   'You face an environment nobody has described to you. Some bodies move in a plane. You perceive it ONLY as tables of positions over time, one table per launch: the body you launched (the LAST symbol of each table) and the other bodies that are there. You are told nothing else: not why anything moves, not what the symbols are, not the units of anything. Positions carry some noise, and a body is not seen when it is far from the region you observe.',
-  'The environment is not one place but a FAMILY of SETUPS, all governed by the same principle: in each setup the other bodies are placed differently, there may be more or fewer of them, and the table\'s axes are turned and shifted differently. `setups` lists the ones you know; you can launch only in your laboratory setups. A law is what holds in every setup.',
+  'The environment is not one place but a FAMILY of SETUPS, all governed by the same principle: in each setup the other bodies are placed differently, there may be more or fewer of them, and the table\'s axes are turned and shifted differently. You begin with one LABORATORY setup; `setups` lists the ones you know, and you can launch only in your laboratories. A law is what holds in every setup.',
   'YOUR TASK is to write a LAW that predicts, at any row of any table, how far the NEXT position of the launched body departs from simply repeating its last step: the vector d = p(next) - 2·p(now) + p(previous), in the units of the table. Nobody will tell you what the law is: everything you learn, you find out yourself.',
   'A law has three parts:',
   '  - OBSERVATIONS: small deterministic JavaScript functions over the table up to the current row (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge.',
@@ -41,7 +41,8 @@ const LAW_LINES: readonly PromptLine[] = [
   '  - COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is carried by one of two: either the JUDGE - it is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders) - or CODE, `(p) => number`, in the units of the table, and then the judge is not asked for that component.',
   'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your law says.',
   '',
-  'Every round your law is TESTED on launches you have never seen, in setups you have never seen - some of them starting beyond the region you observe. For every point of those launches, the environment gives its VERDICT: a pair of numbers from -1 to 1, one per axis of the table; 0 on an axis means no difference along it between your prediction and what happened there. What the rest of the range means is for you to work out. You also learn whether the environment accepted your law. After the test, those launches are yours to study like any other.',
+  'Every round your law is CHECKED in your laboratories, on launches there you have never seen - some of them starting beyond the region you observe. For every point of those launches the environment gives its VERDICT: a pair of numbers from -1 to 1, one per axis of the table; 0 on an axis means no difference along it between your prediction and what happened there. What the rest of the range means is for you to work out. You also learn, for each setup, whether your law holds there. After the check, those launches are yours to study like any other.',
+  'When YOU judge that your law holds, add "validate": true to your proposal. If it holds in all your laboratories, the environment VALIDATES it in the other setups of the family, which you have not seen - for each, whether it holds, with its verdicts - and checks your laboratories again. A setup where your law does not hold becomes one of your laboratories: its tables are yours and you can launch there. When your law holds in every setup of the family, it is confirmed once more in setups nobody has seen, and accepted if it holds there too. `validations_left` says how many times you may still validate; asking while your law does not hold in all your laboratories is refused and costs nothing.',
   '',
   'YOUR NOTEBOOK (the `notebook` field) is yours: your beliefs and their history, the notes you chose to write, the index of launches, every law you tried with its results, and your own lessons and planned next experiment. Nothing is added to it for you except the facts of what you did and how your laws predicted. A note can cite launches as "<launch>" and points of them as "<launch>@<row>".',
   'Every round, take a stance on EVERY belief you still hold: "keep", "revise" (give the new statement), "confirm" (the evidence settled it) or "drop" (the evidence refuted it); add new ones with "new". Cite the evidence: launches, points, rounds.',
@@ -89,7 +90,8 @@ const LAW_LINES: readonly PromptLine[] = [
   '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
   '  "components": { "<id>": { "definition": "what this part of the prediction is", "direction": "(p) => [x, y]", "weights": { "<rule id>": number }, "range": [low, high], "scale": "linear" | "log" } | { "definition": "...", "direction": "(p) => [x, y]", "magnitude": "(p) => <number>" } },',
   '  "lessons": ["what this round taught you, in a sentence each"],',
-  '  "next_experiment": "what you intend to test next round, and why"',
+  '  "next_experiment": "what you intend to test next round, and why",',
+  '  "validate": true | false',
   '}',
   'Rule types: "noul" answers a probability 0..1 that the statement holds (criteria: {"yes": "...", "no": "..."}); "score" picks a level from criteria ordered lowest to highest (an array of 3 to 5 strings); "choice" gives probabilities over named options (criteria: {"<option>": "..."}; its value is the probability of the FIRST option).',
   'Ids are lowercase snake_case. A log scale needs 0 < low. Keep code short, pure and deterministic; no randomness, no dates.'
@@ -113,6 +115,7 @@ export interface LawExplorerBrief {
   readonly launchesLeft?: number;
   /** The setups of the family it knows: its laboratories, and the tests' so far. */
   readonly setups?: readonly unknown[];
+  readonly validationsLeft?: number;
   readonly refused?: readonly string[];
   readonly directive?: string | null;
   readonly task?: string | null;
@@ -148,6 +151,7 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.launchesLeft !== undefined ? { launches_left: brief.launchesLeft } : {}),
     ...(brief.setups && brief.setups.length ? { setups: brief.setups } : {}),
+    ...(brief.validationsLeft !== undefined ? { validations_left: brief.validationsLeft } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
     ...(brief.directive ? { operator_directive: brief.directive } : {}),
     ...(brief.task ? { task: brief.task } : {})
@@ -207,6 +211,8 @@ export function buildLaw(data: Record<string, unknown>, context: { world: string
 
 export interface LawProposal {
   readonly law: Law;
+  /** It asks the environment to validate this law against the family. */
+  readonly validate: boolean;
   readonly rationale: string;
   readonly beliefs: BeliefStance[];
   readonly lessons: string[];
@@ -222,7 +228,7 @@ export function parseLawProposal(content: string, context: { world: string; lang
   const { law, errors, warnings } = buildLaw(data, context);
   const { beliefs, lessons, nextExperiment } = parseReflective(data, context.round ?? 0, warnings);
   if (errors.length) return { ok: false, errors };
-  return { ok: true, proposal: { law, rationale: typeof data.rationale === 'string' ? data.rationale : '', beliefs, lessons, nextExperiment, warnings } };
+  return { ok: true, proposal: { law, validate: data.validate === true, rationale: typeof data.rationale === 'string' ? data.rationale : '', beliefs, lessons, nextExperiment, warnings } };
 }
 
 /* --- Investigation requests ------------------------------------------------------------ */

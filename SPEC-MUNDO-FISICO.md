@@ -440,6 +440,42 @@ Tres cosas se mantienen fijas entre montajes porque forman parte del principio, 
 - **Con varias fuentes hay trayectorias caóticas,** pero la predicción es de un paso, así que el caos no se acumula.
 - **La etapa 2 necesita filas previas** antes de exigir predicciones.
 
+### 8.6 El protocolo del investigador: dominar un montaje, validar, y convertir los fallos en laboratorios (26/09/2026)
+
+Propuesta del usuario, que sustituye a la prueba de cada ronda en montajes nuevos. Probar cada ronda en toda la familia
+movía muchos datos, aunque System 2 aún no dominara ni su propio laboratorio. Ahora se valida en la familia solo cuando
+tiene sentido: cuando hay una ley que funciona donde nació.
+
+1. **Un montaje.** System 2 empieza con un solo laboratorio (`lab1`, el mundo base). Cada ronda, su ley se **comprueba**
+   allí, en lanzamientos que no ha visto de ese mismo montaje. Recibe los veredictos y si su ley se sostiene.
+2. **Él decide cuándo validar** (`"validate": true` en la propuesta). Si la ley se sostiene en todos sus laboratorios,
+   el entorno la valida en una **familia finita** de montajes que no ha visto (`--family 4`, con 1, 2 y 3 cuerpos
+   representados) y vuelve a comprobar sus laboratorios (regresión). Tiene un presupuesto de validaciones
+   (`--validations 3`); pedir una antes de tiempo se rechaza sin gastarla.
+3. **Un montaje donde la ley no se sostiene pasa a ser laboratorio:** sus tablas son suyas y puede lanzar allí. La
+   anomalía se convierte en el siguiente experimento.
+4. **Cuando la ley se sostiene en toda la familia,** una **confirmación ciega** en dos conjuntos de montajes que nadie ha
+   visto decide la aceptación. Es necesaria porque los montajes que fallaron y se estudiaron ya no prueban nada: solo lo
+   nunca visto demuestra que la ley generaliza y no que fue superando, uno a uno, los montajes que se le mostraron.
+
+**System 2 recibe:**
+- sus laboratorios y los montajes de la familia donde validó;
+- por montaje, si su ley se sostiene, con los veredictos por punto;
+- si una validación se rechazó o convirtió montajes en laboratorios;
+- cuántas validaciones le quedan.
+
+Nunca recibe errores ni puntuaciones. El operador guarda en el journal los χ² por montaje, la ley oculta, las ablaciones
+y la confirmación ciega.
+
+**Ensayo con LLM falso (semilla 3, siempre pidiendo validar):**
+
+| Ronda | Qué pasó |
+|---|---|
+| 1 | Ley por Jev: no se sostiene en `lab1` → validación rechazada, sin gastarla |
+| 2 | Ley relativa a un cuerpo: se sostiene en `lab1` → valida: se sostiene en `setup3` (un cuerpo) y falla en `setup1`, `setup2` y `setup4` (varios) → **pasan a ser laboratorios** |
+| 3 | La misma ley falla en los nuevos laboratorios (18 a 632) → validación rechazada |
+| 4 | Ley sumada sobre todos los cuerpos: se sostiene en los 4 laboratorios → valida: `setup3` se sostiene → confirmación ciega en 6 montajes nuevos (todos ≤ 0,70) → **aceptada** |
+
 ## 9. Métricas del operador (solo en el journal)
 
 - La ley verdadera y sus parámetros, en el marco percibido.
