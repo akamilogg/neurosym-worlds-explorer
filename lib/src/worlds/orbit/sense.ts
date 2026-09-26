@@ -1,0 +1,109 @@
+import { mulberry32 } from '../grid/gen.ts';
+import { toPercept, type OrbitSpec, type Trajectory, type Vec2 } from './world.ts';
+
+/* ============================================================================
+ * The predefined SENSE of orbit@1: a table of positions over time, in the
+ * learner's own frame (rotated, mirrored, scaled and shifted per seed, with its
+ * own time unit), with noise on every position. It is all System 2 ever
+ * perceives of this world: no velocities, no accelerations, no masses of the
+ * sources, no names with meaning. Symbols are drawn per seed from a neutral pool.
+ *
+ *        t       # x       # y       @ x       @ y
+ *     0.00   12.4113   -3.0702    0.0201    0.0003
+ *     0.37   12.3628   -2.5109    0.0199   -0.0002
+ *     ...
+ *
+ * A probe outside the observable region is not seen: its cells read "·".
+ * ========================================================================== */
+
+const POOL = ['#', '@', '%', '&', '+', '*', '$', '=', '~', '^'];
+const HIDDEN = '·';
+
+export interface OrbitSenseOptions {
+  /** Round every perceived position to a multiple of this (0: continuous). An experiment flag (--resolution). */
+  readonly resolution?: number;
+  /** false: show the probe outside the observable region too (the operator's view, or a trial's extrapolation band). */
+  readonly window?: boolean;
+}
+
+export interface OrbitSense {
+  /** One symbol per source, in the order of spec.sources, and the probe's. */
+  readonly sourceGlyphs: readonly string[];
+  readonly probeGlyph: string;
+  render(trajectory: Trajectory): string;
+}
+
+/** A deterministic 32-bit hash of a string (FNV-1a), to seed the noise of one trajectory. */
+function hash32(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return h >>> 0;
+}
+
+function gaussian(rnd: () => number): number {
+  const u = Math.max(rnd(), 1e-12), v = rnd();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+export function tableSense(spec: OrbitSpec, options: OrbitSenseOptions = {}): OrbitSense {
+  const rnd = mulberry32(spec.seed * 53 + 11);
+  const pool = POOL.slice();
+  const sourceGlyphs = spec.sources.map(() => pool.splice(Math.floor(rnd() * pool.length), 1)[0]);
+  const probeGlyph = pool.splice(Math.floor(rnd() * pool.length), 1)[0];
+  const resolution = options.resolution ?? 0;
+  const windowed = options.window ?? true;
+  const sigma = spec.noise * spec.frame.scale;
+  const decimals = resolution > 0 ? Math.max(0, Math.ceil(-Math.log10(resolution) - 1e-9)) : 4;
+  const cell = (v: number): string => (resolution > 0 ? Math.round(v / resolution) * resolution : v).toFixed(decimals).padStart(10);
+  return {
+    sourceGlyphs,
+    probeGlyph,
+    render(trajectory) {
+      /* The same trajectory always reads the same: the noise is seeded by the world and the trajectory's name. */
+      const noise = mulberry32(hash32(spec.id + '|' + trajectory.id));
+      const seen = (p: Vec2): [number, number] => {
+        const q = toPercept.pos(spec.frame, p);
+        return [q[0] + sigma * gaussian(noise), q[1] + sigma * gaussian(noise)];
+      };
+      const glyphs = [...sourceGlyphs, probeGlyph];
+      const lines = ['         t' + glyphs.map((g) => (g + ' x').padStart(10) + (g + ' y').padStart(10)).join('')];
+      for (const s of trajectory.states) {
+        const cells = [toPercept.time(spec.frame, s.t).toFixed(2).padStart(10)];
+        for (const src of spec.sources) { const q = seen(src.pos); cells.push(cell(q[0]), cell(q[1])); }
+        if (!windowed || Math.hypot(s.pos[0], s.pos[1]) <= spec.window) { const q = seen(s.pos); cells.push(cell(q[0]), cell(q[1])); }
+        else cells.push(HIDDEN.padStart(10), HIDDEN.padStart(10));
+        lines.push(cells.join(''));
+      }
+      return lines.join('\n');
+    }
+  };
+}
+
+/** What a perception-only measure may read: the table itself and the same table as columns. No law, no velocities,
+    no masses of the sources. A position outside the observable region is null. */
+export interface OrbitPercept {
+  readonly table: string;
+  readonly t: readonly number[];
+  /** Per symbol, its x and y column. */
+  readonly bodies: Readonly<Record<string, { readonly x: readonly (number | null)[]; readonly y: readonly (number | null)[] }>>;
+  readonly symbols: readonly string[];
+}
+
+export function readTable(table: string): OrbitPercept {
+  const lines = table.split('\n').filter((l) => l.trim());
+  const header = lines[0].trim().split(/\s+/).slice(1);
+  const symbols: string[] = [];
+  for (let i = 0; i + 1 < header.length; i += 4) symbols.push(header[i]);
+  const t: number[] = [];
+  const cols = symbols.map(() => ({ x: [] as (number | null)[], y: [] as (number | null)[] }));
+  for (const line of lines.slice(1)) {
+    const cells = line.trim().split(/\s+/);
+    t.push(Number(cells[0]));
+    symbols.forEach((_, i) => {
+      const x = cells[1 + 2 * i], y = cells[2 + 2 * i];
+      cols[i].x.push(x === HIDDEN ? null : Number(x));
+      cols[i].y.push(y === HIDDEN ? null : Number(y));
+    });
+  }
+  return { table, t, symbols, bodies: Object.fromEntries(symbols.map((g, i) => [g, cols[i]])) };
+}

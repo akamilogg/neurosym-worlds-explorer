@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./foxhounds": "./src/worlds/foxhounds/index.ts",
+    "./orbit": "./src/worlds/orbit/index.ts",
     "./node": "./src/runtime/node-vm.ts",
     "./browser": "./src/browser.ts"
   },

@@ -1,7 +1,8 @@
 # SPEC · Mundo físico: descubrir una ley de movimiento que nadie le ha contado
 
 **Fichero:** `SPEC-MUNDO-FISICO.md`
-**Estado (26/09/2026):** propuesta, sin implementar. Segundo mundo del experimento de mundo desconocido
+**Estado (26/09/2026):** P1 implementada (mundo, leyes por nivel, sentido tabular, calibración: `lib/src/worlds/orbit/`,
+`lib/scripts/calibrate-orbit.ts`, `lib/test/orbit.test.ts`); P2–P5 pendientes. Segundo mundo del experimento de mundo desconocido
 (ver `INFORME.md`, *Mundo desconocido: hallazgos de los runs 1–19*).
 
 ---
@@ -94,6 +95,11 @@ Hay dos cosas distintas que se pueden discretizar:
 | `--resolution` | X ≥ 0 | **Precisión de la percepción.** Las posiciones llegan redondeadas a X; `0` = continua. Una malla gruesa hace más difícil distinguir exponentes cercanos: es un parámetro de dificultad |
 
 Configuración recomendada por defecto: `--sampling grid --resolution 0` (abarata sin degradar los datos).
+
+**Hallazgo de P1:** `--resolution` está en las unidades del aprendiz, y la escala del marco varía por semilla (×0,3 a
+×30). La misma resolución pesa mucho más en una semilla dibujada a escala pequeña. Con `--resolution 0.1`, 3 de 8
+semillas de L1 dejan de tener margen (el suelo de ruido sube del ~0,3 % a entre el 0,6 % y el 5,8 %). La calibración
+acepta la resolución como argumento y lo mide; queda por decidir si el flag debe ser relativo a la escala (§10).
 
 El experimento de interés es `--sampling free --resolution 0`: **¿discretiza System 2 por su cuenta**, agrupando
 sus observaciones en bandas? Si lo hace, vuelve a surgir el mecanismo de atención del run 17 sin que el mundo lo
@@ -196,7 +202,9 @@ Sobre las mismas muestras de la prueba:
    regla pueda responder en una escala de puntos más fina? La ablación lo dirá con datos.
 3. **Presupuesto de lanzamientos por ronda:** en la cuadrícula, `try` era barato; aquí cada lanzamiento son T
    pasos. Propuesta inicial: 6 por ronda, como `--plays`.
-4. **Coste en `--sampling free`:** sin caché, cada muestra de la prueba son llamadas a Jev. Limitar el número de
+4. **`--resolution` absoluta o relativa:** en unidades del aprendiz (lo que ve) o como fracción del tamaño de la región
+   observable (misma dificultad en todas las semillas). Ver el hallazgo de P1 en §4.1.
+5. **Coste en `--sampling free`:** sin caché, cada muestra de la prueba son llamadas a Jev. Limitar el número de
    muestras por ronda y registrar el coste.
 
 ## 11. Hipótesis que el experimento puede confirmar o refutar
