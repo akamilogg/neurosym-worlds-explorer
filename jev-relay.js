@@ -39,7 +39,7 @@ const DEFAULTS = {
   maxBodyBytes: 1048576,                                      // 1 MiB
   maxResponseBytes: 2097152,                                  // 2 MiB
   allowOrigin: '*',                                           // no cookies are used, so * is legal
-  apiKey: '',
+  apiKey: '',                                                  // placeholder: set TYPESAFE_API_KEY in the environment
   defaultModel: '',                                           // used only when the client omits `model`
   fetchImpl: null,
   log: null

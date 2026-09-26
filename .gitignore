@@ -5,3 +5,6 @@ dist/
 # local launcher with API keys
 lib/run-grid.sh
 lib/run-grid.ps1
+
+# local backup copies, not published
+Salva Working/
