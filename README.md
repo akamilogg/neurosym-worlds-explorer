@@ -1,4 +1,4 @@
-# Cat & Mouse · a neuro-symbolic harness for learning unknown worlds
+# Neuro-symbolic harness for learning unknown worlds
 
 Can a language model work out the rules of a game it has never seen, from nothing but a picture of the
 board, its own experiments and how its games end? And if it can, is what it learns something a human can read?
