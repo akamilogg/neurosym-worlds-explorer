@@ -398,3 +398,82 @@ modos de aprendizaje y la aceptación graduada.
 **Limitación honesta:** una medida `code` corre en el hilo de la página sin límite de tiempo (lo decidido: sin
 tope de cómputo); un bucle infinito colgaría la página. El replay sobre la evidencia la ejecuta antes que nada,
 pero no puede detectar un bucle que no termine. En Node, `nodeVmRunner` sí aplica un timeout.
+
+---
+
+## Actualización 26/09/2026 · Mundo desconocido: hallazgos de los runs 1–19
+
+**Montaje.** Juegos de cuadrícula generados por semilla (`lib/src/worlds/grid`), que System 2 no puede conocer
+por preentrenamiento. Solo los percibe como una imagen ASCII, girada o reflejada por semilla, con símbolos neutros:
+sin reglas en texto, sin nombres con significado y sin lista de jugadas legales. System 2 aprende solo de fuentes
+propias: sus sentidos, sus medidas en código, su búsqueda, el resultado de sus partidas y sus experimentos
+(`view`, `inspect`, `try`, `measure`, `play`, `table`, sondas), con un cuaderno propio. El oráculo y la heurística
+informada existen solo como métricas del operador en el journal. Desde `5ef8c15`, **Jev no recibe nunca la imagen
+ni la posición**: solo las observaciones que System 2 define (números con rango o textos sin rango). Runner:
+`lib/scripts/run-grid.ts`; calibración de semillas: `lib/scripts/calibrate-grid.ts`.
+
+**Nivel de evidencia.** *Sólida*: se repite en varios runs o sale de una comparación directa. *Indicio*: uno o dos
+runs por condición. La varianza entre runs es grande (los runs 7 y 8, con el mismo harness, dieron resultados
+opuestos), así que casi todo es n=1 por condición.
+
+### A. Lo que el experimento ha demostrado
+
+1. **Un LLM descubre las reglas de un mundo que no conoce, con fuentes propias** (sólida). El run 17 (semilla 22,
+   gpt-6-sol) recuperó el juego entero: los movimientos de los dos bandos, las tres formas de terminar y el empate
+   por límite, bajo la orientación 7 y sin pistas. Lo hizo con experimentos propios: pares de `try` que difieren en
+   una sola cosa, repeticiones desde la misma salida y tablas de posiciones finales. Su mejor fórmula ganó 29/40.
+2. **Ganar no demuestra entender** (sólida). En la semilla 26, el run sin herramientas (19) ganó 16/16 imaginando
+   un Conecta 4 inexistente, y la ablación con evaluador plano gana casi todo: esa semilla la resuelve la búsqueda
+   de profundidad 2. La medida que discrimina es la **recuperación de reglas**, no la tasa de victorias. La
+   calibración solo desde la salida habitual engañaba (plano 0/4); desde salidas nuevas, el plano gana 7/7.
+3. **Que Jev juzgue solo las observaciones de System 2 es un mecanismo de atención dirigido por su intención**
+   (indicio fuerte: runs 16→17, reforzado por 18 frente a 19). Al quitarle la imagen, Jev pasó de restar a sumar
+   frente a la versión solo código (0–3 → 6–2) y las llamadas bajaron de ~9000 a ~650. Las observaciones definen
+   una abstracción de estados: posiciones que miden igual son la misma pregunta, y la caché acierta. Riesgo: lo
+   que System 2 no mide, Jev no lo ve.
+4. **Las herramientas dan interpretabilidad y, además, ahorro** (indicio, semilla 26, un run por condición). Con
+   victorias iguales: con herramientas, ~17 llamadas a Jev por prueba y reglas reales (movimiento exacto, victoria
+   parcial, supervivencia correcta); sin herramientas, ~785 llamadas por prueba y ninguna regla. El ahorro no se
+   diseñó: es un subproducto de entender.
+5. **Una arquitectura, dos modos** (observado). *Interpretable*: observaciones precisas, hipótesis y reglas.
+   *Delegado*: la escena entera pasa a Jev como texto y la decisión queda en System 1 (el caso del coche que
+   conduce solo). En el run 19, System 2 eligió el modo delegado por su cuenta al quedarse sin ver ("si yo no veo,
+   que vea el juez"). Con un conjunto de acciones finito y conocido, valorar los estados siguientes equivale a
+   elegir entre acciones: no hace falta un modo de política aparte. La distinción real con el coche es poder
+   simular la consecuencia antes de actuar.
+
+### B. Lo que aprendimos del instrumento
+
+6. **Los errores del instrumento se convierten en creencias falsas** (sólida). Empates etiquetados como derrotas
+   diluyeron una prueba perfecta (run 13); una etiqueta "inverted" hizo descartar una creencia correcta (run 5);
+   cuatro partidas casi iguales contaban como cuatro (run 6). El arreglo fue siempre el mismo: **hechos, no
+   veredictos** (p. ej. una puntuación de -1 a 1, cuyo significado System 2 dedujo solo).
+7. **Una guía de método genérica cambia la conducta sin filtrar el entorno** (indicio). Con la guía, la meta del
+   rival se encontró y mantuvo en 2 de 2 runs (1 de 2 sin ella); con "las explicaciones rivales pueden valer a la
+   vez", el run 12 sostuvo por primera vez las dos condiciones de victoria.
+8. **El modelo pesa más que el prompt en los cuellos de botella de razonamiento** (indicio, run 16). El exceso de
+   cautela de gpt-6-luna no cedió a ninguna línea del prompt; gpt-6-sol decide y actúa desde la primera ronda.
+
+### C. Modos de fallo de System 2
+
+- **Priors de preentrenamiento:** llamó "fox" y "runner" a piezas de un juego inventado; a ciegas proyectó un
+  Conecta 4.
+- **Exceso de cautela:** con 100 % frente a 0 % siguió diciendo "asociación, no regla" (luna, runs 14–15).
+- **Anclaje al marcador ruidoso:** volvió a una teoría que él mismo había refutado porque el marcador la daba como
+  mejor (run 15).
+- **Entender sin trasladarlo a la fórmula:** en el run 12 tenía la teoría, pero la regla de encierro pesó 0.2 y
+  desapareció. En el run 16 la teoría era correcta y el juego peor, mientras Jev aún veía la imagen.
+- **No usar lo disponible:** ningún `play` en el run 8; lecturas imposibles de la imagen (runs 6 y 8).
+
+### D. Límites y lo que falta para sostener la tesis
+
+Tesis: *si System 2 generaliza a escenarios que nunca vio, los LLM tienen un potencial de generalización latente,
+y lo que les falta son herramientas como las de este harness.* Hoy hay dos semillas con mecánicas distintas
+(22: atrapar / llegar; 26: tocar / sobrevivir), n=1 por condición, y la 26 no discrimina por victorias. Falta:
+
+- la escalera de herramientas (`--tools`) en la semilla 22, que la calibración nueva confirma como discriminante
+  (plano 2/7 y 1/7 desde salidas nuevas);
+- repeticiones por condición;
+- usar la métrica de recuperación de reglas (`operator_rule_recovery`, en el journal desde `dbe32e0`, junto con
+  llamadas a Jev por partida y posiciones por observación);
+- la ablación "imagen para Jev" sobre la misma fórmula, para comparar los dos modos de forma limpia.
