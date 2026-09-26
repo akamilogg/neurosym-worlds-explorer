@@ -8,3 +8,7 @@ lib/run-grid.ps1
 
 # local backup copies, not published
 Salva Working/
+
+# run journals are not published (the 21/09 journal stays: it is the fixture of the parity tests)
+runs/*
+!runs/2026-09-21-run-journal.json

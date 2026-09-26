@@ -11,7 +11,7 @@ export const ROOT = path.resolve(here, '..', '..');
 /* The REFERENCE harness: fox-hounds-harness.html as committed in the baseline (the code that produced the
    21/09 run), read from git and loaded exactly as its own selftest does. The working copy now delegates
    to this library, so comparing against it would compare the library with itself. */
-export const BASELINE_COMMIT = '3deded1';
+export const BASELINE_COMMIT = '55c0944';
 export function baselineHarnessHtml(): string {
   return execFileSync('git', ['show', BASELINE_COMMIT + ':fox-hounds-harness.html'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 }

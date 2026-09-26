@@ -138,7 +138,7 @@ npm run typecheck
 node ../fox-hounds-harness.selftest.js   # el harness con la biblioteca dentro (342 checks)
 ```
 
-Los tests de paridad cargan el harness **del commit base** (`3deded1`, el código que produjo el run
+Los tests de paridad cargan el harness **del commit base** (`55c0944`, el código que produjo el run
 del 21/09) y comparan:
 - reglas del mundo (~10 700 estados), los 12 ops, la fórmula aceptada del run (`runs/…json`);
 - el planner del ratón (greedy y profundidades 1-4) y el oráculo (ganador, plies, motivo, agotamiento);

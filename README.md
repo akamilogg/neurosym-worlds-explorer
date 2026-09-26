@@ -98,7 +98,7 @@ The full account, in Spanish, is in [INFORME.md](INFORME.md) (section *Mundo des
 | [`lib/`](lib/README.md) | `neurosym`, the portable TypeScript core (no runtime dependencies): World, Observer, Formula, Judge, Evaluator, Search, and the learner |
 | `lib/src/worlds/grid/` | the generated games, their ASCII sense, starting-position variants, and operator-only tools |
 | `lib/src/learn/` | the explorer (System 2's protocol), notebook, experiments and probes, ablations, the learning loop |
-| `lib/scripts/run-grid.ts` | runs the unknown-world experiment and writes a JSON journal |
+| `lib/scripts/run-grid.ts` | runs the unknown-world experiment and writes a JSON journal to `runs/` (journals are not published) |
 | `lib/scripts/calibrate-grid.ts` | finds seeds that leave room to learn (forced win, learnable, not won by a flat judge, not a known game) |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
@@ -127,3 +127,7 @@ node --experimental-strip-types scripts/run-grid.ts --seed 22
 Useful options: `--tools none` (or a subset such as `view,inspect,probes`) for the baseline without
 instruments, `--flat` for a judge that knows nothing, `--variants N` for generalization starts. The header of
 `run-grid.ts` documents them all.
+
+## License
+
+[MIT](LICENSE)
