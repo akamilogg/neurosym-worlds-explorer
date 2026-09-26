@@ -39,7 +39,8 @@ verdadera a mano:
 3. **El montaje donde falla pasa a ser laboratorio**, para estudiarlo.
 4. **Cuando se sostiene en toda la familia,** la confirmación ciega en montajes nunca vistos decide la aceptación.
 
-Implementado en el mundo físico (`SPEC-MUNDO-FISICO.md` §8.6). En la cuadrícula, las fases G3 y G4 lo siguen.
+Implementado en el mundo físico (`SPEC-MUNDO-FISICO.md` §8.6). En la cuadrícula, las fases G3 y G4 lo siguen. El prompt
+explica el protocolo sin anunciar la familia ni qué varía en ella (§6).
 
 ## 2. La cuadrícula: el artefacto de reglas
 
@@ -114,7 +115,10 @@ mundo físico su ley es su modelo. Entonces unas reglas equivocadas harían perd
 
 ## 6. Lo que ve System 2
 
-- **El prompt dice** que el juego se juega en una familia de tableros con las mismas reglas. Es la premisa, no las reglas.
+- **El prompt no dice nada del mundo** (cero pistas, `SPEC-MUNDO-FISICO.md` I5): ni que es un juego de dos jugadores,
+  ni que hay una familia de tableros, ni qué cambia entre ellos. Explica el artefacto de reglas solo con la interfaz: los
+  cambios en el formato de `try` y el final en la escala con que ya recibe los resultados. Que los tableros de la prueba
+  tienen otro tamaño lo descubre al verlos.
 - **Recibe** el veredicto por posición, si se aceptaron las reglas y la fórmula, el resultado de sus partidas y los
   tableros de las pruebas como datos.
 - **No recibe:** tasas de acierto agregadas, ni qué regla falla ni por qué, ni los movimientos que no predijo, ni una
@@ -154,7 +158,7 @@ mundo físico su ley es su modelo. Entonces unas reglas equivocadas harían perd
 | Fase | Contenido | Ficheros |
 |---|---|---|
 | G1 | Familia de tableros: `boardOf(spec, index)` con tamaño, salida y número de piezas propios, filtrado por jugabilidad | `lib/src/worlds/grid/family.ts` |
-| G2 | El artefacto de reglas en el protocolo del explorador: parseo, comprobación sobre sus partidas, prompt sin ejemplos del entorno | `lib/src/learn/explorer.ts` |
+| G2 | El artefacto de reglas en el protocolo del explorador: parseo, comprobación sobre sus partidas, prompt sin pistas (§6) | `lib/src/learn/explorer.ts` |
 | G3 | Prueba de reglas y veredicto por posición; aceptación exacta con confirmación ciega; `--quick` como en orbit (parar cuando System 2 da sus reglas por buenas) | `lib/scripts/run-grid.ts`, `lib/src/learn/rules-test.ts` |
 | G4 | La fórmula en tableros de la familia y la regresión emparejada | `lib/scripts/run-grid.ts` |
 | G5 | Tests de calibración de §7 y medidas del operador en el journal | `lib/test/grid-rules.test.ts` |

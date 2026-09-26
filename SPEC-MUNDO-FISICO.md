@@ -41,8 +41,11 @@ equivoca la ley.
   observaciones de System 2, y las palabras de sus reglas.
 - **I4 · Métricas del operador aparte.** La ley verdadera, el suelo de ruido, el mejor ajuste newtoniano y la nota
   de recuperación viven solo en el journal y nunca llegan a System 2 ni a Jev.
-- **I5 · Guía de método sin ejemplos del entorno.** El prompt puede enseñar cómo usar las herramientas, nunca qué
-  ley buscar.
+- **I5 · Cero pistas en el prompt (reforzado el 26/09/2026).** El prompt es genérico: una persona (inducción de
+  investigador), un método de investigación y una explicación general de las herramientas y del protocolo. Nunca dice
+  nada de la naturaleza del mundo ni del tipo de observaciones que convienen: ni qué se mueve, ni qué varía entre los
+  sitios donde se comprueba la ley, ni que hay ruido o una región que no se ve, ni qué ley buscar. La tarea (qué se
+  predice) y los parámetros de las herramientas son la interfaz; la forma de lo percibido la describe `percept`.
 
 ## 3. El mundo `orbit@1`
 
@@ -420,8 +423,9 @@ Tres cosas se mantienen fijas entre montajes porque forman parte del principio, 
 - Experimenta en los **montajes de laboratorio** (`lab1`, `lab2`) con sus lanzamientos (`"setup": "<id>"`).
 - Su ley se prueba cada ronda en **montajes nuevos**. Sigue recibiendo el veredicto por punto y si se aceptó, y esas
   tablas pasan a ser datos suyos.
-- El prompt dice que el entorno es una familia de montajes regidos por un mismo principio. Es la premisa del experimento,
-  como en la cuadrícula decir que es un juego; no le dice cuál es el principio.
+- ~~El prompt dice que el entorno es una familia de montajes regidos por un mismo principio.~~ **Retirado el 26/09/2026
+  (I5):** era una pista. El prompt solo explica el protocolo: su ley se comprueba en sus laboratorios y, cuando la valida,
+  en sitios que no ha visto. Qué cambia entre ellos lo descubre él.
 
 #### Cómo quedó la etapa 1
 

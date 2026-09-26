@@ -87,3 +87,13 @@ test('System 2 decides when to validate: "validate": true on a proposal, false o
   assert.match(prompt, /becomes one of your laboratories/);
   assert.equal(lawExplorerPayload({ round: 1, perceptDoc: '', validationsLeft: 2 }).validations_left, 2);
 });
+
+/* Zero hints (SPEC-MUNDO-FISICO I5): the prompt is a persona, a method and the instruments; nothing about the nature of the
+   world - not what moves, not what varies between the places the law is checked, not a region it cannot see. */
+const NATURE = /\b(famil(y|ies)|bodies|in a plane|region you observe|placed differently|same principle|axes are turned)\b/i;
+
+test('zero hints: the prompt says nothing about what the world is or what varies in it', () => {
+  const full = lawExplorerSystem();
+  assert.doesNotMatch(full, NATURE, 'hint: ' + (full.match(NATURE)?.[0] ?? ''));
+  assert.match(full, /places you have not seen/, 'the protocol is still explained');
+});

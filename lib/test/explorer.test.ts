@@ -247,3 +247,10 @@ test('the baseline: a withheld instrument is never mentioned in the prompt, and 
   assert.ok(viewOnly.includes('{"view"') && viewOnly.includes('INVESTIGATE before proposing'));
   assert.ok(!viewOnly.includes('{"try"') && !viewOnly.includes('`table`') && !viewOnly.includes('`play`'));
 });
+
+/* Zero hints (SPEC-MUNDO-FISICO I5): nothing about the nature of the world - not that it is a game of two players, not that
+   there is another side, not a family of boards. The words of the instruments ("game", "turn") are the interface. */
+test('zero hints: the explorer prompt says nothing about what the world is', () => {
+  const NATURE = /\b(two players|turn-based|other side|other player|famil(y|ies)|boards?|pieces?)\b/i;
+  assert.doesNotMatch(EXPLORER_SYSTEM, NATURE, 'hint: ' + (EXPLORER_SYSTEM.match(NATURE)?.[0] ?? ''));
+});
