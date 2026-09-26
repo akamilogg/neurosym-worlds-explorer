@@ -4,7 +4,8 @@
 **Estado (26/09/2026):** P1 implementada (mundo, leyes por nivel, sentido tabular, calibración: `lib/src/worlds/orbit/`,
 `lib/scripts/calibrate-orbit.ts`, `lib/test/orbit.test.ts`). P2 implementada (predictor, prueba de predicción,
 ablaciones: `lib/src/core/predict.ts`, `lib/src/worlds/orbit/predict.ts`, `lib/src/learn/law-ablation.ts`,
-`lib/test/predict.test.ts`). P3–P5 pendientes. Segundo mundo del experimento de mundo desconocido
+`lib/test/predict.test.ts`). P3 implementada (protocolo y prompt del explorador de leyes: `lib/src/learn/law-explorer.ts`,
+`ORBIT_PERCEPT_DOC`, `lib/test/law-explorer.test.ts`). P4–P5 pendientes. Segundo mundo del experimento de mundo desconocido
 (ver `INFORME.md`, *Mundo desconocido: hallazgos de los runs 1–19*).
 
 ---
@@ -160,6 +161,25 @@ aceleración. Una ley es una lista de **componentes**:
 | cuaderno | creencias, notas, métodos | igual: creencias con postura obligatoria, notas que citan lanzamientos (`launch7@t=3.5`), métodos propios |
 
 `--tools` funciona igual que en `run-grid.ts`, para la línea base sin instrumentos.
+
+### 6.1 Decisiones de P3
+
+- **Instrumentos:** `view`, `launch`, `inspect`, `measure`, `simulate`, `table`. Las sondas no existen como
+  instrumento aparte: su papel (una observación frente a lo que pasó) lo cumple `table`, que devuelve cada punto con
+  el **residuo** de la mejor ley. Si hace falta el resumen estadístico (concordancia, permutación), se añade después.
+- **`launch` siempre ofrece `m`**, "una propiedad positiva del cuerpo que eliges" (1 por defecto), en todos los
+  niveles. Donde la ley no depende de ella, descubrirlo también es un resultado; ofrecerla solo en L2 delataría el nivel.
+- **`simulate`** integra con la propia definición de lo que se predice: siguiente = actual + último paso + d
+  predicho. No añade física del harness.
+- **El prompt no nombra ninguna ciencia ni cantidad del mundo.** Un test lo vigila con una lista de palabras
+  (gravedad, masa, fuerza, órbita, atracción, energía, aceleración, inversa, cuadrado…). Dos correcciones de la
+  primera versión: fuera "the pull of the latest result" (*pull*) y "root-mean-square" (ahora "quadratic mean").
+- **Una lente retirada:** "una descripción válida en un marco debe valer en cualquier marco girado". Es falsa para
+  las leyes anisótropas de L4, que tienen una dirección privilegiada: habría afirmado algo erróneo sobre el mundo.
+- **Lentes de método que quedan**, genéricas: variar un argumento cada vez, cambiar de escala (una suma en una escala
+  es un producto en otra), tratar lo que ya se cree de situaciones parecidas como una hipótesis, estimar el ruido
+  desde las propias tablas, y que una ley es también lo que afirma al extrapolar. La del cambio de escala orienta
+  hacia el análisis logarítmico; es guía de método permitida, pero conviene tenerla presente al leer los runs.
 
 ## 7. La prueba de cada ronda y la aceptación
 

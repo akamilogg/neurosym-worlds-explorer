@@ -107,3 +107,14 @@ export function readTable(table: string): OrbitPercept {
   }
   return { table, t, symbols, bodies: Object.fromEntries(symbols.map((g, i) => [g, cols[i]])) };
 }
+
+/** What the learner is told about the object its code receives: the shape of the table, nothing about the world. */
+export const ORBIT_PERCEPT_DOC = [
+  'An observation is a JavaScript function `(p) => number` (or, without a range, `(p) => text`); a direction is `(p) => [x, y]`.',
+  '`p` is one table you perceive, up to its CURRENT row (the last one; later rows are never included), already read for you:',
+  '  p.table    the table exactly as shown (a string)',
+  '  p.t        the time of each row (numbers)',
+  '  p.symbols  one symbol per body, in the order of the columns; the LAST one is the body you launched',
+  '  p.bodies   p.bodies[symbol].x[row] and .y[row]: its position at each row, or null where it is not seen',
+  'The current row is p.t.length - 1.'
+].join('\n');

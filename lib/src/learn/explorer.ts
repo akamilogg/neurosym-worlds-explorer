@@ -196,7 +196,7 @@ export type ExplorerTurn =
   | { kind: 'investigate'; requests: ExplorerRequest[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
   | { kind: 'proposal'; parse: ExplorerParse; notes: NoteOp[]; methods: NoteOp[] };
 
-function parseNotes(raw: unknown, warnings: string[]): NoteOp[] {
+export function parseNotes(raw: unknown, warnings: string[]): NoteOp[] {
   const out: NoteOp[] = [];
   (Array.isArray(raw) ? raw : []).forEach((n, i) => {
     const o = n && typeof n === 'object' ? n as Record<string, unknown> : null;
@@ -274,11 +274,11 @@ export interface ExplorerProposal {
 
 export type ExplorerParse = { ok: true; proposal: ExplorerProposal } | { ok: false; errors: string[] };
 
-const ID = /^[a-z][a-z0-9_]{0,47}$/;
+export const ID = /^[a-z][a-z0-9_]{0,47}$/;
 const TYPES: readonly QuestionType[] = ['noul', 'score', 'choice'];
-const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null);
+export const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null);
 
-function parseObservation(raw: unknown, where: string, lang: string, errors: string[]): MeasureDecl | null {
+export function parseObservation(raw: unknown, where: string, lang: string, errors: string[]): MeasureDecl | null {
   const o = obj(raw);
   if (!o) { errors.push(where + ': an observation must be an object'); return null; }
   const source = typeof o.source === 'string' ? o.source.trim() : '';
@@ -291,7 +291,7 @@ function parseObservation(raw: unknown, where: string, lang: string, errors: str
   return { definition: typeof o.definition === 'string' ? o.definition : '', spec: { kind: 'code', lang, source }, range };
 }
 
-function parseRule(raw: unknown, where: string, errors: string[]): Rule | null {
+export function parseRule(raw: unknown, where: string, errors: string[]): Rule | null {
   const r = obj(raw);
   if (!r) { errors.push(where + ': a rule must be an object'); return null; }
   const type = r.type as QuestionType;
@@ -313,7 +313,7 @@ function parseRule(raw: unknown, where: string, errors: string[]): Rule | null {
 }
 
 /** The reflective part of any answer: stances on beliefs, lessons, the next experiment. */
-function parseReflective(data: Record<string, unknown>, round: number, warnings: string[]): { beliefs: BeliefStance[]; lessons: string[]; nextExperiment: string } {
+export function parseReflective(data: Record<string, unknown>, round: number, warnings: string[]): { beliefs: BeliefStance[]; lessons: string[]; nextExperiment: string } {
   const beliefs: BeliefStance[] = [];
   const rawBeliefs = Array.isArray(data.beliefs) ? data.beliefs : [];
   rawBeliefs.forEach((raw, i) => {
