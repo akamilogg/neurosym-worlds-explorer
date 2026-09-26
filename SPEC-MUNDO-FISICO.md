@@ -2,7 +2,9 @@
 
 **Fichero:** `SPEC-MUNDO-FISICO.md`
 **Estado (26/09/2026):** P1 implementada (mundo, leyes por nivel, sentido tabular, calibración: `lib/src/worlds/orbit/`,
-`lib/scripts/calibrate-orbit.ts`, `lib/test/orbit.test.ts`); P2–P5 pendientes. Segundo mundo del experimento de mundo desconocido
+`lib/scripts/calibrate-orbit.ts`, `lib/test/orbit.test.ts`). P2 implementada (predictor, prueba de predicción,
+ablaciones: `lib/src/core/predict.ts`, `lib/src/worlds/orbit/predict.ts`, `lib/src/learn/law-ablation.ts`,
+`lib/test/predict.test.ts`). P3–P5 pendientes. Segundo mundo del experimento de mundo desconocido
 (ver `INFORME.md`, *Mundo desconocido: hallazgos de los runs 1–19*).
 
 ---
@@ -169,6 +171,29 @@ aceleración. Una ley es una lista de **componentes**:
   de saber cómo terminó cada partida: un resultado objetivo, no un veredicto.
 - **Aceptación:** error ≤ un umbral declarado por nivel en las dos bandas. System 2 solo sabe si se aceptó.
 - **Marcador:** el error por ronda (menor es mejor), con la huella de la fórmula, como el `scoreboard` actual.
+
+### 7.1 Decisiones y hallazgos de P2
+
+- **Qué se predice.** En la fila i, cuánto se aparta la posición siguiente de repetir el último paso:
+  d(i) = p(i+1) − 2·p(i) + p(i−1), leído de la propia tabla (con su ruido). Es una definición sobre lo percibido, no
+  una ley: la ley tiene que explicarlo. El punto que ve el código es la tabla hasta la fila i, nunca la siguiente. Es
+  la única elección del harness que roza el contenido físico (sugiere mirar el cambio del paso); se deja anotada
+  como tal.
+- **Una llamada a Jev por punto.** Todos los componentes leen las mismas observaciones y reglas; cada uno compone
+  las respuestas con sus pesos. Con `--sampling grid` los puntos se repiten y la caché acierta (comprobado en test).
+- **La direcciones son código del aprendiz sobre la percepción**, fuera del `Observer` (no llegan a Jev). Se
+  resolvió así la pregunta abierta 1 sin tocar el `Observer`.
+- **La métrica de error importa.** El error cuadrático relativo lo dominan los pocos puntos de encuentro cercano
+  (aceleraciones grandes). En una prueba, la ley exacta daba 0,06 % frente a la verdad y 13,5 % frente a lo
+  observado: ese 13,5 % es el suelo de ruido de esas muestras, no el 0,3 % de la calibración (tomado sobre otra
+  distribución de puntos). Por eso la prueba informa también la mediana del error por muestra y, para el operador,
+  el suelo medido sobre las mismas muestras (`floor`). La aceptación (P4) debe ser relativa a ese suelo.
+- **El brazo "solo código" aplica la escala del componente** (lineal o log; ajuste por Gauss-Newton). Con un ajuste
+  lineal ingenuo sobre una escala log, el código solo salía 5 veces peor y habría atribuido a Jev un mérito que no
+  es suyo.
+- **El brazo "solo código" se ajusta fuera de la muestra.** Ajustado y puntuado sobre las mismas muestras, llega a
+  bajar del suelo (0,130 frente a 0,136: ajusta el ruido). En P4 se ajusta con los puntos de exploración y se
+  puntúa en la prueba.
 
 ## 8. Ablaciones (información, no veredicto)
 
