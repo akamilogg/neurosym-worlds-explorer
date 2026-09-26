@@ -99,7 +99,24 @@ Hay dos cosas distintas que se pueden discretizar:
 | `--sampling` | `grid` \| `free` | **Dónde se evalúa la predicción.** `grid`: las muestras de la prueba caen en una malla fija de posiciones del mundo, que se repiten ronda tras ronda (la caché de Jev acierta; el coste baja). `free`: posiciones muestreadas libremente |
 | `--resolution` | X ≥ 0 | **Precisión de la percepción.** Las posiciones llegan redondeadas a X; `0` = continua. Una malla gruesa hace más difícil distinguir exponentes cercanos: es un parámetro de dificultad |
 
-Configuración recomendada por defecto: `--sampling grid --resolution 0` (abarata sin degradar los datos).
+Por defecto: `--sampling free --resolution 0`. Con el protocolo del investigador (§8.6) la ley se comprueba en lanzamientos
+que System 2 no ha visto, y una malla fija deja de serlo desde la segunda ronda; `--sampling grid` queda como experimento
+de coste. El journal guarda por ronda los aciertos de la caché de Jev (`jev.cache`) y el hash de la parte juzgada de la ley
+(`judgment_hash`).
+
+**Simulación sin Jev (26/09/2026, semilla 3, L1, montaje base, 8 rondas, parámetros por defecto):** las preguntas que se
+repiten dependen solo del vector de observaciones, así que un juez falso da el ahorro exacto.
+
+| Observación | Ley entre rondas | `free`: en vivo / puntos | `grid`: en vivo / puntos |
+|---|---|---|---|
+| distancia continua | igual | 986 / 988 | 136 / 1088 |
+| distancia continua | cambia | 988 / 988 | 1088 / 1088 |
+| bandas de log r (×4) | igual | 13 / 988 | 10 / 1088 |
+| bandas de log r (×4) | cambia | 78 / 988 | 80 / 1088 |
+
+`grid` solo ahorra cuando la parte juzgada de la ley (observaciones y reglas) no cambia entre rondas y las observaciones
+son continuas; si cambia, no acierta nada de rondas anteriores. Si System 2 mide en bandas, `free` ya acierta más del 90 %
+sin repetir puntos: el ahorro viene de discretizar, no de la malla.
 
 **Hallazgo de P1:** `--resolution` está en las unidades del aprendiz, y la escala del marco varía por semilla (×0,3 a
 ×30). La misma resolución pesa mucho más en una semilla dibujada a escala pequeña. Con `--resolution 0.1`, 3 de 8

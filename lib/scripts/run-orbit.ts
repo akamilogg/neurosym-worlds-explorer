@@ -14,6 +14,9 @@
      --steps N           investigation answers System 2 may give per round before proposing (default 3)
      --launches N        bodies System 2 may launch itself per round (default 6)
      --resolution X      round every perceived position to X, in the table's units (default 0: continuous)
+     --sampling S        free: new check launches every round (default: they are unseen, as the protocol asks); grid: the
+                         same fixed lattice of launches every round, so the same points recur and Jev's cache can hit - the
+                         check is then no longer on unseen launches after the first round (an experiment on cost)
      --test-view N       check launches per setup from inside the observable region (default 4)
      --test-beyond N     check launches per setup from beyond it: the extrapolation band (default 2)
      --every N           take every N-th usable row of a launch as a test point (default 8; with fewer points per setup
@@ -63,6 +66,7 @@ import { Observer } from '../src/core/observer.ts';
 import { Evaluator } from '../src/core/evaluate.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../src/core/jev.ts';
 import { parseJsonLoose, type ApiError } from '../src/core/net.ts';
+import { judgmentHash } from '../src/core/formula.ts';
 import { lawFormula, Predictor, scoreOf, testPredictions, type Law, type PredictionSample, type TestResult, type Vec2 } from '../src/core/predict.ts';
 import { hashString, stableStringify } from '../src/core/hash.ts';
 import { nodeVmRunner } from '../src/runtime/node-vm.ts';
@@ -103,6 +107,7 @@ const cfg = {
   steps: Number(arg('steps', '3')),
   launches: Number(arg('launches', '6')),
   resolution: Number(arg('resolution', '0')),
+  sampling: (arg('sampling', 'free') === 'grid' ? 'grid' : 'free') as 'grid' | 'free',
   testView: Number(arg('test-view', '4')),
   testBeyond: Number(arg('test-beyond', '2')),
   every: Number(arg('every', '8')),
@@ -289,6 +294,9 @@ function notebookBrief(): Record<string, unknown> {
 /* --- Checks: in the laboratories every round; in the family when System 2 validates -------------------- */
 
 let lastTest: unknown = null;
+/** Operator: the main evaluator's cumulative questions to Jev, live against answered from the cache (same observation vector). */
+const cacheStats = () => ({ live: evaluator.stats.judgeCalls, hits: evaluator.stats.vectorHits,
+  hit_rate: round2(evaluator.stats.vectorHits / Math.max(1, evaluator.stats.judgeCalls + evaluator.stats.vectorHits)) });
 /** Every point checked so far, by round: the rows `table` can show "on tests". */
 const testPoints = new Map<number, PredictionSample<OrbitPoint>[]>();
 let validationsLeft = cfg.validations;
@@ -301,7 +309,7 @@ function launchesIn(list: readonly Setup[], attempt: number, round: number, name
   const samples: PredictionSample<OrbitPoint>[] = [];
   const all: { spec: OrbitSpec; tr: Trajectory }[] = [];
   list.forEach((setup, j) => {
-    trialLaunches(setup.spec, { sampling: 'free', attempt: attempt * 16 + j, inView: cfg.testView, beyond: cfg.testBeyond }).forEach((tr, k) => {
+    trialLaunches(setup.spec, { sampling: cfg.sampling, attempt: attempt * 16 + j, inView: cfg.testView, beyond: cfg.testBeyond }).forEach((tr, k) => {
       const id = name ? name(setup) + '-' + (k + 1) : setup.id + '/' + k;
       if (name) store(id, setup, round, 'the check of round ' + round, tr, Math.hypot(tr.launch.pos[0], tr.launch.pos[1]) > spec.window);
       all.push({ spec: setup.spec, tr });
@@ -712,7 +720,10 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   record.accepted = ok;
   lastTest = { round, laboratories: describeCheck(labCheck.result, labHeld), ...(validationView ? { validation: validationView } : {}), accepted: ok, validations_left: validationsLeft };
   log('check', { round, laboratories: { held: labHeld, ...operatorView(labCheck.result) }, asked_to_validate: record.validate, ...(validation ? { validation } : validationView ? { validation: validationView } : {}), accepted: ok,
-    jev: { calls: judge.stats.calls, errors: judge.stats.errors, check_calls: labCheck.calls, calls_per_point: round2(labCheck.calls / Math.max(1, labCheck.result.samples.length)) },
+    jev: { calls: judge.stats.calls, errors: judge.stats.errors, check_calls: labCheck.calls, calls_per_point: round2(labCheck.calls / Math.max(1, labCheck.result.samples.length)), cache: cacheStats() },
+    /* What Jev's cache is keyed on besides the observation vector: the law's observations and rules. Unchanged across rounds,
+       recurring points (--sampling grid) can hit; changed, nothing from earlier rounds can. */
+    judgment_hash: judgmentHash(lawFormula(record.law)),
     abstraction: abstractionOf(record.law, testPoints.get(round) ?? []) });
   say('  check in the laboratories: ' + chi2Text(labCheck.result) + ' (accept <= ' + cfg.accept + '; operator: hidden law ' + round2(labCheck.result.scores.reference ?? 0) + ' vs law ' + round2(labCheck.result.scores.law) + ')' +
     (record.validate && !validation ? '; validation refused' : '') + (ok ? '  ACCEPTED' : ''));
@@ -731,6 +742,6 @@ log('end', {
   stoppedBy: llmFatal ? 'llm_error' : accepted ? 'accepted' : 'budget', ...(llmFatal ? { llm_error: llmFatal } : {}),
   final: final ? { round: final.round, fingerprint: final.fingerprint, test: final.test, law: ownLaw(final.law) } : null,
   best_for_the_operator: top ? { round: top.round, fingerprint: top.fingerprint, test: top.test } : null,
-  notebook, launches: launchIndex(), jev: { calls: judge.stats.calls, errors: judge.stats.errors }
+  notebook, launches: launchIndex(), jev: { calls: judge.stats.calls, errors: judge.stats.errors, cache: cacheStats() }
 });
 say('done: ' + (accepted ? 'accepted in round ' + accepted.round : 'not accepted; best score ' + (top?.test ? round2(top.test.score) : '-')) + '; journal ' + outFile);
