@@ -91,6 +91,26 @@ a clean comparison of the interpretable and delegated modes on the same formula.
 
 The full account, in Spanish, is in [INFORME.md](INFORME.md) (section *Mundo desconocido: hallazgos de los runs 1–19*).
 
+## Next: a physical world
+
+The same principle, applied to discovering a **law of motion**. Bodies move in a plane under a law drawn per
+seed and, on purpose, not the one a model knows: a pull that falls as r^-2.37 instead of r^-2, a hidden mass, a
+term in the velocity, a screened or anisotropic pull. System 2 perceives only noisy tables of positions, in a
+rotated, mirrored and rescaled frame with neutral symbols, and launches bodies of its own to experiment. Its task
+is to write a law that predicts how each next position departs from repeating the last step:
+
+```
+d̂(s) = Σ_k  m_k(s) · d_k(s)      d_k: a direction, in code
+                                 m_k: a magnitude, the judge's answers to rules over code observations,
+                                      placed in a declared range (linear or log)
+```
+
+Every round the law is tested on launches it has never seen, some starting beyond the region it observes, where
+a law that only fits what it has seen breaks down. Ablations compare the law against the same observations
+without the judge, a constant, and a judge that reads the whole table (the delegated mode). The operator grades
+the recovered law against the hidden one. Nothing has been run with a real model yet. The design is in
+[SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
+
 ## Repository
 
 | Path | What it is |
@@ -100,6 +120,9 @@ The full account, in Spanish, is in [INFORME.md](INFORME.md) (section *Mundo des
 | `lib/src/learn/` | the explorer (System 2's protocol), notebook, experiments and probes, ablations, the learning loop |
 | `lib/scripts/run-grid.ts` | runs the unknown-world experiment and writes a JSON journal to `runs/` (journals are not published) |
 | `lib/scripts/calibrate-grid.ts` | finds seeds that leave room to learn (forced win, learnable, not won by a flat judge, not a known game) |
+| `lib/src/worlds/orbit/` | the physical world: laws by level, the table sense, prediction points and test launches, operator-only tools |
+| `lib/src/core/predict.ts`, `lib/src/learn/law-*.ts` | the predictor (a law as components), the law explorer (System 2's protocol there), the law ablations |
+| `lib/scripts/run-orbit.ts`, `calibrate-orbit.ts` | runs the physical-world experiment; finds laws that leave room to discover (Newton misses clearly above the noise) |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
 
@@ -135,6 +158,16 @@ node --experimental-strip-types scripts/run-grid.ts --seed 22
 Useful options: `--tools none` (or a subset such as `view,inspect,probes`) for the baseline without
 instruments, `--flat` for a judge that knows nothing, `--variants N` for generalization starts. The header of
 `run-grid.ts` documents them all.
+
+The physical world works the same way, with `lib/run-orbit.example.ps1` / `.sh` as launchers:
+
+```bash
+node --experimental-strip-types scripts/calibrate-orbit.ts 1 20 1
+./run-orbit.sh --seed 3 --level 1
+```
+
+Its options include `--level 1..4`, `--sampling grid|free` (test points that repeat, or new ones every round),
+`--resolution X` (rounded perception), `--tools` and `--delegated`; the header of `run-orbit.ts` documents them.
 
 ## License
 

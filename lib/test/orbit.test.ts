@@ -85,3 +85,25 @@ test('operator: Newton fits a Newtonian law exactly and misses a generated one; 
   assert.ok(relError(own, fitNewton(spec, own)) > 0.03, 'p = ' + spec.law.central.p.toFixed(2) + ' is not Newton');
   assert.ok(noiseFloor(spec, own, 0.5) > noiseFloor(spec, own, 0));
 });
+
+test('operator: the law stated in the learner\'s terms is the law the tables show (d = C · r^-p in table units)', async () => {
+  const { describeOrbitTruth } = await import('../src/worlds/orbit/describe.ts');
+  const { predictionSamples, trialLaunches } = await import('../src/worlds/orbit/predict.ts');
+  const { spec } = generateOrbit(3, 1);
+  const sense = tableSense(spec);
+  const truth = describeOrbitTruth(spec, sense);
+  const stated = truth.find((t) => t.id.startsWith('central_'))!.statement;
+  const [, C, p] = /size ([\d.e+-]+) · r\^-([\d.]+)/.exec(stated)!.map(Number) as number[];
+  const trajectories = trialLaunches(spec, { sampling: 'grid', attempt: 1, inView: 3, beyond: 1 });
+  for (const s of predictionSamples(spec, trajectories)) {
+    const row = s.state.row;
+    const seen = readTable(s.state.table);
+    const src = toPercept.pos(spec.frame, spec.sources[0].pos);
+    const probe: Vec2 = [seen.bodies[sense.probeGlyph].x[row]!, seen.bodies[sense.probeGlyph].y[row]!];
+    const r = Math.hypot(probe[0] - src[0], probe[1] - src[1]);
+    const size = Math.hypot(s.truth![0], s.truth![1]);
+    assert.ok(close(size, C * Math.pow(r, -p), 0.02 + 5 * spec.noise * spec.frame.scale / r), 'at r = ' + r.toFixed(2) + ': ' + size + ' vs ' + C * Math.pow(r, -p));
+  }
+  assert.ok(truth.some((t) => t.id === 'launch_property' && /does not matter/.test(t.statement)));
+  assert.ok(truth.some((t) => t.id === 'velocity_term' && /Nothing in d depends/.test(t.statement)));
+});

@@ -5,7 +5,9 @@
 `lib/scripts/calibrate-orbit.ts`, `lib/test/orbit.test.ts`). P2 implementada (predictor, prueba de predicción,
 ablaciones: `lib/src/core/predict.ts`, `lib/src/worlds/orbit/predict.ts`, `lib/src/learn/law-ablation.ts`,
 `lib/test/predict.test.ts`). P3 implementada (protocolo y prompt del explorador de leyes: `lib/src/learn/law-explorer.ts`,
-`ORBIT_PERCEPT_DOC`, `lib/test/law-explorer.test.ts`). P4–P5 pendientes. Segundo mundo del experimento de mundo desconocido
+`ORBIT_PERCEPT_DOC`, `lib/test/law-explorer.test.ts`). P4 implementada (runner con journal y métricas del operador:
+`lib/scripts/run-orbit.ts`, `lib/src/worlds/orbit/describe.ts`, lanzadores `lib/run-orbit.example.*`; probado de punta a
+punta con un LLM falso y el juez plano). P5: los tests se han ido escribiendo en cada fase; falta el primer run real. Segundo mundo del experimento de mundo desconocido
 (ver `INFORME.md`, *Mundo desconocido: hallazgos de los runs 1–19*).
 
 ---
@@ -225,6 +227,21 @@ Sobre las mismas muestras de la prueba:
 | Solo código | un ajuste (lineal o log-lineal, a elección del harness) sobre las mismas observaciones, sin Jev | ¿aportan las reglas de Jev algo que el código no expresa? Si el error baja con la regla, sí (como el 6–2 del run 17) |
 | Plano | una constante por componente | el suelo |
 | Modo delegado | Jev predice la magnitud a partir de la tabla completa como texto | la comparación limpia de los dos modos de la arquitectura |
+
+### 8.1 Cómo quedó P4
+
+- **Ronda:** System 2 investiga (hasta `--steps` respuestas), propone una ley, la ley se prueba sobre los lanzamientos
+  de prueba de esa ronda (que quedan como suyos para estudiarlos, `test<ronda>-<k>`), y recibe los hechos: error por
+  lanzamiento, si empezó dentro de la región que observa y los puntos que más falló. Se construye sobre la mejor ley.
+- **Aceptación:** error ≤ `--accept` (1,2 por defecto) veces el suelo de ruido de los mismos puntos, en las dos bandas.
+  El suelo es del operador; System 2 solo sabe si se aceptó.
+- **Brazo "solo código":** ajustado con los puntos de los lanzamientos de System 2 y de exploración, puntuado en la prueba.
+- **Coste:** con `--sampling grid`, la segunda prueba de la misma ley costó 0 llamadas a Jev en el ensayo (la caché
+  acierta en todos los puntos).
+- **Primer ensayo con LLM falso y juez plano (semilla 3, L1):** ley plana 0,99; solo código 0,19; plano 1,12;
+  delegado 0,99 (el juez plano responde 0,5 siempre); suelo 0,136; Newton en el operador: 23 % dentro de la región,
+  356 % fuera. En las peticiones a System 2 no aparece ninguna palabra delatora ni el exponente de la ley.
+- **Lanzadores:** `run-orbit.example.ps1` / `.sh`; las copias con claves (`run-orbit.ps1` / `.sh`) están en `.gitignore`.
 
 ## 9. Métricas del operador (solo en el journal)
 

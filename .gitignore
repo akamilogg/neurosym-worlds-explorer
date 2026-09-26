@@ -12,3 +12,5 @@ Salva Working/
 # run journals are not published (the 21/09 journal stays: it is the fixture of the parity tests)
 runs/*
 !runs/2026-09-21-run-journal.json
+lib/run-orbit.sh
+lib/run-orbit.ps1

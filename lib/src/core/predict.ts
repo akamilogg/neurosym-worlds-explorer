@@ -105,7 +105,8 @@ export class Predictor<S> {
     for (const r of [jsFunctionRunner(), ...(options.runners ?? [])]) this.runners.set(r.lang, r);
   }
 
-  private direction(component: LawComponent, percept: unknown): Vec2 {
+  /** A component's direction on what is perceived of a state (no Judge involved): to check a law before it is used. */
+  directionOf(component: LawComponent, percept: unknown): Vec2 {
     const { lang, source } = component.direction;
     const key = lang + '|' + source;
     let fn = this.compiled.get(key);
@@ -133,7 +134,7 @@ export class Predictor<S> {
     for (const [id, c] of Object.entries(law.components)) {
       const value = compose(scalar, c.weights).value;
       const magnitude = magnitudeOf(value, c);
-      const direction = this.direction(c, percept);
+      const direction = this.directionOf(c, percept);
       components[id] = { value, magnitude, direction };
       vector = [vector[0] + magnitude * direction[0], vector[1] + magnitude * direction[1]];
     }
