@@ -8,9 +8,9 @@ import { toPercept, type OrbitSpec, type Trajectory, type Vec2 } from './world.t
  * perceives of this world: no velocities, no accelerations, no masses of the
  * sources, no names with meaning. Symbols are drawn per seed from a neutral pool.
  *
- *        t       # x       # y       @ x       @ y
- *     0.00   12.4113   -3.0702    0.0201    0.0003
- *     0.37   12.3628   -2.5109    0.0199   -0.0002
+ *         t          # x          # y          @ x          @ y
+ *     0.000    12.411302    -3.070215     0.020117     0.000304
+ *     0.518    12.362841    -2.510933     0.019904    -0.000213
  *     ...
  *
  * A probe outside the observable region is not seen: its cells read "·".
@@ -53,8 +53,8 @@ export function tableSense(spec: OrbitSpec, options: OrbitSenseOptions = {}): Or
   const resolution = options.resolution ?? 0;
   const windowed = options.window ?? true;
   const sigma = spec.noise * spec.frame.scale;
-  const decimals = resolution > 0 ? Math.max(0, Math.ceil(-Math.log10(resolution) - 1e-9)) : 4;
-  const cell = (v: number): string => (resolution > 0 ? Math.round(v / resolution) * resolution : v).toFixed(decimals).padStart(10);
+  const decimals = resolution > 0 ? Math.max(0, Math.ceil(-Math.log10(resolution) - 1e-9)) : 6;
+  const cell = (v: number): string => (resolution > 0 ? Math.round(v / resolution) * resolution : v).toFixed(decimals).padStart(13);
   return {
     sourceGlyphs,
     probeGlyph,
@@ -66,12 +66,12 @@ export function tableSense(spec: OrbitSpec, options: OrbitSenseOptions = {}): Or
         return [q[0] + sigma * gaussian(noise), q[1] + sigma * gaussian(noise)];
       };
       const glyphs = [...sourceGlyphs, probeGlyph];
-      const lines = ['         t' + glyphs.map((g) => (g + ' x').padStart(10) + (g + ' y').padStart(10)).join('')];
+      const lines = ['         t' + glyphs.map((g) => (g + ' x').padStart(13) + (g + ' y').padStart(13)).join('')];
       for (const s of trajectory.states) {
-        const cells = [toPercept.time(spec.frame, s.t).toFixed(2).padStart(10)];
+        const cells = [toPercept.time(spec.frame, s.t).toFixed(3).padStart(10)];
         for (const src of spec.sources) { const q = seen(src.pos); cells.push(cell(q[0]), cell(q[1])); }
         if (!windowed || Math.hypot(s.pos[0], s.pos[1]) <= spec.window) { const q = seen(s.pos); cells.push(cell(q[0]), cell(q[1])); }
-        else cells.push(HIDDEN.padStart(10), HIDDEN.padStart(10));
+        else cells.push(HIDDEN.padStart(13), HIDDEN.padStart(13));
         lines.push(cells.join(''));
       }
       return lines.join('\n');

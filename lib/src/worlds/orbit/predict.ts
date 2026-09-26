@@ -4,7 +4,7 @@ import type { World } from '../../core/types.ts';
 import { mulberry32 } from '../grid/gen.ts';
 import { launchNear } from './gen.ts';
 import { readTable, tableSense, type OrbitSenseOptions } from './sense.ts';
-import { acceleration, simulate, toPercept, type OrbitSpec, type Trajectory, type Vec2 } from './world.ts';
+import { acceleration, simulate, toPercept, type OrbitSpec, type Trajectory } from './world.ts';
 
 /* ============================================================================
  * What a prediction is in orbit@1, and what the trial tests it on.

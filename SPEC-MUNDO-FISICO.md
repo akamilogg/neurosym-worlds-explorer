@@ -276,6 +276,51 @@ Sobre las mismas muestras de la prueba:
 Con la ley del run escrita en código, el ensayo reproduce su error (0,1329), la acepta tras la confirmación ciega
 (0,19 en lanzamientos nuevos) y no hace ninguna llamada a Jev.
 
+### 8.3 Segundo run y el veredicto del entorno (26/09/2026)
+
+**Run orbit 2** (semilla 3, L1, gpt-6-sol, `5f33b53`): aceptado en la ronda 3, sin ninguna llamada a Jev.
+- **Lo que hizo bien:** usó la magnitud en código sin trucos, descubrió la discretización y metió un integrador en su
+  ley (ajusta la velocidad con las dos últimas posiciones e integra 16 subpasos).
+- **La forma de la ley no era la verdadera:** 2000/(r² + min(25, 3r))^1,5, una cúbica suavizada. Vale en un intervalo
+  (±5 % entre r = 8 y 25) y se aleja fuera (−32 % en r = 80), porque su pendiente tiende a −3. La ley del run 1 se
+  mantenía en 1,00 ± 0,02 de r = 8 a 80.
+- **En lanzamientos nuevos con pasos cercanos se hundió:** 0,76 frente a 0,34 de la ley oculta.
+
+**Diagnóstico, del entorno y no de System 2:**
+- *d* mezclaba la ley con la discretización.
+- El error cuadrático relativo lo decidían los pocos pasos cercanos, así que la tarea premiaba parchear el centro y no
+  veía la forma lejos.
+- La grid le dejó afinar sobre la propia prueba.
+- Sobre todo, **le dábamos una métrica** (error, mediana, peores puntos, "mejor ley") y la optimizó: descartó los
+  errores lejanos "por su tamaño absoluto".
+
+**Principio del usuario:** a System 2 no se le da ninguna métrica. Observa por su cuenta, y es el entorno el que dice si
+su regla vale.
+
+**Cambios:**
+- **Muestreo 4 veces más fino** (una fila cada 0,125, 4 subpasos, 240 filas) con ruido 1e-5 y 6 decimales. La ley
+  oculta queda en el ruido: 0,011 frente a 0,009 en la semilla 3, antes 0,141.
+- **El veredicto del entorno.** En cada punto de cada lanzamiento de prueba, un vector con un número por eje de la
+  tabla: tanh((d observado − d predicho) / |d observado|), en [−1, 1]. El 0 significa que no hay diferencia en ese eje;
+  el resto lo interpreta System 2. Es relativo a lo que pasó en cada punto, así que un punto lejano pesa lo mismo que
+  uno cercano. Los ejes son los de la tabla, no radial y tangencial, que delataría la dirección que importa.
+- **Nada de números para System 2:** ni error, ni mediana, ni peores puntos, ni marcador, ni "mejor ley". Recibe los
+  veredictos, si se aceptó la ley y su última ley; sobre cuál construye decide él. `table` da el residuo y el veredicto
+  en cada punto.
+- **Aceptación (oculta):** la media cuadrática de los veredictos de la ley ≤ `--accept` × la de la ley oculta en los
+  mismos puntos, +0,02, en cada banda. Se exige en la prueba y en **dos** conjuntos nuevos de confirmación ciega.
+- `--sampling free` por defecto.
+- **Gradación de la fuerza aparte de su integración.** Integrar el movimiento dentro de la fila es cinemática, no un
+  término de velocidad. Una forma que coincide solo en parte del rango es "parcial".
+
+**Ensayo con LLM falso (semilla 3):**
+
+| Ley | Veredicto | Ley oculta | Más allá de la región | Resultado |
+|---|---|---|---|---|
+| Por Jev (juez plano) | 1,23 | 0,09 | — | rechazada |
+| La forma del run 2 (ajustada en r = 15) | 0,233 | 0,131 | 0,29 frente a 0,17 | rechazada |
+| La forma verdadera | 0,0815 | 0,0808 | — | aceptada; confirmada con 0,090 y 0,088 |
+
 ## 9. Métricas del operador (solo en el journal)
 
 - La ley verdadera y sus parámetros, en el marco percibido.

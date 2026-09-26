@@ -77,9 +77,11 @@ test('the exact law, written in the learner\'s frame, predicts to the noise; the
   assert.ok(Math.abs(r.error - r.reference!) < 0.02 * r.reference! + 1e-3, 'the exact law scores the reference: ' + r.error + ' vs ' + r.reference);
   assert.ok(r.floor! < 0.03 && r.floor! < r.reference!, 'noise floor ' + r.floor + ' below the hidden law\'s own miss ' + r.reference);
   assert.ok(r.error < 0.2, 'against what was observed: ' + r.error);
-  assert.equal(calls, samples.length, 'two components, one question per point');
+  /* One question per distinct observation: two components share it, and points that measure the same share the answer. */
+  const distinct = new Set(samples.map((x) => observer.observe(x.state, exact.observations).vector)).size;
+  assert.equal(calls, distinct, 'two components, one question per distinct observation');
   await testPredictions(samples, async (s) => (await predictor.predict(twoParts, s)).vector);
-  assert.equal(calls, samples.length, 'the same points again: every answer from the cache');
+  assert.equal(calls, distinct, 'the same points again: every answer from the cache');
 });
 
 test('ablations: code alone carries a law written in code; a constant per component is the floor', async () => {
@@ -138,4 +140,14 @@ test('a magnitude in code: the Judge is never asked for it, the ablation keeps i
   assert.deepEqual(delegatedLaw(mixed).components.toward, mixed.components.toward);
   const both = { ...codeOnlyLaw.components.toward, weights: { pull: 1 } };
   assert.match(checkLaw({ ...exact, components: { both } }).errors.join(' '), /weighs no rule/);
+});
+
+test('the environment\'s verdict: per axis, in [-1, 1], 0 where the prediction agrees, relative to what happened there', async () => {
+  const { scoreOf, scoreRms } = await import('../src/core/predict.ts');
+  assert.deepEqual(scoreOf([1, 2], [1, 2]), [0, 0]);
+  const far = scoreOf([0.009, 0], [0.01, 0]), near = scoreOf([9, 0], [10, 0]);
+  assert.ok(Math.abs(far[0] - near[0]) < 1e-12, 'a 10% miss weighs the same far away and close in');
+  assert.ok(far[0] > 0 && scoreOf([0.011, 0], [0.01, 0])[0] < 0, 'the sign says which way it missed');
+  assert.ok(scoreOf([100, 0], [1, 0])[0] >= -1 && scoreOf([0, 0], [0, 0]).every((v) => v === 0));
+  assert.equal(scoreRms([[0.3, 0.4]]), 0.5);
 });

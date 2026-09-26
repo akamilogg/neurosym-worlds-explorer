@@ -202,6 +202,21 @@ export interface SampleResult {
   readonly target: Vec2;
   /** |predicted - target| / |target|. */
   readonly error: number;
+  /** The environment's verdict at this point, per axis: tanh((target - predicted) / |target|), in [-1, 1]. 0 means no
+      difference along that axis; ±1 a miss as large as what happened, or larger. Relative to what happened at the point,
+      so a point far away, where little happens, weighs as much as one close in. */
+  readonly score: Vec2;
+}
+
+/** The per-point, per-axis verdict of a prediction against what happened. */
+export function scoreOf(predicted: Vec2, target: Vec2): Vec2 {
+  const size = Math.hypot(target[0], target[1]) || 1e-300;
+  return [Math.tanh((target[0] - predicted[0]) / size), Math.tanh((target[1] - predicted[1]) / size)];
+}
+
+/** Quadratic mean of per-point scores (the length of each score vector): 0 when every point agreed. Operator side. */
+export function scoreRms(scores: readonly Vec2[]): number {
+  return scores.length ? Math.sqrt(scores.reduce((n, s) => n + s[0] ** 2 + s[1] ** 2, 0) / scores.length) : 0;
 }
 
 export interface TestResult {
@@ -216,6 +231,10 @@ export interface TestResult {
   readonly floor: number | null;
   /** Operator only: the error of the hidden law itself against what was observed, on the same samples. */
   readonly reference: number | null;
+  /** Operator only: the quadratic mean of the per-point scores - of the law, of the hidden law, of the noise-free truth -
+      overall and per band. Every point weighs the same, near or far. */
+  readonly scores: { readonly law: number; readonly reference: number | null; readonly floor: number | null;
+    readonly byBand: Readonly<Record<string, { law: number; reference: number | null; floor: number | null }>> };
   readonly samples: readonly SampleResult[];
   /** Samples whose prediction failed (a measure or a direction that threw), with the reason. */
   readonly failed: readonly { ref?: string; error: string }[];
@@ -243,17 +262,25 @@ export async function testPredictions<S>(samples: readonly PredictionSample<S>[]
   const truthPairs: { predicted: Vec2; target: Vec2 }[] = [];
   const floorPairs: { predicted: Vec2; target: Vec2 }[] = [];
   const referencePairs: { predicted: Vec2; target: Vec2 }[] = [];
+  const scored: PredictionSample<S>[] = [];
   const failed: { ref?: string; error: string }[] = [];
   for (const s of samples) {
     let predicted: Vec2;
     try { predicted = await predict(s.state); } catch (error) { failed.push({ ref: s.ref, error: String((error as Error)?.message ?? error) }); continue; }
     const size = Math.hypot(s.target[0], s.target[1]);
     results.push({ ref: s.ref, band: s.band, predicted, target: s.target,
-      error: size > 0 ? Math.hypot(predicted[0] - s.target[0], predicted[1] - s.target[1]) / size : 0 });
+      error: size > 0 ? Math.hypot(predicted[0] - s.target[0], predicted[1] - s.target[1]) / size : 0, score: scoreOf(predicted, s.target) });
+    scored.push(s);
     if (s.truth) { truthPairs.push({ predicted, target: s.truth }); floorPairs.push({ predicted: s.truth, target: s.target }); }
     if (s.reference) referencePairs.push({ predicted: s.reference, target: s.target });
   }
   const bands = [...new Set(results.map((r) => r.band).filter((b): b is string => !!b))];
+  const scoresOf = (idx: number[]) => ({
+    law: scoreRms(idx.map((i) => results[i].score)),
+    reference: idx.every((i) => scored[i].reference) && idx.length ? scoreRms(idx.map((i) => scoreOf(scored[i].reference!, scored[i].target))) : null,
+    floor: idx.every((i) => scored[i].truth) && idx.length ? scoreRms(idx.map((i) => scoreOf(scored[i].truth!, scored[i].target))) : null
+  });
+  const all = results.map((_, i) => i);
   return {
     error: relativeError(results),
     byBand: Object.fromEntries(bands.map((b) => [b, relativeError(results.filter((r) => r.band === b))])),
@@ -261,6 +288,7 @@ export async function testPredictions<S>(samples: readonly PredictionSample<S>[]
     truthError: truthPairs.length ? relativeError(truthPairs) : null,
     floor: floorPairs.length ? relativeError(floorPairs) : null,
     reference: referencePairs.length ? relativeError(referencePairs) : null,
+    scores: { ...scoresOf(all), byBand: Object.fromEntries(bands.map((b) => [b, scoresOf(all.filter((i) => results[i].band === b))])) },
     samples: results,
     failed
   };

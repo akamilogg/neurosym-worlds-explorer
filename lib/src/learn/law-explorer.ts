@@ -40,18 +40,18 @@ const LAW_LINES: readonly PromptLine[] = [
   '  - COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is carried by one of two: either the JUDGE - it is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders) - or CODE, `(p) => number`, in the units of the table, and then the judge is not asked for that component.',
   'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your law says.',
   '',
-  'Every round your law is TESTED on launches you have never seen - some of them starting beyond the region you observe - and you get its errors on each of them. After the test, those launches are yours to study like any other.',
+  'Every round your law is TESTED on launches you have never seen - some of them starting beyond the region you observe. For every point of those launches, the environment gives its VERDICT: a pair of numbers from -1 to 1, one per axis of the table; 0 on an axis means no difference along it between your prediction and what happened there. What the rest of the range means is for you to work out. You also learn whether the environment accepted your law. After the test, those launches are yours to study like any other.',
   '',
   'YOUR NOTEBOOK (the `notebook` field) is yours: your beliefs and their history, the notes you chose to write, the index of launches, every law you tried with its results, and your own lessons and planned next experiment. Nothing is added to it for you except the facts of what you did and how your laws predicted. A note can cite launches as "<launch>" and points of them as "<launch>@<row>".',
   'Every round, take a stance on EVERY belief you still hold: "keep", "revise" (give the new statement), "confirm" (the evidence settled it) or "drop" (the evidence refuted it); add new ones with "new". Cite the evidence: launches, points, rounds.',
   '',
   [['view', 'inspect', 'launch', 'measure', 'simulate', 'table'], 'INVESTIGATE before proposing. Instead of a proposal you may answer {"investigate": [ ...requests ], "notes": [ ...optional ]}; the results come back in `investigation`, and `steps_left` says how many more such answers you have this round. Requests:'],
-  [['view'], '  {"view": "<launch>", "from": <row>, "to": <row>}   rows of one of your tables (at most 40 per request)'],
+  [['view'], '  {"view": "<launch>", "from": <row>, "to": <row>}   rows of one of your tables (at most 60 per request)'],
   [['launch'], '  {"launch": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>}}   LAUNCH a body yourself: from the position (x, y) of the table\'s frame, moving at first by (vx, vy) per unit of the table\'s time; "m" is a positive property of the body you choose (default 1). You get its table (named "launch<n>"). A launch from outside the region you observe, or onto another body, is refused, and you are not told why. It is how you TEST an idea directly: two launches that differ in one thing isolate the effect of that thing. At most `launches_left` this round.'],
-  [['inspect'], '  {"inspect": "<launch>@<row>", "law": <round> | <draft> }   what a law (without "law": your best) predicts at that point, part by part: each component\'s direction, its magnitude and the judge\'s answer behind it, what each rule answered and what each observation measured there - and what was observed'],
+  [['inspect'], '  {"inspect": "<launch>@<row>", "law": <round> | <draft> }   what a law (without "law": your latest) predicts at that point, part by part: each component\'s direction, its magnitude and the judge\'s answer behind it, what each rule answered and what each observation measured there - and what was observed'],
   [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<launch>@<row>", ...]}   the value of that code at those points (without "range": the text it composes, as the judge would read it)'],
-  [['simulate'], '  {"simulate": "<launch>@<row>", "law": <round> | <draft>, "rows": <n>}   run a law forward from that point: each next position is the current one plus the last step plus the law\'s predicted d, row after row (at most 40), next to what was observed there if anything was. Nothing it simulates counts on the scoreboard.'],
-  [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "launches" | "tests"}   the value of that code at the points of your own launches or of the test launches, each with the RESIDUAL of your best law there (observed d minus predicted d, and its size relative to the observed d): the rows behind the errors, to inspect yourself'],
+  [['simulate'], '  {"simulate": "<launch>@<row>", "law": <round> | <draft>, "rows": <n>}   run a law forward from that point: each next position is the current one plus the last step plus the law\'s predicted d, row after row (at most 40), next to what was observed there if anything was. Nothing it simulates is a test of your law.'],
+  [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "launches" | "tests"}   the value of that code at the points of your own launches or of the test launches, each with the RESIDUAL of your latest law there (observed d minus predicted d) and the environment\'s verdict at that point: the rows behind the verdicts, to inspect yourself'],
   '',
   'HOW YOU THINK. What follows are lenses from your disciplines, each with examples of how your instruments can serve it. They are examples, not a procedure, and they describe nothing about this environment. Combine the instruments in any way you judge useful, bring in anything else you know that applies, and when the environment does not fit a model, change the model.',
   '',
@@ -69,13 +69,13 @@ const LAW_LINES: readonly PromptLine[] = [
   '  - A law that is right only where you have looked will fail beyond it. How a law extrapolates is part of what it claims.',
   '',
   '3. PRACTICE.',
-  '  - Reflect on your own trajectory, deeply and every round, before deciding anything. Your notebook is the record of your research: reread it as a demanding reviewer would read someone else\'s work. Follow each belief through its history and ask whether each change was justified by the evidence cited, or by a single case, a misreading, or the sway of the latest result. Look for what you dropped too early and what you kept too long; for experiments you planned and never ran; for questions your notes left open. Compare your laws round by round with the scoreboard: what changed, what the change did, and whether you learned why. Name your own errors plainly, and let that shape this round.',
+  '  - Reflect on your own trajectory, deeply and every round, before deciding anything. Your notebook is the record of your research: reread it as a demanding reviewer would read someone else\'s work. Follow each belief through its history and ask whether each change was justified by the evidence cited, or by a single case, a misreading, or the sway of the latest result. Look for what you dropped too early and what you kept too long; for experiments you planned and never ran; for questions your notes left open. Compare your laws round by round with the environment\'s verdicts on them: what changed, what the change did, and whether you learned why. Name your own errors plainly, and let that shape this round.',
   '  - Keep a THEORY in your notes: your current model, your rival theories, what is still unknown, and the plan that would test it.',
   (t: Tools) => '  - Decompose: derive specific claims from the theory and turn each into something you can check - a belief' + (t.has('launch') ? ', a launch' : '') + (t.has('measure') ? ', a measurement' : '') + (t.has('simulate') ? ', a simulation' : '') + ', or any other use of your instruments. When a claim fails, revise the theory as a whole, not only that claim.',
   [['launch', 'measure', 'simulate', 'table'], '  - An investigation that only looks at tables leaves your measuring and experimenting instruments idle.'],
   '  - Build your own methods. When a way of investigating works, or wastes your steps, write it down as a METHOD in any answer: "methods": [ {"do": "write", "id": "<id>", "text": "..."} | {"do": "forget", "id": "<id>"} ]. Your methods come back to you every round in `notebook.methods`.',
   '',
-  '`scoreboard` shows how each of your laws did on its test: the relative error (the size of the prediction\'s miss over the size of what was observed, as a quadratic mean over all test points; 0 is perfect, predicting nothing scores 1) and the median of the per-point errors; a law\'s `fingerprint` is the same exactly when the law is the same. `your_best_law` is the one with the lowest error so far - not necessarily your latest.',
+  '`your_latest_law` is the law you proposed last, and `last_test` holds the environment\'s verdicts on it. Your notebook lists every law you proposed, with whether it was accepted; a law\'s `fingerprint` is the same exactly when the law is the same. Which of your laws to build on is yours to decide.',
   '',
   'If the payload carries a `task`, it says what this consultation is for and what to answer instead of a proposal.',
   '',
@@ -103,7 +103,6 @@ export interface LawExplorerBrief {
   readonly round: number;
   readonly perceptDoc: string;
   readonly notebook?: Record<string, unknown> | null;
-  readonly scoreboard?: unknown;
   readonly law?: Law | null;
   readonly lawRound?: number | null;
   /** The latest test: per launch, its error; the points it missed most. */
@@ -140,8 +139,7 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
     round: brief.round,
     percept: brief.perceptDoc,
     ...(brief.notebook ? { notebook: brief.notebook } : {}),
-    ...(brief.scoreboard ? { scoreboard: brief.scoreboard } : {}),
-    ...(brief.law ? { your_best_law: { ...(brief.lawRound ? { from_round: brief.lawRound } : {}), ...ownLaw(brief.law) } } : {}),
+    ...(brief.law ? { your_latest_law: { ...(brief.lawRound ? { from_round: brief.lawRound } : {}), ...ownLaw(brief.law) } } : {}),
     ...(brief.lastTest ? { last_test: brief.lastTest } : {}),
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
@@ -225,7 +223,7 @@ export function parseLawProposal(content: string, context: { world: string; lang
 
 /* --- Investigation requests ------------------------------------------------------------ */
 
-/** `law`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its best law. */
+/** `law`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its latest law. */
 export type LawRequest =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string; readonly law: number | Law | null }
@@ -264,8 +262,8 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
       const q = obj(r) ?? {};
       if (typeof q.view === 'string') {
         const from = Number.isInteger(q.from) ? q.from as number : 0;
-        const to = Number.isInteger(q.to) ? q.to as number : from + 39;
-        requests.push({ view: q.view, from, to: Math.min(to, from + 39) });
+        const to = Number.isInteger(q.to) ? q.to as number : from + 59;
+        requests.push({ view: q.view, from, to: Math.min(to, from + 59) });
       } else if (obj(q.launch)) {
         const l = obj(q.launch)!;
         const [x, y, vx, vy] = [num(l.x), num(l.y), num(l.vx), num(l.vy)];

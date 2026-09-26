@@ -108,8 +108,11 @@ d̂(s) = Σ_k  m_k(s) · d_k(s)      d_k: a direction, in code
 Every round the law is tested on launches it has never seen, some starting beyond the region it observes, where
 a law that only fits what it has seen breaks down. Ablations compare the law against the same observations
 without the judge, a constant, and a judge that reads the whole table (the delegated mode). The operator grades
-the recovered law against the hidden one. Nothing has been run with a real model yet. The design is in
-[SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
+the recovered law against the hidden one. System 2 is never given an error to optimize: for every test point the
+environment returns its verdict (a vector in [-1, 1] per axis, 0 where the prediction agrees) and whether the law was
+accepted, and System 2 works out the rest. First runs with a real model recovered the exponent (r^-2.65 against a hidden
+2.66) and showed why the environment, not only the learner, decides what "finding the law" means. The design and the runs
+are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 
 ## Repository
 

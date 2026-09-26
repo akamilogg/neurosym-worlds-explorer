@@ -44,7 +44,7 @@ export function describeOrbitTruth(spec: OrbitSpec, sense: OrbitSense): TruthSta
   spec.sources.forEach((src, i) => {
     out.push({ id: 'central_' + sense.sourceGlyphs[i], statement: `Part of d points ${toward} ${sense.sourceGlyphs[i]}, with size ${profile(src.mass)}, where ${r}.` });
   });
-  out.push({ id: 'distance_power', statement: `That size falls with distance as a power of r with exponent -${f(central.p)} (not -2)` +
+  out.push({ id: 'distance_power', statement: `That size falls with distance as a power of r with exponent -${f(central.p)} (not -2), the same power at every distance` +
     (central.form === 'screened' ? ', cut off further by an exponential factor' : central.form === 'softened' ? ', softened near the body (it stays finite as r goes to 0)' : '') + '.' });
   if (central.form === 'anisotropic') {
     const axis = spec.frame.flip ? spec.frame.theta - (central.axis ?? 0) : spec.frame.theta + (central.axis ?? 0);
@@ -65,6 +65,6 @@ export function describeOrbitTruth(spec: OrbitSpec, sense: OrbitSense): TruthSta
     out.push(velocity.kind === 'drag'
       ? { id: 'velocity_term', statement: `Another part of d points against the last step, with size ${f(C)} · u^${f(velocity.s)}, where ${u}.` }
       : { id: 'velocity_term', statement: `Another part of d points sideways to the last step (a quarter turn to the ${spec.frame.flip ? 'right' : 'left'} in the table's axes), with size ${f(C)} · u^${f(velocity.s)}, where ${u}.` });
-  } else out.push({ id: 'velocity_term', statement: 'Nothing in d depends on how fast the body moves: there is no term in the step.' });
+  } else out.push({ id: 'velocity_term', statement: 'The pull does not depend on how fast the body moves: the law has no term in the velocity. (Carrying the pull over a row - integrating the motion within it - is kinematics, not such a term.)' });
   return out;
 }

@@ -63,7 +63,7 @@ test('only what the explorer wrote travels back, and the payload carries the per
   assert.equal(own.components.toward.direction, draft.components.toward.direction);
   const payload = lawExplorerPayload({ round: 3, perceptDoc: ORBIT_PERCEPT_DOC, law: t.parse.proposal.law, lawRound: 2, stepsLeft: 2, launchesLeft: 5 });
   assert.equal(payload.launches_left, 5);
-  assert.equal((payload.your_best_law as { from_round: number }).from_round, 2);
+  assert.equal((payload.your_latest_law as { from_round: number }).from_round, 2);
 });
 
 test('a component may carry its magnitude in code; an ignored request is echoed back so it can be read', () => {

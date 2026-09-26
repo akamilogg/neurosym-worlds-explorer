@@ -66,7 +66,10 @@ export function drawOrbit(seed: number, level: number, attempt = 0): OrbitSpec {
   return {
     id: 'o' + seed + 'L' + level + (attempt ? '.' + attempt : ''), seed, level,
     law: { central, velocity }, sources, frame,
-    window: 10, collide: 0.8, escape: 25, dt: 0.5, substeps: 16, steps: 80, noise: 0.0005
+    /* A row every 0.125 (four substeps of 1/32): fine enough that a second difference over two rows is the law at an
+       instant, up to the noise, even in close passes; the noise is set low enough that a law of the wrong form shows
+       beyond it, far from the source too. */
+    window: 10, collide: 0.8, escape: 25, dt: 0.125, substeps: 4, steps: 240, noise: 0.00001
   };
 }
 

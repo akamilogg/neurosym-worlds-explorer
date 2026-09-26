@@ -105,5 +105,5 @@ test('operator: the law stated in the learner\'s terms is the law the tables sho
     assert.ok(close(size, C * Math.pow(r, -p), 0.02 + 5 * spec.noise * spec.frame.scale / r), 'at r = ' + r.toFixed(2) + ': ' + size + ' vs ' + C * Math.pow(r, -p));
   }
   assert.ok(truth.some((t) => t.id === 'launch_property' && /does not matter/.test(t.statement)));
-  assert.ok(truth.some((t) => t.id === 'velocity_term' && /Nothing in d depends/.test(t.statement)));
+  assert.ok(truth.some((t) => t.id === 'velocity_term' && /does not depend on how fast/.test(t.statement)));
 });
