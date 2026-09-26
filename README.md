@@ -118,7 +118,15 @@ node --experimental-strip-types scripts/calibrate-grid.ts 1 40 2 2,4
 ```
 
 Run the experiment. Endpoints and keys come from the environment only: `LLM_URL` (any OpenAI-compatible
-`/chat/completions`), `LLM_MODEL`, `LLM_KEY`, and `JEV_KEY` (optionally `JEV_URL`) for the judge.
+`/chat/completions`), `LLM_MODEL`, `LLM_KEY`, and `JEV_KEY` (optionally `JEV_URL`) for the judge. The easiest way
+is a launcher: copy `lib/run-grid.example.ps1` (Windows) or `lib/run-grid.example.sh` to `run-grid.ps1` /
+`run-grid.sh` in the same folder, fill in your keys (those two names are git-ignored), and pass any option through:
+
+```bash
+./run-grid.sh --seed 22
+```
+
+or set the variables yourself and call the script directly:
 
 ```bash
 node --experimental-strip-types scripts/run-grid.ts --seed 22
