@@ -193,11 +193,14 @@ export interface PredictionSample<S> {
   readonly band?: string;
   /** A name the learner can cite (e.g. "launch3@12"). */
   readonly ref?: string;
+  /** Which group the sample belongs to (e.g. the setup it was observed in), for criteria that must hold in each. */
+  readonly group?: string;
 }
 
 export interface SampleResult {
   readonly ref?: string;
   readonly band?: string;
+  readonly group?: string;
   readonly predicted: Vec2;
   readonly target: Vec2;
   /** |predicted - target| / |target|. */
@@ -235,6 +238,13 @@ export interface TestResult {
       overall and per band. Every point weighs the same, near or far. */
   readonly scores: { readonly law: number; readonly reference: number | null; readonly floor: number | null;
     readonly byBand: Readonly<Record<string, { law: number; reference: number | null; floor: number | null }>> };
+  /** When the noise of what is observed is given (a variance per component, estimated from observables): the median over
+      points of |observed - predicted|² / (2 (σ² + (ε |observed|)²)), overall and per band, ε a declared relative
+      precision. About 1 or less when what is left is noise and the declared precision; a law off by more lies well
+      above. Null without a noise estimate. */
+  readonly chi2: { readonly median: number; readonly byBand: Readonly<Record<string, number>>;
+    /** Per group (e.g. setup), per band. */
+    readonly byGroup: Readonly<Record<string, Readonly<Record<string, number>>>> } | null;
   readonly samples: readonly SampleResult[];
   /** Samples whose prediction failed (a measure or a direction that threw), with the reason. */
   readonly failed: readonly { ref?: string; error: string }[];
@@ -257,7 +267,8 @@ function median(values: readonly number[]): number {
 }
 
 /** Run a predictor (a law's, or an ablation's plain function) over samples. */
-export async function testPredictions<S>(samples: readonly PredictionSample<S>[], predict: (state: S) => Promise<Vec2> | Vec2): Promise<TestResult> {
+export async function testPredictions<S>(samples: readonly PredictionSample<S>[], predict: (state: S) => Promise<Vec2> | Vec2,
+  options: { noiseVariance?: number; relativePrecision?: number } = {}): Promise<TestResult> {
   const results: SampleResult[] = [];
   const truthPairs: { predicted: Vec2; target: Vec2 }[] = [];
   const floorPairs: { predicted: Vec2; target: Vec2 }[] = [];
@@ -268,7 +279,7 @@ export async function testPredictions<S>(samples: readonly PredictionSample<S>[]
     let predicted: Vec2;
     try { predicted = await predict(s.state); } catch (error) { failed.push({ ref: s.ref, error: String((error as Error)?.message ?? error) }); continue; }
     const size = Math.hypot(s.target[0], s.target[1]);
-    results.push({ ref: s.ref, band: s.band, predicted, target: s.target,
+    results.push({ ref: s.ref, band: s.band, group: s.group, predicted, target: s.target,
       error: size > 0 ? Math.hypot(predicted[0] - s.target[0], predicted[1] - s.target[1]) / size : 0, score: scoreOf(predicted, s.target) });
     scored.push(s);
     if (s.truth) { truthPairs.push({ predicted, target: s.truth }); floorPairs.push({ predicted: s.truth, target: s.target }); }
@@ -289,6 +300,14 @@ export async function testPredictions<S>(samples: readonly PredictionSample<S>[]
     floor: floorPairs.length ? relativeError(floorPairs) : null,
     reference: referencePairs.length ? relativeError(referencePairs) : null,
     scores: { ...scoresOf(all), byBand: Object.fromEntries(bands.map((b) => [b, scoresOf(all.filter((i) => results[i].band === b))])) },
+    chi2: options.noiseVariance && options.noiseVariance > 0 ? (() => {
+      const eps = options.relativePrecision ?? 0;
+      const chi = (r: SampleResult) => ((r.target[0] - r.predicted[0]) ** 2 + (r.target[1] - r.predicted[1]) ** 2) /
+        (2 * (options.noiseVariance! + (eps * Math.hypot(r.target[0], r.target[1])) ** 2));
+      const groups = [...new Set(results.map((r) => r.group).filter((g): g is string => !!g))];
+      const perBand = (rs: SampleResult[]) => Object.fromEntries(bands.filter((b) => rs.some((r) => r.band === b)).map((b) => [b, median(rs.filter((r) => r.band === b).map(chi))]));
+      return { median: median(results.map(chi)), byBand: perBand(results), byGroup: Object.fromEntries(groups.map((g) => [g, perBand(results.filter((r) => r.group === g))])) };
+    })() : null,
     samples: results,
     failed
   };

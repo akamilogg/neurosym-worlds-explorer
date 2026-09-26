@@ -22,38 +22,30 @@ export interface TruthStatement {
 
 const f = (n: number, digits = 3): string => Number(n.toPrecision(digits)).toString();
 
-export function describeOrbitTruth(spec: OrbitSpec, sense: OrbitSense): TruthStatement[] {
+export function describeOrbitTruth(spec: OrbitSpec, sense: OrbitSense, options: { varyStrength?: boolean } = {}): TruthStatement[] {
   const { central, velocity } = spec.law;
   const s = spec.frame.scale, dt = spec.dt;
   const probe = sense.probeGlyph;
   const out: TruthStatement[] = [];
-  const sources = sense.sourceGlyphs.join(' and ');
-  out.push({ id: 'sources', statement: `The bodies ${sources} do not move; only the launched body ${probe} does.` });
+  out.push({ id: 'sources', statement: `In every setup, the bodies other than the launched one (${probe}) never move.` });
   const toward = central.k > 0 ? 'toward' : 'away from';
   const r = 'r (the distance from ' + probe + ' to that body, in table units)';
-  /* The profile in table units: d = C · profile(r'), with the constants folded into C. */
-  const profile = (mass: number): string => {
-    const base = s * dt * dt * central.k * mass;
-    switch (central.form) {
-      case 'power': return f(base * Math.pow(s, central.p)) + ' · r^-' + f(central.p);
-      case 'screened': return f(base * Math.pow(s, central.p)) + ' · e^(-r / ' + f(s * (central.lambda ?? 1)) + ') · r^-' + f(central.p);
-      case 'softened': return f(base * Math.pow(s, central.p)) + ' · (r² + ' + f(s * (central.eps ?? 1)) + '²)^-' + f(central.p / 2);
-      case 'anisotropic': return f(base * Math.pow(s, central.p)) + ' · r^-' + f(central.p);
-    }
-  };
-  spec.sources.forEach((src, i) => {
-    out.push({ id: 'central_' + sense.sourceGlyphs[i], statement: `Part of d points ${toward} ${sense.sourceGlyphs[i]}, with size ${profile(src.mass)}, where ${r}.` });
-  });
+  /* The profile in table units: d = C · profile(r'), with the constants folded into C (a source of strength 1). */
+  const base = s * dt * dt * central.k;
+  const profile = central.form === 'power' ? f(base * Math.pow(s, central.p)) + ' · r^-' + f(central.p)
+    : central.form === 'screened' ? f(base * Math.pow(s, central.p)) + ' · e^(-r / ' + f(s * (central.lambda ?? 1)) + ') · r^-' + f(central.p)
+    : central.form === 'softened' ? f(base * Math.pow(s, central.p)) + ' · (r² + ' + f(s * (central.eps ?? 1)) + '²)^-' + f(central.p / 2)
+    : f(base * Math.pow(s, central.p)) + ' · r^-' + f(central.p);
+  const ownStrength = options.varyStrength || new Set(spec.sources.map((x) => x.mass)).size > 1;
+  out.push({ id: 'central', statement: `Each motionless body pulls the launched body ${toward} itself: that part of d has size ` +
+    (ownStrength ? 'M · ' + profile + ', M a strength of its own for each body,' : profile + ', the same for every body in every setup,') + ` where ${r}.` });
+  out.push({ id: 'superposition', statement: 'With several motionless bodies, their parts of d add up (as vectors).' });
   out.push({ id: 'distance_power', statement: `That size falls with distance as a power of r with exponent -${f(central.p)} (not -2), the same power at every distance` +
     (central.form === 'screened' ? ', cut off further by an exponential factor' : central.form === 'softened' ? ', softened near the body (it stays finite as r goes to 0)' : '') + '.' });
   if (central.form === 'anisotropic') {
     const axis = spec.frame.flip ? spec.frame.theta - (central.axis ?? 0) : spec.frame.theta + (central.axis ?? 0);
     const deg = ((axis * 180 / Math.PI) % 180 + 180) % 180;
-    out.push({ id: 'anisotropy', statement: `That size also depends on the direction from the body to ${probe}: it is multiplied by 1 + ${f(central.amp ?? 0)} · cos(2 (φ - ${f(deg)}°)), where φ is the angle of that direction in the table's axes. The environment has a preferred axis.` });
-  }
-  if (spec.sources.length > 1) {
-    const ratio = spec.sources[1].mass / spec.sources[0].mass;
-    out.push({ id: 'source_strength', statement: `The two bodies differ in strength: ${sense.sourceGlyphs[1]} acts ${f(ratio)} times as strongly as ${sense.sourceGlyphs[0]} at the same distance, and the two parts add up.` });
+    out.push({ id: 'anisotropy', statement: `That size also depends on the direction from the body to ${probe}: it is multiplied by 1 + ${f(central.amp ?? 0)} · cos(2 (φ - ${f(deg)}°)), where φ is the angle of that direction in the table's axes. The world has a preferred axis, the same in every setup.` });
   }
   out.push({ id: 'launch_property', statement: central.massExp
     ? `The property m of the launched body matters: the size is multiplied by m^${f(central.massExp)}.`

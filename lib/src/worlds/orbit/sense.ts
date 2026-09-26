@@ -48,8 +48,10 @@ function gaussian(rnd: () => number): number {
 export function tableSense(spec: OrbitSpec, options: OrbitSenseOptions = {}): OrbitSense {
   const rnd = mulberry32(spec.seed * 53 + 11);
   const pool = POOL.slice();
-  const sourceGlyphs = spec.sources.map(() => pool.splice(Math.floor(rnd() * pool.length), 1)[0]);
+  /* The launched body first, then the sources in order: the same symbols in every setup of a family (setups share the
+     seed), however many sources each one has. */
   const probeGlyph = pool.splice(Math.floor(rnd() * pool.length), 1)[0];
+  const sourceGlyphs = spec.sources.map(() => pool.splice(Math.floor(rnd() * pool.length), 1)[0]);
   const resolution = options.resolution ?? 0;
   const windowed = options.window ?? true;
   const sigma = spec.noise * spec.frame.scale;

@@ -151,3 +151,24 @@ test('the environment\'s verdict: per axis, in [-1, 1], 0 where the prediction a
   assert.ok(scoreOf([100, 0], [1, 0])[0] >= -1 && scoreOf([0, 0], [0, 0]).every((v) => v === 0));
   assert.equal(scoreRms([[0.3, 0.4]]), 0.5);
 });
+
+test('acceptance by the noise of what is observed: estimated from the motionless sources, a perfect predictor gives about 1, a law 5% off lies far above', async () => {
+  const { observedNoiseVariance } = await import('../src/worlds/orbit/predict.ts');
+  const trajectories = trialLaunches(spec, { sampling: 'free', attempt: 11, inView: 6, beyond: 3 });
+  const variance = observedNoiseVariance(spec, trajectories);
+  const expected = 6 * (spec.noise * spec.frame.scale) ** 2;
+  assert.ok(Math.abs(variance / expected - 1) < 0.15, 'the sources give the noise of d: ' + variance + ' vs ' + expected);
+  const pts = predictionSamples(spec, trajectories);
+  const perfect = await testPredictions(pts, (s) => pts.find((x) => x.state === s)!.truth!, { noiseVariance: variance });
+  for (const m of Object.values(perfect.chi2!.byBand)) assert.ok(m > 0.3 && m < 1.5, 'noise alone: ' + m);
+  const weak = await testPredictions(pts, (s) => { const t = pts.find((x) => x.state === s)!.reference!; return [0.95 * t[0], 0.95 * t[1]]; }, { noiseVariance: variance });
+  assert.ok(weak.chi2!.byBand.view > 2, 'a law 5% too weak: ' + weak.chi2!.byBand.view);
+  /* With a declared precision of 1%, the hidden law passes with room to spare, a law 1% off passes, one 5% off does not. */
+  const opts = { noiseVariance: variance, relativePrecision: 0.01 };
+  const hidden = await testPredictions(pts, (s) => pts.find((x) => x.state === s)!.reference!, opts);
+  const off1 = await testPredictions(pts, (s) => { const t = pts.find((x) => x.state === s)!.reference!; return [1.01 * t[0], 1.01 * t[1]]; }, opts);
+  const off5 = await testPredictions(pts, (s) => { const t = pts.find((x) => x.state === s)!.reference!; return [0.95 * t[0], 0.95 * t[1]]; }, opts);
+  for (const b of ['view', 'outer']) assert.ok(hidden.chi2!.byBand[b] < 1.2 && off1.chi2!.byBand[b] < 2, b + ': ' + hidden.chi2!.byBand[b] + ', ' + off1.chi2!.byBand[b]);
+  assert.ok(off5.chi2!.byBand.view > 2, '5% off: ' + off5.chi2!.byBand.view);
+  assert.equal((await testPredictions(pts, () => [0, 0])).chi2, null, 'no noise estimate, no chi2');
+});

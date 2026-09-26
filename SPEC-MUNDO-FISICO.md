@@ -321,6 +321,125 @@ su regla vale.
 | La forma del run 2 (ajustada en r = 15) | 0,233 | 0,131 | 0,29 frente a 0,17 | rechazada |
 | La forma verdadera | 0,0815 | 0,0808 | — | aceptada; confirmada con 0,090 y 0,088 |
 
+### 8.4 El operador como investigador: una aceptación sin oráculo (26/09/2026)
+
+**Límite acordado con el usuario:** el operador puede definir qué es ganar, perder o progresar, igual que un investigador
+evalúa sus resultados, pero solo sobre cantidades observables. Nunca usa la verdad oculta para juzgar, ni hace el
+análisis por System 2.
+
+**Qué incumplía la versión anterior:** su aceptación comparaba con la ley oculta, que es la hoja de respuestas.
+
+**Criterio nuevo: residuos compatibles con el error de medida más una precisión declarada.**
+- El ruido σ² de cada componente de *d* se estima solo con lo observable: las fuentes no se mueven, así que las segundas
+  diferencias de sus columnas en las mismas tablas son ruido puro.
+- En cada punto: |d observado − d predicho|² / (2 (σ² + (ε·|d|)²)), con ε = `--precision` (1 % por defecto).
+- Se acepta si la mediana por banda es ≤ `--accept` (2), en la prueba y en los dos conjuntos de confirmación ciega.
+- Se usa la mediana porque un solo paso cercano dispara la media: en la semilla 2 llevaba la de la propia ley oculta a
+  280.
+- Se declara una precisión porque, con un ruido tan bajo, sin ella se exigía ~0,5 % y la ley oculta llegaba a 1,6 en
+  algún conjunto.
+
+**Medido en la semilla 3, sobre cinco conjuntos nuevos, con ε = 1 %:**
+- la ley oculta queda entre 0,10 y 0,98;
+- un 1 % de error en la intensidad pasa (≤ 0,63);
+- un 2 % está en el límite (hasta 1,95);
+- la forma del run 2 y Newton fallan por órdenes de magnitud.
+
+La ley oculta queda solo como medida del operador en el journal.
+
+**Ensayo con LLM falso:**
+
+| Ley | Mediana de χ² (dentro / más allá) | Resultado |
+|---|---|---|
+| Por Jev (juez plano) | 13692 / 45665 | rechazada |
+| La forma del run 2 | 8,7 / 4,0 | rechazada |
+| La forma verdadera, con un 0,5 % de error | 0,32 / 0,86 | aceptada y confirmada (0,30 / 0,55 y 0,53 / 0,83) |
+
+System 2 sigue recibiendo solo el veredicto por punto y si se aceptó.
+
+### 8.5 Validar una ley como un investigador: invariancia entre entornos (26/09/2026)
+
+#### Primeros principios
+
+Un investigador no tiene la ley verdadera para comparar. Tiene su hipótesis, que predice; el mundo, que se observa; y la
+posibilidad de montar experimentos distintos.
+- Una hipótesis se da por buena cuando acierta **predicciones arriesgadas en condiciones en las que no se ajustó**
+  (Popper).
+- En particular, se da por buena cuando se mantiene **invariante al cambiar el montaje**. Lo que se sostiene entre
+  entornos distintos es el mecanismo; lo que no, era ajuste. Es la idea de la predicción invariante en inferencia
+  causal (Peters, Bühlmann y Meinshausen, 2016).
+
+#### Por qué hace falta
+
+Hasta aquí validábamos con lanzamientos nuevos, pero en el mismo mundo: misma fuente, mismo sitio, mismos ejes.
+- Eso dejó pasar ajustes que no son principios. Las leyes de los dos runs escriben la posición de la fuente como
+  constante (`cx = 7.572, cy = 2.271`) y una intensidad propia de esa fuente (640, 2000).
+- Nada les obligaba a la **superposición**: qué pasa con dos fuentes.
+
+#### El criterio
+
+El entorno es una **familia de montajes**, todos regidos por el mismo principio: la forma de la ley y su exponente, que
+salen de la semilla. Una ley se acepta si **predice el estado siguiente en todos los montajes de la prueba y en montajes
+nuevos de confirmación ciega**, nunca vistos. Dentro de cada montaje, "predice" es el criterio observable de §8.4:
+residuos compatibles con el ruido medido en las propias tablas más la precisión declarada. La ley oculta no interviene en
+nada; queda como medida del operador.
+
+#### Qué varía entre montajes, por etapas
+
+| Etapa | Qué varía | Qué obliga a la ley |
+|---|---|---|
+| **1** (implementada) | La posición de cada fuente; el número de fuentes (1 a 3); el giro y el desplazamiento de los ejes de la tabla | Usar posiciones relativas a lo que se ve, no coordenadas memorizadas; sumar las contribuciones de varias fuentes |
+| 2 (`--vary-strength`) | La intensidad ("masa") de cada fuente | **Inferir** la intensidad a partir de lo observado: la ley en código puede leer las filas anteriores de la tabla y estimarla, como se mide la masa de un planeta por la órbita de su luna |
+| 3 (sin hacer) | La escala de los ejes (las unidades) | Nada de constantes en unidades fijas |
+
+Tres cosas se mantienen fijas entre montajes porque forman parte del principio, no del montaje:
+- **La intensidad universal**, en la etapa 1: una sola "G".
+- **La orientación, en las leyes anisótropas (L4):** la dirección privilegiada es una propiedad del mundo, como la vertical.
+- **La reflexión de los ejes:** en L3 una desviación "a la izquierda" se vería a la derecha en un mundo espejado, y eso
+  ya no sería el mismo principio.
+
+#### Cómo lo vive System 2
+
+- Experimenta en los **montajes de laboratorio** (`lab1`, `lab2`) con sus lanzamientos (`"setup": "<id>"`).
+- Su ley se prueba cada ronda en **montajes nuevos**. Sigue recibiendo el veredicto por punto y si se aceptó, y esas
+  tablas pasan a ser datos suyos.
+- El prompt dice que el entorno es una familia de montajes regidos por un mismo principio. Es la premisa del experimento,
+  como en la cuadrícula decir que es un juego; no le dice cuál es el principio.
+
+#### Cómo quedó la etapa 1
+
+- **`worlds/orbit/family.ts`:** `environmentOf(base, index)` genera montajes deterministas: 1 a 3 fuentes dentro de
+  media región observable, separadas entre sí; giro y desplazamiento propios de los ejes. La ley, la escala, la unidad
+  de tiempo y la reflexión se mantienen; la orientación también, si la ley es anisótropa.
+- **El símbolo del cuerpo lanzado es el mismo en todos los montajes.** Se sortea primero, antes que las fuentes.
+- **Laboratorios que difieren:** `lab1` es el mundo base (un cuerpo) y `lab2` un montaje con dos. Si no, System 2 solo
+  descubriría la superposición al suspender una prueba.
+- **La prueba** usa 3 montajes nuevos (`test<ronda><a|b|c>`), con 4 lanzamientos dentro de la región y 2 fuera en cada
+  uno. La confirmación ciega son dos conjuntos más de 3 montajes nuevos.
+- **El criterio es por montaje y por banda:** la ley tiene que sostenerse en cada uno, no en promedio. Con la mediana
+  sobre todos los puntos juntos, un montaje fallido quedaba escondido si los otros tenían un solo cuerpo; lo vimos en el
+  ensayo.
+- **Hacen falta suficientes puntos por montaje** (un punto cada 8 filas y 6 lanzamientos). Con ~15 puntos, unos pocos
+  pasos muy cercanos decidían la mediana, e incluso la ley oculta suspendía 2 de 60 montajes. Con los valores nuevos
+  aprueba los 60, sin necesidad de excluir puntos.
+- **`simulate` escribe las filas en el formato actual de la tabla** (6 decimales, cualquier número de cuerpos). Arrastraba
+  el formato viejo.
+
+**Ensayo con LLM falso (semilla 3):**
+
+| Ley | Resultado |
+|---|---|
+| Por Jev | rechazada |
+| La forma del run 2 | rechazada (5 a 155) |
+| La ley correcta, pero relativa a un solo cuerpo (como la escribieron los dos runs reales) | rechazada en su propia prueba, en el montaje con varios cuerpos (342) |
+| La ley sumada sobre todos los cuerpos | aceptada y confirmada en los 6 montajes ciegos (todos ≤ 0,76) |
+
+#### Riesgos
+
+- **Aprobar será más difícil.** El journal sigue mostrando el progreso: parecido con la ley real y veredictos.
+- **Con varias fuentes hay trayectorias caóticas,** pero la predicción es de un paso, así que el caos no se acumula.
+- **La etapa 2 necesita filas previas** antes de exigir predicciones.
+
 ## 9. Métricas del operador (solo en el journal)
 
 - La ley verdadera y sus parámetros, en el marco percibido.

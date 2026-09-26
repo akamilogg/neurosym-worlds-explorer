@@ -92,7 +92,7 @@ test('operator: the law stated in the learner\'s terms is the law the tables sho
   const { spec } = generateOrbit(3, 1);
   const sense = tableSense(spec);
   const truth = describeOrbitTruth(spec, sense);
-  const stated = truth.find((t) => t.id.startsWith('central_'))!.statement;
+  const stated = truth.find((t) => t.id === 'central')!.statement;
   const [, C, p] = /size ([\d.e+-]+) · r\^-([\d.]+)/.exec(stated)!.map(Number) as number[];
   const trajectories = trialLaunches(spec, { sampling: 'grid', attempt: 1, inView: 3, beyond: 1 });
   for (const s of predictionSamples(spec, trajectories)) {
@@ -106,4 +106,36 @@ test('operator: the law stated in the learner\'s terms is the law the tables sho
   }
   assert.ok(truth.some((t) => t.id === 'launch_property' && /does not matter/.test(t.statement)));
   assert.ok(truth.some((t) => t.id === 'velocity_term' && /does not depend on how fast/.test(t.statement)));
+});
+
+test('a family of setups: the same law, bodies placed and counted differently, axes turned and shifted; the launched body keeps its symbol', async () => {
+  const { environmentOf } = await import('../src/worlds/orbit/family.ts');
+  const { predictionSamples, trialLaunches } = await import('../src/worlds/orbit/predict.ts');
+  const { describeOrbitTruth } = await import('../src/worlds/orbit/describe.ts');
+  const { spec: base } = generateOrbit(3, 1);
+  assert.equal(environmentOf(base, 0), base);
+  assert.deepEqual(environmentOf(base, 7), environmentOf(base, 7), 'deterministic');
+  const counts = new Set<number>();
+  for (let i = 1; i <= 12; i++) {
+    const e = environmentOf(base, i);
+    counts.add(e.sources.length);
+    assert.deepEqual(e.law, base.law, 'the principle stays');
+    assert.equal(e.frame.scale, base.frame.scale);
+    assert.equal(e.frame.flip, base.frame.flip);
+    assert.ok(e.sources.every((s) => s.mass === 1 && Math.hypot(s.pos[0], s.pos[1]) <= base.window / 2));
+    assert.equal(tableSense(e).probeGlyph, tableSense(base).probeGlyph, 'the launched body has the same symbol everywhere');
+  }
+  assert.deepEqual([...counts].sort(), [1, 2, 3]);
+  /* The law stated for the family holds in a setup with several bodies: d is the sum of C r^-p toward each of them. */
+  const e = [...Array(20).keys()].map((i) => environmentOf(base, i + 1)).find((x) => x.sources.length === 3)!;
+  const sense = tableSense(e);
+  const [, C, p] = /size ([\d.e+-]+) · r\^-([\d.]+)/.exec(describeOrbitTruth(base, tableSense(base)).find((t) => t.id === 'central')!.statement)!.map(Number) as number[];
+  const srcs = e.sources.map((s) => toPercept.pos(e.frame, s.pos));
+  for (const s of predictionSamples(e, trialLaunches(e, { sampling: 'free', attempt: 3, inView: 3, beyond: 1 })).slice(0, 30)) {
+    const q = readTable(s.state.table).bodies[sense.probeGlyph], i = s.state.row;
+    const sum = srcs.reduce<number[]>((acc, c) => { const u = [c[0] - q.x[i]!, c[1] - q.y[i]!], r = Math.hypot(u[0], u[1]), m = C * Math.pow(r, -p); return [acc[0] + m * u[0] / r, acc[1] + m * u[1] / r]; }, [0, 0]);
+    const ref = s.reference!;
+    assert.ok(Math.hypot(sum[0] - ref[0], sum[1] - ref[1]) <= 0.02 * Math.hypot(ref[0], ref[1]) + 1e-4, 'superposition: ' + sum + ' vs ' + ref);
+  }
+  assert.ok(environmentOf(base, 5, { varyStrength: true }).sources.some((s) => s.mass !== 1), 'stage 2: strengths of their own');
 });

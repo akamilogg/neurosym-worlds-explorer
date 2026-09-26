@@ -83,6 +83,22 @@ export function trialLaunches(spec: OrbitSpec, options: TrialOptions): Trajector
   return out;
 }
 
+/** The noise of one component of d, estimated ONLY from what is observed: the sources do not move, so the second
+    differences of their columns in the same tables are pure noise (and rounding, with --resolution). A researcher's error
+    bar, not the truth: it uses no hidden quantity. */
+export function observedNoiseVariance(spec: OrbitSpec, trajectories: readonly Trajectory[], options: OrbitSenseOptions = {}): number {
+  const sense = tableSense(spec, { resolution: options.resolution, window: false });
+  let sum = 0, n = 0;
+  for (const tr of trajectories) {
+    const t = readTable(sense.render(tr));
+    for (const g of sense.sourceGlyphs) for (const axis of ['x', 'y'] as const) {
+      const c = t.bodies[g][axis];
+      for (let i = 1; i + 1 < c.length; i++) { const d = c[i + 1]! - 2 * c[i]! + c[i - 1]!; sum += d * d; n++; }
+    }
+  }
+  return n ? sum / n : 0;
+}
+
 export interface SampleOptions extends OrbitSenseOptions {
   /** Take every k-th usable row (default 8), to keep the number of questions to the Judge bounded. */
   readonly every?: number;

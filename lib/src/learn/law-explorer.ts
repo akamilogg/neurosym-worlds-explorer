@@ -33,6 +33,7 @@ type PromptLine = string | readonly [readonly LawTool[], string] | ((t: Tools) =
 const LAW_LINES: readonly PromptLine[] = [
   'You are a research scientist and mathematician. Your working disciplines include analysis and algebra, statistics and information theory - and whatever else proves applicable - and you use them explicitly: you name the formal object you are reasoning about, you state hypotheses as claims that can be checked, and you choose each experiment for the information it will yield.',
   'You face an environment nobody has described to you. Some bodies move in a plane. You perceive it ONLY as tables of positions over time, one table per launch: the body you launched (the LAST symbol of each table) and the other bodies that are there. You are told nothing else: not why anything moves, not what the symbols are, not the units of anything. Positions carry some noise, and a body is not seen when it is far from the region you observe.',
+  'The environment is not one place but a FAMILY of SETUPS, all governed by the same principle: in each setup the other bodies are placed differently, there may be more or fewer of them, and the table\'s axes are turned and shifted differently. `setups` lists the ones you know; you can launch only in your laboratory setups. A law is what holds in every setup.',
   'YOUR TASK is to write a LAW that predicts, at any row of any table, how far the NEXT position of the launched body departs from simply repeating its last step: the vector d = p(next) - 2·p(now) + p(previous), in the units of the table. Nobody will tell you what the law is: everything you learn, you find out yourself.',
   'A law has three parts:',
   '  - OBSERVATIONS: small deterministic JavaScript functions over the table up to the current row (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge.',
@@ -40,14 +41,14 @@ const LAW_LINES: readonly PromptLine[] = [
   '  - COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is carried by one of two: either the JUDGE - it is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders) - or CODE, `(p) => number`, in the units of the table, and then the judge is not asked for that component.',
   'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your law says.',
   '',
-  'Every round your law is TESTED on launches you have never seen - some of them starting beyond the region you observe. For every point of those launches, the environment gives its VERDICT: a pair of numbers from -1 to 1, one per axis of the table; 0 on an axis means no difference along it between your prediction and what happened there. What the rest of the range means is for you to work out. You also learn whether the environment accepted your law. After the test, those launches are yours to study like any other.',
+  'Every round your law is TESTED on launches you have never seen, in setups you have never seen - some of them starting beyond the region you observe. For every point of those launches, the environment gives its VERDICT: a pair of numbers from -1 to 1, one per axis of the table; 0 on an axis means no difference along it between your prediction and what happened there. What the rest of the range means is for you to work out. You also learn whether the environment accepted your law. After the test, those launches are yours to study like any other.',
   '',
   'YOUR NOTEBOOK (the `notebook` field) is yours: your beliefs and their history, the notes you chose to write, the index of launches, every law you tried with its results, and your own lessons and planned next experiment. Nothing is added to it for you except the facts of what you did and how your laws predicted. A note can cite launches as "<launch>" and points of them as "<launch>@<row>".',
   'Every round, take a stance on EVERY belief you still hold: "keep", "revise" (give the new statement), "confirm" (the evidence settled it) or "drop" (the evidence refuted it); add new ones with "new". Cite the evidence: launches, points, rounds.',
   '',
   [['view', 'inspect', 'launch', 'measure', 'simulate', 'table'], 'INVESTIGATE before proposing. Instead of a proposal you may answer {"investigate": [ ...requests ], "notes": [ ...optional ]}; the results come back in `investigation`, and `steps_left` says how many more such answers you have this round. Requests:'],
   [['view'], '  {"view": "<launch>", "from": <row>, "to": <row>}   rows of one of your tables (at most 60 per request)'],
-  [['launch'], '  {"launch": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>}}   LAUNCH a body yourself: from the position (x, y) of the table\'s frame, moving at first by (vx, vy) per unit of the table\'s time; "m" is a positive property of the body you choose (default 1). You get its table (named "launch<n>"). A launch from outside the region you observe, or onto another body, is refused, and you are not told why. It is how you TEST an idea directly: two launches that differ in one thing isolate the effect of that thing. At most `launches_left` this round.'],
+  [['launch'], '  {"launch": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>, "setup": "<laboratory setup>"}}   LAUNCH a body yourself, in one of your laboratory setups (default: the first): from the position (x, y) of that setup\'s table frame, moving at first by (vx, vy) per unit of the table\'s time; "m" is a positive property of the body you choose (default 1). You get its table (named "launch<n>"). A launch from outside the region you observe, or onto another body, is refused, and you are not told why. It is how you TEST an idea directly: two launches that differ in one thing isolate the effect of that thing. At most `launches_left` this round.'],
   [['inspect'], '  {"inspect": "<launch>@<row>", "law": <round> | <draft> }   what a law (without "law": your latest) predicts at that point, part by part: each component\'s direction, its magnitude and the judge\'s answer behind it, what each rule answered and what each observation measured there - and what was observed'],
   [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<launch>@<row>", ...]}   the value of that code at those points (without "range": the text it composes, as the judge would read it)'],
   [['simulate'], '  {"simulate": "<launch>@<row>", "law": <round> | <draft>, "rows": <n>}   run a law forward from that point: each next position is the current one plus the last step plus the law\'s predicted d, row after row (at most 40), next to what was observed there if anything was. Nothing it simulates is a test of your law.'],
@@ -110,6 +111,8 @@ export interface LawExplorerBrief {
   readonly investigation?: readonly unknown[];
   readonly stepsLeft?: number;
   readonly launchesLeft?: number;
+  /** The setups of the family it knows: its laboratories, and the tests' so far. */
+  readonly setups?: readonly unknown[];
   readonly refused?: readonly string[];
   readonly directive?: string | null;
   readonly task?: string | null;
@@ -144,6 +147,7 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.launchesLeft !== undefined ? { launches_left: brief.launchesLeft } : {}),
+    ...(brief.setups && brief.setups.length ? { setups: brief.setups } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
     ...(brief.directive ? { operator_directive: brief.directive } : {}),
     ...(brief.task ? { task: brief.task } : {})
@@ -227,7 +231,7 @@ export function parseLawProposal(content: string, context: { world: string; lang
 export type LawRequest =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string; readonly law: number | Law | null }
-  | { readonly launch: { readonly x: number; readonly y: number; readonly vx: number; readonly vy: number; readonly m: number } }
+  | { readonly launch: { readonly x: number; readonly y: number; readonly vx: number; readonly vy: number; readonly m: number; readonly setup?: string } }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   | { readonly simulate: string; readonly law: number | Law | null; readonly rows: number }
   | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'launches' | 'tests' };
@@ -269,7 +273,7 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
         const [x, y, vx, vy] = [num(l.x), num(l.y), num(l.vx), num(l.vy)];
         const m = l.m === undefined ? 1 : num(l.m);
         if (x === null || y === null || vx === null || vy === null || m === null || !(m > 0)) { warnings.push('request #' + i + ': launch needs numbers x, y, vx, vy (and a positive m)'); continue; }
-        requests.push({ launch: { x, y, vx, vy, m } });
+        requests.push({ launch: { x, y, vx, vy, m, ...(typeof l.setup === 'string' ? { setup: l.setup } : {}) } });
       } else if (typeof q.inspect === 'string') {
         const law = lawOf(q.law, i, 'inspect');
         if (law === undefined) continue;
