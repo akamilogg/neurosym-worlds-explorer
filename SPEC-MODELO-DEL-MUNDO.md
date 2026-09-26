@@ -1,8 +1,8 @@
 # SPEC · El modelo del mundo: descubrir las reglas y validarlas como un investigador
 
 **Fichero:** `SPEC-MODELO-DEL-MUNDO.md`
-**Estado (26/09/2026):** propuesta. La parte del mundo físico está implementada (`SPEC-MUNDO-FISICO.md` §8.4–8.5,
-commit `9656ef2`); la de la cuadrícula, sin implementar.
+**Estado (26/09/2026):** la parte del mundo físico está implementada (`SPEC-MUNDO-FISICO.md` §8.4–8.5, commit
+`9656ef2`). De la cuadrícula está hecha G1 (la familia de tableros) y la calibración de §7; G2 a G5 están pendientes.
 
 ---
 
@@ -28,6 +28,18 @@ verdadera a mano:
 | **Qué se mantiene** | la ley, la escala, la unidad de tiempo, la reflexión (y el giro, si la ley es anisótropa) | los vectores de movimiento, las condiciones de victoria, la forma del tablero, el límite de jugadas y la orientación de la imagen |
 | **Veredicto por predicción** | desviación por eje en [−1, 1] | acierto o fallo de cada movimiento y de cada final |
 | **Aceptación** | compatible con el ruido observado más la precisión declarada, en cada montaje | **exacta**: el mundo es determinista, así que todo tiene que coincidir en cada montaje |
+
+### 1.1 El protocolo, igual en los dos mundos (acordado el 26/09/2026)
+
+1. **Un montaje.** System 2 empieza en un solo montaje (el laboratorio: en la cuadrícula, el tablero base). Cada ronda,
+   su modelo se comprueba allí en casos que no ha visto.
+2. **Él decide cuándo validar.** Si su modelo se sostiene en todos sus laboratorios, se valida en una familia finita de
+   montajes que no ha visto, más una regresión en sus laboratorios. Hay un presupuesto de validaciones; pedir una antes
+   de tiempo se rechaza sin gastarla.
+3. **El montaje donde falla pasa a ser laboratorio**, para estudiarlo.
+4. **Cuando se sostiene en toda la familia,** la confirmación ciega en montajes nunca vistos decide la aceptación.
+
+Implementado en el mundo físico (`SPEC-MUNDO-FISICO.md` §8.6). En la cuadrícula, las fases G3 y G4 lo siguen.
 
 ## 2. La cuadrícula: el artefacto de reglas
 
@@ -116,6 +128,26 @@ mundo físico su ley es su modelo. Entonces unas reglas equivocadas harían perd
    otro tamaño.
 3. **Unas reglas con un movimiento de menos** (por ejemplo, olvidar un paso hacia atrás del rival, como en el run 7)
    fallan.
+
+### 7.1 Resultado de la calibración (G1)
+
+- **`worlds/grid/family.ts`:** `boardOf(base, index)` genera tableros con el tamaño (5 a 8), el número de piezas y la
+  salida propios de cada uno, filtrados por jugabilidad. Se mantienen las reglas, la forma, el límite de jugadas y, a
+  través de la semilla, la orientación de la imagen y los símbolos.
+- **`worlds/grid/rules-check.ts`:**
+  - `verdictAt` y `checkRulesAt` dan la respuesta del mundo a unas reglas en una posición: movimientos rechazados, el
+    número de movimientos no predichos y si el final coincide;
+  - `trueRulesSource`, solo para el operador, escribe las reglas verdaderas como las escribiría un aprendiz, relativas
+    al tablero que se ve.
+- **Las reglas verdaderas aciertan en todas las posiciones** de partidas al azar en 60 tableros de las semillas 22, 26 y 4
+  (más de 1000 posiciones por semilla). Las reglas "de un solo tablero" (con el tamaño del tablero base fijo) fallan en
+  más de 10 de los 60.
+- **Hallazgo: solo se puede validar lo que el mundo muestra.** En la semilla 26, el otro bando tiene un movimiento que
+  siempre lo sacaría del tablero (empieza en la última fila y ese vector baja), así que nunca ocurre. Unas reglas que lo
+  omiten predicen exactamente lo mismo que las verdaderas y aprueban, y es correcto: son indistinguibles por
+  observación. El test exige, en cambio, que olvidar un movimiento que sí ocurre falle.
+- **Sesgo del filtro, a vigilar:** en la semilla 22 casi todos los tableros admitidos tienen 5 o 6 filas, porque en los
+  más altos el juego al azar casi nunca gana por encierro. Aun así, los tableros difieren en ancho, piezas y salida.
 
 ## 8. Plan
 
