@@ -16,13 +16,13 @@
      --epsilon X         the opponent errs with this probability, seeded per game (default 0.15)
      --probe-positions N labelled positions a probe is measured on, at most (default 40)
      --steps N           investigation answers System 2 may give per round before proposing (default 3)
-     --plays N           games System 2 may play itself per round with the "play" request (default 4): its laboratory,
+     --plays N           episodes System 2 may run itself per round with the "replay" request (default 4): its laboratory,
                          from any position of its games, with any of its formulas or a draft; never on the scoreboard
      --reveal-choices    inspect also shows every position the search considered (default: only the one it chose; the
                          learner finds out what else was possible by TRYING changes against the environment)
      --variants N        generalization: games from N starting positions never played, every trial (default 7; 0 = off).
                          Accepting a formula requires winning them too.
-     --tools a,b,...     the instruments System 2 is given (default: all = view,inspect,try,measure,play,table,probes;
+     --tools a,b,...     the instruments System 2 is given (default: all = view,inspect,act,measure,replay,table,probes - "try" and "play" are accepted too;
                          "none" = none of them). The BASELINE: without them the prompt says nothing of them and any
                          request for one is refused - to measure what the instruments add, the same seed, model and
                          budget with and without.
@@ -54,6 +54,7 @@ import { runAttempts, type AttemptScore, type TrialGame } from '../src/learn/loo
 import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type ActionSample, type LabelledPosition, type Probe } from '../src/learn/experiments.ts';
 import { ceilingOf, tightness } from '../src/worlds/grid/informed.ts';
 import { variantStarts } from '../src/worlds/grid/variants.ts';
+import { reflectionTask, toolOf } from '../src/learn/prompt.ts';
 import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../src/learn/explorer.ts';
 import { Notebook, type GameRecord } from '../src/learn/notebook.ts';
 import { recordTurn, surprises, type TurnRecord } from '../src/learn/exploration.ts';
@@ -93,7 +94,7 @@ const cfg = {
 function parseTools(value: string): ExplorerTool[] {
   if (value === 'all') return [...EXPLORER_TOOLS];
   if (value === 'none') return [];
-  const asked = value.split(',').map((t) => t.trim()).filter(Boolean);
+  const asked = value.split(',').map((t) => t.trim()).filter(Boolean).map((t) => toolOf(t) ?? t);
   const unknown = asked.filter((t) => !(EXPLORER_TOOLS as readonly string[]).includes(t));
   if (unknown.length) { console.error('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + EXPLORER_TOOLS.join(', ') + ', or all / none)'); process.exit(2); }
   return EXPLORER_TOOLS.filter((t) => asked.includes(t));
@@ -223,6 +224,8 @@ const games = new Map<string, StoredGame>();
 const notebook = new Notebook();
 let gameCounter = 0;
 const resultOf = (winner: string | null): GameRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
+/** What System 2 is told of how an episode ended: the score of the interface, never a word of a game. */
+const scoreOfResult = (r: string): number => (r === 'won' ? 1 : r === 'lost' ? -1 : 0);
 const valueOfResult = (r: GameRecord['result']): number => (r === 'won' ? 1 : r === 'lost' ? 0 : 0.5);
 
 function store(round: number, how: string, states: GridState[], winner: string | null, turns = new Map<number, TurnRecord<GridState>>()): StoredGame {
@@ -238,7 +241,7 @@ const tries: GridState[] = [];
 /** "g3@4" is the position at turn 4 of game g3; "g3@4/2" a position its search considered on that turn (only the one
     it chose, unless --reveal-choices); "try5" the result of the learner's fifth accepted try. */
 function resolve(ref: string): GridState | null {
-  const t = /^try(\d+)$/.exec(ref.trim());
+  const t = /^(?:act|try)(\d+)$/.exec(ref.trim());
   if (t) return tries[Number(t[1]) - 1] ?? null;
   const m = /^(g\d+)@(\d+)(?:\/(\d+))?$/.exec(ref.trim());
   const g = m ? games.get(m[1]) : undefined;
@@ -258,7 +261,7 @@ async function explore(): Promise<void> {
       const moves = world.actions(s);
       return moves[Math.floor(rnd() * moves.length)];
     });
-    const stored = store(0, 'exploration: your side moved at random', ep.states, ep.outcome.winner);
+    const stored = store(0, 'the environment: your steps chosen at random', ep.states, ep.outcome.winner);
     log('exploration_game', { game: stored.id, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1 });
   }
 }
@@ -309,7 +312,7 @@ async function trial(formula: Formula, attempt: number, using: Evaluator<GridSta
     results.push({ outcome: ep.outcome.winner === 'A' ? 'win' : ep.outcome.winner === 'B' ? 'loss' : 'draw', plies: ep.states.length - 1 });
     held.push(knownThroughout || critical !== null ? stillWinning : null);
     criticals.push(critical);
-    if (record) stored.push(store(round, 'your formula of round ' + round + (plan.start ? ', from a starting position you had not played' : ''), ep.states, ep.outcome.winner, turns));
+    if (record) stored.push(store(round, 'your model of round ' + round + (plan.start ? ', from a start you had not seen' : ''), ep.states, ep.outcome.winner, turns));
     say(tag + 'attempt ' + attempt + ' ' + plan.label + ': ' + (ep.outcome.winner ?? 'none') + ' by ' + ep.outcome.reason + ' after ' + (ep.states.length - 1) +
       ' turns [operator: still winning for ' + (held[held.length - 1] ?? '?') + ' turns' + (critical !== null ? ', thrown at ' + critical : '') + ']' +
       ' (' + Math.round((Date.now() - t0) / 1000) + ' s' + (record ? ', Jev calls ' + judge.stats.calls : '') + ')');
@@ -390,8 +393,8 @@ const picture = (s: GridState): string => sense.render(s);
 let playCounter = 0;
 async function play(from: string, formula: Formula, how: string): Promise<unknown> {
   const start = resolve(from);
-  if (!start) return { play: from, error: 'no such position' };
-  if (world.outcome(start).over) return { play: from, error: 'that game is already over there' };
+  if (!start) return { replay: from, error: 'no such point' };
+  if (world.outcome(start).over) return { replay: from, error: 'that episode has already ended there' };
   const rnd = mulberry32(cfg.seed * 3571 + (++playCounter) * 131 + level * 1_000_003);
   const opponent = noisyOpponent(world, (s) => planner.respond(s), cfg.epsilon, rnd);
   const turns = new Map<number, TurnRecord<GridState>>();
@@ -403,51 +406,51 @@ async function play(from: string, formula: Formula, how: string): Promise<unknow
     turns.set(turn, await recordTurn(evaluator, world, s, chosen, { formula, depth: cfg.depth, maximizer: 'A', turn }));
     return chosen;
   }, { start });
-  const g = store(currentRound, 'you played it: ' + how + ', from ' + from, ep.states, ep.outcome.winner, turns);
+  const g = store(currentRound, 'your replay: ' + how + ', from ' + from, ep.states, ep.outcome.winner, turns);
   log('played_by_the_learner', { round: currentRound, game: g.id, from, how, result: g.result, turns: ep.states.length - 1, reason: ep.outcome.reason,
     ...(roundOf.has(formula) ? {} : { draft: formula }) });
-  return { play: from, with: how, game: g.id, result: g.result, turns: ep.states.length - 1 };
+  return { replay: from, with: how, episode: g.id, score: scoreOfResult(g.result), steps: ep.states.length - 1 };
 }
 
 async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { left: number }): Promise<unknown> {
   /* An instrument withheld by the experiment is refused, never run. */
-  const kind = (['view', 'inspect', 'try', 'measure', 'play', 'table'] as const).find((k) => k in req)!;
+  const kind = (['view', 'inspect', 'act', 'measure', 'replay', 'table'] as const).find((k) => k in req)!;
   if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
-  if ('play' in req) {
-    if (plays.left <= 0) return { play: req.play, error: 'no games left to play this round' };
+  if ('replay' in req) {
+    if (plays.left <= 0) return { replay: req.replay, error: 'no replays left this round' };
     const formula = req.formula === null ? base : typeof req.formula === 'number' ? formulaOfRound.get(req.formula) ?? null : req.formula;
-    if (!formula) return { play: req.play, error: req.formula === null ? 'you have no formula yet: write a draft' : 'no formula of round ' + req.formula };
+    if (!formula) return { replay: req.replay, error: req.formula === null ? 'you have no model yet: write a draft' : 'no model of round ' + req.formula };
     if (typeof req.formula === 'object' && req.formula !== null) {
       const recent = [...games.values()].flatMap((g) => g.states).slice(-60);
       const failures = replayOnEvidence(observer, formula.observations, recent.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
-      if (failures.length) return { play: req.play, error: 'an observation of your draft failed on positions of your games: ' + failures.join(' | ') };
+      if (failures.length) return { replay: req.replay, error: 'an observation of your draft failed on points of your episodes: ' + failures.join(' | ') };
     }
     plays.left--;
-    const how = req.formula === null ? 'your best formula' + (base && roundOf.has(base) ? ' (round ' + roundOf.get(base) + ')' : '')
-      : typeof req.formula === 'number' ? 'your formula of round ' + req.formula : 'a draft formula';
-    return play(req.play, formula, how);
+    const how = req.formula === null ? 'your_model' + (base && roundOf.has(base) ? ' (round ' + roundOf.get(base) + ')' : '')
+      : typeof req.formula === 'number' ? 'your model of round ' + req.formula : 'a draft model';
+    return play(req.replay, formula, how);
   }
   if ('view' in req) {
     const g = games.get(req.view);
-    if (!g) return { view: req.view, error: 'no such game' };
-    const frames = g.states.map((s, turn) => ({ turn, picture: picture(s) })).slice(Math.max(0, req.from), Math.max(0, req.to) + 1);
-    return { view: g.id, result: g.result, turns: g.states.length - 1, frames };
+    if (!g) return { view: req.view, error: 'no such episode' };
+    const frames = g.states.map((s, step) => ({ step, picture: picture(s) })).slice(Math.max(0, req.from), Math.max(0, req.to) + 1);
+    return { view: g.id, score: scoreOfResult(g.result), steps: g.states.length - 1, frames };
   }
   if ('inspect' in req) {
     const m = /^(g\d+)@(\d+)$/.exec(req.inspect.trim());
     const g = m ? games.get(m[1]) : undefined;
-    if (!m || !g) return { inspect: req.inspect, error: 'use "<game>@<turn>" with a game from your notebook' };
+    if (!m || !g) return { inspect: req.inspect, error: 'use "<episode>@<step>" with an episode from your notebook' };
     const t = g.turns.get(Number(m[2]));
-    if (!t) return { inspect: req.inspect, error: g.turns.size ? 'your search did not choose on that turn (it is not one of your turns); your turns here: ' + [...g.turns.keys()].join(', ') : 'in this game your side moved at random: nothing was searched' };
+    if (!t) return { inspect: req.inspect, error: g.turns.size ? 'your search did not choose at that step (it is not one of yours); yours here: ' + [...g.turns.keys()].join(', ') : 'in this episode your steps were chosen at random: nothing was searched' };
     const describe = (c: TurnRecord<GridState>['choices'][number], k: number) => ({ name: req.inspect + '/' + k, picture: picture(c.state),
       value_looking_ahead: c.lookahead, value_directly: c.direct,
       /* Its own formula taken apart: the answer of each rule and the value of each observation behind value_directly. */
       ...(Object.keys(c.rules).length ? { each_rule_answered: c.rules } : {}),
       ...(Object.keys(c.measures).length ? { your_observations_measured: c.measures } : {}),
-      finished_games_your_search_ran_into: { you_won: c.endingsWon, the_other_side_won: c.endingsLost } });
+      finished_episodes_your_search_ran_into: { scored_1: c.endingsWon, scored_minus_1: c.endingsLost } });
     const k = t.choices.findIndex((c) => c.chosen);
     return {
-      inspect: req.inspect, position: picture(t.state), your_search_value: t.value,
+      inspect: req.inspect, point: picture(t.state), your_search_value: t.value,
       chose: k >= 0 ? describe(t.choices[k], k) : null,
       /* Only with --reveal-choices: otherwise the learner finds out what was possible by trying. */
       ...(cfg.revealChoices ? { also_considered: t.choices.map((c, j) => ({ c, j })).filter(({ c }) => !c.chosen).map(({ c, j }) => describe(c, j)) } : {})
@@ -459,33 +462,33 @@ async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { l
     const rows = (await probeSet()).filter((p) => !!p.final === (req.on === 'final')).map((p) => {
       const o = observer.observe(p.state, { ...SENSES, m: decl });
       const err = o.errors.find((e) => e.id === 'm');
-      return { position: p.ref, game_score: p.score, ...(err ? { error: err.error } : { value: o.values.m }) };
+      return { point: p.ref, episode_score: p.score, ...(err ? { error: err.error } : { value: o.values.m }) };
     });
     return { table: req.table.source, on: req.on, rows };
   }
-  if ('try' in req) {
-    const s = resolve(req.try);
-    if (!s) return { try: req.try, error: 'no such position' };
-    if (world.outcome(s).over || s.turn !== 'A') return { try: req.try, error: 'it is not your turn in that position' };
+  if ('act' in req) {
+    const s = resolve(req.act);
+    if (!s) return { act: req.act, error: 'no such point' };
+    if (world.outcome(s).over || s.turn !== 'A') return { act: req.act, error: 'the next step there is not yours' };
     const from = sense.locate(req.from[0], req.from[1]), to = sense.locate(req.to[0], req.to[1]);
     /* The environment answers only allowed or not: never why. */
     const move = from && to ? world.actions(s).find((m) => m.from[0] === from[0] && m.from[1] === from[1] && m.to[0] === to[0] && m.to[1] === to[1]) : undefined;
-    if (!move) return { try: req.try, from: req.from, to: req.to, allowed: false };
+    if (!move) return { act: req.act, from: req.from, to: req.to, accepted: false };
     const after = world.step(s, move);
     tries.push(after);
     /* What anyone who makes the move sees: whether the game ended there, and who won. Never why. */
     const outcome = world.outcome(after);
-    return { try: req.try, from: req.from, to: req.to, allowed: true, name: 'try' + tries.length, picture: picture(after),
-      game_ended: outcome.over ? (outcome.winner === 'A' ? 'you won' : outcome.winner === 'B' ? 'you lost' : 'draw') : false };
+    return { act: req.act, from: req.from, to: req.to, accepted: true, name: 'act' + tries.length, picture: picture(after),
+      episode_ended: outcome.over ? { score: outcome.winner === 'A' ? 1 : outcome.winner === 'B' ? -1 : 0 } : false };
   }
   const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, ...(req.measure.range ? { range: req.measure.range } : {}) };
   return {
     measure: req.measure.source, values: req.on.map((ref) => {
       const s = resolve(ref);
-      if (!s) return { position: ref, error: 'no such position' };
+      if (!s) return { point: ref, error: 'no such point' };
       const o = observer.observe(s, { ...SENSES, m: decl });
       const err = o.errors.find((e) => e.id === 'm');
-      return err ? { position: ref, error: err.error } : { position: ref, value: o.values.m ?? o.texts.m };
+      return err ? { point: ref, error: err.error } : { point: ref, value: o.values.m ?? o.texts.m };
     })
   };
 }
@@ -493,20 +496,19 @@ async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { l
 /** How each of its formulas did (facts of its own games), with the best and the latest named. */
 function scoreboard(): unknown {
   const rows = notebook.rounds.filter((r) => r.games.length).map((r) => ({ round: r.round, fingerprint: r.fingerprint,
-    wins: r.games.reduce((a, g) => a + g.wins, 0), of: r.games.reduce((a, g) => a + g.of, 0) }));
+    scored_1: r.games.reduce((a, g) => a + g.wins, 0), episodes: r.games.reduce((a, g) => a + g.of, 0) }));
   if (!rows.length) return null;
-  const best = rows.reduce((a, b) => (b.wins / b.of > a.wins / a.of ? b : a));
+  const best = rows.reduce((a, b) => (b.scored_1 / b.episodes > a.scored_1 / a.episodes ? b : a));
   return { by_round: rows, best: best, latest: rows[rows.length - 1] };
 }
 
 function latestSurprises(): unknown {
   const latest = lastScore?.stored ?? [];
-  return latest.map((g) => ({ game: g.id, result: g.result, where_your_search_was_most_wrong: surprises([...g.turns.values()], valueOfResult(g.result)) }));
+  return latest.map((g) => ({ episode: g.id, score: scoreOfResult(g.result), where_your_search_was_most_wrong: surprises([...g.turns.values()], valueOfResult(g.result))
+    .map(({ turn, next, ...rest }) => ({ step: turn, next, ...rest })) }));
 }
 
-const REFLECTION_TASK = 'REFLECTION ROUND. Your formula is final: do not propose one. Look back at your games' + (investigative ? ' (you may investigate first)' : '') + ' and '
-  + 'answer with {"rationale": ..., "beliefs": [stances on every belief you hold, and any new ones], "notes": [...], "lessons": [...], "next_experiment": ...}: '
-  + 'what you now believe about this environment - how it works, how each side wins, and why your formula won or lost - citing your evidence.';
+const REFLECTION_TASK = reflectionTask(investigative);
 
 /* Set when the LLM service refuses the account itself (no credit, bad key): nothing further can be asked of System 2. */
 let llmFatal: string | null = null;
@@ -524,7 +526,7 @@ async function propose(from: Formula | null, directive: string | null = null, mo
     const payload = explorerPayload({
       round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(), scoreboard: scoreboard(),
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-      hypotheses: registry.current(), ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('play') ? { playsLeft: plays.left } : {}),
+      hypotheses: registry.current(), ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
       refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null
     });
     say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
@@ -556,12 +558,12 @@ async function propose(from: Formula | null, directive: string | null = null, mo
       const results: unknown[] = [];
       for (const r of turn.requests) results.push(await runRequest(r, from, plays));
       /* A draft travels back as it wrote it, never as the host's formula object. */
-      const asWritten = turn.requests.map((r) => 'play' in r && r.formula !== null && typeof r.formula === 'object' ? { play: r.play, formula: ownFormula(r.formula) } : r);
+      const asWritten = turn.requests.map((r) => 'replay' in r && r.formula !== null && typeof r.formula === 'object' ? { replay: r.replay, model: ownFormula(r.formula) } : r);
       investigation.push({ step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
       log('investigation', { round, requests: turn.requests, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
       say('  investigates: ' + turn.requests.map((r, i) => 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
-        : 'try' in r ? 'try ' + r.try + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { allowed?: boolean }).allowed ? ' allowed' : ' refused')
-        : 'play' in r ? 'play from ' + r.play + ' -> ' + ((results[i] as { result?: string; error?: string }).result ?? (results[i] as { error?: string }).error)
+        : 'act' in r ? 'act ' + r.act + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { accepted?: boolean }).accepted ? ' accepted' : ' refused')
+        : 'replay' in r ? 'replay from ' + r.replay + ' -> ' + ((results[i] as { score?: number; error?: string }).score ?? (results[i] as { error?: string }).error)
         : 'table' in r ? 'table on ' + r.on : 'measure on ' + r.on.length).join('; '));
       refused = [];
       continue;

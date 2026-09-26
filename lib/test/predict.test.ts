@@ -30,7 +30,7 @@ const { k, p } = spec.law.central;
 const K = spec.frame.scale * k * spec.dt * spec.dt;
 const mags = samples.map((s) => Math.hypot(s.truth![0], s.truth![1]));
 const [lo, hi] = [Math.min(...mags) / 2, Math.max(...mags) * 2];
-const last = "const g = p.symbols, i = p.t.length - 1, s = p.bodies[g[0]], q = p.bodies[g[g.length - 1]];";
+const last = "const g = p.symbols, i = p.t.length - 1, s = p.series[g[0]], q = p.series[g[g.length - 1]];";
 const exact: Law = {
   world: 'orbit@1',
   observations: {

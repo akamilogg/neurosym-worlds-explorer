@@ -45,7 +45,7 @@ test('the learner\'s frame: positions and velocities go there and back, and a la
   const asked: Vec2 = toPercept.pos(f, [4, 1]);
   const tr = simulate(quiet, 'l1', { pos: fromPercept.pos(f, asked), vel: fromPercept.vel(f, [0, 0]), mass: 1 });
   const seen = readTable(tableSense(quiet).render(tr));
-  const probe = seen.bodies[tableSense(quiet).probeGlyph];
+  const probe = seen.series[tableSense(quiet).probeGlyph];
   assert.ok(close(probe.x[0]!, asked[0], 1e-3) && close(probe.y[0]!, asked[1], 1e-3));
 });
 
@@ -69,11 +69,11 @@ test('--resolution rounds what is perceived; outside the observable region the p
   const { spec } = generateOrbit(2, 1);
   const tr = sampleLaunches(spec, 1, 5, 'view')[0];
   const coarse = readTable(tableSense(spec, { resolution: 0.5 }).render(tr));
-  for (const g of coarse.symbols) for (const v of [...coarse.bodies[g].x, ...coarse.bodies[g].y]) if (v !== null) assert.ok(close(v / 0.5, Math.round(v / 0.5), 1e-9));
+  for (const g of coarse.symbols) for (const v of [...coarse.series[g].x, ...coarse.series[g].y]) if (v !== null) assert.ok(close(v / 0.5, Math.round(v / 0.5), 1e-9));
   const far = simulate(spec, 'far', { pos: [14, 0], vel: [0, 0.3], mass: 1 });
   const glyph = tableSense(spec).probeGlyph;
-  assert.equal(readTable(tableSense(spec).render(far)).bodies[glyph].x[0], null);
-  assert.notEqual(readTable(tableSense(spec, { window: false }).render(far)).bodies[glyph].x[0], null);
+  assert.equal(readTable(tableSense(spec).render(far)).series[glyph].x[0], null);
+  assert.notEqual(readTable(tableSense(spec, { window: false }).render(far)).series[glyph].x[0], null);
 });
 
 test('operator: Newton fits a Newtonian law exactly and misses a generated one; rounding raises the noise floor', () => {
@@ -99,7 +99,7 @@ test('operator: the law stated in the learner\'s terms is the law the tables sho
     const row = s.state.row;
     const seen = readTable(s.state.table);
     const src = toPercept.pos(spec.frame, spec.sources[0].pos);
-    const probe: Vec2 = [seen.bodies[sense.probeGlyph].x[row]!, seen.bodies[sense.probeGlyph].y[row]!];
+    const probe: Vec2 = [seen.series[sense.probeGlyph].x[row]!, seen.series[sense.probeGlyph].y[row]!];
     const r = Math.hypot(probe[0] - src[0], probe[1] - src[1]);
     const size = Math.hypot(s.reference![0], s.reference![1]);
     assert.ok(close(size, C * Math.pow(r, -p), 0.02 + 5 * spec.noise * spec.frame.scale / r), 'at r = ' + r.toFixed(2) + ': ' + size + ' vs ' + C * Math.pow(r, -p));
@@ -132,7 +132,7 @@ test('a family of setups: the same law, bodies placed and counted differently, a
   const [, C, p] = /size ([\d.e+-]+) · r\^-([\d.]+)/.exec(describeOrbitTruth(base, tableSense(base)).find((t) => t.id === 'central')!.statement)!.map(Number) as number[];
   const srcs = e.sources.map((s) => toPercept.pos(e.frame, s.pos));
   for (const s of predictionSamples(e, trialLaunches(e, { sampling: 'free', attempt: 3, inView: 3, beyond: 1 })).slice(0, 30)) {
-    const q = readTable(s.state.table).bodies[sense.probeGlyph], i = s.state.row;
+    const q = readTable(s.state.table).series[sense.probeGlyph], i = s.state.row;
     const sum = srcs.reduce<number[]>((acc, c) => { const u = [c[0] - q.x[i]!, c[1] - q.y[i]!], r = Math.hypot(u[0], u[1]), m = C * Math.pow(r, -p); return [acc[0] + m * u[0] / r, acc[1] + m * u[1] / r]; }, [0, 0]);
     const ref = s.reference!;
     assert.ok(Math.hypot(sum[0] - ref[0], sum[1] - ref[1]) <= 0.02 * Math.hypot(ref[0], ref[1]) + 1e-4, 'superposition: ' + sum + ' vs ' + ref);

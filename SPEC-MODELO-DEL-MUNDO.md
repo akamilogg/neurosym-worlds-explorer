@@ -87,13 +87,13 @@ decide en dos jugadas) se aplica a cada montaje.
 jugadas por el entorno: el bando de System 2 con su fórmula y el otro con su planificador. Se incluyen posiciones de los
 dos bandos y las finales.
 
-**El veredicto, por posición.** Son hechos que el mundo da al contrastar la predicción, lo mismo que haría `try`
+**El veredicto, por posición.** Son hechos que el mundo da al contrastar la predicción, lo mismo que haría `act`
 sistemáticamente:
 - los movimientos que predijo y el mundo **no permite** (cuáles son: son afirmaciones suyas);
 - **cuántos** movimientos permite el mundo que no predijo. El número, no la lista, para no darle los movimientos hechos;
 - si el final predicho coincide con el real, y cuál fue el real, porque el final de una partida siempre se ve.
 
-**Después de la prueba,** esos tableros y partidas pasan a ser suyos para estudiarlos, con `view`, `try` y `play`.
+**Después de la prueba,** esos tableros y partidas pasan a ser suyos para estudiarlos, con `view`, `act` y `replay`.
 
 **La aceptación de las reglas:** **cero fallos** (ningún movimiento de más ni de menos, ningún final equivocado) en los
 tableros de la prueba y en dos conjuntos más de tableros de confirmación ciega. Como el mundo es determinista, no hace
@@ -117,7 +117,7 @@ mundo físico su ley es su modelo. Entonces unas reglas equivocadas harían perd
 
 - **El prompt no dice nada del mundo** (cero pistas, `SPEC-MUNDO-FISICO.md` I5): ni que es un juego de dos jugadores,
   ni que hay una familia de tableros, ni qué cambia entre ellos. Explica el artefacto de reglas solo con la interfaz: los
-  cambios en el formato de `try` y el final en la escala con que ya recibe los resultados. Que los tableros de la prueba
+  cambios en el formato de `act` y el final en la escala con que ya recibe los resultados. Que los tableros de la prueba
   tienen otro tamaño lo descubre al verlos.
 - **Recibe** el veredicto por posición, si se aceptaron las reglas y la fórmula, el resultado de sus partidas y los
   tableros de las pruebas como datos.

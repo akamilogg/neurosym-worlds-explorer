@@ -18,7 +18,7 @@ const observer = new Observer<GridState>(world, { kinds: ['sense', 'code'], sens
 /* A local judge that reads one measured fact: the move counter, scaled. */
 const judge: Judge = { id: 'local', async judge(r) { return { v: { value: Math.min(1, (r.measurements.t ?? 0) / 20), confidence: null } }; } };
 const formula = makeFormula({ world: world.id, observations: { picture: { spec: { kind: 'sense', sense: 'ascii' } },
-  t: { spec: { kind: 'code', lang: 'js', source: '(p) => p.move' }, range: [0, 40] } },
+  t: { spec: { kind: 'code', lang: 'js', source: '(p) => p.step' }, range: [0, 40] } },
   rules: { v: { type: 'noul', used_as: 'value', instructions: '{{t}}', criteria: { yes: '', no: '' } } }, weights: { v: 1 } });
 
 test('a recorded turn holds every choice its search had, as its search valued them, and marks the one it took', async () => {

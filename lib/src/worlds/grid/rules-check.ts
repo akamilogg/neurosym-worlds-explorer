@@ -92,7 +92,7 @@ export function trueRulesSource(spec: GridSpec, sense: GridSense): { moves: stri
   const A = JSON.stringify(sense.glyphA), B = JSON.stringify(sense.glyphB);
   const movesOf = 'function movesOf(p, g, ds) { const out = []; for (let r = 0; r < p.height; r++) for (let c = 0; c < p.width; c++) { if (p.cells[r][c] !== g) continue;'
     + ' for (const [dr, dc] of ds) { const R = r + dr, C = c + dc; if (R >= 0 && R < p.height && C >= 0 && C < p.width && p.cells[R][C] === ".") out.push([r, c, R, C]); } } return out; }';
-  const moves = '(p) => { ' + movesOf + ' return p.toMove === ' + A + ' ? movesOf(p, ' + A + ', ' + deltas(spec.A.moves) + ') : movesOf(p, ' + B + ', ' + deltas(spec.B.moves) + '); }';
+  const moves = '(p) => { ' + movesOf + ' return p.next === ' + A + ' ? movesOf(p, ' + A + ', ' + deltas(spec.A.moves) + ') : movesOf(p, ' + B + ', ' + deltas(spec.B.moves) + '); }';
   const edge = goalEdge(spec, sense);
   const onEdge = edge === 'top' ? 'r === 0' : edge === 'bottom' ? 'r === p.height - 1' : edge === 'left' ? 'c === 0' : 'c === p.width - 1';
   const lines = ['(p) => { ' + movesOf,
@@ -101,6 +101,6 @@ export function trueRulesSource(spec: GridSpec, sense: GridSense): { moves: stri
   if (spec.winB === 'reach') lines.push(' if (b.some(([r, c]) => ' + onEdge + ')) return -1;');
   if (spec.winA === 'tag') lines.push(' if (a.some(([r, c]) => b.some(([R, C]) => Math.max(Math.abs(r - R), Math.abs(c - C)) === 1))) return 1;');
   if (spec.winA === 'trap') lines.push(' if (movesOf(p, ' + B + ', ' + deltas(spec.B.moves) + ').length === 0) return 1;');
-  lines.push(' if (p.move >= ' + spec.maxPlies + ') return ' + (spec.winB === 'survive' ? '-1' : '0') + ';', ' return null; }');
+  lines.push(' if (p.step >= ' + spec.maxPlies + ') return ' + (spec.winB === 'survive' ? '-1' : '0') + ';', ' return null; }');
   return { moves, ending: lines.join('') };
 }

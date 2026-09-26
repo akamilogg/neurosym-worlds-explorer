@@ -47,7 +47,7 @@ test('an observation probe costs nothing; a question probe asks the Judge and is
   const stub = stubJev();
   const ps = positions();
   const probes = [
-    { id: 'clock', hypothesis: 'late positions are worse for me', observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.move' }, range: [0, 12] as [number, number] } },
+    { id: 'clock', hypothesis: 'late positions are worse for me', observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.step' }, range: [0, 12] as [number, number] } },
     { id: 'ask', hypothesis: 'the judge can tell', question: { type: 'noul' as const, instructions: 'Am I doing well?', criteria: { yes: 'y', no: 'n' } } }
   ];
   const results = await runProbes(probes, ps, { observer, judge: new JevJudge({ fetch: stub.fetch }), base, maximizer: 'A' }, { minSamples: 3, round: 1 });
@@ -85,7 +85,7 @@ test('observation and question are reported separately, and finished positions t
   const ps = positions();
   const finals = ps.slice(0, 6).map((p, i) => ({ ...p, final: true, label: (i < 3 ? 'win' : 'loss') as 'win' | 'loss' }));
   const probe = { id: 'both', hypothesis: 'late is bad',
-    observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.move' }, range: [0, 12] as [number, number] },
+    observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.step' }, range: [0, 12] as [number, number] },
     question: { type: 'noul' as const, instructions: 'The clock reads {{probe_both}}. Early?', criteria: { yes: 'y', no: 'n' } } };
   const [r] = await runProbes([probe], [...ps, ...finals], { observer, judge: new JevJudge({ fetch: stub.fetch }), base, maximizer: 'A' }, { minSamples: 3 });
   assert.deepEqual(r.tests.map((t) => t.by + ':' + t.positions), ['observation:in_play', 'observation:final', 'question:in_play']);
@@ -127,7 +127,7 @@ test('siblings: choices from one won position are ordered by the probe, pairs co
     for (const l of set.lose) assert.notEqual(solveAgainstModel(world16, l, 'A', respond).winner, 'A');
   }
   const stub = stubJev();
-  const [r] = await runProbes([{ id: 'clock', hypothesis: 'h', observation: { spec: { kind: 'code', lang: 'js', source: '(p) => p.move' }, range: [0, 40] } }],
+  const [r] = await runProbes([{ id: 'clock', hypothesis: 'h', observation: { spec: { kind: 'code', lang: 'js', source: '(p) => p.step' }, range: [0, 40] } }],
     positions(), { observer: observer16, judge: new JevJudge({ fetch: stub.fetch }), base: { ...base, world: world16.id }, maximizer: 'A', siblings: sets }, { minSamples: 1 });
   const choice = r.tests.find((x) => x.positions === 'siblings')!;
   assert.equal(choice.sets, sets.length);
@@ -146,11 +146,11 @@ test('positions are compared by the score their game ended with: a draw is neith
   assert.equal(classifyScored(samples, { minSamples: 9 }).status, 'inconclusive');
   const stub = stubJev();
   const ps = positions().slice(0, 12).map((p, i) => ({ ...p, final: true, score: [1, 0, -1][i % 3] }));
-  const probe = { id: 'x', hypothesis: 'h', observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.move' }, range: [0, 12] as [number, number] } };
+  const probe = { id: 'x', hypothesis: 'h', observation: { spec: { kind: 'code' as const, lang: 'js', source: '(p) => p.step' }, range: [0, 12] as [number, number] } };
   const [r] = await runProbes([probe], ps, { observer, judge: new JevJudge({ fetch: stub.fetch }), base, maximizer: 'A' }, { minSamples: 3 });
   const final = r.tests.find((t) => t.positions === 'final')!;
   assert.deepEqual(final.by_score!.map((g) => [g.score, g.positions]), [[1, 4], [0, 4], [-1, 4]]);
   const seen = describeTest(final) as any;
-  assert.deepEqual(seen.by_game_score.map((g: any) => g.game_score), [1, 0, -1]);
+  assert.deepEqual(seen.by_episode_score.map((g: any) => g.episode_score), [1, 0, -1]);
   assert.ok(!('mean_in_won_games' in seen) && !/won|lost|draw/.test(JSON.stringify(seen)), 'only the score: its meaning is for the learner');
 });

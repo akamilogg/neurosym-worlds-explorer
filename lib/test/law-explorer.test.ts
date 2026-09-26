@@ -9,9 +9,9 @@ import { ORBIT_PERCEPT_DOC } from '../src/worlds/orbit/sense.ts';
 const GIVEAWAYS = /\b(gravit\w*|newton\w*|mass(es)?|forces?|orbit\w*|planet\w*|stars?|suns?|attract\w*|pull\w*|physic\w*|energy|momentum|accelerat\w*|kepler\w*|inertia\w*|inverse|squared?)\b/i;
 
 const draft = {
-  observations: { dist: { definition: 'distance to the first body', source: '(p) => { const i = p.t.length - 1, a = p.bodies[p.symbols[0]], b = p.bodies[p.symbols[p.symbols.length - 1]]; return Math.hypot(a.x[i] - b.x[i], a.y[i] - b.y[i]); }', range: [0, 40] } },
+  observations: { dist: { definition: 'distance to the first body', source: '(p) => { const i = p.t.length - 1, a = p.series[p.symbols[0]], b = p.series[p.symbols[p.symbols.length - 1]]; return Math.hypot(a.x[i] - b.x[i], a.y[i] - b.y[i]); }', range: [0, 40] } },
   rules: { near: { type: 'noul', instructions: 'Is {{dist}} small?', criteria: { yes: 'small', no: 'large' } } },
-  components: { toward: { definition: 'toward the first body', direction: '(p) => { const i = p.t.length - 1, a = p.bodies[p.symbols[0]], b = p.bodies[p.symbols[p.symbols.length - 1]]; return [a.x[i] - b.x[i], a.y[i] - b.y[i]]; }', weights: { near: 2 }, range: [0.001, 1], scale: 'log' } }
+  components: { toward: { definition: 'toward the first body', direction: '(p) => { const i = p.t.length - 1, a = p.series[p.symbols[0]], b = p.series[p.symbols[p.symbols.length - 1]]; return [a.x[i] - b.x[i], a.y[i] - b.y[i]]; }', weights: { near: 2 }, range: [0.001, 1], scale: 'log' } }
 };
 
 test('the prompt names no science, no law and no quantity of the world; withheld instruments are not mentioned', () => {
@@ -49,8 +49,9 @@ test('an investigation: launches, drafts to simulate, measures and tables; malfo
     { dance: true }
   ], notes: [{ id: 'n', text: 'x' }] }), { world: 'orbit@1' });
   if (t.kind !== 'investigate') throw new Error('not an investigation');
-  assert.deepEqual(t.requests.map((r) => Object.keys(r)[0]), ['launch', 'simulate', 'inspect', 'measure', 'table']);
-  assert.deepEqual((t.requests[0] as { launch: unknown }).launch, { x: 1, y: 2, vx: 0, vy: 0.5, m: 1 });
+  assert.deepEqual(t.requests.map((r) => Object.keys(r)[0]), ['act', 'simulate', 'inspect', 'measure', 'table'], 'the earlier names are still accepted');
+  assert.deepEqual((t.requests[0] as { act: unknown }).act, { x: 1, y: 2, vx: 0, vy: 0.5, m: 1 });
+  assert.equal((t.requests[4] as { on: string }).on, 'checks');
   assert.equal((t.requests[1] as { rows: number }).rows, 40, 'at most 40 rows');
   assert.equal(t.warnings.length, 3);
   assert.equal(t.notes[0].do, 'write');
@@ -62,8 +63,8 @@ test('only what the explorer wrote travels back, and the payload carries the per
   const own = ownLaw(t.parse.proposal.law) as { components: Record<string, { direction: string }> };
   assert.equal(own.components.toward.direction, draft.components.toward.direction);
   const payload = lawExplorerPayload({ round: 3, perceptDoc: ORBIT_PERCEPT_DOC, law: t.parse.proposal.law, lawRound: 2, stepsLeft: 2, launchesLeft: 5 });
-  assert.equal(payload.launches_left, 5);
-  assert.equal((payload.your_latest_law as { from_round: number }).from_round, 2);
+  assert.equal(payload.acts_left, 5);
+  assert.equal((payload.your_model as { from_round: number }).from_round, 2);
 });
 
 test('a component may carry its magnitude in code; an ignored request is echoed back so it can be read', () => {
@@ -96,4 +97,32 @@ test('zero hints: the prompt says nothing about what the world is or what varies
   const full = lawExplorerSystem();
   assert.doesNotMatch(full, NATURE, 'hint: ' + (full.match(NATURE)?.[0] ?? ''));
   assert.match(full, /places you have not seen/, 'the protocol is still explained');
+});
+
+import { commonPrompt, reflectionTask, TOOLS } from '../src/learn/prompt.ts';
+import { EXPLORER_SYSTEM, GRID_INTERFACE } from '../src/learn/explorer.ts';
+import { ORBIT_INTERFACE } from '../src/learn/law-explorer.ts';
+import { GRID_PERCEPT_DOC } from '../src/worlds/grid/sense.ts';
+
+/* ONE prompt for every world (learn/prompt.ts): each world's prompt is the common text for its instruments, then its
+   interface. Nothing about a world is written outside its interface. */
+test('one prompt: every world\'s prompt begins with the common text, word for word', () => {
+  const grid = commonPrompt(new Set(GRID_INTERFACE.tools), new Set(GRID_INTERFACE.features));
+  const orbit = commonPrompt(new Set(ORBIT_INTERFACE.tools), new Set(ORBIT_INTERFACE.features));
+  assert.ok(EXPLORER_SYSTEM.startsWith(grid + '\n\nTHIS ENVIRONMENT\'S INTERFACE.'));
+  assert.ok(lawExplorerSystem().startsWith(orbit + '\n\nTHIS ENVIRONMENT\'S INTERFACE.'));
+  /* With the same instruments and features, the two worlds are told the same thing. */
+  const same = new Set(TOOLS);
+  assert.equal(commonPrompt(same, new Set(['check'])), commonPrompt(same, new Set(['check'])));
+});
+
+/* Zero hints in everything System 2 reads of a world: the prompt, the percept and the reflection task. "game theory" is a
+   discipline of the persona, the same in every world. */
+const WORLD_WORDS = /\b(games?|players?|turns?|wins?|won|lost|draws?|boards?|pieces?|moves?|bodies|body|launch\w*|positions?|orbit\w*|mass(es)?|forces?|famil(y|ies)|planes?|opponents?|sides?)\b/i;
+test('zero hints: no world is named in its own words, in either world', () => {
+  for (const [name, text] of [['grid prompt', EXPLORER_SYSTEM], ['orbit prompt', lawExplorerSystem()], ['grid percept', GRID_PERCEPT_DOC],
+    ['orbit percept', ORBIT_PERCEPT_DOC], ['reflection', reflectionTask(true)]] as const) {
+    const t = text.replaceAll('game theory', '');
+    assert.doesNotMatch(t, WORLD_WORDS, name + ': ' + (t.match(WORLD_WORDS)?.[0] ?? ''));
+  }
 });

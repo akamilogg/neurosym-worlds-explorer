@@ -39,13 +39,18 @@ symbols. It gets no rules, no meaningful names and no list of legal moves.
 
 It learns only from its own sources:
 
+The prompt is ONE text for every world (`lib/src/learn/prompt.ts`): a researcher persona, a research method and a general
+account of the instruments. It says nothing about the nature of the world; each world adds only its interface (what its
+model produces and the parameters of each instrument) and the shape of what is perceived. The instruments have common names:
+
 | Instrument | What it gives System 2 |
 |---|---|
-| `view` / `inspect` | the pictures of its games; what its own search saw on a turn, rule by rule and observation by observation |
-| `try` | attempt a change from a position; the environment only says allowed (with the new picture) or refused, never why |
-| `measure` | run one of its observations over any positions |
-| `play` | play a laboratory game from any position with any of its formulas |
-| `table` / probes | how an observation or a question separates positions by how the game ended (score -1..1, concordance, a permutation test) |
+| `view` / `inspect` | what was recorded in its episodes; what its own model computed at a point, rule by rule and observation by observation |
+| `act` | intervene in the environment (earlier `try` / `launch`); it only says whether it accepted and what followed, never why |
+| `replay` | run an episode again in the environment from any point, with any of its models (earlier `play`) |
+| `simulate` | run a model forward alone, without the environment |
+| `measure` | run one of its observations over any points |
+| `table` / probes | how an observation or a question separates points by how the episode ended (score -1..1, concordance, a permutation test) |
 | notebook | beliefs with a mandatory stance each round, notes pointing to positions, its own methods |
 
 The environment offers primitive actions only: no precooked analysis, no hints, and no environment-specific

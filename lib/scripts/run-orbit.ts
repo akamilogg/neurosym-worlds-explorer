@@ -12,7 +12,7 @@
      --attempts N        proposal/test rounds (default 8)
      --explore N         launches the environment makes before the first proposal (default 4)
      --steps N           investigation answers System 2 may give per round before proposing (default 3)
-     --launches N        bodies System 2 may launch itself per round (default 6)
+     --launches N        episodes System 2 may start itself per round with the "act" request (default 6)
      --resolution X      round every perceived position to X, in the table's units (default 0: continuous)
      --sampling S        free: new check launches every round (default: they are unseen, as the protocol asks); grid: the
                          same fixed lattice of launches every round, so the same points recur and Jev's cache can hit - the
@@ -33,7 +33,8 @@
    What System 2 learns of a test is the ENVIRONMENT'S VERDICT at every point of every test launch: a vector with one
    number per axis of the table, tanh((observed d - predicted d) / |observed d|), in [-1, 1]. It is never given an error,
    a mean, a ranking or a "best law": what the verdicts mean, and which of its laws to build on, is for it to work out.
-     --tools a,b,...     the instruments System 2 is given (default: all = view,inspect,launch,measure,simulate,table;
+     --tools a,b,...     the instruments System 2 is given (default: all = view,inspect,act,measure,simulate,table - "launch" is
+                         accepted for act;
                          "none" = none of them): the BASELINE, as in run-grid.ts
      --delegated         also run the delegated arm of the ablation every round (the Judge reads the table; one call per point)
      --no-ablation       skip the code-only and flat arms
@@ -79,6 +80,7 @@ import { nodeVmRunner } from '../src/runtime/node-vm.ts';
 import { openAiChatClient } from '../src/learn/system2.ts';
 import { replayOnEvidence } from '../src/learn/gates.ts';
 import { parseReflection } from '../src/learn/explorer.ts';
+import { reflectionTask, toolOf } from '../src/learn/prompt.ts';
 import { LAW_TOOLS, lawExplorerPayload, lawExplorerSystem, ownLaw, parseLawTurn, type LawRequest, type LawTool } from '../src/learn/law-explorer.ts';
 import { delegatedLaw, fitLawCodeOnly } from '../src/learn/law-ablation.ts';
 import { Notebook } from '../src/learn/notebook.ts';
@@ -100,7 +102,7 @@ const flag = (name: string): boolean => argv.includes('--' + name);
 function parseTools(value: string): LawTool[] {
   if (value === 'all') return [...LAW_TOOLS];
   if (value === 'none') return [];
-  const asked = value.split(',').map((t) => t.trim()).filter(Boolean);
+  const asked = value.split(',').map((t) => t.trim()).filter(Boolean).map((t) => toolOf(t) ?? t);
   const unknown = asked.filter((t) => !(LAW_TOOLS as readonly string[]).includes(t));
   if (unknown.length) { console.error('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + LAW_TOOLS.join(', ') + ', or all / none)'); process.exit(2); }
   return LAW_TOOLS.filter((t) => asked.includes(t));
@@ -241,14 +243,14 @@ function observedD(ref: string): Vec2 | null {
   const l = m ? launches.get(m[1]) : undefined;
   if (!m || !l) return null;
   const i = Number(m[2]);
-  const probe = readTable(l.table).bodies[sense.probeGlyph];
+  const probe = readTable(l.table).series[sense.probeGlyph];
   const xs = [probe.x[i - 1], probe.x[i], probe.x[i + 1]], ys = [probe.y[i - 1], probe.y[i], probe.y[i + 1]];
   if (i < 1 || [...xs, ...ys].some((v) => v === null || v === undefined)) return null;
   return [round2(xs[2]! - 2 * xs[1]! + xs[0]!), round2(ys[2]! - 2 * ys[1]! + ys[0]!)];
 }
 
 /** The index of launches, as the notebook shows it. */
-const launchIndex = () => [...launches.values()].map((l) => ({ launch: l.id, setup: l.setup, round: l.round, launched_by: l.by, from: l.launch, rows: l.trajectory.states.length }));
+const launchIndex = () => [...launches.values()].map((l) => ({ episode: l.id, place: l.setup, round: l.round, by: l.by, from: l.launch, steps: l.trajectory.states.length }));
 
 /* The environment launches a few bodies in each laboratory setup before the first proposal. */
 function explore(): void {
@@ -258,7 +260,7 @@ function explore(): void {
     const setup = labs[launchCounter % labs.length];
     const launch = launchNear(setup.spec, rnd, 2 * spec.collide + rnd() * (spec.window - 2 * spec.collide), 1);
     if (!launchable(setup.spec, launch.pos)) continue;
-    const id = 'launch' + (++launchCounter);
+    const id = 'ep' + (++launchCounter);
     store(id, setup, 0, 'the environment', simulate(setup.spec, id, launch));
     log('exploration_launch', { launch: id, setup: setup.id });
   }
@@ -288,12 +290,12 @@ const lawOfRound = (round: number): Law | null => laws.find((l) => l.round === r
 const notebook = new Notebook();
 let unaddressed: string[] = [];
 function notebookBrief(): Record<string, unknown> {
-  const { games: _g, rounds: _r, ...own } = notebook.brief(unaddressed) as Record<string, unknown>;
+  const { episodes: _g, models: _r, ...own } = notebook.brief(unaddressed) as Record<string, unknown>;
   const last = laws[laws.length - 1];
   return {
     ...own,
-    launches: launchIndex(),
-    laws: laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, law: ownLaw(l.law), accepted: l.accepted })),
+    episodes: launchIndex(),
+    models: laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })),
     ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {})
   };
 }
@@ -373,8 +375,8 @@ function describeCheck(result: TestResult, held: Record<string, boolean>): unkno
     const id = x.ref!.split('@')[0];
     byLaunch.set(id, [...(byLaunch.get(id) ?? []), { point: x.ref!, verdict: x.score.map((v) => Math.round(v * 1000) / 1000) }]);
   }
-  return Object.entries(held).map(([setup, holds]) => ({ setup, your_law_holds_here: holds,
-    launches: [...byLaunch.entries()].filter(([id]) => launches.get(id)?.setup === setup).map(([id, points]) => ({ launch: id, from: launches.get(id)!.launch, points })) }));
+  return Object.entries(held).map(([setup, holds]) => ({ place: setup, your_model_holds_here: holds,
+    episodes: [...byLaunch.entries()].filter(([id]) => launches.get(id)?.setup === setup).map(([id, points]) => ({ episode: id, from: launches.get(id)!.launch, points })) }));
 }
 
 /** What the operator keeps of a test result. */
@@ -446,26 +448,26 @@ function checkOnPoints(law: Law): string[] {
 }
 
 async function runRequest(req: LawRequest, budget: { launches: number }): Promise<unknown> {
-  const kind = (['view', 'inspect', 'launch', 'measure', 'simulate', 'table'] as const).find((k) => k in req)!;
+  const kind = (['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const).find((k) => k in req)!;
   if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
   if ('view' in req) {
     const l = launches.get(req.view);
-    if (!l) return { view: req.view, error: 'no such launch' };
+    if (!l) return { view: req.view, error: 'no such episode' };
     const lines = l.table.split('\n');
     return { view: l.id, rows_in_table: lines.length - 1, table: [lines[0], ...lines.slice(1 + Math.max(0, req.from), 2 + Math.max(0, req.to))].join('\n') };
   }
-  if ('launch' in req) {
-    if (budget.launches <= 0) return { launch: req.launch, error: 'no launches left this round' };
-    const setup = setups.get(req.launch.setup ?? 'lab1');
-    if (!setup || setup.role !== 'laboratory') return { launch: req.launch, error: 'you can launch only in your laboratory setups: ' + [...setups.values()].filter((s) => s.role === 'laboratory').map((s) => s.id).join(', ') };
-    const pos = fromPercept.pos(setup.spec.frame, [req.launch.x, req.launch.y]);
-    /* The environment answers only whether it launched: never why not. */
-    if (!launchable(setup.spec, pos)) return { launch: req.launch, launched: false };
+  if ('act' in req) {
+    if (budget.launches <= 0) return { act: req.act, error: 'no acts left this round' };
+    const setup = setups.get(req.act.setup ?? 'lab1');
+    if (!setup || setup.role !== 'laboratory') return { act: req.act, error: 'you can act only in your laboratories: ' + [...setups.values()].filter((s) => s.role === 'laboratory').map((s) => s.id).join(', ') };
+    const pos = fromPercept.pos(setup.spec.frame, [req.act.x, req.act.y]);
+    /* The environment answers only whether it accepted: never why not. */
+    if (!launchable(setup.spec, pos)) return { act: req.act, accepted: false };
     budget.launches--;
-    const id = 'launch' + (++launchCounter);
-    const l = store(id, setup, currentRound, 'you', simulate(setup.spec, id, { pos, vel: fromPercept.vel(setup.spec.frame, [req.launch.vx, req.launch.vy]), mass: req.launch.m }));
+    const id = 'act' + (++launchCounter);
+    const l = store(id, setup, currentRound, 'you', simulate(setup.spec, id, { pos, vel: fromPercept.vel(setup.spec.frame, [req.act.vx, req.act.vy]), mass: req.act.m }));
     const lines = l.table.split('\n');
-    return { launch: req.launch, launched: true, name: id, rows_in_table: lines.length - 1, table: lines.slice(0, 61).join('\n'), ...(lines.length > 61 ? { more: 'view it for the rest' } : {}) };
+    return { act: req.act, accepted: true, name: id, rows_in_table: lines.length - 1, table: lines.slice(0, 61).join('\n'), ...(lines.length > 61 ? { more: 'view it for the rest' } : {}) };
   }
   if ('measure' in req) {
     const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, ...(req.measure.range ? { range: req.measure.range } : {}) };
@@ -480,10 +482,10 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
   if ('inspect' in req) {
     const law = lawOf(req.law);
     const p = resolve(req.inspect);
-    if (!law) return { inspect: req.inspect, error: 'there is no law yet: name a draft' };
+    if (!law) return { inspect: req.inspect, error: 'there is no model yet: name a draft' };
     if (!p) return { inspect: req.inspect, error: 'no such point' };
     const failures = typeof req.law === 'object' && req.law ? checkOnPoints(law) : [];
-    if (failures.length) return { inspect: req.inspect, error: 'your draft failed on points of your launches: ' + failures.join(' | ') };
+    if (failures.length) return { inspect: req.inspect, error: 'your draft failed on points of your episodes: ' + failures.join(' | ') };
     try {
       const pr = await predictor.predict(law, p);
       return {
@@ -500,10 +502,10 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
   if ('simulate' in req) {
     const law = lawOf(req.law);
     const start = resolve(req.simulate);
-    if (!law) return { simulate: req.simulate, error: 'there is no law yet: name a draft' };
-    if (!start || start.row < 1) return { simulate: req.simulate, error: 'no such point (it needs a row with a row before it)' };
+    if (!law) return { simulate: req.simulate, error: 'there is no model yet: name a draft' };
+    if (!start || start.row < 1) return { simulate: req.simulate, error: 'no such point (it needs a step with a step before it)' };
     const failures = typeof req.law === 'object' && req.law ? checkOnPoints(law) : [];
-    if (failures.length) return { simulate: req.simulate, error: 'your draft failed on points of your launches: ' + failures.join(' | ') };
+    if (failures.length) return { simulate: req.simulate, error: 'your draft failed on points of your episodes: ' + failures.join(' | ') };
     const [id] = req.simulate.split('@');
     const observed = readTable(launches.get(id)!.table);
     const lines = start.table.split('\n');
@@ -513,26 +515,26 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
         const now = readTable(lines.join('\n'));
         const i = now.t.length - 1;
         const pr = await predictor.predict(law, { table: lines.join('\n'), row: i });
-        const probe = now.bodies[sense.probeGlyph];
+        const probe = now.series[sense.probeGlyph];
         if (probe.x[i] === null || probe.x[i - 1] === null) break;
         const next: Vec2 = [2 * probe.x[i]! - probe.x[i - 1]! + pr.vector[0], 2 * probe.y[i]! - probe.y[i - 1]! + pr.vector[1]];
         const t = now.t[i] + (now.t[i] - now.t[i - 1]);
         /* The other bodies keep their last seen positions; the launched body moves as the law says. */
         /* The same format as the tables: the other bodies keep their last seen positions, then the launched body. */
         const others = now.symbols.filter((g) => g !== sense.probeGlyph);
-        const cells = [t.toFixed(3).padStart(10), ...others.flatMap((g) => [now.bodies[g].x[i], now.bodies[g].y[i]].map((v) => (v ?? 0).toFixed(6).padStart(13))),
+        const cells = [t.toFixed(3).padStart(10), ...others.flatMap((g) => [now.series[g].x[i], now.series[g].y[i]].map((v) => (v ?? 0).toFixed(6).padStart(13))),
           next[0].toFixed(6).padStart(13), next[1].toFixed(6).padStart(13)];
         lines.push(cells.join(''));
-        const seen = observed.bodies[sense.probeGlyph];
-        rows.push({ row: i + 1, simulated: next.map(round2), observed: seen.x[i + 1] !== undefined && seen.x[i + 1] !== null ? [seen.x[i + 1], seen.y[i + 1]] : null });
+        const seen = observed.series[sense.probeGlyph];
+        rows.push({ step: i + 1, simulated: next.map(round2), observed: seen.x[i + 1] !== undefined && seen.x[i + 1] !== null ? [seen.x[i + 1], seen.y[i + 1]] : null });
       }
-    } catch (e) { return { simulate: req.simulate, error: String((e as Error).message ?? e), rows }; }
-    return { simulate: req.simulate, rows };
+    } catch (e) { return { simulate: req.simulate, error: String((e as Error).message ?? e), steps: rows }; }
+    return { simulate: req.simulate, steps: rows };
   }
   /* table: the points of its launches or of the tests, the code's value, and the residual of its latest law there. */
   const law = latest()?.law ?? null;
   const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, range: req.table.range };
-  const samples = req.on === 'tests' ? [...testPoints.values()].flat().slice(-60) : ownSamples().slice(-60);
+  const samples = req.on === 'checks' ? [...testPoints.values()].flat().slice(-60) : ownSamples().slice(-60);
   const rows: unknown[] = [];
   for (const s of samples) {
     const o = observer.observe(s.state, { m: decl });
@@ -547,14 +549,12 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
     }
     rows.push({ point: s.ref, ...(err ? { error: err.error } : { value: o.values.m }), observed_d: s.target.map(round2), residual });
   }
-  return { table: req.table.source, on: req.on, residuals_of: law ? 'your latest law' : 'no law yet', rows };
+  return { table: req.table.source, on: req.on, residuals_of: law ? 'your latest model' : 'no model yet', rows };
 }
 
 /* --- Consulting System 2 ------------------------------------------------------------- */
 
-const REFLECTION_TASK = 'REFLECTION ROUND. Your law is final: do not propose one. Look back at your launches and tests' + (investigative ? ' (you may investigate first)' : '') + ' and '
-  + 'answer with {"rationale": ..., "beliefs": [stances on every belief you hold, and any new ones], "notes": [...], "lessons": [...], "next_experiment": ...}: '
-  + 'what you now believe about this environment - what moves the launched body and how, in terms you could check - citing your evidence.';
+const REFLECTION_TASK = reflectionTask(investigative);
 
 let currentRound = 0;
 let llmFatal: string | null = null;
@@ -572,9 +572,9 @@ async function consult(mode: 'propose' | 'reflect'): Promise<LawRecord | null> {
     const stepsLeft = investigative ? Math.max(0, cfg.steps - steps) : 0;
     const payload = lawExplorerPayload({
       round, perceptDoc: ORBIT_PERCEPT_DOC, notebook: notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
-      setups: [...setups.values()].filter((x) => x.role !== 'confirmation' && (x.role === 'laboratory' || x.seen)).map((x) => ({ setup: x.id, role: x.role === 'laboratory' ? 'your laboratory: you can launch here' : 'a setup of the family where your law was validated' })),
+      setups: [...setups.values()].filter((x) => x.role !== 'confirmation' && (x.role === 'laboratory' || x.seen)).map((x) => ({ place: x.id, role: x.role === 'laboratory' ? 'your laboratory: you can act here' : 'a place where your model was validated' })),
       validationsLeft,
-      lastTest, ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('launch') ? { launchesLeft: budget.launches } : {}),
+      lastTest, ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('act') ? { launchesLeft: budget.launches } : {}),
       refused, task: mode === 'reflect' ? REFLECTION_TASK : null
     });
     say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
@@ -706,7 +706,7 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   const quickStop = cfg.quick && record.validate;
   /* 2. The validation, when System 2 asks for it and its law holds where it was born. */
   if (record.validate && !quickStop) {
-    if (!allHeld(labHeld)) validationView = { refused: 'your law does not yet hold in every one of your laboratories: nothing was spent' };
+    if (!allHeld(labHeld)) validationView = { refused: 'your model does not yet hold in every one of your laboratories: nothing was spent' };
     else if (validationsLeft <= 0) validationView = { refused: 'you have no validations left' };
     else {
       validationsLeft--;
@@ -716,7 +716,7 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
       const famHeld = famCheck ? heldIn(famCheck.result, family.map((x) => x.id), famCheck.set) : {};
       /* A setup where the law does not hold becomes a laboratory. */
       const becameLabs = family.filter((x) => !famHeld[x.id]).map((x) => { x.role = 'laboratory'; return x.id; });
-      validationView = { family: famCheck ? describeCheck(famCheck.result, famHeld) : [], ...(becameLabs.length ? { now_your_laboratories: becameLabs } : {}) };
+      validationView = { validated_in: famCheck ? describeCheck(famCheck.result, famHeld) : [], ...(becameLabs.length ? { now_your_laboratories: becameLabs } : {}) };
       validation = { family: famCheck ? { held: famHeld, ...operatorView(famCheck.result) } : null, became_laboratories: becameLabs };
       say('  validation (' + (cfg.validations - validationsLeft) + '/' + cfg.validations + '): family ' + (famCheck ? chi2Text(famCheck.result) : '-') + (becameLabs.length ? '; now laboratories: ' + becameLabs.join(', ') : ''));
       /* 3. It holds everywhere: the blind confirmation decides. */

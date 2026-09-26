@@ -1,4 +1,5 @@
 import { parseJsonLoose } from '../core/net.ts';
+import { INVESTIGATION_TOOLS as INVESTIGATION, system2Prompt, type WorldInterface } from './prompt.ts';
 import { normalizeWeights } from '../core/formula.ts';
 import { checkLaw, type Law, type LawComponent } from '../core/predict.ts';
 import type { MeasureDecl, Rule } from '../core/types.ts';
@@ -25,83 +26,33 @@ import type { BeliefStance, NoteOp } from './notebook.ts';
 /** What an ignored request looked like, so the learner and the journal can see what was asked. */
 const clipJson = (v: unknown): string => { const t = JSON.stringify(v) ?? String(v); return t.length > 200 ? t.slice(0, 199) + '…' : t; };
 
-export const LAW_TOOLS = ['view', 'inspect', 'launch', 'measure', 'simulate', 'table'] as const;
+/** The physical world's interface to the common prompt (learn/prompt.ts): what its model produces, how its parts combine,
+    the parameters of its instruments and the form of a verdict. Interface words only (SPEC-MUNDO-FISICO I5). */
+export const ORBIT_INTERFACE: WorldInterface = {
+  tools: ['view', 'inspect', 'act', 'measure', 'simulate', 'table'],
+  features: ['check'],
+  lines: [
+    'What your model produces: at any row of any episode, how far the NEXT value of the LAST pair of columns, p = (x, y), departs from simply repeating its last step: the vector d = p(next) - 2·p(now) + p(previous), in the units of the table.',
+    'Its parts combine as COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is carried by one of two: either the JUDGE - it is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders) - or CODE, `(p) => number`, in the units of the table, and then the judge is not asked for that component.',
+    'A VERDICT is a pair of numbers from -1 to 1, one per column of the pair (x, then y); 0 on one means no difference in it between your prediction and what happened there. What the rest of the range means is for you to work out.',
+    [INVESTIGATION, 'Requests:'],
+    [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   rows of one of your tables (at most 60 per request)'],
+    [['act'], '  {"act": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>, "place": "<laboratory>"}}   start an episode yourself in one of your laboratories (default: the first): its last pair of columns starts at (x, y) and changes at first by (vx, vy) per unit of the first column; "m" is a positive number you choose (default 1). You get its table (named "act<n>"). It may be refused, and you are not told why. At most `acts_left` this round.'],
+    [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model (without "model": your latest) produced at that point, part by part: each component\'s direction, its magnitude and the judge\'s answer behind it, what each rule answered and what each observation measured there - and what was observed'],
+    [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
+    [['simulate'], '  {"simulate": "<episode>@<step>", "model": <round> | <draft>, "steps": <n>}   each next value of the last pair is the current one plus its last step plus the model\'s predicted d, row after row (at most 40)'],
+    [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the points of your own episodes, or of the checks, each with the RESIDUAL of your latest model there (observed d minus predicted d) and the environment\'s verdict at that point']
+  ],
+  modelFields: ['  "components": { "<id>": { "definition": "what this part of the prediction is", "direction": "(p) => [x, y]", "weights": { "<rule id>": number }, "range": [low, high], "scale": "linear" | "log" } | { "definition": "...", "direction": "(p) => [x, y]", "magnitude": "(p) => <number>" } },']
+};
+
+export const LAW_TOOLS = ['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const;
 export type LawTool = typeof LAW_TOOLS[number];
 type Tools = ReadonlySet<LawTool>;
 
-type PromptLine = string | readonly [readonly LawTool[], string] | ((t: Tools) => string);
-
-/* A line tagged with instruments is kept when ANY of them is available. */
-const LAW_LINES: readonly PromptLine[] = [
-  'You are a research scientist and mathematician. Your working disciplines include analysis and algebra, statistics and information theory - and whatever else proves applicable - and you use them explicitly: you name the formal object you are reasoning about, you state hypotheses as claims that can be checked, and you choose each experiment for the information it will yield.',
-  'You face an environment nobody has described to you. You perceive it ONLY through the tables it shows you (their form is described in `percept`) and through what your instruments return. You are told nothing else about it: not what it is, not what anything in it means, not the units of anything.',
-  'You begin with one LABORATORY; `setups` lists the places you know, and you can experiment only in your laboratories.',
-  'YOUR TASK is to write a LAW that predicts, at any row of any table, how far the NEXT position of the launched body departs from simply repeating its last step: the vector d = p(next) - 2·p(now) + p(previous), in the units of the table. Nobody will tell you what the law is: everything you learn, you find out yourself.',
-  'A law has three parts:',
-  '  - OBSERVATIONS: small deterministic JavaScript functions over the table up to the current row (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge.',
-  '  - RULES: questions a semantic judge answers. The judge does NOT see the table: it sees only the words of your rules and your observations (cite a number inside a rule as {{observation_id}}; a text observation reaches it as written). A rule\'s answer is a number from 0 to 1. The judge knows nothing about this environment either.',
-  '  - COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is carried by one of two: either the JUDGE - it is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders) - or CODE, `(p) => number`, in the units of the table, and then the judge is not asked for that component.',
-  'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your law says.',
-  '',
-  'Every round your law is CHECKED in your laboratories, on cases there you have never seen. For every point of them the environment gives its VERDICT: a pair of numbers from -1 to 1, one per axis of the table; 0 on an axis means no difference along it between your prediction and what happened there. What the rest of the range means is for you to work out. You also learn, for each laboratory, whether your law holds there. After the check, those cases are yours to study like any other.',
-  'When YOU judge that your law holds, add "validate": true to your proposal. If it holds in all your laboratories, the environment VALIDATES it in places you have not seen - for each, whether it holds, with its verdicts - and checks your laboratories again. A place where your law does not hold becomes one of your laboratories: what was seen there is yours to study, and you can experiment there. When your law holds in all of them, it is confirmed once more where nobody has looked, and accepted if it holds there too. `validations_left` says how many times you may still validate; asking while your law does not hold in all your laboratories is refused and costs nothing.',
-  '',
-  'YOUR NOTEBOOK (the `notebook` field) is yours: your beliefs and their history, the notes you chose to write, the index of launches, every law you tried with its results, and your own lessons and planned next experiment. Nothing is added to it for you except the facts of what you did and how your laws predicted. A note can cite launches as "<launch>" and points of them as "<launch>@<row>".',
-  'Every round, take a stance on EVERY belief you still hold: "keep", "revise" (give the new statement), "confirm" (the evidence settled it) or "drop" (the evidence refuted it); add new ones with "new". Cite the evidence: launches, points, rounds.',
-  '',
-  [['view', 'inspect', 'launch', 'measure', 'simulate', 'table'], 'INVESTIGATE before proposing. Instead of a proposal you may answer {"investigate": [ ...requests ], "notes": [ ...optional ]}; the results come back in `investigation`, and `steps_left` says how many more such answers you have this round. Requests:'],
-  [['view'], '  {"view": "<launch>", "from": <row>, "to": <row>}   rows of one of your tables (at most 60 per request)'],
-  [['launch'], '  {"launch": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>, "setup": "<laboratory setup>"}}   LAUNCH a body yourself, in one of your laboratory setups (default: the first): from the position (x, y) of that setup\'s table frame, moving at first by (vx, vy) per unit of the table\'s time; "m" is a positive property of the body you choose (default 1). You get its table (named "launch<n>"). A launch may be refused, and you are not told why. It is how you TEST an idea directly: two launches that differ in one thing isolate the effect of that thing. At most `launches_left` this round.'],
-  [['inspect'], '  {"inspect": "<launch>@<row>", "law": <round> | <draft> }   what a law (without "law": your latest) predicts at that point, part by part: each component\'s direction, its magnitude and the judge\'s answer behind it, what each rule answered and what each observation measured there - and what was observed'],
-  [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<launch>@<row>", ...]}   the value of that code at those points (without "range": the text it composes, as the judge would read it)'],
-  [['simulate'], '  {"simulate": "<launch>@<row>", "law": <round> | <draft>, "rows": <n>}   run a law forward from that point: each next position is the current one plus the last step plus the law\'s predicted d, row after row (at most 40), next to what was observed there if anything was. Nothing it simulates is a test of your law.'],
-  [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "launches" | "tests"}   the value of that code at the points of your own launches or of the test launches, each with the RESIDUAL of your latest law there (observed d minus predicted d) and the environment\'s verdict at that point: the rows behind the verdicts, to inspect yourself'],
-  '',
-  'HOW YOU THINK. What follows are lenses from your disciplines, each with examples of how your instruments can serve it. They are examples, not a procedure, and they describe nothing about this environment. Combine the instruments in any way you judge useful, bring in anything else you know that applies, and when the environment does not fit a model, change the model.',
-  '',
-  '1. FORMAL MODELS. Describe what you learn as functions, relations and invariants, and keep that description in your notes. For example:',
-  '  - A quantity that depends on others can be studied one argument at a time: hold every other argument fixed and vary one.',
-  '  - Relations that look complicated on one scale can be simple on another (a sum on one scale is a product on another).',
-  '  - What you already believe about similar-looking situations is a hypothesis like any other: test it before you build on it.',
-  '',
-  '2. EVIDENCE (statistics and information theory). For example:',
-  '  - Hold rival theories at once, as a distribution rather than a single bet. More than one may hold at once, in different conditions.',
-  '  - A conclusion can also be accepted. When a claim has held in every case you have seen, with no counterexample, and noise does not explain it, adopt it as a working rule and build on it, revising it only when a counterexample appears. Waiting for certainty costs as much as concluding too early.',
-  '  - Choose experiments by expected information gain: the most informative experiment is one whose result your rival theories predict differently.',
-  '  - Prefer the shortest law that explains all the evidence (minimum description length). A residual is information, not noise to excuse, until you have shown it is only noise: ask what the points with the largest residuals share that the others do not.',
-  '  - Whatever you perceive may carry noise; if it does, its size can be estimated from what you perceive, and an error that no law could reduce below it is not a failure of the law.',
-  '  - A law that is right only where you have looked will fail beyond it. How a law extrapolates is part of what it claims.',
-  '',
-  '3. PRACTICE.',
-  '  - Reflect on your own trajectory, deeply and every round, before deciding anything. Your notebook is the record of your research: reread it as a demanding reviewer would read someone else\'s work. Follow each belief through its history and ask whether each change was justified by the evidence cited, or by a single case, a misreading, or the sway of the latest result. Look for what you dropped too early and what you kept too long; for experiments you planned and never ran; for questions your notes left open. Compare your laws round by round with the environment\'s verdicts on them: what changed, what the change did, and whether you learned why. Name your own errors plainly, and let that shape this round.',
-  '  - Keep a THEORY in your notes: your current model, your rival theories, what is still unknown, and the plan that would test it.',
-  (t: Tools) => '  - Decompose: derive specific claims from the theory and turn each into something you can check - a belief' + (t.has('launch') ? ', a launch' : '') + (t.has('measure') ? ', a measurement' : '') + (t.has('simulate') ? ', a simulation' : '') + ', or any other use of your instruments. When a claim fails, revise the theory as a whole, not only that claim.',
-  [['launch', 'measure', 'simulate', 'table'], '  - An investigation that only looks at tables leaves your measuring and experimenting instruments idle.'],
-  '  - Build your own methods. When a way of investigating works, or wastes your steps, write it down as a METHOD in any answer: "methods": [ {"do": "write", "id": "<id>", "text": "..."} | {"do": "forget", "id": "<id>"} ]. Your methods come back to you every round in `notebook.methods`.',
-  '',
-  '`your_latest_law` is the law you proposed last, and `last_test` holds the environment\'s verdicts on it. Your notebook lists every law you proposed, with whether it was accepted; a law\'s `fingerprint` is the same exactly when the law is the same. Which of your laws to build on is yours to decide.',
-  '',
-  'If the payload carries a `task`, it says what this consultation is for and what to answer instead of a proposal.',
-  '',
-  'When you propose, answer with ONE JSON object and nothing else:',
-  '{',
-  '  "rationale": "what you believe now and why, citing the evidence",',
-  '  "beliefs": [ { "id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "the belief (required for new and revise)", "why": "...", "evidence": ["<launch, point or round>"] } ],',
-  '  "notes": [ { "do": "write", "id": "<id>", "text": "...", "positions": ["<launch>@<row>"] } | { "do": "forget", "id": "<id>" } ],',
-  '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } | { "definition": "what it shows the judge", "source": "(p) => <text>" } },',
-  '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
-  '  "components": { "<id>": { "definition": "what this part of the prediction is", "direction": "(p) => [x, y]", "weights": { "<rule id>": number }, "range": [low, high], "scale": "linear" | "log" } | { "definition": "...", "direction": "(p) => [x, y]", "magnitude": "(p) => <number>" } },',
-  '  "lessons": ["what this round taught you, in a sentence each"],',
-  '  "next_experiment": "what you intend to test next round, and why",',
-  '  "validate": true | false',
-  '}',
-  'Rule types: "noul" answers a probability 0..1 that the statement holds (criteria: {"yes": "...", "no": "..."}); "score" picks a level from criteria ordered lowest to highest (an array of 3 to 5 strings); "choice" gives probabilities over named options (criteria: {"<option>": "..."}; its value is the probability of the FIRST option).',
-  'Ids are lowercase snake_case. A log scale needs 0 < low. Keep code short, pure and deterministic; no randomness, no dates.'
-];
-
-/** The law explorer's system prompt for the instruments it is given (all of them by default). */
+/** The law explorer's system prompt for the instruments it is given (all of them by default): the common prompt. */
 export function lawExplorerSystem(tools: Tools = new Set(LAW_TOOLS)): string {
-  return LAW_LINES.flatMap((l) => typeof l === 'string' ? [l] : typeof l === 'function' ? [l(tools)] : l[0].some((t) => tools.has(t)) ? [l[1]] : []).join('\n');
+  return system2Prompt(ORBIT_INTERFACE, tools);
 }
 
 export interface LawExplorerBrief {
@@ -147,12 +98,12 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
     round: brief.round,
     percept: brief.perceptDoc,
     ...(brief.notebook ? { notebook: brief.notebook } : {}),
-    ...(brief.law ? { your_latest_law: { ...(brief.lawRound ? { from_round: brief.lawRound } : {}), ...ownLaw(brief.law) } } : {}),
-    ...(brief.lastTest ? { last_test: brief.lastTest } : {}),
+    ...(brief.law ? { your_model: { ...(brief.lawRound ? { from_round: brief.lawRound } : {}), ...ownLaw(brief.law) } } : {}),
+    ...(brief.lastTest ? { last_check: brief.lastTest } : {}),
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
-    ...(brief.launchesLeft !== undefined ? { launches_left: brief.launchesLeft } : {}),
-    ...(brief.setups && brief.setups.length ? { setups: brief.setups } : {}),
+    ...(brief.launchesLeft !== undefined ? { acts_left: brief.launchesLeft } : {}),
+    ...(brief.setups && brief.setups.length ? { places: brief.setups } : {}),
     ...(brief.validationsLeft !== undefined ? { validations_left: brief.validationsLeft } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
     ...(brief.directive ? { operator_directive: brief.directive } : {}),
@@ -239,10 +190,10 @@ export function parseLawProposal(content: string, context: { world: string; lang
 export type LawRequest =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string; readonly law: number | Law | null }
-  | { readonly launch: { readonly x: number; readonly y: number; readonly vx: number; readonly vy: number; readonly m: number; readonly setup?: string } }
+  | { readonly act: { readonly x: number; readonly y: number; readonly vx: number; readonly vy: number; readonly m: number; readonly setup?: string } }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   | { readonly simulate: string; readonly law: number | Law | null; readonly rows: number }
-  | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'launches' | 'tests' };
+  | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'episodes' | 'checks' };
 
 export type LawTurn =
   | { kind: 'investigate'; requests: LawRequest[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
@@ -263,10 +214,10 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
       if (Number.isInteger(raw)) return raw as number;
       if (obj(raw)) {
         const built = buildLaw(raw as Record<string, unknown>, context);
-        if (built.errors.length) { warnings.push('request #' + i + ': the draft law of ' + kind + ' was refused: ' + built.errors.slice(0, 4).join(' | ')); return undefined; }
+        if (built.errors.length) { warnings.push('request #' + i + ': the draft model of ' + kind + ' was refused: ' + built.errors.slice(0, 4).join(' | ')); return undefined; }
         return built.law;
       }
-      warnings.push('request #' + i + ': "law" must be a round number or a draft { observations, rules, components }');
+      warnings.push('request #' + i + ': "model" must be a round number or a draft { observations, rules, components }');
       return undefined;
     };
     const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -276,20 +227,22 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
         const from = Number.isInteger(q.from) ? q.from as number : 0;
         const to = Number.isInteger(q.to) ? q.to as number : from + 59;
         requests.push({ view: q.view, from, to: Math.min(to, from + 59) });
-      } else if (obj(q.launch)) {
-        const l = obj(q.launch)!;
+      } else if (obj(q.act ?? q.launch)) {
+        const l = obj(q.act ?? q.launch)!;
         const [x, y, vx, vy] = [num(l.x), num(l.y), num(l.vx), num(l.vy)];
         const m = l.m === undefined ? 1 : num(l.m);
-        if (x === null || y === null || vx === null || vy === null || m === null || !(m > 0)) { warnings.push('request #' + i + ': launch needs numbers x, y, vx, vy (and a positive m)'); continue; }
-        requests.push({ launch: { x, y, vx, vy, m, ...(typeof l.setup === 'string' ? { setup: l.setup } : {}) } });
+        if (x === null || y === null || vx === null || vy === null || m === null || !(m > 0)) { warnings.push('request #' + i + ': act needs numbers x, y, vx, vy (and a positive m)'); continue; }
+        const place = l.place ?? l.setup;
+        requests.push({ act: { x, y, vx, vy, m, ...(typeof place === 'string' ? { setup: place } : {}) } });
       } else if (typeof q.inspect === 'string') {
-        const law = lawOf(q.law, i, 'inspect');
+        const law = lawOf(q.model !== undefined ? q.model : q.law, i, 'inspect');
         if (law === undefined) continue;
         requests.push({ inspect: q.inspect, law });
       } else if (typeof q.simulate === 'string') {
-        const law = lawOf(q.law, i, 'simulate');
+        const law = lawOf(q.model !== undefined ? q.model : q.law, i, 'simulate');
         if (law === undefined) continue;
-        const rows = Number.isInteger(q.rows) ? Math.max(1, Math.min(40, q.rows as number)) : 20;
+        const n = q.steps ?? q.rows;
+        const rows = Number.isInteger(n) ? Math.max(1, Math.min(40, n as number)) : 20;
         requests.push({ simulate: q.simulate, law, rows });
       } else if (obj(q.measure) && Array.isArray(q.on)) {
         const m = obj(q.measure)!;
@@ -300,8 +253,8 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
         const m = obj(q.table)!;
         const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
         if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': table needs "source" and "range"'); continue; }
-        requests.push({ table: { source: m.source, range }, on: q.on === 'tests' ? 'tests' : 'launches' });
-      } else warnings.push('request #' + i + ' ignored (' + clipJson(r) + '): use view, launch, inspect, measure, simulate or table');
+        requests.push({ table: { source: m.source, range }, on: q.on === 'checks' || q.on === 'tests' ? 'checks' : 'episodes' });
+      } else warnings.push('request #' + i + ' ignored (' + clipJson(r) + '): use view, act, inspect, measure, simulate or table');
     }
     if (o.investigate.length > max) warnings.push('only the first ' + max + ' requests were run');
     return { kind: 'investigate', requests, notes, methods, warnings };

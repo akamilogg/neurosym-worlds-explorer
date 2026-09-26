@@ -42,23 +42,23 @@ test('rounds: the lineage says what changed and how its games went, and the less
   nb.recordGames(1, ['lost', 'won', 'lost', 'draw']);
   nb.recordRound(2, formula({ a: 'A?', b: 'B?' }), ['blocking helps'], 'test blocking');
   const brief = nb.brief() as any;
-  assert.equal(brief.rounds.length, 2);
-  assert.deepEqual(brief.rounds[0].games, [{ results: ['lost', 'won', 'lost', 'draw'], wins: 1, of: 4 }]);
-  assert.deepEqual(brief.rounds[1].changes, { added: ['rule b'], removed: [], reweighted: ['a'] });
+  assert.equal(brief.models.length, 2);
+  assert.deepEqual(brief.models[0].episodes, [{ scores: [-1, 1, -1, 0], scored_1: 1, of: 4 }], 'scores, never words of a game');
+  assert.deepEqual(brief.models[1].changes, { added: ['rule b'], removed: [], reweighted: ['a'] });
   assert.deepEqual(brief.your_last_lessons, ['blocking helps']);
   assert.equal(brief.your_planned_next_experiment, 'test blocking');
-  assert.ok(!('picture' in brief.rounds[0].formula.observations), 'the sense is the host own, not part of the explorer lineage');
+  assert.ok(!('picture' in brief.models[0].model.observations), 'the sense is the host own, not part of the explorer lineage');
 });
 
 test('notes belong to the explorer: it writes, rewrites and forgets them; positions must exist in its own games', () => {
   const nb = new Notebook();
   nb.addGames([{ id: 'g1', round: 0, how: 'exploration: at random', result: 'lost', turns: 9 }]);
   const exists = (ref: string) => /^g1@[0-9]$/.test(ref);
-  assert.deepEqual(nb.applyNotes(1, [{ do: 'write', id: 'edge', text: 'it ran to the edge', positions: ['g1@8', 'g7@1'] }], exists), ['note "edge": no position "g7@1"']);
+  assert.deepEqual(nb.applyNotes(1, [{ do: 'write', id: 'edge', text: 'it ran to the edge', positions: ['g1@8', 'g7@1'] }], exists), ['note "edge": no point "g7@1"']);
   nb.applyNotes(2, [{ do: 'write', id: 'edge', text: 'it ran to the right edge', positions: ['g1@9'] }, { do: 'write', id: 'Bad', text: 'x' }], exists);
   let brief = nb.brief() as any;
-  assert.deepEqual(brief.notes, [{ id: 'edge', text: 'it ran to the right edge', positions: ['g1@9'], written_round: 1, updated_round: 2 }]);
-  assert.deepEqual(brief.games, [{ game: 'g1', round: 0, moves_chosen_by: 'exploration: at random', result: 'lost', turns: 9 }]);
+  assert.deepEqual(brief.notes, [{ id: 'edge', text: 'it ran to the right edge', points: ['g1@9'], written_round: 1, updated_round: 2 }]);
+  assert.deepEqual(brief.episodes, [{ episode: 'g1', round: 0, chosen_by: 'exploration: at random', score: -1, steps: 9 }]);
   assert.deepEqual(nb.applyNotes(3, [{ do: 'forget', id: 'edge' }, { do: 'forget', id: 'ghost' }], exists), ['note "ghost" does not exist']);
   brief = nb.brief() as any;
   assert.deepEqual(brief.notes, []);
@@ -87,5 +87,5 @@ test('the explorer answers with stances, lessons and a next experiment; the payl
   nb.recordRound(2, parsed.proposal.formula, parsed.proposal.lessons, parsed.proposal.nextExperiment);
   const payload = explorerPayload({ round: 3, perceptDoc: 'doc', notebook: nb.brief(['edge']), formula: parsed.proposal.formula, formulaRound: 2 }) as any;
   assert.deepEqual(payload.notebook.you_took_no_stance_on, ['edge']);
-  assert.equal(payload.your_best_formula.from_round, 2);
+  assert.equal(payload.your_model.from_round, 2);
 });

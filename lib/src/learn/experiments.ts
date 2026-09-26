@@ -347,12 +347,12 @@ export async function runProbes<S>(probes: readonly Probe[], positions: readonly
 /** A test as FACTS, with no verdict: the explorer compares them with its own hypothesis (whose direction only it
     knows). "Chance could explain it" is the one statistical fact it cannot see by itself in a handful of numbers. */
 export function describeTest(t: ProbeTest): Record<string, unknown> {
-  const where = t.positions === 'siblings' ? 'choices from one position' : t.positions === 'final' ? 'final positions' : 'positions in play';
-  const chance = t.status === 'inconclusive' ? 'too few positions to say' : t.status === 'unsupported' ? 'yes' : 'no';
-  /* By the score each game ended with: what the scores mean is for the explorer to work out. */
+  const where = t.positions === 'siblings' ? 'choices from one point' : t.positions === 'final' ? 'final points' : 'points in play';
+  const chance = t.status === 'inconclusive' ? 'too few points to say' : t.status === 'unsupported' ? 'yes' : 'no';
+  /* By the score each episode ended with: what the scores mean is for the explorer to work out. */
   if (t.by_score) return {
     tested: t.by, on: where,
-    by_game_score: t.by_score.map((g) => ({ game_score: g.score, positions: g.positions, mean: g.mean })),
+    by_episode_score: t.by_score.map((g) => ({ episode_score: g.score, points: g.positions, mean: g.mean })),
     auc: t.auc, could_chance_explain_the_difference: chance
   };
   return {

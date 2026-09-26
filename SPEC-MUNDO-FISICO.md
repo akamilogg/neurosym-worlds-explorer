@@ -46,6 +46,14 @@ equivoca la ley.
   nada de la naturaleza del mundo ni del tipo de observaciones que convienen: ni qué se mueve, ni qué varía entre los
   sitios donde se comprueba la ley, ni que hay ruido o una región que no se ve, ni qué ley buscar. La tarea (qué se
   predice) y los parámetros de las herramientas son la interfaz; la forma de lo percibido la describe `percept`.
+- **I6 · Un solo prompt para todos los mundos (26/09/2026).** `lib/src/learn/prompt.ts` tiene el texto común (persona,
+  método, herramientas, protocolo) con vocabulario común: episodio, paso, punto, modelo. Las herramientas tienen nombres
+  comunes: `view`, `inspect`, `act` (antes `try` y `launch`), `replay` (antes `play`), `simulate`, `measure`, `table`,
+  `probes`; los nombres antiguos se aceptan como alias. Cada mundo solo añade su interfaz (`GRID_INTERFACE`,
+  `ORBIT_INTERFACE`): qué produce el modelo, cómo se combinan sus partes, los parámetros de cada herramienta y la forma del
+  veredicto. Dos mundos con las mismas herramientas reciben el mismo texto común, palabra por palabra. Lo percibido se
+  describe como estructura de datos (`p.series`, `p.next`, `p.step`), y los resultados llegan como puntuación de -1 a 1,
+  nunca como "ganó" o "perdió". Un test lo vigila con una lista de palabras de ambos mundos.
 
 ## 3. El mundo `orbit@1`
 

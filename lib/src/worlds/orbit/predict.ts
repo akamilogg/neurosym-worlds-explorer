@@ -92,7 +92,7 @@ export function observedNoiseVariance(spec: OrbitSpec, trajectories: readonly Tr
   for (const tr of trajectories) {
     const t = readTable(sense.render(tr));
     for (const g of sense.sourceGlyphs) for (const axis of ['x', 'y'] as const) {
-      const c = t.bodies[g][axis];
+      const c = t.series[g][axis];
       for (let i = 1; i + 1 < c.length; i++) { const d = c[i + 1]! - 2 * c[i]! + c[i - 1]!; sum += d * d; n++; }
     }
   }
@@ -114,7 +114,7 @@ export function predictionSamples(spec: OrbitSpec, trajectories: readonly Trajec
     const outer = Math.hypot(tr.launch.pos[0], tr.launch.pos[1]) > spec.window;
     const sense = tableSense(spec, { resolution: options.resolution, window: outer ? false : options.window });
     const lines = sense.render(tr).split('\n');
-    const probe = readTable(lines.join('\n')).bodies[sense.probeGlyph];
+    const probe = readTable(lines.join('\n')).series[sense.probeGlyph];
     let taken = 0;
     for (let i = 1; i + 1 < tr.states.length; i++) {
       const xs = [probe.x[i - 1], probe.x[i], probe.x[i + 1]], ys = [probe.y[i - 1], probe.y[i], probe.y[i + 1]];

@@ -148,7 +148,7 @@ export class Notebook {
       }
       const text = (op.text ?? '').trim();
       if (!text) { warnings.push('note "' + op.id + '" has no text'); continue; }
-      const positions = (op.positions ?? []).filter((p) => { const ok = known(p); if (!ok) warnings.push('note "' + op.id + '": no position "' + p + '"'); return ok; });
+      const positions = (op.positions ?? []).filter((p) => { const ok = known(p); if (!ok) warnings.push('note "' + op.id + '": no point "' + p + '"'); return ok; });
       const old = this.notes.get(op.id);
       if (old) { old.text = clip(text, 1200); old.positions = positions; old.updated = round; }
       else this.notes.set(op.id, { id: op.id, text: clip(text, 1200), positions, written: round, updated: round });
@@ -205,6 +205,8 @@ export class Notebook {
 
   /** The notebook as the explorer reads it. */
   brief(unaddressed: readonly string[] = []): Record<string, unknown> {
+    /* Results travel as the score the interface speaks of (1, 0, -1), never as words of a game. */
+    const score = (r: string): number | string => (r === 'won' ? 1 : r === 'lost' ? -1 : r === 'draw' ? 0 : r);
     const beliefs = [...this.beliefs.values()];
     const last = this.rounds[this.rounds.length - 1];
     return {
@@ -214,10 +216,12 @@ export class Notebook {
       })),
       beliefs_dropped: beliefs.filter((b) => b.status === 'dropped').map((b) => ({ id: b.id, statement: b.statement, why: b.history[b.history.length - 1].why })),
       ...(unaddressed.length ? { you_took_no_stance_on: [...unaddressed] } : {}),
-      notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, positions: n.positions, written_round: n.written, updated_round: n.updated })),
+      notes: [...this.notes.values()].map((n) => ({ id: n.id, text: n.text, points: n.positions, written_round: n.written, updated_round: n.updated })),
       methods: [...this.methods.values()].map((m) => ({ id: m.id, text: m.text, written_round: m.written, updated_round: m.updated })),
-      games: this.games.map((g) => ({ game: g.id, round: g.round, moves_chosen_by: g.how, result: g.result, turns: g.turns })),
-      rounds: this.rounds.map((r) => ({ round: r.round, fingerprint: r.fingerprint, formula: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes, games: r.games })),
+      /* The common vocabulary of the prompt (prompt.ts): episodes, steps, models. */
+      episodes: this.games.map((g) => ({ episode: g.id, round: g.round, chosen_by: g.how, score: score(g.result), steps: g.turns })),
+      models: this.rounds.map((r) => ({ round: r.round, fingerprint: r.fingerprint, model: r.formula, ...(r.changes ? { changes: r.changes } : {}), probes: r.probes,
+        episodes: r.games.map((g) => ({ scores: g.results.map(score), scored_1: g.wins, of: g.of })) })),
       ...(this.reflections.length ? { reflections: this.reflections } : {}),
       ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {})
     };

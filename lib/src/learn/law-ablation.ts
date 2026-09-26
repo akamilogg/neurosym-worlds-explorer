@@ -164,7 +164,7 @@ export function delegatedLaw(law: Law, tableSource = RECENT_ROWS): Law {
     const rule = 'delegated_' + id;
     rules[rule] = {
       type: 'noul', used_as: 'value',
-      instructions: 'The observed table shows how some bodies moved. Estimate how far the next position of the last symbol departs from repeating its last step, '
+      instructions: 'The table shows pairs of values over time. Estimate how far the next pair of values of the last symbol departs from repeating its last step, '
         + 'measured along one direction, as a fraction between the smallest (0) and the largest (1) plausible size'
         + (c.scale === 'log' ? ' on a logarithmic scale' : '') + '.',
       criteria: { yes: 'large', no: 'small' }

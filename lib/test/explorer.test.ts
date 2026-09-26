@@ -22,7 +22,7 @@ const answer = {
   observations: { mine: { definition: 'my pieces', source: '(p) => p.cells.flat().filter((c) => c === p.you).length', range: [0, 20] } },
   rules: { many: { type: 'score', instructions: 'I have {{mine}} pieces. How good?', criteria: ['bad', 'even', 'good'] } },
   weights: { many: 3 },
-  probes: [{ id: 'late', hypothesis: 'late is bad', observation: { source: '(p) => p.move', range: [0, 40] } }],
+  probes: [{ id: 'late', hypothesis: 'late is bad', observation: { source: '(p) => p.step', range: [0, 40] } }],
   evidence_ref: { case: 0 }
 };
 
@@ -72,7 +72,7 @@ test('the explorer is told nothing about the world: the payload is its notebook,
     const said = /^[a-z]+$/.test(word) ? new RegExp('(^|[^a-z])' + word + '($|[^a-z])').test(text) : text.includes(word);
     assert.ok(!said, 'the payload must not say "' + word + '"');
   }
-  const own = (payload as any).your_best_formula;
+  const own = (payload as any).your_model;
   assert.deepEqual(Object.keys(own.observations), ['mine'], 'the sense is the host\'s, not echoed as the explorer\'s code');
   assert.equal((payload as any).investigation[0].results[0].frames[0].picture, sense.render(world.initial()));
   assert.equal((payload as any).steps_left, 2);
@@ -97,7 +97,7 @@ test('episodes: a noisy opponent replays exactly per seed, and positions are lab
 test('ablation: the same observations read linearly, no Judge - the sign is fitted on labelled positions', async () => {
   const { fitCodeOnly, codeOnlyFormula, codeOnlyJudge, CODE_ONLY_RULE } = await import('../src/learn/ablation.ts');
   const { Evaluator } = await import('../src/core/evaluate.ts');
-  const clock = { spec: { kind: 'code', lang: 'js', source: '(p) => p.move' }, range: [0, 40] } as const;
+  const clock = { spec: { kind: 'code', lang: 'js', source: '(p) => p.step' }, range: [0, 40] } as const;
   const f = parseExplorerProposal(JSON.stringify({ ...answer, observations: { ...answer.observations, clock: { source: clock.spec.source, range: [0, 40] } },
     rules: { r: { type: 'noul', instructions: '{{mine}} {{clock}}', criteria: { yes: 'y', no: 'n' } } }, weights: { r: 1 }, probes: [] }),
   { world: world.id, senses: SENSES });
@@ -196,14 +196,14 @@ test('play: its best formula, one of its rounds, or a draft built and checked li
   ] }), { world: world.id, senses: SENSES });
   assert.ok(t.kind === 'investigate');
   if (t.kind !== 'investigate') return;
-  assert.deepEqual(t.requests.slice(0, 2), [{ play: 'g1@0', formula: null }, { play: 'g2@6', formula: 3 }]);
+  assert.deepEqual(t.requests.slice(0, 2), [{ replay: 'g1@0', formula: null }, { replay: 'g2@6', formula: 3 }], 'the earlier name "play" is still accepted');
   const built = (t.requests[2] as { formula: { observations: Record<string, unknown>; weights: Record<string, number> } }).formula;
   assert.ok('picture' in built.observations && 'mine' in built.observations, 'a draft carries the senses too');
   assert.equal(built.weights.many, 1);
   assert.equal(t.requests.length, 3);
   assert.equal(t.warnings.length, 2);
-  assert.match(t.warnings[0], /draft formula of play was refused/);
-  assert.match(EXPLORER_SYSTEM, /"play"/);
+  assert.match(t.warnings[0], /draft model of replay was refused/);
+  assert.match(EXPLORER_SYSTEM, /"replay"/);
 });
 
 test('the thinking guidance is discipline and strategy only: nothing in it names a feature of any world or game', () => {
@@ -211,7 +211,7 @@ test('the thinking guidance is discipline and strategy only: nothing in it names
   const method = EXPLORER_SYSTEM.slice(start, EXPLORER_SYSTEM.indexOf('`surprises` lists', start)).toLowerCase();
   assert.ok(start >= 0 && method.includes('table') && method.includes('play') && method.includes('methods'));
   for (const word of ['row', 'column', 'col,', 'edge', 'corner', 'piece', 'capture', 'trap', 'reach', 'immobil', 'block', 'diagonal', 'side', 'goal']) {
-    assert.ok(!method.includes(word), 'method guidance must not mention "' + word + '"');
+    assert.ok(!new RegExp('\\b' + word).test(method), 'method guidance must not mention "' + word + '"');
   }
 });
 
@@ -239,13 +239,13 @@ test('the baseline: a withheld instrument is never mentioned in the prompt, and 
   for (const t of EXPLORER_TOOLS.filter((x) => x !== 'probes')) {
     assert.ok(!none.includes('{"' + t + '"') && !none.includes('`' + t + '`'), 'no request and no lens example for ' + t);
   }
-  assert.ok(!/INVESTIGATE before proposing|PROBES|"probes"|steps_left|plays_left/.test(none));
+  assert.ok(!/INVESTIGATE before proposing|PROBES|"probes"|steps_left|replays_left/.test(none));
   for (const kept of ['HOW YOU THINK.', 'YOUR NOTEBOOK', 'When you propose, answer with ONE JSON object', 'sufficiency', 'minimum description length']) {
     assert.ok(none.includes(kept), 'kept: ' + kept);
   }
   const viewOnly = explorerSystem(new Set(['view'] as const));
   assert.ok(viewOnly.includes('{"view"') && viewOnly.includes('INVESTIGATE before proposing'));
-  assert.ok(!viewOnly.includes('{"try"') && !viewOnly.includes('`table`') && !viewOnly.includes('`play`'));
+  assert.ok(!viewOnly.includes('{"act"') && !viewOnly.includes('`table`') && !viewOnly.includes('`replay`'));
 });
 
 /* Zero hints (SPEC-MUNDO-FISICO I5): nothing about the nature of the world - not that it is a game of two players, not that

@@ -12,7 +12,7 @@ import { exists, type GridSpec, type GridState } from './world.ts';
  *   1  . . . . .
  *   ...
  *   4  . . @ . .
- *   you: #   to move: #   move 3
+ *   you: #   next: #   step 3
  * ========================================================================== */
 
 /* Symbols only: a letter glyph would also appear inside the words of the legend ("you", "to move"). */
@@ -77,7 +77,7 @@ export function asciiSense(spec: GridSpec): GridSense {
       }
       const lines: string[] = ['    ' + Array.from({ length: W }, (_, x) => String(x)).join(' ')];
       cells.forEach((row, Y) => lines.push(String(Y).padStart(2) + '  ' + row.join(' ')));
-      lines.push('you: ' + glyphA + '   to move: ' + (state.turn === 'A' ? glyphA : glyphB) + '   move ' + state.ply);
+      lines.push('you: ' + glyphA + '   next: ' + (state.turn === 'A' ? glyphA : glyphB) + '   step ' + state.ply);
       return lines.join('\n');
     }
   };
@@ -91,8 +91,10 @@ export interface GridPercept {
   readonly width: number;
   readonly height: number;
   readonly you: string;
-  readonly toMove: string;
-  readonly move: number;
+  /** The symbol the picture marks as "next". */
+  readonly next: string;
+  /** The step number the picture shows. */
+  readonly step: number;
 }
 
 export function readPicture(picture: string): GridPercept {
@@ -107,20 +109,19 @@ export function readPicture(picture: string): GridPercept {
   const width = Math.max(0, ...rows.map((r) => r.length));
   const cells = rows.map((r) => Object.freeze(Array.from({ length: width }, (_, i) => r[i] ?? ' ')));
   const you = /you: (\S)/.exec(legend)?.[1] ?? '';
-  const toMove = /to move: (\S)/.exec(legend)?.[1] ?? '';
-  const move = Number(/move (\d+)$/.exec(legend)?.[1] ?? 0);
-  return Object.freeze({ picture, cells: Object.freeze(cells), width, height: cells.length, you, toMove, move });
+  const next = /next: (\S)/.exec(legend)?.[1] ?? '';
+  const step = Number(/step (\d+)$/.exec(legend)?.[1] ?? 0);
+  return Object.freeze({ picture, cells: Object.freeze(cells), width, height: cells.length, you, next, step });
 }
 
 /** What an observation over the grid sense receives, described for a reader who knows nothing else. */
 export const GRID_PERCEPT_DOC = [
-  'An observation is a JavaScript function `(p) => number`. `p` is the picture you perceive, already read for you:',
+  'An observation is a JavaScript function `(p) => number` (or, without a range, `(p) => text`). `p` is the picture perceived at a point, already read for you:',
   '  p.picture  the picture exactly as shown (a string)',
-  '  p.cells    the grid as drawn: p.cells[row][col] is one character (row 0 is the top line, col 0 the left column);',
-  '             "." is an empty square, " " is not part of the board, any other symbol is a piece',
-  '  p.width, p.height   the grid size as drawn',
-  '  p.you      the symbol of YOUR pieces',
-  '  p.toMove   the symbol of the side about to move',
-  '  p.move     how many turns have been played',
-  'Nothing else is available: no rules, no list of possible moves.'
+  '  p.cells    the characters of the picture\'s grid: p.cells[row][col] is one character (row 0 is its top line, col 0 its left column)',
+  '  p.width, p.height   the size of that grid',
+  '  p.you      the symbol the picture marks as "you"',
+  '  p.next     the symbol the picture marks as "next"',
+  '  p.step     the step number the picture shows',
+  'Nothing else is available.'
 ].join('\n');
