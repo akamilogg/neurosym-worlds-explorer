@@ -64,7 +64,8 @@ export async function recordTurn<S, A>(evaluator: Evaluator<S>, world: World<S, 
   const key = (m: A) => (world.actionKey ? world.actionKey(m) : JSON.stringify(m));
   for (const m of world.actions(state, options.maximizer)) {
     const child = world.step(state, m);
-    const ev = await evaluator.eval(options.formula, child);
+    /* The chosen step is taken apart for the learner: its rules are answered even when the output does not read them. */
+    const ev = await evaluator.eval(options.formula, child, undefined, { askRules: key(m) === key(chosen) });
     const direct = ev.value;
     const rules = Object.fromEntries(Object.entries(ev.answers).map(([id, a]) => [id, Math.round(a.value * 10000) / 10000]));
     const measures: Record<string, number | string> = Object.fromEntries(Object.entries(options.formula.observations)

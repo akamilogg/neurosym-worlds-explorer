@@ -60,8 +60,17 @@ function readRetryAfter(headers?: { get(name: string): string | null }): number 
 export function parseJsonLoose(text: string): unknown {
   if (typeof text !== 'string' || !text.trim()) return null;
   try { return JSON.parse(text); } catch { /* fall through */ }
-  const start = text.indexOf('{');
-  if (start < 0) return null;
+  /* The first balanced {...} that parses: prose before the object may hold braces of its own (e.g. LaTeX "x^{-2}"). */
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    const end = balancedEnd(text, start);
+    if (end < 0) continue;
+    try { return JSON.parse(text.slice(start, end + 1)); } catch { /* try the next brace */ }
+  }
+  return null;
+}
+
+/** Where the object opened at `start` closes (strings skipped), or -1. */
+function balancedEnd(text: string, start: number): number {
   let depth = 0, inString = false, escaped = false;
   for (let i = start; i < text.length; i++) {
     const ch = text[i];
@@ -73,11 +82,9 @@ export function parseJsonLoose(text: string): unknown {
     }
     if (ch === '"') inString = true;
     else if (ch === '{') depth++;
-    else if (ch === '}' && --depth === 0) {
-      try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; }
-    }
+    else if (ch === '}' && --depth === 0) return i;
   }
-  return null;
+  return -1;
 }
 
 export async function fetchJson(url: string, options: FetchJsonOptions = {}): Promise<FetchJsonResult> {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiError, fetchJson } from '../src/core/net.ts';
+import { ApiError, fetchJson, parseJsonLoose } from '../src/core/net.ts';
 
 /* The transport must say what happened. Seen in a real run against OpenRouter: the 200 headers arrive at
    once, the body later; a body cut by our own timeout used to become "" and then "not valid JSON". */
@@ -37,6 +37,13 @@ test('an empty 200 body is retried, and a non-JSON body says status, type and si
 test('keep-alive comments before the JSON (OpenRouter) are tolerated', async () => {
   const r = await fetchJson('https://x', { fetch: (async () => ok(': OPENROUTER PROCESSING\n\n: OPENROUTER PROCESSING\n\n{"choices":[{"message":{"content":"{\\"v\\":1}"}}]}')) as any });
   assert.equal((r.data as any).choices[0].message.content, '{"v":1}');
+});
+
+test('braces in the prose before the object (LaTeX) do not hide it: the first balanced {...} that parses', () => {
+  assert.deepEqual(parseJsonLoose('The departure scales as $r^{-2.5}$ and $x_{i}$.\n{"rationale":"a {brace} in a string","v":[1]}'),
+    { rationale: 'a {brace} in a string', v: [1] });
+  assert.deepEqual(parseJsonLoose('an unclosed { brace, then {"a":1}'), { a: 1 });
+  assert.equal(parseJsonLoose('only ${x}$ here'), null);
 });
 
 test('a network-level failure is retried only when the host asks (a browser CORS failure never is)', async () => {

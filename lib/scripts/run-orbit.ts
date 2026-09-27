@@ -304,7 +304,7 @@ function notebookBrief(): Record<string, unknown> {
 
 let lastTest: unknown = null;
 /** Operator: the main evaluator's cumulative questions to Jev, live against answered from the cache (same observation vector). */
-const cacheStats = () => ({ live: evaluator.stats.judgeCalls, hits: evaluator.stats.vectorHits,
+const cacheStats = () => ({ live: evaluator.stats.judgeCalls, hits: evaluator.stats.vectorHits, not_asked_output_ignores_rules: evaluator.stats.judgeUnread,
   hit_rate: round2(evaluator.stats.vectorHits / Math.max(1, evaluator.stats.judgeCalls + evaluator.stats.vectorHits)) });
 /** Every point checked so far, by round: the rows `table` can show "on tests". */
 const testPoints = new Map<number, PredictionSample<OrbitPoint>[]>();
@@ -490,7 +490,8 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
     const failures = typeof req.law === 'object' && req.law ? checkOnPoints(law) : [];
     if (failures.length) return { inspect: req.inspect, error: 'your draft failed on points of your episodes: ' + failures.join(' | ') };
     try {
-      const pr = await predictor.predict(law, p);
+      /* A model taken apart: its rules are answered even when its output does not read them. */
+      const pr = await predictor.predict(law, p, { askRules: true });
       return {
         inspect: req.inspect, your_observations_measured: pr.observations,
         ...(pr.evaluation ? { each_rule_answered: Object.fromEntries(Object.entries(pr.rules).map(([id, v]) => [id, round2(v)])), V: pr.V } : { the_judge_was_not_asked: true }),
@@ -693,14 +694,23 @@ explore();
 let accepted: LawRecord | null = null;
 /** --quick: the law System 2 judged good, where the run stopped. */
 let satisfied: LawRecord | null = null;
+/** The law that held in every laboratory at the latest check. Asking to validate that same law (the same fingerprint, the
+    same laboratories) validates it on the check it held in: a new check could fail by chance, and then the law that held
+    would never be validated. */
+type LabCheck = { result: TestResult; calls: number; set: CheckSet };
+let heldAt: { fingerprint: string; round: number; labs: string; labCheck: LabCheck; labHeld: Record<string, boolean> } | null = null;
 for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   const record = await consult('propose');
   if (!record) { if (llmFatal) break; continue; }
   const round = record.round;
   /* 1. The check in the laboratories, on launches there it has not seen. */
   const inLabs = labs();
-  const labCheck = await evaluate(record.law, launchesIn(inLabs, round, round, (x) => 'check' + round + '-' + x.id));
-  const labHeld = heldIn(labCheck.result, inLabs.map((x) => x.id), labCheck.set);
+  const labIds = inLabs.map((x) => x.id).join(',');
+  const reused: { round: number; labCheck: LabCheck; labHeld: Record<string, boolean> } | null = record.validate && heldAt && heldAt.fingerprint === record.fingerprint && heldAt.labs === labIds ? heldAt : null;
+  if (reused) say('  this law held in every laboratory in round ' + reused.round + ': validated on that check, without checking again');
+  const labCheck: LabCheck = reused ? reused.labCheck : await evaluate(record.law, launchesIn(inLabs, round, round, (x) => 'check' + round + '-' + x.id));
+  const labHeld: Record<string, boolean> = reused ? reused.labHeld : heldIn(labCheck.result, inLabs.map((x) => x.id), labCheck.set);
+  if (!reused) heldAt = allHeld(labHeld) ? { fingerprint: record.fingerprint, round, labs: labIds, labCheck, labHeld } : null;
   record.test = { error: labCheck.result.error, median: labCheck.result.median, score: labCheck.result.scores.law };
   let validation: Record<string, unknown> | null = null;
   let validationView: unknown = null;
@@ -713,6 +723,7 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
     else if (validationsLeft <= 0) validationView = { refused: 'you have no validations left' };
     else {
       validationsLeft--;
+      heldAt = null;
       const family = [...setups.values()].filter((x) => x.role === 'family');
       for (const x of family) x.seen = true;
       const famCheck = family.length ? await evaluate(record.law, launchesIn(family, 5000 + round, round, (x) => 'valid' + round + '-' + x.id)) : null;
@@ -732,13 +743,14 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
     }
   }
   record.accepted = ok;
-  lastTest = { round, laboratories: describeCheck(labCheck.result, labHeld), ...(validationView ? { validation: validationView } : {}), accepted: ok, validations_left: validationsLeft };
-  log('check', { round, laboratories: { held: labHeld, ...operatorView(labCheck.result) }, asked_to_validate: record.validate, ...(validation ? { validation } : validationView ? { validation: validationView } : {}), accepted: ok,
-    jev: { calls: judge.stats.calls, errors: judge.stats.errors, check_calls: labCheck.calls, calls_per_point: round2(labCheck.calls / Math.max(1, labCheck.result.samples.length)), cache: cacheStats() },
+  lastTest = { round, ...(reused ? { not_checked_again: 'this model already held in every one of your laboratories in round ' + reused.round + ': these are the verdicts of that check' } : {}),
+    laboratories: describeCheck(labCheck.result, labHeld), ...(validationView ? { validation: validationView } : {}), accepted: ok, validations_left: validationsLeft };
+  log('check', { round, ...(reused ? { reused_check_of_round: reused.round } : {}), laboratories: { held: labHeld, ...operatorView(labCheck.result) }, asked_to_validate: record.validate, ...(validation ? { validation } : validationView ? { validation: validationView } : {}), accepted: ok,
+    jev: { calls: judge.stats.calls, errors: judge.stats.errors, check_calls: reused ? 0 : labCheck.calls, calls_per_point: round2(labCheck.calls / Math.max(1, labCheck.result.samples.length)), cache: cacheStats() },
     /* What Jev's cache is keyed on besides the observation vector: the law's observations and rules. Unchanged across rounds,
        recurring points (--sampling grid) can hit; changed, nothing from earlier rounds can. */
     judgment_hash: judgmentHash(lawFormula(record.law)),
-    abstraction: abstractionOf(record.law, testPoints.get(round) ?? []) });
+    abstraction: abstractionOf(record.law, testPoints.get(reused ? reused.round : round) ?? []) });
   say('  check in the laboratories: ' + chi2Text(labCheck.result) + ' (accept <= ' + cfg.accept + '; operator: hidden law ' + round2(labCheck.result.scores.reference ?? 0) + ' vs law ' + round2(labCheck.result.scores.law) + ')' +
     (record.validate && !validation && !quickStop ? '; validation refused' : '') + (ok ? '  ACCEPTED' : ''));
   if (quickStop) {
@@ -747,7 +759,7 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
     say('  --quick: System 2 judges its law good in round ' + round + ' (in its laboratories: ' + (allHeld(labHeld) ? 'holds' : 'does NOT hold') + '); stopping without validation');
     break;
   }
-  if (cfg.ablation || cfg.delegated) await ablate(record.law, round, labCheck.result);
+  if ((cfg.ablation || cfg.delegated) && !reused) await ablate(record.law, round, labCheck.result);
   if (ok) { accepted = record; log('accepted', { round }); break; }
 }
 

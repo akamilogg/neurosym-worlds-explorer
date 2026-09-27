@@ -1,6 +1,6 @@
 import { checkFormula, makeFormula } from './formula.ts';
 import type { Evaluator, Evaluation } from './evaluate.ts';
-import { OutputRunner, outputInputs, type OutputResult } from './output.ts';
+import { OutputRunner, outputInputs, outputObservations, type OutputResult } from './output.ts';
 import type { CodeRunner, CodeSpec, Formula, MeasureDecl, Rule } from './types.ts';
 
 /* ============================================================================
@@ -68,7 +68,7 @@ export interface Prediction {
   readonly observations: Readonly<Record<string, number | string>>;
   readonly rules: Readonly<Record<string, number>>;
   readonly V: number | null;
-  /** The Judge's evaluation; null when the law has no rules. */
+  /** The Judge's evaluation; null when the law has no rules, or its output read none of them (the Judge was not asked). */
   readonly evaluation: Evaluation | null;
 }
 
@@ -125,8 +125,20 @@ export class Predictor<S> {
 
   /** `measure`: observations to hand the output instead of the law's own (an ablation: the Judge reads something else,
       the output still reads what the learner measured). */
-  async predict(law: Law, state: S, options: { signal?: AbortSignal; measure?: Readonly<Record<string, MeasureDecl>> } = {}): Promise<Prediction> {
+  async predict(law: Law, state: S, options: { signal?: AbortSignal; measure?: Readonly<Record<string, MeasureDecl>>; askRules?: boolean } = {}): Promise<Prediction> {
     const percept = this.perceive(state);
+    /* An output that reads none of the rules answers alone: the Judge is not asked questions nobody reads. */
+    if (law.output && asksJudge(law) && !options.askRules) {
+      const o = this.evaluator.observer.observe(state, options.measure ?? law.observations);
+      if (o.errors.length) throw new Error('an observation failed: ' + o.errors.map((e) => e.id + ': ' + e.error).join(' | '));
+      const observations = outputObservations(o.values, o.texts ?? {});
+      const alone = this.outputs.runIfJudgeUnread(law.output, percept, observations);
+      if (alone) {
+        this.evaluator.stats.judgeUnread++;
+        return { vector: this.toCompared(alone.answer, state, percept), answer: alone.answer, parts: alone.parts,
+          observations, rules: {}, V: null, evaluation: null };
+      }
+    }
     let evaluation: Evaluation | null = null;
     let values: Readonly<Record<string, number>> = {}, texts: Readonly<Record<string, string>> = {};
     const rules: Record<string, number | undefined> = {};

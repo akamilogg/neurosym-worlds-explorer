@@ -18,7 +18,8 @@ import type { CodeRunner, CodeSpec } from './types.ts';
  * named values are shown back to it by `inspect`, so a model in code stays readable.
  *
  * Output never changes what the Judge is asked: the judgment hash, and so the cache,
- * depend on the observations and the rules only.
+ * depend on the observations and the rules only. It decides WHETHER the Judge is asked:
+ * an output that never reads `m.rules` nor `m.V` answers without it (runIfJudgeUnread).
  * ========================================================================== */
 
 export interface OutputInputs {
@@ -62,6 +63,31 @@ export class OutputRunner {
     }
     return { answer: out, parts: {} };
   }
+
+  /** Runs `output` before anything is asked of the Judge: `m.rules` and `m.V` are only read on demand. When the code
+      reads neither, this is its answer and the Judge need not be asked at all; when it reads either (even inside a
+      try/catch, or by spreading `m`), null: ask the Judge, then run it with the answers. The answer is the same either
+      way - the Judge is only spared the questions nobody reads. */
+  runIfJudgeUnread(spec: CodeSpec, p: unknown, observations: OutputInputs['observations']): OutputResult | null {
+    let read = false;
+    const unread = (): never => { read = true; throw new Error('the output reads the rules: ask the Judge first'); };
+    const m = Object.defineProperties({ observations } as object, {
+      rules: { enumerable: true, get: unread },
+      V: { enumerable: true, get: unread }
+    }) as OutputInputs;
+    try {
+      const out = this.run(spec, p, m);
+      return read ? null : out;
+    } catch (e) {
+      if (read) return null;
+      throw e;
+    }
+  }
+}
+
+/** What `output` reads as `m.observations`: each observation's number, or its text. */
+export function outputObservations(values: Readonly<Record<string, number>>, texts: Readonly<Record<string, string>>): OutputInputs['observations'] {
+  return { ...values, ...texts };
 }
 
 /** The inputs of `output` from an observation and the Judge's answers. */
@@ -69,5 +95,5 @@ export function outputInputs(values: Readonly<Record<string, number>>, texts: Re
   answers: Readonly<Record<string, number | undefined>>, V: number | null): OutputInputs {
   const rules: Record<string, number> = {};
   for (const [id, v] of Object.entries(answers)) if (typeof v === 'number' && Number.isFinite(v)) rules[id] = v;
-  return { observations: { ...values, ...texts }, rules, V };
+  return { observations: outputObservations(values, texts), rules, V };
 }

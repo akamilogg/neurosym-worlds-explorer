@@ -4,7 +4,7 @@ import { evaluationConfidence } from './jev.ts';
 import { mergePolicyDistributions, type PolicyMerge } from './policy.ts';
 import type { Observation } from './observer.ts';
 import type { CodeRunner, Formula, Judge, JudgeAnswer, JudgeRequest, MeasureDecl, Outcome, Rule, World } from './types.ts';
-import { OutputRunner, outputInputs, type OutputResult } from './output.ts';
+import { OutputRunner, outputInputs, outputObservations, type OutputResult } from './output.ts';
 
 /** Anything that can measure O(s) in a world: the library's Observer, or a host's own measuring code. */
 export interface ObserverLike<S> {
@@ -33,7 +33,8 @@ export interface JudgedEvent<S> {
  * 21/09 shows why this matters: 10 567 leaves were judged with 2 989 live calls.
  * ========================================================================== */
 
-export type Provenance = 'rules' | 'live' | 'cached-vector';
+/** 'code': the model's output answered without reading the rules, so the Judge was not asked. */
+export type Provenance = 'rules' | 'live' | 'cached-vector' | 'code';
 
 export interface Evaluation {
   /** V(s) for the maximizer, rounded to 4 decimals. */
@@ -79,6 +80,13 @@ export interface EvaluatorStats {
   vectorHits: number;
   fallbacks: number;
   priorCalls: number;
+  /** Evaluations of a model with rules whose output read none of them: the Judge was not asked. */
+  judgeUnread: number;
+}
+
+export interface EvalOptions {
+  /** Ask the Judge every rule even when the output does not read them (to show the learner what they answer). */
+  readonly askRules?: boolean;
 }
 
 export class MeasurementError extends Error {
@@ -102,7 +110,7 @@ export class Evaluator<S = unknown> {
   readonly observer: ObserverLike<S>;
   readonly judge: Judge;
   readonly maximizer: string;
-  readonly stats: EvaluatorStats = { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0 };
+  readonly stats: EvaluatorStats = { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0, judgeUnread: 0 };
   private readonly cache: Map<string, Record<string, JudgeAnswer>>;
   private readonly inflight = new Map<string, Promise<Record<string, JudgeAnswer>>>();
   private readonly priors: Map<string, PolicyMerge | null>;
@@ -172,7 +180,14 @@ export class Evaluator<S = unknown> {
     }
   }
 
-  async eval(formula: Formula, state: S, signal?: AbortSignal): Promise<Evaluation> {
+  /** The output's answer as a value (a number, kept to [0, 1]). */
+  private valueOf(output: OutputResult): number {
+    const v = Number(output.answer);
+    if (typeof output.answer !== 'number' || !Number.isFinite(v)) throw new Error('output must answer a number here (it answered ' + JSON.stringify(output.answer) + ')');
+    return Math.min(1, Math.max(0, v));
+  }
+
+  async eval(formula: Formula, state: S, signal?: AbortSignal, options: EvalOptions = {}): Promise<Evaluation> {
     this.assertUsable(formula);
     this.stats.evaluations++;
     const world = this.world;
@@ -191,6 +206,15 @@ export class Evaluator<S = unknown> {
     const ids = valueRuleIds(formula);
     const key = jHash + '|' + side + '|' + context.id + '|' + observation.vector;
     const texts = observation.texts ?? {};
+    /* An output that reads none of the rules answers alone: the Judge is not asked questions nobody reads. */
+    if (formula.output && ids.length && !options.askRules) {
+      const alone = this.outputs.runIfJudgeUnread(formula.output, observation.context ?? null, outputObservations(observation.values, texts));
+      if (alone) {
+        this.stats.judgeUnread++;
+        return { value: round(this.valueOf(alone), 4), confidence: null, observation, answers: {}, fallbacks: [], formulaHash: fHash,
+          judgmentHash: jHash, provenance: 'code', outcome: null, judgmentKey: key, output: alone };
+      }
+    }
     /* What the Judge reads is exactly what the formula observes: the measured numbers and the texts its code composed.
        What the senses perceive feeds that code, never the Judge. */
     const { answers, live } = !ids.length ? { answers: {} as Record<string, JudgeAnswer>, live: false } : await this.ask(key, 'value', state, {
@@ -212,9 +236,7 @@ export class Evaluator<S = unknown> {
     let output: OutputResult | undefined;
     if (formula.output) {
       output = this.outputs.run(formula.output, observation.context ?? null, outputInputs(observation.values, texts, scalar, ids.length ? composition.value : null));
-      const v = Number(output.answer);
-      if (typeof output.answer !== 'number' || !Number.isFinite(v)) throw new Error('output must answer a number here (it answered ' + JSON.stringify(output.answer) + ')');
-      value = Math.min(1, Math.max(0, v));
+      value = this.valueOf(output);
     }
     return {
       value: round(value, 4), confidence: evaluationConfidence(answers, formula.rules), observation, answers,

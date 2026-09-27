@@ -1360,8 +1360,17 @@ var Neurosym = (() => {
       return JSON.parse(text);
     } catch {
     }
-    const start = text.indexOf("{");
-    if (start < 0) return null;
+    for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
+      const end = balancedEnd(text, start);
+      if (end < 0) continue;
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch {
+      }
+    }
+    return null;
+  }
+  function balancedEnd(text, start) {
     let depth = 0, inString = false, escaped = false;
     for (let i = start; i < text.length; i++) {
       const ch = text[i];
@@ -1373,15 +1382,9 @@ var Neurosym = (() => {
       }
       if (ch === '"') inString = true;
       else if (ch === "{") depth++;
-      else if (ch === "}" && --depth === 0) {
-        try {
-          return JSON.parse(text.slice(start, i + 1));
-        } catch {
-          return null;
-        }
-      }
+      else if (ch === "}" && --depth === 0) return i;
     }
-    return null;
+    return -1;
   }
   async function fetchJson(url, options = {}) {
     const doFetch = options.fetch ?? globalThis.fetch;
@@ -1681,11 +1684,36 @@ var Neurosym = (() => {
       }
       return { answer: out, parts: {} };
     }
+    /** Runs `output` before anything is asked of the Judge: `m.rules` and `m.V` are only read on demand. When the code
+        reads neither, this is its answer and the Judge need not be asked at all; when it reads either (even inside a
+        try/catch, or by spreading `m`), null: ask the Judge, then run it with the answers. The answer is the same either
+        way - the Judge is only spared the questions nobody reads. */
+    runIfJudgeUnread(spec, p, observations) {
+      let read = false;
+      const unread = () => {
+        read = true;
+        throw new Error("the output reads the rules: ask the Judge first");
+      };
+      const m = Object.defineProperties({ observations }, {
+        rules: { enumerable: true, get: unread },
+        V: { enumerable: true, get: unread }
+      });
+      try {
+        const out = this.run(spec, p, m);
+        return read ? null : out;
+      } catch (e) {
+        if (read) return null;
+        throw e;
+      }
+    }
   };
+  function outputObservations(values, texts) {
+    return { ...values, ...texts };
+  }
   function outputInputs(values, texts, answers, V) {
     const rules = {};
     for (const [id, v] of Object.entries(answers)) if (typeof v === "number" && Number.isFinite(v)) rules[id] = v;
-    return { observations: { ...values, ...texts }, rules, V };
+    return { observations: outputObservations(values, texts), rules, V };
   }
 
   // src/core/evaluate.ts
@@ -1708,7 +1736,7 @@ var Neurosym = (() => {
       __publicField(this, "observer");
       __publicField(this, "judge");
       __publicField(this, "maximizer");
-      __publicField(this, "stats", { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0 });
+      __publicField(this, "stats", { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0, judgeUnread: 0 });
       __publicField(this, "cache");
       __publicField(this, "inflight", /* @__PURE__ */ new Map());
       __publicField(this, "priors");
@@ -1773,7 +1801,13 @@ var Neurosym = (() => {
         if (live) this.inflight.delete(key);
       }
     }
-    async eval(formula, state, signal) {
+    /** The output's answer as a value (a number, kept to [0, 1]). */
+    valueOf(output) {
+      const v = Number(output.answer);
+      if (typeof output.answer !== "number" || !Number.isFinite(v)) throw new Error("output must answer a number here (it answered " + JSON.stringify(output.answer) + ")");
+      return Math.min(1, Math.max(0, v));
+    }
+    async eval(formula, state, signal, options = {}) {
       this.assertUsable(formula);
       this.stats.evaluations++;
       const world = this.world;
@@ -1802,6 +1836,25 @@ var Neurosym = (() => {
       const ids = valueRuleIds(formula);
       const key = jHash + "|" + side + "|" + context.id + "|" + observation.vector;
       const texts = observation.texts ?? {};
+      if (formula.output && ids.length && !options.askRules) {
+        const alone = this.outputs.runIfJudgeUnread(formula.output, observation.context ?? null, outputObservations(observation.values, texts));
+        if (alone) {
+          this.stats.judgeUnread++;
+          return {
+            value: round(this.valueOf(alone), 4),
+            confidence: null,
+            observation,
+            answers: {},
+            fallbacks: [],
+            formulaHash: fHash,
+            judgmentHash: jHash,
+            provenance: "code",
+            outcome: null,
+            judgmentKey: key,
+            output: alone
+          };
+        }
+      }
       const { answers, live } = !ids.length ? { answers: {}, live: false } : await this.ask(key, "value", state, {
         world: world.id,
         rulesOfTheWorld: world.describeRules(),
@@ -1820,9 +1873,7 @@ var Neurosym = (() => {
       let output;
       if (formula.output) {
         output = this.outputs.run(formula.output, observation.context ?? null, outputInputs(observation.values, texts, scalar, ids.length ? composition.value : null));
-        const v = Number(output.answer);
-        if (typeof output.answer !== "number" || !Number.isFinite(v)) throw new Error("output must answer a number here (it answered " + JSON.stringify(output.answer) + ")");
-        value = Math.min(1, Math.max(0, v));
+        value = this.valueOf(output);
       }
       return {
         value: round(value, 4),
@@ -3611,7 +3662,7 @@ var Neurosym = (() => {
     "",
     ...f.has("check") ? [
       "Every round your model is CHECKED in your LABORATORIES - you begin with one; `places` lists the places you know - on cases there you have never seen. The environment gives its VERDICTS on them (their form is in the interface). You also learn, for each laboratory, whether your model holds there. After the check, those cases are yours to study like any other.",
-      'When YOU judge that your model holds, add "validate": true to your proposal. If it holds in all your laboratories, the environment VALIDATES it in places you have not seen - for each, whether it holds, with its verdicts - and checks your laboratories again. A place where your model does not hold becomes one of your laboratories: what was seen there is yours to study, and you can experiment there. When your model holds in all of them, it is confirmed once more where nobody has looked, and accepted if it holds there too. `validations_left` says how many times you may still validate; asking while your model does not hold in all your laboratories is refused and costs nothing.',
+      'When YOU judge that your model holds, add "validate": true to your proposal. If it holds in all your laboratories (a model that held in all of them at the latest check is not checked there again: that check counts), the environment VALIDATES it in places you have not seen - for each, whether it holds, with its verdicts - and checks your laboratories again. A place where your model does not hold becomes one of your laboratories: what was seen there is yours to study, and you can experiment there. When your model holds in all of them, it is confirmed once more where nobody has looked, and accepted if it holds there too. `validations_left` says how many times you may still validate; asking while your model does not hold in all your laboratories is refused and costs nothing.',
       ""
     ] : [],
     (_t) => 'YOUR NOTEBOOK (the `notebook` field) is yours: your beliefs and their history, the notes you chose to write, your methods, the index of episodes, every model you tried with what came of it, and your own lessons and planned next experiment. Nothing is added to it for you except the facts of what you did and what came of it. Write in it what you want to remember: a note can cite episodes as "<episode>" and points of them as "<episode>@<step>".',
@@ -4186,7 +4237,7 @@ var Neurosym = (() => {
     const key = (m) => world.actionKey ? world.actionKey(m) : JSON.stringify(m);
     for (const m of world.actions(state, options.maximizer)) {
       const child = world.step(state, m);
-      const ev = await evaluator.eval(options.formula, child);
+      const ev = await evaluator.eval(options.formula, child, void 0, { askRules: key(m) === key(chosen) });
       const direct = ev.value;
       const rules = Object.fromEntries(Object.entries(ev.answers).map(([id, a]) => [id, Math.round(a.value * 1e4) / 1e4]));
       const measures = Object.fromEntries(Object.entries(options.formula.observations).filter(([id, d]) => d.spec.kind === "code" && Number.isFinite(ev.observation.values[id])).map(([id]) => [id, Math.round(ev.observation.values[id] * 1e4) / 1e4]));

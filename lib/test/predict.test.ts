@@ -157,6 +157,48 @@ test('a formula\'s output is the value in the Evaluator (kept to [0, 1]); the ju
   assert.equal((await evaluator.eval(over, samples[5].state)).value, 1, 'kept to [0, 1]');
 });
 
+test('an output that reads none of the rules answers alone: the Judge is not asked questions nobody reads', async () => {
+  const { makeFormula } = await import('../src/core/formula.ts');
+  const { OutputRunner } = await import('../src/core/output.ts');
+  const runner = new OutputRunner();
+  const code = (source: string) => ({ kind: 'code' as const, lang: 'js', source });
+  assert.equal(runner.runIfJudgeUnread(code('(p, m) => m.observations.a + 1'), null, { a: 1 })?.answer, 2);
+  for (const reads of ['(p, m) => m.rules.x', '(p, m) => m.V', '(p, m) => { try { return m.rules.x; } catch (e) { return 0; } }', '(p, m) => ({ ...m }).observations.a'])
+    assert.equal(runner.runIfJudgeUnread(code(reads), null, { a: 1 }), null, reads);
+  assert.throws(() => runner.runIfJudgeUnread(code('(p, m) => m.observations.a.b.c'), null, { a: 1 }), 'an error of its own is its own');
+
+  const base = makeFormula({ world: 'orbit@1', observations: exact.observations, rules: exact.rules, weights: { pull: 1 } });
+  const ignores = makeFormula({ ...base, output: code('(p, m) => m.observations.mag') });
+  const reads = makeFormula({ ...base, output: code('(p, m) => m.rules.pull') });
+  calls = 0;
+  const evaluator = new Evaluator<OrbitPoint>(observer, echo, { maximizer: 'nature' });
+  const alone = await evaluator.eval(ignores, samples[5].state);
+  assert.equal(calls, 0, 'not asked');
+  assert.equal(alone.provenance, 'code');
+  assert.deepEqual(alone.answers, {});
+  assert.equal(evaluator.stats.judgeUnread, 1);
+  const asked = await evaluator.eval(ignores, samples[5].state, undefined, { askRules: true });
+  assert.equal(calls, 1, 'asked when the rules are to be shown');
+  assert.equal(asked.value, alone.value, 'the same answer either way');
+  assert.ok('pull' in asked.answers);
+  await evaluator.eval(reads, samples[6].state);
+  assert.equal(calls, 2, 'asked when the output reads them');
+
+  /* The same in the Predictor. */
+  calls = 0;
+  const predictor = predictorWith(echo);
+  const law: Law = { ...exact, output: code('(p, m) => [m.observations.mag, 0]') };
+  const pr = await predictor.predict(law, samples[3].state);
+  assert.equal(calls, 0);
+  assert.equal(pr.evaluation, null);
+  assert.deepEqual(pr.rules, {});
+  assert.ok(typeof pr.observations.mag === 'number');
+  const shown = await predictor.predict(law, samples[3].state, { askRules: true });
+  assert.equal(calls, 1);
+  assert.deepEqual(shown.vector, pr.vector);
+  assert.ok('pull' in shown.rules);
+});
+
 test('the environment\'s verdict: per axis, in [-1, 1], 0 where the prediction agrees, relative to what happened there', async () => {
   const { scoreOf, scoreRms } = await import('../src/core/predict.ts');
   assert.deepEqual(scoreOf([1, 2], [1, 2]), [0, 0]);

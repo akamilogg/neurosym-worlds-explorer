@@ -1,8 +1,10 @@
 # SPEC · El objetivo: la métrica de progreso que define el operador
 
 **Fichero:** `SPEC-OBJETIVO.md`
-**Estado (27/09/2026):** propuesta, sin implementar. Parte del primer run real de orbit@1 con el prompt común y el
-artefacto con `output` (§1). Generaliza lo que hoy está repartido entre `lib/scripts/run-orbit.ts` y
+**Estado (27/09/2026):** propuesta; el contrato está sin implementar. Parte del primer run real de orbit@1 con el prompt
+común y el artefacto con `output` (§1) y del de la cuadrícula `--seed 22` (§1.1). Ya implementado, en los dos runners:
+Jev solo se pregunta si el `output` lee las reglas (§9.4) y un modelo que se sostuvo se valida sin comprobarlo otra vez
+(§3.3). Generaliza lo que hoy está repartido entre `lib/scripts/run-orbit.ts` y
 `lib/scripts/run-grid.ts`.
 
 ---
@@ -39,6 +41,28 @@ por caso, el criterio de "se sostiene" y el protocolo.
 trabajar por su cuenta en una tarea **si un operador le define una métrica de progreso**: qué respuesta se pide, contra
 qué casos se contrasta, qué hecho devuelve el entorno por caso y cuándo se da por buena. Esa métrica ya existe en los
 dos mundos, implícita y repartida por los runners. Esta SPEC la extrae a un contrato: el **objetivo**.
+
+### 1.1 La cuadrícula, `--seed 22` (niveles 2 y 4, 8 intentos)
+
+Sin validación: se agotó el presupuesto en el laboratorio.
+
+- **La investigación, buena.** Refutó su primera hipótesis ("la esquina (0,4)") con `table` (todas las derrotas acaban
+  con `=` en la última columna). Aisló direcciones de movimiento con pares de `act`. Comparó modelos con `replay` desde
+  el mismo inicio y alteró una sola jugada (act21 → g89). Fue cauto con la causalidad.
+- **Progreso en el laboratorio.** 4/8 → 5 → 6 → 8/8 → 8/8, y en la ronda 5 el modelo se sostuvo. En las rondas 4 y 5 la
+  precisión de acción fue 1,0.
+- **Recuperación de reglas: 0,5.** Es severa: tiene las cuatro direcciones propias y las del rival, la victoria
+  ("= sin movimiento") y la derrota exacta. Le falta el empate a los 26 turnos.
+- **El criterio "se sostiene" es todo o nada con 8 episodios.** Un modelo que gana el 94 % de las veces (la huella
+  `obanx1`: 15/16) pasa 8/8 con probabilidad ≈ 0,6, y ≈ 0,35 si además vuelve a jugar los 8 anteriores.
+  - En la ronda 5 se sostuvo, pero System 2 no pidió validar. En la 6 lo pidió con el mismo modelo, la comprobación
+    nueva dio 7/8 y la validación se rechazó.
+  - Las rondas 7–9 fueron parches a inicios concretos, que arreglaban unos y rompían otros.
+  - Una de esas derrotas, g81, era ganable (`critical: 0`: la primera jugada tiró la victoria). System 2 no puede
+    distinguirla del ruido.
+- **Jev, otra vez sin uso, y caro.** El `output` nunca leyó `m`, y las ablaciones fueron idénticas en las 8
+  comprobaciones. Desde la ronda 4 la observación era un JSON de la posición entera, distinto en cada posición, así que
+  la caché no servía: 6 739 llamadas (129–209 por partida) cuya respuesta no leyó nadie.
 
 ## 2. Principios (heredados; ninguno se relaja)
 
@@ -121,6 +145,13 @@ semillas). En orbit equivale a volver a predecir los puntos de la comprobación 
 del protocolo (`pairedRegression`), y "se sostiene" puede exigir que ningún caso vuelto a correr empeore (`previous` en
 `holds`).
 
+### 3.3 Se valida el modelo que se sostuvo
+
+Si System 2 pide validar el mismo modelo (la misma huella, los mismos laboratorios) que se sostuvo en la última
+comprobación, se valida sobre esa comprobación, sin comprobarlo otra vez. Una comprobación nueva puede fallar por azar
+(§1.1), y entonces el modelo que se sostuvo no se validaría nunca. System 2 lo ve como `not_checked_again`, y la
+interfaz común lo dice. Implementado en `run-grid.ts` y `run-orbit.ts` (`heldAt`).
+
 ## 4. Los dos mundos como instancias
 
 | Pieza | orbit@1 (hoy en `run-orbit.ts`) | Cuadrícula (hoy en `run-grid.ts`) |
@@ -196,7 +227,24 @@ de añadir nada.
    sea casi un gradiente? En orbit el signo por eje ya orienta la corrección; es un hecho, pero muy informativo.
 3. ¿Un presupuesto común de coste (llamadas a Jev y al LLM) como parte del protocolo, con el coste por aceptación como
    medida principal del operador?
-4. Jev sin uso (§1): ¿se le sigue preguntando cuando el `output` no lee `m`? Hoy sí: 877 llamadas sin efecto en el run.
-   Opciones: medirlo solo (O4), o no preguntar y que `inspect` no muestre esas respuestas.
+4. ~~Jev sin uso (§1): ¿se le sigue preguntando cuando el `output` no lee `m`?~~ **Resuelto:** no se le pregunta.
+   - El `output` corre primero con `m.rules` y `m.V` perezosos (`OutputRunner.runIfJudgeUnread`). Si no los lee (ni
+     dentro de un `try`, ni al esparcir `m`), su respuesta vale y Jev no se consulta. La respuesta es la misma en los
+     dos casos.
+   - `inspect` sí pregunta las reglas del paso elegido (`askRules`), para que System 2 vea qué responde Jev a sus reglas.
+   - El journal cuenta las evaluaciones sin preguntar (`not_asked_output_ignores_rules`): es la medida de "reglas
+     decorativas" de O4.
+   - Habría evitado 877 llamadas en orbit y 6 739 en la cuadrícula.
 5. Para tareas de actuar, ¿el objetivo puede pedir además un modelo del mundo (lo que G2 descartó en la cuadrícula por
    filtrar la forma del entorno)? Recomendado: no; el objetivo pide una sola respuesta.
+6. **El criterio "se sostiene" frente al ruido (§1.1).** Todo o nada sobre pocos casos castiga a un modelo bueno por
+   azar y empuja a parchear casos sueltos. Opciones, todas del operador:
+   - **(a) Un umbral:** por ejemplo, perder ≤ 1 de 8 y que ningún caso vuelto a correr empeore.
+   - **(b) Solo cuentan los fallos evitables:** la cuadrícula tiene solver (`critical`: la jugada que tiró una victoria).
+     Una derrota desde una salida perdida no cuenta. No filtra nada: System 2 solo ve "se sostiene".
+   - **(c) Más casos por comprobación.** Cuesta más, y no resuelve el todo o nada.
+   - **(d) Un intervalo:** que la tasa de acierto supere un umbral con confianza, lo que cambia el criterio de "todos"
+     a "casi todos".
+
+   §3.3 ya evita el peor caso (no validar un modelo que se sostuvo). Recomendado: (b) donde haya solver y (a) donde no.
+   Pendiente de decidir.

@@ -61,6 +61,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Observer } from '../src/core/observer.ts';
 import { Evaluator } from '../src/core/evaluate.ts';
+import { formulaHash } from '../src/core/formula.ts';
 import { OutputRunner, outputInputs } from '../src/core/output.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../src/core/jev.ts';
 import { searchBestMove, PLAY_PV_ALPHA_BETA } from '../src/core/search.ts';
@@ -260,6 +261,8 @@ function makePlace(id: string, index: number, role: Role): Place {
 }
 const places = new Map<string, Place>([[base.id, base]]);
 for (let k = 1; k <= cfg.family; k++) places.set('place' + k, makePlace('place' + k, k, 'family'));
+/** Evaluations, on every board, where a model's output read none of its rules (so the Judge was not asked). */
+const judgeUnread = (): number => [...places.values()].reduce((n, p) => n + p.evaluator.stats.judgeUnread, 0);
 const labs = (): Place[] => [...places.values()].filter((p) => p.role === 'laboratory');
 
 /* Every state the learner can name belongs to a board: what is perceived and how an episode ends depend on it. */
@@ -770,6 +773,10 @@ async function checkIn(place: Place, formula: Formula, attempt: number, count: n
 
 const allHold = (checks: readonly CheckOfPlace[]) => checks.every((c) => c.holds);
 let confirmCounter = 0;
+/** The model that held in every laboratory at the latest check. Asking to validate that same model (the same fingerprint,
+    the same laboratories) validates it on the check it held in: a new check could fail by chance, and then the model that
+    held would never be validated. */
+let heldAt: { hash: string; round: number; labs: string; checks: CheckOfPlace[] } | null = null;
 
 let candidate: Formula = first;
 let accepted: { formula: Formula; round: number | null } | null = null;
@@ -781,17 +788,23 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   const round = roundOf.get(candidate) ?? currentRound;
   say('attempt ' + attempt + ' (round ' + round + ') against opponent level ' + cfg.levels[level] + (cfg.epsilon ? ' (errs ' + cfg.epsilon + ')' : '') + '; laboratories: ' + labs().map((l) => l.id).join(', '));
   /* 1. The check in the laboratories. */
-  const callsBefore = judge.stats.calls;
-  const labChecks: CheckOfPlace[] = [];
-  for (const lab of labs()) labChecks.push(await checkIn(lab, candidate, attempt, cfg.variants, true, 'the check of round ' + round));
-  const trialCalls = judge.stats.calls - callsBefore;
-  const stored = labChecks.flatMap((c) => c.score.stored);
+  const callsBefore = judge.stats.calls, unreadBefore = judgeUnread();
+  const labIds = labs().map((l) => l.id).join(',');
+  const reused = asksToValidate.has(candidate) && heldAt && heldAt.hash === formulaHash(candidate) && heldAt.labs === labIds ? heldAt : null;
+  const labChecks: CheckOfPlace[] = reused ? reused.checks : [];
+  if (reused) say('  this model held in every laboratory in round ' + reused.round + ': validated on that check, without checking again');
+  else for (const lab of labs()) labChecks.push(await checkIn(lab, candidate, attempt, cfg.variants, true, 'the check of round ' + round));
+  if (!reused) heldAt = allHold(labChecks) ? { hash: formulaHash(candidate), round, labs: labIds, checks: labChecks } : null;
+  const trialCalls = judge.stats.calls - callsBefore, trialUnread = judgeUnread() - unreadBefore;
+  const stored = reused ? [] : labChecks.flatMap((c) => c.score.stored);
   const wins = labChecks.reduce((n, c) => n + c.score.wins, 0), total = labChecks.reduce((n, c) => n + c.score.total, 0);
-  lastScore = { ...labChecks[0].score, stored };
-  notebook.recordGames(round, stored.map((g) => g.result));
-  if (!best || wins / Math.max(1, total) > best.wins / Math.max(1, best.total)) best = { formula: candidate, wins, total };
+  if (!reused) {
+    lastScore = { ...labChecks[0].score, stored };
+    notebook.recordGames(round, stored.map((g) => g.result));
+  }
+  if (!reused && (!best || wins / Math.max(1, total) > best.wins / Math.max(1, best.total))) best = { formula: candidate, wins, total };
   const operator = labChecks.map((c) => ({ place: c.place.id, action_accuracy: actionAccuracy(c.score.samples), turns_still_winning: c.score.held, critical: c.score.critical }));
-  say('  check in the laboratories: ' + labChecks.map((c) => c.place.id + ' ' + c.score.wins + '/' + c.score.total + (c.rerun ? ' (run again: +' + c.rerun.went_up + ' -' + c.rerun.went_down + ')' : '') + (c.holds ? ' holds' : '')).join(', '));
+  if (!reused) say('  check in the laboratories: ' + labChecks.map((c) => c.place.id + ' ' + c.score.wins + '/' + c.score.total + (c.rerun ? ' (run again: +' + c.rerun.went_up + ' -' + c.rerun.went_down + ')' : '') + (c.holds ? ' holds' : '')).join(', '));
   /* 2. The validation, when System 2 asks for it and its model holds in its laboratories. */
   let validation: Record<string, unknown> | null = null;
   let validationView: Record<string, unknown> | null = null;
@@ -802,6 +815,7 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
     else if (validationsLeft <= 0) validationView = { refused: 'you have no validations left' };
     else {
       validationsLeft--;
+      heldAt = null;
       /* Every board of the family that is not a laboratory: the ones seen before are checked again (a regression). */
       const family = [...places.values()].filter((p) => p.role === 'family');
       const famChecks: CheckOfPlace[] = [];
@@ -827,16 +841,19 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
       }
     }
   }
-  lastCheck = { round, laboratories: describeChecks(labChecks), ...(validationView ? { validation: validationView } : {}), accepted: ok, validations_left: validationsLeft };
-  log('check', { attempt, round, level: cfg.levels[level], laboratories: labChecks.map((c) => ({ place: c.place.id, holds: c.holds, wins: c.score.wins, total: c.score.total, rerun: c.rerun })),
+  lastCheck = { round, ...(reused ? { not_checked_again: 'this model already held in every one of your laboratories in round ' + reused.round + ': these are the verdicts of that check' } : {}),
+    laboratories: describeChecks(labChecks), ...(validationView ? { validation: validationView } : {}), accepted: ok, validations_left: validationsLeft };
+  log('check', { attempt, round, level: cfg.levels[level], ...(reused ? { reused_check_of_round: reused.round } : {}), laboratories: labChecks.map((c) => ({ place: c.place.id, holds: c.holds, wins: c.score.wins, total: c.score.total, rerun: c.rerun })),
     asked_to_validate: asksToValidate.has(candidate), ...(validation ? { validation } : validationView ? { validation: validationView } : {}), accepted: ok, operator,
-    jev: { calls: judge.stats.calls, errors: judge.stats.errors, trial_calls: trialCalls, calls_per_game: Math.round(trialCalls / Math.max(1, total) * 10) / 10 },
+    jev: { calls: judge.stats.calls, errors: judge.stats.errors, trial_calls: trialCalls, calls_per_game: Math.round(trialCalls / Math.max(1, total) * 10) / 10,
+      /* Evaluations where the model's output read none of its rules: the Judge was not asked (its rules are decorative). */
+      ...(Object.keys(candidate.rules).length && candidate.output ? { not_asked_output_ignores_rules: trialUnread } : {}) },
     abstraction: abstractionOf(candidate, stored),
     /* OPERATOR ONLY: analyses of the learner's data it is never handed (SPEC-MUNDO-FISICO I2). */
     operator_analysis: { surprises: latestSurprises(), record: scoreboard() } });
   if (asksToValidate.has(candidate) && !validation && !quickStop) say('  validation refused: ' + String(validationView?.refused ?? ''));
   if (ok) say('  ACCEPTED');
-  if (cfg.ablation) await ablate(candidate, attempt, labChecks[0].score, labChecks[0].place);
+  if (cfg.ablation && !reused) await ablate(candidate, attempt, labChecks[0].score, labChecks[0].place);
   if (quickStop) {
     satisfied = candidate; stoppedBy = 'quick_stop';
     log('quick_stop', { round, held_in_laboratories: Object.fromEntries(labChecks.map((c) => [c.place.id, c.holds])), model: ownFormula(candidate) });
@@ -851,6 +868,7 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
       for (const p of places.values()) p.planner = plannerFor(p.world, p.spec);
       evaluator.reset();
       previousCheck.clear();
+      heldAt = null;
       validationsLeft = cfg.validations;
       log('escalate', { level: cfg.levels[level] });
       say('accepted: the opponent now plans ' + cfg.levels[level] + ' turns ahead');
