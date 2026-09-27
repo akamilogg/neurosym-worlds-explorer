@@ -133,6 +133,9 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | `lib/src/worlds/orbit/` | the physical world: laws by level, the table sense, prediction points and test launches, operator-only tools |
 | `lib/src/core/output.ts`, `lib/src/core/predict.ts`, `lib/src/learn/law-*.ts` | a model's output code, the predictor, the law explorer (System 2's protocol there), the law ablations |
 | `lib/scripts/run-orbit.ts`, `calibrate-orbit.ts` | runs the physical-world experiment; finds laws that leave room to discover (Newton misses clearly above the noise) |
+| `lib/src/learn/objective.ts`, `protocol.ts`, `operator.ts`, `law-session.ts` | the operator's objective as a contract, the researcher's protocol (the same for every world), the operator's common measures, a session with System 2 for a world whose answer is a model ([SPEC-OBJETIVO.md](SPEC-OBJETIVO.md)) |
+| `lib/src/worlds/*/objective.ts` | each world's objective: the form of its answer, its cases, its verdict and its criterion |
+| `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts` | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule; the answer is the next row |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
 
@@ -181,7 +184,19 @@ node --experimental-strip-types scripts/calibrate-orbit.ts 1 20 1
 Its options include `--level 1..4`, `--sampling grid|free` (test points that repeat, or new ones every round),
 `--resolution X` (rounded perception), `--tools`, `--delegated` and `--quick` (stop the first time System 2 judges its
 law good, without validating it, to see whether a change makes the exploration promising); the header of `run-orbit.ts`
-documents them.
+documents them. `--regression` answers each laboratory's previous check again with the new law (the paired regression,
+on by default in the grid).
+
+A third world, `cells@1`, uses the same prompt and protocol with nothing of its own but its world, senses, instruments
+and objective (`lib/run-cells.example.ps1` / `.sh`):
+
+```bash
+./run-cells.sh --seed 1 --level 1
+```
+
+Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the
+cost (Judge calls and evaluations it was not asked, LLM calls and tokens) in all and up to the acceptance, and what the
+Judge's rules added in the ablations.
 
 ## License
 

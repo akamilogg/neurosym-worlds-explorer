@@ -1,10 +1,10 @@
 # SPEC · El objetivo: la métrica de progreso que define el operador
 
 **Fichero:** `SPEC-OBJETIVO.md`
-**Estado (27/09/2026):** propuesta; el contrato está sin implementar. Parte del primer run real de orbit@1 con el prompt
-común y el artefacto con `output` (§1) y del de la cuadrícula `--seed 22` (§1.1). Ya implementado, en los dos runners:
-Jev solo se pregunta si el `output` lee las reglas (§9.4) y un modelo que se sostuvo se valida sin comprobarlo otra vez
-(§3.3). Generaliza lo que hoy está repartido entre `lib/scripts/run-orbit.ts` y
+**Estado (27/09/2026):** implementada, O1–O5 (§7). Parte del primer run real de orbit@1 con el prompt común y el
+artefacto con `output` (§1) y del de la cuadrícula `--seed 22` (§1.1). También implementado: Jev solo se pregunta si el
+`output` lee las reglas (§9.4), y un modelo que se sostuvo se valida sin comprobarlo otra vez (§3.3). Queda abierta la
+pregunta del criterio frente al ruido (§9.6) y falta la evidencia de §8 con LLM real. Generaliza lo que hoy está repartido entre `lib/scripts/run-orbit.ts` y
 `lib/scripts/run-grid.ts`.
 
 ---
@@ -112,6 +112,16 @@ interface Objective<S, C> {
 }
 ```
 
+**Como quedó implementado** (`lib/src/learn/objective.ts`). Hay tres ajustes respecto al esbozo:
+
+- **`casesIn(place, context)`** recibe también el intento, el propósito (`check`, `validation`, `blind`), la posición
+  del sitio entre los que se comprueban juntos y el conjunto ciego.
+- **`run(model, casesPorSitio, context)`** corre varios sitios a la vez. Orbit lo necesita: estima el ruido juntando los
+  sitios de un mismo conjunto. Devuelve los resultados por sitio y la vista del operador del conjunto.
+- **`view(results, place)`** sustituye a `verdictOf`. Da los hechos que ve System 2 de un sitio: un veredicto por caso,
+  agrupado como el mundo lo muestra (por episodio en orbit, por punto en `cells`). La regresión se muestra con
+  `rerunView`, y `holds` la recibe como `{ before, now }`.
+
 Y el protocolo, igual para cualquier objetivo, con sus parámetros:
 
 ```ts
@@ -160,12 +170,22 @@ interfaz común lo dice. Implementado en `run-grid.ts` y `run-orbit.ts` (`heldAt
 | Lectura de la respuesta | `answerAsDeparture`: d = respuesta − 2·p(ahora) + p(antes) | la búsqueda la usa como valor |
 | Casos | `launchesIn`: lanzamientos no vistos, en vista y más allá | `plansFor`: salida habitual + salidas no jugadas, con semilla |
 | Veredicto por caso | `scoreOf`: tanh((obs − pred)/\|obs\|) por eje | puntuación del episodio (1, 0, −1) |
-| Se sostiene | `heldIn`: por banda, mediana de χ² ≤ `--accept`, con el ruido estimado de lo observable y la precisión declarada | todos los episodios puntúan 1 y ninguno vuelto a jugar baja (`checkIn`) |
+| Se sostiene | por banda, mediana de χ² ≤ `--accept`, con el ruido estimado de lo observable y la precisión declarada | todos los episodios puntúan 1 y ninguno vuelto a jugar baja |
 | Familia | `environmentOf`: otras fuentes, otro marco | `boardOf`: otro tamaño, piezas y salidas |
-| Confirmación ciega | `confirmBlind` | tableros `blind*` en el bucle del protocolo |
+| Confirmación ciega | dos conjuntos de montajes `blind*` (`blindPlaces`) | dos conjuntos de tableros `blind*` (`blindPlaces`) |
 | Métricas del operador | ley oculta, suelo de ruido, prior newtoniano, calificación | techo informado, precisión de acción, calificación |
 
-La implementación del contrato debe reproducir estos dos comportamientos **sin cambiarlos** (§7, O1–O2).
+La implementación reproduce los dos comportamientos (§7, O1–O2): con un LLM falso y el juez plano, los checks dan las
+mismas cifras que antes del cambio. Hoy viven en `lib/src/worlds/orbit/objective.ts` y `lib/src/worlds/grid/objective.ts`.
+Las líneas de interfaz de la respuesta y del veredicto salen del objetivo, y el texto del prompt no cambió.
+
+El tercer mundo, `cells@1` (O5), es una fila de símbolos cerrada en anillo con una regla local oculta:
+
+- **Respuesta:** la fila siguiente, como texto (ni un número ni un par).
+- **Casos:** puntos de episodios no vistos.
+- **Veredicto:** las posiciones donde la respuesta difiere.
+- **Se sostiene:** todos los puntos son exactos.
+- **Familia:** otras longitudes y mezclas, con la misma regla.
 
 ## 5. Qué ve System 2 y qué no
 
@@ -199,16 +219,26 @@ Es una extensión, no la primera fase: primero los dos mundos con verdad calcula
 Cada fase reproduce primero el comportamiento actual (journals equivalentes en ensayos con LLM falso y juez neutro) antes
 de añadir nada.
 
-| Fase | Contenido | Ficheros |
-|---|---|---|
-| O1 | Tipos `Objective`, `Protocol`, `Place`; el bucle del protocolo en la biblioteca (comprobación, validación, laboratorios nuevos, confirmación ciega, `--quick`) | `lib/src/learn/objective.ts`, `lib/src/learn/protocol.ts` |
-| O2 | orbit@1 y la cuadrícula como instancias; los runners quedan en configuración, E/S y journal | `lib/src/worlds/*/objective.ts`, `lib/scripts/run-*.ts` |
-| O3 | La regresión emparejada como parámetro, también en orbit | `lib/src/learn/protocol.ts` |
-| O4 | Medidas del operador comunes en el journal: cuánto aporta Jev (ablaciones, `output` que no lee `m`), coste por aceptación, rondas hasta validar | `lib/src/learn/protocol.ts` |
-| O5 | Un tercer entorno pequeño, no diseñado pensando en estos dos, conectado solo con mundo + sentidos + acciones + objetivo | `lib/src/worlds/<nuevo>/` |
-| O6 (opcional) | Objetivos con rúbrica y juez (§6) | — |
+| Fase | Contenido | Ficheros | Estado |
+|---|---|---|---|
+| O1 | Tipos `Objective`, `Protocol`, `Place`; el bucle del protocolo en la biblioteca (comprobación, validación, laboratorios nuevos, confirmación ciega, `--quick`, reinicio para una etapa nueva) | `lib/src/learn/objective.ts`, `lib/src/learn/protocol.ts` | hecho |
+| O2 | orbit@1 y la cuadrícula como instancias; los runners quedan en configuración, E/S, instrumentos y journal | `lib/src/worlds/*/objective.ts`, `lib/scripts/run-*.ts` | hecho |
+| O3 | La regresión emparejada como parámetro, también en orbit (`--regression`; la ley debe seguir sosteniéndose en los puntos de la comprobación anterior) | `lib/src/learn/protocol.ts`, `lib/src/worlds/orbit/objective.ts` | hecho |
+| O4 | Medidas del operador comunes en el journal (`operator_summary`): hitos, coste en total y hasta la aceptación, cuánto aportan las reglas de Jev en las ablaciones, evaluaciones sin preguntar a Jev | `lib/src/learn/operator.ts`, `lib/src/learn/protocol.ts` | hecho |
+| O5 | Un tercer entorno pequeño, conectado solo con mundo + sentidos + acciones + objetivo: `cells@1` | `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts`, `lib/src/learn/law-session.ts` | hecho |
+| O6 (opcional) | Objetivos con rúbrica y juez (§6) | — | no empezado |
 
-**Criterio de éxito de la SPEC:** O5 se conecta sin tocar el prompt ni el protocolo.
+**Criterio de éxito de la SPEC:** O5 se conecta sin tocar el prompt ni el protocolo. **Cumplido.** `cells@1` usa el prompt
+común, el protocolo y la sesión de System 2 tal cual. Del código común solo necesitó dos cosas generales:
+
+- que los parámetros de `act` los lea cada mundo (`parseAct`);
+- poder obtener la respuesta de un modelo sin la comparación numérica de orbit (`Predictor.rawAnswerWith`).
+
+La sesión (`LawSession`: consultas, notebook, pasos de investigación, reflexión) salió de `run-orbit.ts` a la
+biblioteca, y orbit la usa igual.
+
+**Queda fuera de O5:** la cuadrícula conserva su propio bucle de consulta, porque su modelo es una fórmula que usa una
+búsqueda y tiene instrumentos propios como `replay`. Unificarlo con `LawSession` es trabajo aparte.
 
 ## 8. Evidencia que la sostendría
 
@@ -217,7 +247,9 @@ de añadir nada.
 - **La cuadrícula** con el protocolo (`--seed 22`), una tarea de actuar donde el código es torpe: ¿aporta Jev?
 - **orbit a nivel 3 o 4** (término de velocidad, atracción que no es potencia): H2 de `SPEC-MUNDO-FISICO.md`, Jev
   debería ganar al código donde el código expresa mal.
-- **O5**: un entorno nuevo resuelto con el mismo prompt y protocolo.
+- **O5**: `cells@1` con LLM real (`./run-cells.sh --seed 1 --level 1`, y `--level 2`): ¿recupera la regla desde cero y
+  la valida en la familia? Es un mundo sin conocimiento previo útil tan claro como la mecánica. ¿Aporta Jev algo cuando
+  la respuesta es una fila entera?
 
 ## 9. Preguntas abiertas
 

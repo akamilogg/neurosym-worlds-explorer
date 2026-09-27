@@ -14,3 +14,5 @@ runs/*
 !runs/2026-09-21-run-journal.json
 lib/run-orbit.sh
 lib/run-orbit.ps1
+lib/run-cells.sh
+lib/run-cells.ps1

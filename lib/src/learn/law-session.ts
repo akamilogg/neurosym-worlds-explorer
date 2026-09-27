@@ -1,0 +1,195 @@
+import { hashString, stableStringify } from '../core/hash.ts';
+import type { ApiError } from '../core/net.ts';
+import type { Law } from '../core/predict.ts';
+import { parseReflection } from './explorer.ts';
+import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest, type OrbitAct } from './law-explorer.ts';
+import { Notebook } from './notebook.ts';
+import type { ChatClient } from './system2.ts';
+
+/* ============================================================================
+ * A session with System 2 for a world whose answer is a MODEL (observations, rules,
+ * weights, output): its rounds, its notebook, and one consultation - investigation
+ * steps, then a proposal (or, at the end, a reflection). The same for every world: what a
+ * world brings is its instruments (`runRequest`), how it names points (`known`), how a
+ * proposal is tried on the learner's own points before anything uses it (`failures`),
+ * and the protocol's view (places, validations left, the last check).
+ *
+ * Nothing here knows what the world is. System 2 is told facts and the protocol's
+ * verdicts only (SPEC-MUNDO-FISICO I2); the journal gets everything.
+ * ========================================================================== */
+
+export interface LawRecord {
+  readonly round: number;
+  readonly law: Law;
+  readonly fingerprint: string;
+  /** Operator only: what the host keeps of the law's check, never shown to System 2. */
+  test: Record<string, number> | null;
+  accepted: boolean;
+  /** System 2 asked to validate this law. */
+  readonly validate: boolean;
+  readonly lessons: string[];
+  readonly nextExperiment: string;
+}
+
+export interface LawSessionHost<A> {
+  readonly llm: ChatClient;
+  /** The system prompt (the common one, with the world's interface). */
+  readonly system: string;
+  /** The world id a law is written for. */
+  readonly world: string;
+  /** The shape of what is perceived, as the sense describes it. */
+  readonly perceptDoc: string;
+  /** Investigation answers per round (0 with no instruments). */
+  readonly steps: number;
+  readonly investigative: boolean;
+  /** Acts per round, when the world offers `act`. */
+  readonly acts?: number;
+  /** The world's act parameters (default: orbit@1's). */
+  readonly parseAct?: (raw: Record<string, unknown>) => A | string;
+  runRequest(request: LawRequest<A>, budget: { acts: number }, round: number): Promise<unknown>;
+  /** Whether a reference names an episode or a point of the learner's. */
+  known(ref: string): boolean;
+  /** A law must compute on points of the learner's own episodes before anything uses it: why it does not. */
+  failures(law: Law): string[];
+  /** The index of episodes, as the notebook shows it. */
+  episodes(): unknown[];
+  /** The protocol's view: places known, validations left, the last check. */
+  places(): readonly unknown[];
+  validationsLeft(): number;
+  lastCheck(): unknown;
+  /** How an act is echoed back in the prompt's words (default: as parsed). */
+  actAsWritten?(act: A): unknown;
+  log(type: string, data?: Record<string, unknown>): void;
+  say(text: string): void;
+}
+
+/** A law's identity: its own code and words (the same law has the same fingerprint). */
+export const lawFingerprint = (law: Law): string => hashString(stableStringify(ownLaw(law))).slice(0, 10);
+
+export class LawSession<A = OrbitAct> {
+  readonly host: LawSessionHost<A>;
+  readonly laws: LawRecord[] = [];
+  readonly notebook = new Notebook();
+  currentRound = 0;
+  /** Set when the LLM service refuses the account itself (no credit, bad key): nothing further can be asked. */
+  fatal: string | null = null;
+  private unaddressed: string[] = [];
+
+  constructor(host: LawSessionHost<A>) { this.host = host; }
+
+  latest(): LawRecord | null { return this.laws[this.laws.length - 1] ?? null; }
+  lawOfRound(round: number): Law | null { return this.laws.find((l) => l.round === round)?.law ?? null; }
+  /** A round of its own, a draft it wrote, or (null) its latest law. */
+  lawOf(ref: number | Law | null): Law | null { return ref === null ? this.latest()?.law ?? null : typeof ref === 'number' ? this.lawOfRound(ref) : ref; }
+
+  /** Its notebook as it reads it: its own entries, the episodes, every model it tried with what came of it. */
+  notebookBrief(): Record<string, unknown> {
+    const { episodes: _g, models: _r, ...own } = this.notebook.brief(this.unaddressed) as Record<string, unknown>;
+    const last = this.latest();
+    return {
+      ...own,
+      episodes: this.host.episodes(),
+      models: this.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })),
+      ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {})
+    };
+  }
+
+  /** One round: investigation steps, then a proposal - or, with `reflect`, a reflection (the law is final). */
+  async consult(mode: 'propose' | 'reflect', reflectionTask: string | null = null): Promise<LawRecord | null> {
+    const h = this.host;
+    if (this.fatal) return null;
+    this.currentRound++;
+    const round = this.currentRound;
+    const b = this.latest();
+    let refused: string[] = [];
+    const investigation: unknown[] = [];
+    let steps = 0, refusals = 0;
+    const budget = { acts: h.acts ?? 0 };
+    while (refusals < 3 && steps <= h.steps + 3) {
+      const stepsLeft = h.investigative ? Math.max(0, h.steps - steps) : 0;
+      const payload = lawExplorerPayload({
+        round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
+        setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(),
+        ...(h.investigative ? { investigation, stepsLeft } : {}), ...(h.acts !== undefined ? { launchesLeft: budget.acts } : {}),
+        refused, task: mode === 'reflect' ? reflectionTask : null
+      });
+      h.say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
+      steps++;
+      let content = '';
+      try {
+        content = (await h.llm.complete({ system: h.system, user: payload })).content;
+      } catch (error) {
+        const status = (error as ApiError)?.details?.status;
+        if (status === 401 || status === 402 || status === 403) {
+          this.fatal = String((error as Error)?.message || error);
+          h.log('llm_fatal', { round, status, error: this.fatal });
+          h.say('the LLM service refused the account (HTTP ' + status + '): stopping');
+          return null;
+        }
+        refusals++;
+        h.log('proposal_failed', { round, error: String((error as Error)?.message || error) });
+        continue;
+      }
+      const turn = parseLawTurn<A>(content, { world: h.world, round, ...(h.parseAct ? { parseAct: h.parseAct } : {}) });
+      const noteWarnings = [...this.notebook.applyNotes(round, turn.notes, (ref) => h.known(ref)), ...this.notebook.applyMethods(round, turn.methods)];
+      if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
+      if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }
+      if (turn.kind === 'investigate') {
+        if (stepsLeft <= 0) { refused = [h.investigative ? 'no investigation steps left this round: answer with your proposal now' : 'there is no investigating in this experiment: answer with your proposal']; refusals++; continue; }
+        const results: unknown[] = [];
+        for (const r of turn.requests) results.push(await h.runRequest(r, budget, round));
+        /* Echoed in the prompt's words, and a draft as it wrote it, never as the host's objects. */
+        const modelOf = (l: number | Law | null) => (l !== null && typeof l === 'object' ? ownLaw(l) : l);
+        const asWritten = turn.requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
+          : 'inspect' in r ? { inspect: r.inspect, model: modelOf(r.law) }
+          : 'act' in r ? { act: h.actAsWritten ? h.actAsWritten(r.act) : r.act } : r);
+        investigation.push({ step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
+        h.log('investigation', { round, requests: asWritten, results, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
+        h.say('  investigates: ' + turn.requests.map((r, i) => {
+          const res = results[i] as { error?: string };
+          const k = Object.keys(r)[0];
+          return k + (res?.error ? ' (' + res.error.slice(0, 60) + ')' : '');
+        }).join('; '));
+        refused = [];
+        continue;
+      }
+      if (mode === 'reflect') {
+        const r = parseReflection(content, round);
+        if (!r.ok) { refused = r.errors; refusals++; h.log('reflection_refused', { round, errors: r.errors, content }); continue; }
+        const stances = this.notebook.applyStances(round, r.reflection.beliefs);
+        this.unaddressed = stances.unaddressed;
+        this.notebook.recordReflection(round, r.reflection.rationale, r.reflection.lessons, r.reflection.nextExperiment);
+        h.log('reflection', { round, investigation_steps: investigation.length, rationale: r.reflection.rationale, beliefs: r.reflection.beliefs, notes: turn.notes,
+          lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings });
+        for (const l of r.reflection.lessons) h.say('  lesson: ' + l);
+        return null;
+      }
+      const parsed = turn.parse;
+      if (!parsed.ok) {
+        refused = parsed.errors; refusals++;
+        h.log('proposal_refused', { round, errors: parsed.errors, content });
+        h.say('  refused: ' + parsed.errors.slice(0, 3).join(' | '));
+        continue;
+      }
+      const failures = h.failures(parsed.proposal.law);
+      if (failures.length) {
+        refused = ['your model failed on points of your episodes: ' + failures.join(' | ')]; refusals++;
+        h.log('proposal_refused', { round, errors: refused, content });
+        h.say('  refused: ' + refused[0].slice(0, 200));
+        continue;
+      }
+      const p = parsed.proposal;
+      const stances = this.notebook.applyStances(round, p.beliefs);
+      this.unaddressed = stances.unaddressed;
+      const record: LawRecord = { round, law: p.law, fingerprint: lawFingerprint(p.law), test: null, accepted: false, validate: p.validate, lessons: p.lessons, nextExperiment: p.nextExperiment };
+      this.laws.push(record);
+      h.log('proposal', { round, investigation_steps: investigation.length, rationale: p.rationale, beliefs: p.beliefs, notes: turn.notes, law: ownLaw(p.law),
+        fingerprint: record.fingerprint, lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });
+      h.say('  proposes: ' + Object.keys(p.law.observations).length + ' observations, ' + Object.keys(p.law.rules).length + ' rules' + (p.law.output ? ', output in code' : '') +
+        '; beliefs ' + p.beliefs.map((x) => x.id + ':' + x.stance).join(' ') + (p.validate ? '; asks to validate' : ''));
+      return record;
+    }
+    h.log('no_proposal', { round, refusals });
+    return null;
+  }
+}

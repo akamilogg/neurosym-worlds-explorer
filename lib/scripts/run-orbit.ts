@@ -74,18 +74,16 @@ import path from 'node:path';
 import { Observer } from '../src/core/observer.ts';
 import { Evaluator } from '../src/core/evaluate.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../src/core/jev.ts';
-import { parseJsonLoose, type ApiError } from '../src/core/net.ts';
+import { parseJsonLoose } from '../src/core/net.ts';
 import { judgmentHash } from '../src/core/formula.ts';
 import { asksJudge, lawFormula, pairOf, Predictor, scoreOf, testPredictions, type Law, type PredictionSample, type TestResult, type Vec2 } from '../src/core/predict.ts';
-import { hashString, stableStringify } from '../src/core/hash.ts';
 import { nodeVmRunner } from '../src/runtime/node-vm.ts';
 import { openAiChatClient } from '../src/learn/system2.ts';
 import { replayOnEvidence } from '../src/learn/gates.ts';
-import { parseReflection } from '../src/learn/explorer.ts';
 import { reflectionTask, toolOf } from '../src/learn/prompt.ts';
-import { LAW_TOOLS, lawExplorerPayload, lawExplorerSystem, ownLaw, parseLawTurn, type LawRequest, type LawTool } from '../src/learn/law-explorer.ts';
+import { LAW_TOOLS, lawExplorerSystem, ownLaw, type LawRequest, type LawTool } from '../src/learn/law-explorer.ts';
 import { delegatedLaw, fitLawCodeOnly } from '../src/learn/law-ablation.ts';
-import { Notebook } from '../src/learn/notebook.ts';
+import { LawSession, lawFingerprint, type LawRecord } from '../src/learn/law-session.ts';
 import { mulberry32 } from '../src/worlds/grid/gen.ts';
 import { ORBIT_PERCEPT_DOC, fromPercept, generateOrbit, launchNear, launchable, readTable, simulate, tableSense, toPercept, type Trajectory } from '../src/worlds/orbit/index.ts';
 import { answerable, answerAsDeparture, departureAsNext, observedNoiseVariance, orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
@@ -277,37 +275,9 @@ function explore(): void {
 
 /* --- Laws and rounds ------------------------------------------------------------- */
 
-interface LawRecord {
-  readonly round: number;
-  readonly law: Law;
-  readonly fingerprint: string;
-  /** Operator only: the test's error and score, never shown to System 2. */
-  test: { error: number; median: number; score: number } | null;
-  accepted: boolean;
-  /** System 2 asked to validate this law against the family. */
-  readonly validate: boolean;
-  readonly lessons: string[];
-  readonly nextExperiment: string;
-}
-const laws: LawRecord[] = [];
-const fingerprint = (law: Law) => hashString(stableStringify(ownLaw(law))).slice(0, 10);
 /** Operator only: the law whose verdicts were best. System 2 builds on its latest law, or any it names. */
-const bestForOperator = (): LawRecord | null => laws.filter((l) => l.test).reduce<LawRecord | null>((a, b) => (!a || b.test!.score < a.test!.score ? b : a), null);
-const latest = (): LawRecord | null => laws[laws.length - 1] ?? null;
-const lawOfRound = (round: number): Law | null => laws.find((l) => l.round === round)?.law ?? null;
-
-const notebook = new Notebook();
-let unaddressed: string[] = [];
-function notebookBrief(): Record<string, unknown> {
-  const { episodes: _g, models: _r, ...own } = notebook.brief(unaddressed) as Record<string, unknown>;
-  const last = laws[laws.length - 1];
-  return {
-    ...own,
-    episodes: launchIndex(),
-    models: laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })),
-    ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {})
-  };
-}
+const bestForOperator = (): LawRecord | null => session.laws.filter((l) => l.test).reduce<LawRecord | null>((a, b) => (!a || b.test!.score < a.test!.score ? b : a), null);
+const latest = (): LawRecord | null => session.latest();
 
 /* --- Checks: in the laboratories every round; in the family when System 2 validates -------------------- */
 
@@ -361,7 +331,7 @@ const protocol = new Protocol(objective, {
     const k = (set === 1 ? 200000 : 100000) + round * 10 + j;
     return { id: 'blind' + k, spec: environmentOf(spec, k, { varyStrength: cfg.varyStrength }), role: 'confirmation' as const, seen: false };
   }),
-  fingerprint: (law) => fingerprint(law),
+  fingerprint: (law) => lawFingerprint(law),
   validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
   cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
   say: (line) => say(line),
@@ -416,7 +386,7 @@ async function ablate(law: Law, round: number, lawResult: TestResult): Promise<v
 
 /* --- Investigation ------------------------------------------------------------------ */
 
-const lawOf = (ref: number | Law | null): Law | null => (ref === null ? latest()?.law ?? null : typeof ref === 'number' ? lawOfRound(ref) : ref);
+const lawOf = (ref: number | Law | null): Law | null => session.lawOf(ref);
 
 /** A law's observations and output must compute on points of the learner's own episodes before anything uses it (the output
     is tried with every rule answering 0.5: no Judge call). */
@@ -438,7 +408,7 @@ function checkOnPoints(law: Law): string[] {
   return errors;
 }
 
-async function runRequest(req: LawRequest, budget: { launches: number }): Promise<unknown> {
+async function runRequest(req: LawRequest, budget: { acts: number }): Promise<unknown> {
   const kind = (['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const).find((k) => k in req)!;
   if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
   if ('view' in req) {
@@ -448,15 +418,15 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
     return { view: l.id, rows_in_table: lines.length - 1, table: [lines[0], ...lines.slice(1 + Math.max(0, req.from), 2 + Math.max(0, req.to))].join('\n') };
   }
   if ('act' in req) {
-    if (budget.launches <= 0) return { act: req.act, error: 'no acts left this round' };
+    if (budget.acts <= 0) return { act: req.act, error: 'no acts left this round' };
     const setup = setups.get(req.act.setup ?? 'lab1');
     if (!setup || setup.role !== 'laboratory') return { act: req.act, error: 'you can act only in your laboratories: ' + [...setups.values()].filter((s) => s.role === 'laboratory').map((s) => s.id).join(', ') };
     const pos = fromPercept.pos(setup.spec.frame, [req.act.x, req.act.y]);
     /* The environment answers only whether it accepted: never why not. */
     if (!launchable(setup.spec, pos)) return { act: req.act, accepted: false };
-    budget.launches--;
+    budget.acts--;
     const id = 'act' + (++launchCounter);
-    const l = store(id, setup, currentRound, 'you', simulate(setup.spec, id, { pos, vel: fromPercept.vel(setup.spec.frame, [req.act.vx, req.act.vy]), mass: req.act.m }));
+    const l = store(id, setup, session.currentRound, 'you', simulate(setup.spec, id, { pos, vel: fromPercept.vel(setup.spec.frame, [req.act.vx, req.act.vy]), mass: req.act.m }));
     const lines = l.table.split('\n');
     return { act: req.act, accepted: true, name: id, rows_in_table: lines.length - 1, table: lines.slice(0, 61).join('\n'), ...(lines.length > 61 ? { more: 'view it for the rest' } : {}) };
   }
@@ -544,115 +514,25 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
 
 const REFLECTION_TASK = reflectionTask(investigative);
 
-let currentRound = 0;
-let llmFatal: string | null = null;
-
-async function consult(mode: 'propose' | 'reflect'): Promise<LawRecord | null> {
-  if (llmFatal) return null;
-  currentRound++;
-  const round = currentRound;
-  const b = latest();
-  let refused: string[] = [];
-  const investigation: unknown[] = [];
-  let steps = 0, refusals = 0;
-  const budget = { launches: cfg.launches };
-  while (refusals < 3 && steps <= cfg.steps + 3) {
-    const stepsLeft = investigative ? Math.max(0, cfg.steps - steps) : 0;
-    const payload = lawExplorerPayload({
-      round, perceptDoc: ORBIT_PERCEPT_DOC, notebook: notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
-      setups: protocol.placesView(),
-      validationsLeft: protocol.validationsLeft,
-      lastTest: protocol.lastView, ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('act') ? { launchesLeft: budget.launches } : {}),
-      refused, task: mode === 'reflect' ? REFLECTION_TASK : null
-    });
-    say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
-    steps++;
-    let content = '';
-    try {
-      content = (await llm.complete({ system: SYSTEM_PROMPT, user: payload })).content;
-    } catch (error) {
-      const status = (error as ApiError)?.details?.status;
-      if (status === 401 || status === 402 || status === 403) {
-        llmFatal = String((error as Error)?.message || error);
-        log('llm_fatal', { round, status, error: llmFatal });
-        say('the LLM service refused the account (HTTP ' + status + '): stopping');
-        return null;
-      }
-      refusals++;
-      log('proposal_failed', { round, error: String((error as Error)?.message || error) });
-      continue;
-    }
-    const turn = parseLawTurn(content, { world: world.id, round });
-    const known = (ref: string) => launches.has(ref.trim()) || resolve(ref) !== null;
-    const noteWarnings = [...notebook.applyNotes(round, turn.notes, known), ...notebook.applyMethods(round, turn.methods)];
-    if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
-    if (turn.methods.length) { say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); log('methods', { round, methods: turn.methods }); }
-    if (turn.kind === 'investigate') {
-      if (stepsLeft <= 0) { refused = [investigative ? 'no investigation steps left this round: answer with your proposal now' : 'there is no investigating in this experiment: answer with your proposal']; refusals++; continue; }
-      const results: unknown[] = [];
-      for (const r of turn.requests) results.push(await runRequest(r, budget));
-      /* A draft travels back as it wrote it, never as the host's law object. */
-      /* Echoed in the prompt's words, and a draft as it wrote it, never as the host's objects. */
-      const modelOf = (l: number | Law | null) => (l !== null && typeof l === 'object' ? ownLaw(l) : l);
-      const asWritten = turn.requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
-        : 'inspect' in r ? { inspect: r.inspect, model: modelOf(r.law) }
-        : 'act' in r ? { act: (({ setup, ...rest }) => ({ ...rest, ...(setup ? { place: setup } : {}) }))(r.act) } : r);
-      investigation.push({ step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
-      log('investigation', { round, requests: asWritten, results, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
-      say('  investigates: ' + turn.requests.map((r, i) => {
-        const res = results[i] as { error?: string; launched?: boolean; name?: string };
-        const k = Object.keys(r)[0];
-        return k + (res?.error ? ' (' + res.error.slice(0, 60) + ')' : k === 'launch' ? (res.launched ? ' -> ' + res.name : ' refused') : '');
-      }).join('; '));
-      refused = [];
-      continue;
-    }
-    if (mode === 'reflect') {
-      const r = parseReflection(content, round);
-      if (!r.ok) { refused = r.errors; refusals++; log('reflection_refused', { round, errors: r.errors, content }); continue; }
-      const stances = notebook.applyStances(round, r.reflection.beliefs);
-      unaddressed = stances.unaddressed;
-      notebook.recordReflection(round, r.reflection.rationale, r.reflection.lessons, r.reflection.nextExperiment);
-      log('reflection', { round, investigation_steps: investigation.length, rationale: r.reflection.rationale, beliefs: r.reflection.beliefs, notes: turn.notes,
-        lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings });
-      for (const l of r.reflection.lessons) say('  lesson: ' + l);
-      return null;
-    }
-    const parsed = turn.parse;
-    if (!parsed.ok) {
-      refused = parsed.errors; refusals++;
-      log('proposal_refused', { round, errors: parsed.errors, content });
-      say('  refused: ' + parsed.errors.slice(0, 3).join(' | '));
-      continue;
-    }
-    const failures = checkOnPoints(parsed.proposal.law);
-    if (failures.length) {
-      refused = ['your model failed on points of your episodes: ' + failures.join(' | ')]; refusals++;
-      log('proposal_refused', { round, errors: refused, content });
-      say('  refused: ' + refused[0].slice(0, 200));
-      continue;
-    }
-    const p = parsed.proposal;
-    const stances = notebook.applyStances(round, p.beliefs);
-    unaddressed = stances.unaddressed;
-    const record: LawRecord = { round, law: p.law, fingerprint: fingerprint(p.law), test: null, accepted: false, validate: p.validate, lessons: p.lessons, nextExperiment: p.nextExperiment };
-    laws.push(record);
-    log('proposal', { round, investigation_steps: investigation.length, rationale: p.rationale, beliefs: p.beliefs, notes: turn.notes, law: ownLaw(p.law),
-      fingerprint: record.fingerprint, lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });
-    say('  proposes: ' + Object.keys(p.law.observations).length + ' observations, ' + Object.keys(p.law.rules).length + ' rules' + (p.law.output ? ', output in code' : '') +
-      '; beliefs ' + p.beliefs.map((x) => x.id + ':' + x.stance).join(' '));
-    return record;
-  }
-  log('no_proposal', { round, refusals });
-  return null;
-}
+const session = new LawSession({
+  llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: ORBIT_PERCEPT_DOC, steps: cfg.steps, investigative,
+  ...(tools.has('act') ? { acts: cfg.launches } : {}),
+  runRequest: (r, budget) => runRequest(r, budget),
+  known: (ref) => launches.has(ref.trim()) || resolve(ref) !== null,
+  failures: (law) => checkOnPoints(law),
+  episodes: () => launchIndex(),
+  places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
+  /* Echoed in the prompt's words: "place", not the host's name for it. */
+  actAsWritten: ({ setup, ...rest }) => ({ ...rest, ...(setup ? { place: setup } : {}) }),
+  log, say
+});
 
 /* --- Operator-only grading ------------------------------------------------------------ */
 
 async function gradeRecovery(): Promise<void> {
   const final = accepted ?? latest();
-  const brief = notebook.brief();
-  const learned = { final_law: final ? ownLaw(final.law) : null, beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: notebook.reflections };
+  const brief = session.notebook.brief();
+  const learned = { final_law: final ? ownLaw(final.law) : null, beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: session.notebook.reflections };
   const system = 'You grade how well a learner recovered the hidden law of motion of an environment it could only perceive as tables of positions. '
     + 'The learner predicts d: how the next position of the launched body departs from repeating its last step. '
     + 'For each TRUE statement, decide from the learner\'s own law and words whether it stated it: "exact" (the same claim; numbers within about 10%), '
@@ -682,9 +562,9 @@ explore();
 let accepted: LawRecord | null = null;
 /** --quick: the law System 2 judged good, where the run stopped. */
 let satisfied: LawRecord | null = null;
-for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
-  const record = await consult('propose');
-  if (!record) { if (llmFatal) break; continue; }
+for (let attempt = 1; attempt <= cfg.attempts && !session.fatal; attempt++) {
+  const record = await session.consult('propose');
+  if (!record) { if (session.fatal) break; continue; }
   const round = record.round;
   /* The protocol: the check in the laboratories on launches there it has not seen; the validation when System 2 asks and
      its law holds in all of them; the blind confirmation when it holds in every setup of the family. */
@@ -710,18 +590,18 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   if (outcome.accepted) { accepted = record; log('accepted', { round }); break; }
 }
 
-if (cfg.reflection && !llmFatal) {
+if (cfg.reflection && !session.fatal) {
   say('reflection round: the law is final; System 2 looks back');
-  await consult('reflect');
+  await session.consult('reflect', REFLECTION_TASK);
 }
-if (cfg.grade && !llmFatal) await gradeRecovery();
+if (cfg.grade && !session.fatal) await gradeRecovery();
 const final = accepted ?? latest();
 const top = bestForOperator();
 log('end', {
-  stoppedBy: llmFatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : 'budget', ...(llmFatal ? { llm_error: llmFatal } : {}),
+  stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : 'budget', ...(session.fatal ? { llm_error: session.fatal } : {}),
   final: final ? { round: final.round, fingerprint: final.fingerprint, test: final.test, law: ownLaw(final.law) } : null,
   best_for_the_operator: top ? { round: top.round, fingerprint: top.fingerprint, test: top.test } : null,
-  notebook, launches: launchIndex(), jev: { calls: judge.stats.calls, errors: judge.stats.errors, cache: cacheStats() },
+  notebook: session.notebook, launches: launchIndex(), jev: { calls: judge.stats.calls, errors: judge.stats.errors, cache: cacheStats() },
   /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
   operator_summary: operatorSummary(protocol.summary(), ablations)
 });

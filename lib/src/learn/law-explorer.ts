@@ -170,20 +170,37 @@ export function parseLawProposal(content: string, context: { world: string; lang
 /* --- Investigation requests ------------------------------------------------------------ */
 
 /** `law`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its latest law. */
-export type LawRequest =
+/** orbit@1's act: start an episode at (x, y), changing at first by (vx, vy), with m, in a laboratory. */
+export interface OrbitAct { readonly x: number; readonly y: number; readonly vx: number; readonly vy: number; readonly m: number; readonly setup?: string }
+
+/** What `act` carries is the world's: each world parses its parameters (`parseAct`); orbit's by default. */
+export type LawRequest<A = OrbitAct> =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string; readonly law: number | Law | null }
-  | { readonly act: { readonly x: number; readonly y: number; readonly vx: number; readonly vy: number; readonly m: number; readonly setup?: string } }
+  | { readonly act: A }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   | { readonly simulate: string; readonly law: number | Law | null; readonly rows: number }
   | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'episodes' | 'checks' };
 
-export type LawTurn =
-  | { kind: 'investigate'; requests: LawRequest[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
+export type LawTurn<A = OrbitAct> =
+  | { kind: 'investigate'; requests: LawRequest<A>[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
   | { kind: 'proposal'; parse: LawParse; notes: NoteOp[]; methods: NoteOp[] };
 
+/** orbit@1's act parameters, or why they cannot be read. */
+export function parseOrbitAct(l: Record<string, unknown>): OrbitAct | string {
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const [x, y, vx, vy] = [num(l.x), num(l.y), num(l.vx), num(l.vy)];
+  const m = l.m === undefined ? 1 : num(l.m);
+  if (x === null || y === null || vx === null || vy === null || m === null || !(m > 0)) return 'act needs numbers x, y, vx, vy (and a positive m)';
+  const place = l.place ?? l.setup;
+  return { x, y, vx, vy, m, ...(typeof place === 'string' ? { setup: place } : {}) };
+}
+
 /** An answer is either an investigation (requests, and maybe notes) or a proposal. */
-export function parseLawTurn(content: string, context: { world: string; lang?: string; round?: number; maxRequests?: number }): LawTurn {
+export function parseLawTurn<A = OrbitAct>(content: string, context: { world: string; lang?: string; round?: number; maxRequests?: number;
+  /** The world's act parameters (default: orbit@1's), or why they cannot be read. */
+  parseAct?: (raw: Record<string, unknown>) => A | string }): LawTurn<A> {
+  const parseAct = context.parseAct ?? (parseOrbitAct as unknown as (raw: Record<string, unknown>) => A | string);
   const data = parseJsonLoose(content);
   const o = obj(data);
   const warnings: string[] = [];
@@ -191,7 +208,7 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
   const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
   const max = context.maxRequests ?? 8;
   if (o && Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output) {
-    const requests: LawRequest[] = [];
+    const requests: LawRequest<A>[] = [];
     const lawOf = (raw: unknown, i: number, kind: string): number | Law | null | undefined => {
       if (raw === undefined || raw === null || raw === 'best') return null;
       if (Number.isInteger(raw)) return raw as number;
@@ -203,7 +220,6 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
       warnings.push('request #' + i + ': "model" must be a round number or a draft { observations, rules, weights, output }');
       return undefined;
     };
-    const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
     for (const [i, r] of o.investigate.slice(0, max).entries()) {
       const q = obj(r) ?? {};
       if (typeof q.view === 'string') {
@@ -211,12 +227,9 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
         const to = Number.isInteger(q.to) ? q.to as number : from + 59;
         requests.push({ view: q.view, from, to: Math.min(to, from + 59) });
       } else if (obj(q.act ?? q.launch)) {
-        const l = obj(q.act ?? q.launch)!;
-        const [x, y, vx, vy] = [num(l.x), num(l.y), num(l.vx), num(l.vy)];
-        const m = l.m === undefined ? 1 : num(l.m);
-        if (x === null || y === null || vx === null || vy === null || m === null || !(m > 0)) { warnings.push('request #' + i + ': act needs numbers x, y, vx, vy (and a positive m)'); continue; }
-        const place = l.place ?? l.setup;
-        requests.push({ act: { x, y, vx, vy, m, ...(typeof place === 'string' ? { setup: place } : {}) } });
+        const act = parseAct(obj(q.act ?? q.launch)!);
+        if (typeof act === 'string') { warnings.push('request #' + i + ': ' + act); continue; }
+        requests.push({ act });
       } else if (typeof q.inspect === 'string') {
         const law = lawOf(q.model !== undefined ? q.model : q.law, i, 'inspect');
         if (law === undefined) continue;

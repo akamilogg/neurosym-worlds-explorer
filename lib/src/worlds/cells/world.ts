@@ -1,0 +1,143 @@
+import { hashString } from '../../core/hash.ts';
+import type { World } from '../../core/types.ts';
+import { mulberry32 } from '../grid/gen.ts';
+
+/* ============================================================================
+ * cells@1: a third environment, built to test that a world connects to the common prompt
+ * and protocol with only its world, senses, actions and objective (SPEC-OBJETIVO O5).
+ *
+ * A row of cells, each showing one of two symbols, closed into a ring. Every step each
+ * cell takes a symbol that depends only on the cells near it (a hidden local rule). The
+ * learner perceives only the rows, as strings of symbols; it answers the NEXT row.
+ *
+ *   level 1   the next symbol depends on the cell and its two neighbours (an elementary rule)
+ *   level 2   on how many cells show the second symbol within two cells either side
+ *
+ * The FAMILY: the same rule and symbols; other ring lengths and other mixes of symbols at
+ * the start. Nothing here is told to the learner: the hidden rule is the operator's.
+ * ========================================================================== */
+
+export interface CellsSpec {
+  readonly id: string;
+  readonly seed: number;
+  readonly level: number;
+  /** Cells in the ring. */
+  readonly width: number;
+  /** Cells either side a cell's next symbol depends on. */
+  readonly radius: 1 | 2;
+  /** Level 1: the elementary rule (0-255; bit n is the next state of the neighbourhood read as the number n).
+      Level 2: bit n is the next state when n cells of the neighbourhood show the second symbol. */
+  readonly rule: number;
+  /** The two symbols, as the learner sees them. */
+  readonly glyphs: readonly [string, string];
+  /** The share of cells showing the second symbol at an episode's start. */
+  readonly density: number;
+  /** Rows after the first in an episode. */
+  readonly steps: number;
+}
+
+/* Rules whose rows keep changing in ways worth modelling (neither dying out nor freezing at once). */
+const ELEMENTARY = [30, 45, 54, 57, 60, 62, 73, 75, 86, 89, 90, 99, 101, 105, 106, 110, 120, 122, 124, 126, 135, 137, 146, 147, 149, 150, 153, 154, 169, 182, 193, 195, 225];
+const GLYPHS = ['.', '#', 'o', 'x', '+', '-', '*', '=', '~', '^', ':', '%'];
+
+export function generateCells(seed: number, level = 1): CellsSpec {
+  const rnd = mulberry32(seed * 7919 + level * 104729);
+  const radius: 1 | 2 = level >= 2 ? 2 : 1;
+  let rule: number;
+  if (radius === 1) rule = ELEMENTARY[Math.floor(rnd() * ELEMENTARY.length)];
+  else {
+    /* A totalistic rule over 0..5 cells: never all-dead from all-dead, never a constant. */
+    do { rule = Math.floor(rnd() * 64); } while ((rule & 1) || rule === 0 || rule === 63 - 1);
+  }
+  const a = Math.floor(rnd() * GLYPHS.length);
+  let b = Math.floor(rnd() * (GLYPHS.length - 1));
+  if (b >= a) b++;
+  return { id: 'cells@1:s' + seed + 'L' + level, seed, level, width: 16 + Math.floor(rnd() * 9), radius, rule, glyphs: [GLYPHS[a], GLYPHS[b]], density: 0.3 + rnd() * 0.4, steps: 24 };
+}
+
+/** One step of the ring: every cell's next state from its neighbourhood. */
+export function stepCells(spec: CellsSpec, row: readonly number[]): number[] {
+  const n = row.length;
+  return row.map((_, i) => {
+    if (spec.radius === 1) {
+      const k = (row[(i - 1 + n) % n] << 2) | (row[i] << 1) | row[(i + 1) % n];
+      return (spec.rule >> k) & 1;
+    }
+    let sum = 0;
+    for (let d = -2; d <= 2; d++) sum += row[(i + d + n) % n];
+    return (spec.rule >> sum) & 1;
+  });
+}
+
+export const renderRow = (spec: CellsSpec, row: readonly number[]): string => row.map((v) => spec.glyphs[v]).join('');
+
+/** A row as states, or null when it is not a row of this ring (length, symbols). */
+export function readRow(spec: CellsSpec, text: string): number[] | null {
+  if (typeof text !== 'string' || text.length !== spec.width) return null;
+  const row: number[] = [];
+  for (const ch of text) {
+    const v = spec.glyphs.indexOf(ch);
+    if (v < 0) return null;
+    row.push(v);
+  }
+  return row;
+}
+
+/** An episode's rows, as perceived: from a start (drawn with `rnd`, or given), `spec.steps` steps. */
+export function runEpisode(spec: CellsSpec, start: readonly number[] | (() => number)): string[] {
+  let row = typeof start === 'function' ? Array.from({ length: spec.width }, () => (start() < spec.density ? 1 : 0)) : [...start];
+  const rows = [renderRow(spec, row)];
+  for (let t = 0; t < spec.steps; t++) { row = stepCells(spec, row); rows.push(renderRow(spec, row)); }
+  return rows;
+}
+
+/** Place `index` of the family of `base` (index 0 is the base world): another ring length and mix, the same rule. */
+export function placeOf(base: CellsSpec, index: number): CellsSpec {
+  if (index === 0) return base;
+  const rnd = mulberry32(base.seed * 92821 + base.level * 613 + index * 2654435761);
+  return { ...base, width: 9 + Math.floor(rnd() * 32), density: 0.2 + rnd() * 0.6 };
+}
+
+/* --- What the learner perceives at a point ------------------------------------------ */
+
+/** A point of an episode: the rows seen up to it (the last is the present). */
+export interface CellsPoint { readonly rows: readonly string[] }
+
+export const CELLS_PERCEPT_DOC = 'At a point of an episode your code receives p = { rows }: `p.rows` is the list of rows seen so far in that episode, oldest first - the last one is the present row. Each row is a string of symbols, all rows of an episode of the same length.';
+
+export const perceiveCells = (point: CellsPoint): { rows: string[] } => ({ rows: [...point.rows] });
+
+/** The world a point belongs to, for the Observer: points come from episodes, nothing moves here. */
+export function cellsPointWorld(): World<CellsPoint, never> {
+  return {
+    id: 'cells@1',
+    actors: ['nature'],
+    initial: () => { throw new Error('cells@1 has no initial state: points come from episodes'); },
+    toMove: () => 'nature',
+    actions: () => [],
+    step: (s) => s,
+    outcome: () => ({ over: false, winner: null, reason: null }),
+    key: (s) => hashString(s.rows.join('\n')),
+    view: () => ({ entities: [], scalars: {} }),
+    describeRules: () => '',
+    actionKey: () => ''
+  };
+}
+
+/* --- Operator only ----------------------------------------------------------------------- */
+
+/** The hidden rule, stated in the symbols the learner sees: for the operator's grading. Never shown to the learner. */
+export function describeCellsTruth(spec: CellsSpec): { id: string; statement: string }[] {
+  const [g0, g1] = spec.glyphs;
+  const out = [{ id: 'ring', statement: 'The row wraps around: the first and the last cell are neighbours.' }];
+  if (spec.radius === 1) {
+    const table = Array.from({ length: 8 }, (_, k) => [(k >> 2) & 1, (k >> 1) & 1, k & 1].map((v) => (v ? g1 : g0)).join('') + ' -> ' + (((spec.rule >> k) & 1) ? g1 : g0));
+    out.push({ id: 'locality', statement: 'A cell\'s next symbol depends only on its own symbol and its two neighbours\' (left, itself, right) in the present row.' });
+    out.push({ id: 'rule', statement: 'The next symbol for each neighbourhood (left, itself, right): ' + table.join('; ') + '.' });
+  } else {
+    const table = Array.from({ length: 6 }, (_, n) => n + ' -> ' + (((spec.rule >> n) & 1) ? g1 : g0));
+    out.push({ id: 'locality', statement: 'A cell\'s next symbol depends only on how many of the five cells centred on it (two either side and itself) show "' + g1 + '" in the present row.' });
+    out.push({ id: 'rule', statement: 'The next symbol for each count of "' + g1 + '" among those five cells: ' + table.join('; ') + '.' });
+  }
+  return out;
+}
