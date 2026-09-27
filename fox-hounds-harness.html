@@ -602,6 +602,8 @@ var Neurosym = (() => {
     INVESTIGATION_TOOLS: () => INVESTIGATION_TOOLS2,
     JEV_DEFAULT_URL: () => JEV_DEFAULT_URL,
     JEV_EVALUATION_CONTRACT: () => JEV_EVALUATION_CONTRACT,
+    JEV_NEUTRAL_CONTRACT: () => JEV_NEUTRAL_CONTRACT,
+    JEV_NEUTRAL_TEXTS_CONTRACT: () => JEV_NEUTRAL_TEXTS_CONTRACT,
     JEV_OBSERVED_TEXTS_CONTRACT: () => JEV_OBSERVED_TEXTS_CONTRACT,
     JUDGE_CONSENSUS: () => JUDGE_CONSENSUS,
     JUDGE_MEASURED: () => JUDGE_MEASURED,
@@ -1453,6 +1455,8 @@ var Neurosym = (() => {
   // src/core/jev.ts
   var JEV_DEFAULT_URL = "https://api.typesafe.ai/v1/systemone";
   var JEV_EVALUATION_CONTRACT = "Judge only the declared measurements. The board coordinates are intentionally absent; System 2 chose O(s).";
+  var JEV_NEUTRAL_CONTRACT = "Judge only the declared measurements: they are all you are shown of this point.";
+  var JEV_NEUTRAL_TEXTS_CONTRACT = "Judge only the declared measurements and the observed texts: they are all you are shown of this point.";
   var JEV_OBSERVED_TEXTS_CONTRACT = "Judge only the declared measurements and the observed texts: they are everything System 2 chose to show of the position, O(s).";
   function pickNumber(value) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -1544,6 +1548,18 @@ var Neurosym = (() => {
   function jevWireState(request) {
     const ctx = request.context ?? {};
     const errors = request.measurementErrors && request.measurementErrors.length ? { measurement_errors: request.measurementErrors.slice() } : {};
+    const hasTexts = !!request.texts && Object.keys(request.texts).length > 0;
+    if (!request.rulesOfTheWorld) {
+      return {
+        evaluation_contract: hasTexts ? JEV_NEUTRAL_TEXTS_CONTRACT : JEV_NEUTRAL_CONTRACT,
+        measurements: { ...request.measurements },
+        ...hasTexts ? { observed_texts: { ...request.texts } } : {},
+        side_to_move: request.sideToMove,
+        ...ctx.opponent !== void 0 && ctx.opponent !== null ? { opponent: ctx.opponent } : {},
+        judgment_formula_hash: ctx.judgment_hash ?? null,
+        ...errors
+      };
+    }
     const wire = {
       rules_of_the_game: request.rulesOfTheWorld,
       evaluation_contract: request.texts && Object.keys(request.texts).length ? JEV_OBSERVED_TEXTS_CONTRACT : JEV_EVALUATION_CONTRACT,
@@ -4126,6 +4142,10 @@ var Neurosym = (() => {
     return { weights, ranges, samples: { win, loss } };
   }
   function codeOnlyFormula(formula) {
+    if (formula.output) {
+      const rules = Object.fromEntries(Object.entries(formula.rules).filter(([, r]) => r.used_as !== "policy").map(([id]) => [id, { type: "noul", used_as: "value", instructions: "linear reading of the observations (ablation)", criteria: { yes: "", no: "" } }]));
+      return makeFormula({ world: formula.world, observations: formula.observations, rules, weights: formula.weights, output: formula.output, meta: { source: "ablation:code-only" } });
+    }
     return makeFormula({
       world: formula.world,
       observations: formula.observations,
@@ -4149,7 +4169,8 @@ var Neurosym = (() => {
           }
           v = clamp(0.5 + acc / total, 0, 1);
         }
-        return { [CODE_ONLY_RULE]: { value: round(v, 4), confidence: null } };
+        const ids = Object.keys(request.questions ?? {});
+        return Object.fromEntries((ids.length ? ids : [CODE_ONLY_RULE]).map((id) => [id, { value: round(v, 4), confidence: null }]));
       }
     };
   }

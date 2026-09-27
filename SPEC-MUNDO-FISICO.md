@@ -35,6 +35,10 @@ equivoca la ley.
 - **I1 · Sin fugas.** Ni System 2 ni Jev reciben la ley, sus parámetros, nombres con significado ("gravedad",
   "masa", "órbita") ni unidades. Los objetos se nombran con símbolos neutros y el sistema de referencia está girado,
   escalado y trasladado por semilla.
+  **27/09/2026:** el envoltorio de cada petición a Jev (`lib/src/core/jev.ts`) decía "the position", "the game is in
+  progress", "The board coordinates are intentionally absent" y llevaba `opponent`, también en orbit. En los mundos que no
+  describen sus reglas ahora es neutro: el contrato, las medidas, los textos, quién tiene el turno y el hash. El juego del
+  gato y el ratón, que sí describe sus reglas, conserva el envoltorio de siempre (paridad con el harness).
 - **I2 · Sin investigación precocinada.** El entorno ofrece acciones primitivas (lanzar, simular, medir), nunca
   análisis hechos: no hay ajuste ni regresión que System 2 no escriba él mismo en código.
 - **I3 · Jev solo ve observaciones.** Ni la percepción ni el estado: solo los números y textos que calculan las

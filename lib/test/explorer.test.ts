@@ -115,6 +115,12 @@ test('ablation: the same observations read linearly, no Judge - the sign is fitt
   const late = await ev.eval(codeOnlyFormula(f.proposal.formula), labelled[labelled.length - 1].state);
   assert.ok(early.value > late.value);
   assert.ok(early.answers[CODE_ONLY_RULE]);
+  /* A model with its own output keeps it, and its rules: each rule gets the linear reading instead of the Judge. */
+  const withOutput = { ...f.proposal.formula, output: { kind: 'code' as const, lang: 'js', source: '(p, m) => 1 - m.rules.r' } };
+  const ablated = codeOnlyFormula(withOutput);
+  assert.deepEqual([Object.keys(ablated.rules), ablated.output?.source], [['r'], '(p, m) => 1 - m.rules.r']);
+  const e2 = await ev.eval(ablated, labelled[0].state);
+  assert.ok(Math.abs(e2.value - (1 - early.value)) < 1e-4, 'the output reads the linear reading: ' + e2.value + ' vs ' + early.value);
 });
 
 test('what System 2 reads never carries the operator measurements, nor counts choices', () => {

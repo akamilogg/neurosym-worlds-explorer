@@ -53,7 +53,9 @@ test('Jev never receives the picture: only the measured values, under a contract
   assert.ok(!JSON.stringify(body).includes(sense.render(world.initial()).split('\n')[1]), 'no row of the picture anywhere');
   assert.equal(body.state.measurements.my_pieces, spec.A.start.length);
   assert.match(body.state.evaluation_contract, /Judge only the declared measurements/);
-  assert.equal(body.state.rules_of_the_game, '');
+  /* A world that does not describe itself: the wrapper names nothing about any world (SPEC-MUNDO-FISICO I1). */
+  assert.ok(!('rules_of_the_game' in body.state) && !('rules_engine_says' in body.state) && !('opponent' in body.state));
+  assert.doesNotMatch(JSON.stringify(body.state), /\b(games?|boards?|positions?|opponents?|pieces?|moves?)\b/i);
   assert.match(body.questions.good.instructions, new RegExp('I have ' + spec.A.start.length + ' pieces'));
   await ev.eval(formula, world.initial());
   assert.equal(stub.bodies.length, 1, 'the same facts are one question');

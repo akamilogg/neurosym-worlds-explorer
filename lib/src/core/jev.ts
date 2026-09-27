@@ -19,6 +19,10 @@ import type { Judge, JudgeAnswer, JudgeRequest, Rule } from './types.ts';
 export const JEV_DEFAULT_URL = 'https://api.typesafe.ai/v1/systemone';
 export const JEV_EVALUATION_CONTRACT =
   'Judge only the declared measurements. The board coordinates are intentionally absent; System 2 chose O(s).';
+/* A world that does not describe itself (the unknown worlds) gets a wrapper that names nothing about any world: no game,
+   board, position or opponent (SPEC-MUNDO-FISICO I1). */
+export const JEV_NEUTRAL_CONTRACT = 'Judge only the declared measurements: they are all you are shown of this point.';
+export const JEV_NEUTRAL_TEXTS_CONTRACT = 'Judge only the declared measurements and the observed texts: they are all you are shown of this point.';
 /** When System 2's code also composed texts for the Judge: they are all it knows of the position, with the numbers. */
 export const JEV_OBSERVED_TEXTS_CONTRACT =
   'Judge only the declared measurements and the observed texts: they are everything System 2 chose to show of the position, O(s).';
@@ -147,6 +151,18 @@ export function jevWireQuestions(questions: Readonly<Record<string, Rule>>): Rec
 export function jevWireState(request: JudgeRequest): Record<string, unknown> {
   const ctx = request.context ?? {};
   const errors = request.measurementErrors && request.measurementErrors.length ? { measurement_errors: request.measurementErrors.slice() } : {};
+  const hasTexts = !!request.texts && Object.keys(request.texts).length > 0;
+  if (!request.rulesOfTheWorld) {
+    return {
+      evaluation_contract: hasTexts ? JEV_NEUTRAL_TEXTS_CONTRACT : JEV_NEUTRAL_CONTRACT,
+      measurements: { ...request.measurements },
+      ...(hasTexts ? { observed_texts: { ...request.texts } } : {}),
+      side_to_move: request.sideToMove,
+      ...(ctx.opponent !== undefined && ctx.opponent !== null ? { opponent: ctx.opponent } : {}),
+      judgment_formula_hash: ctx.judgment_hash ?? null,
+      ...errors
+    };
+  }
   const wire: Record<string, unknown> = {
     rules_of_the_game: request.rulesOfTheWorld,
     evaluation_contract: request.texts && Object.keys(request.texts).length ? JEV_OBSERVED_TEXTS_CONTRACT : JEV_EVALUATION_CONTRACT,

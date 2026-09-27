@@ -55,6 +55,13 @@ export function fitCodeOnly<S>(observer: ObserverLike<S>, formula: Formula, posi
 
 /** The same observations, one rule the local judge answers: the formula to search with in the ablation. */
 export function codeOnlyFormula(formula: Formula): Formula {
+  /* A model with its own output keeps its rules (ids and weights) and its output: only where the rules' answers come from
+     changes - each gets the linear reading instead of the Judge's answer - so the arm isolates what the Judge adds. */
+  if (formula.output) {
+    const rules = Object.fromEntries(Object.entries(formula.rules).filter(([, r]) => r.used_as !== 'policy')
+      .map(([id]) => [id, { type: 'noul' as const, used_as: 'value' as const, instructions: 'linear reading of the observations (ablation)', criteria: { yes: '', no: '' } }]));
+    return makeFormula({ world: formula.world, observations: formula.observations, rules, weights: formula.weights, output: formula.output, meta: { source: 'ablation:code-only' } });
+  }
   return makeFormula({
     world: formula.world, observations: formula.observations,
     rules: { [CODE_ONLY_RULE]: { type: 'noul', used_as: 'value', instructions: 'linear reading of the observations (ablation)', criteria: { yes: '', no: '' } } },
@@ -78,7 +85,9 @@ export function codeOnlyJudge(fit: CodeOnlyFit): Judge {
         }
         v = clamp(0.5 + acc / total, 0, 1);
       }
-      return { [CODE_ONLY_RULE]: { value: round(v, 4), confidence: null } };
+      /* Every question gets the same reading: the ablated formula's own rule, or each of a model's rules (see above). */
+      const ids = Object.keys(request.questions ?? {});
+      return Object.fromEntries((ids.length ? ids : [CODE_ONLY_RULE]).map((id) => [id, { value: round(v, 4), confidence: null }]));
     }
   };
 }
