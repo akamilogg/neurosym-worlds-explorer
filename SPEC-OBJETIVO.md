@@ -85,6 +85,31 @@ bordes abiertos. Pero la regla vaciaba toda fila en uno o dos pasos, y los punto
 - **Parser:** acepta `on` dentro de `measure` y de `table`, y `range` es opcional en `table`. En los dos runs, System 2
   perdió pasos por esas formas.
 
+### 1.3 Nivel 2 con la regla 37, y lo que se añadió después
+
+Nivel 2 con la regla 37: aceptado en la ronda 3, grader 1,0, ninguna comprobación trivial.
+- **Cómo lo resolvió.** Midió los conflictos por radio (radio 1: sí; radio 2: ninguno) y construyó la tabla de 32
+  vecindarios.
+- **Qué no vio.** No descubrió que la regla depende solo de un recuento, que se resume en 6 entradas: predice
+  perfecto sin la estructura compacta.
+- **Jev:** una sola llamada.
+
+Se añadió después:
+- **Nivel 3 de `cells`, de segundo orden.** El símbolo siguiente depende del recuento en la fila presente y del propio
+  símbolo de la celda en la fila anterior. La fila presente no basta, y los puntos de comprobación empiezan donde hay
+  historia suficiente. `act` acepta varias filas (`rows`), igual en todos los niveles.
+- **Grader.** Separa predecir de entender (`GRADING_STRUCTURE`, en `cells`, orbit y la cuadrícula): una tabla que
+  coincide con una afirmación estructural vale "partial". El journal registra `form`: `compact`, `table` o `mixed`.
+- **`messages@1`, la prueba de Jev (H3).** Todo lo que se percibe es texto: mensajes cortos, cada uno con una marca 0 o
+  1 que depende de una regla oculta sobre lo que dicen (cuántos artículos pide, si quien escribe está contento, si pide
+  prisa).
+  - **Familia:** conserva la regla y cambia la redacción. El laboratorio escribe llano (cifras, adjetivos simples); la
+    familia usa números en palabras y modismos, negaciones, otros sustantivos y distractores con números.
+  - **Diseño comprobado con un LLM falso:** un modelo en código hecho a medida del laboratorio se sostiene allí (24/24)
+    y cae en la familia (9–17/24).
+  - **Qué mide el operador:** si System 2 delega el significado en reglas para Jev, y la ablación con juez plano dice
+    cuánto aportan.
+
 ## 2. Principios (heredados; ninguno se relaja)
 
 1. **Cero pistas (`SPEC-MUNDO-FISICO.md` I5).** El objetivo dice la **forma** de la respuesta y los parámetros de lo que
@@ -268,6 +293,8 @@ búsqueda y tiene instrumentos propios como `replay`. Unificarlo con `LawSession
 - **La cuadrícula** con el protocolo (`--seed 22`), una tarea de actuar donde el código es torpe: ¿aporta Jev?
 - **orbit a nivel 3 o 4** (término de velocidad, atracción que no es potencia): H2 de `SPEC-MUNDO-FISICO.md`, Jev
   debería ganar al código donde el código expresa mal.
+- **H3 (`messages@1`)**: con Jev real y con `--flat`, mismo seed. ¿El modelo aceptado pregunta a Jev, y la ablación
+  muestra que sus reglas aportan en la familia?
 - **O5**: `cells@1` con LLM real (`./run-cells.sh --seed 1 --level 1`, y `--level 2`): ¿recupera la regla desde cero y
   la valida en la familia? Es un mundo sin conocimiento previo útil tan claro como la mecánica. ¿Aporta Jev algo cuando
   la respuesta es una fila entera?

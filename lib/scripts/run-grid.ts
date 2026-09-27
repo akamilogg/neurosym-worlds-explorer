@@ -87,7 +87,7 @@ import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec,
 import { boardOf } from '../src/worlds/grid/family.ts';
 import { gridObjective } from '../src/worlds/grid/objective.ts';
 import { Protocol } from '../src/learn/protocol.ts';
-import { operatorSummary, tokensOf, type AblationRecord } from '../src/learn/operator.ts';
+import { GRADING_STRUCTURE, formOf, operatorSummary, tokensOf, type AblationRecord } from '../src/learn/operator.ts';
 import type { ObserverLike } from '../src/core/evaluate.ts';
 import type { Planner } from '../src/core/truth.ts';
 import type { Formula, MeasureDecl } from '../src/core/types.ts';
@@ -170,7 +170,8 @@ async function gradeRecovery(): Promise<void> {
     + 'For each TRUE rule, decide from the learner\'s own words whether it stated that rule: "exact" (stated correctly and completely, in any wording or coordinates equivalent to the picture), '
     + '"partial" (the right idea but incomplete, too broad or too narrow), "wrong" (it states something that contradicts the rule), or "absent" (it says nothing about it). '
     + 'Judge what the learner holds, not what it dropped, unless it holds nothing on that rule. Quote the learner briefly as evidence. '
-    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [learner claims about the rules that no true rule supports]}';
+    + GRADING_STRUCTURE + ' '
+    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [learner claims about the rules that no true rule supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
   const user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: sense.glyphA, other: sense.glyphB }, learner: learned });
   try {
     const content = (await llm.complete({ system, user })).content;
@@ -178,7 +179,7 @@ async function gradeRecovery(): Promise<void> {
     const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
     const points = grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0);
     const score = Math.round(points / truth.length * 100) / 100;
-    log('operator_rule_recovery', { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, grader_model: env.LLM_MODEL });
+    log('operator_rule_recovery', { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: env.LLM_MODEL });
     say('operator: rule recovery ' + score + ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')');
   } catch (e) {
     log('operator_rule_recovery', { truth, error: String((e as Error).message ?? e) });

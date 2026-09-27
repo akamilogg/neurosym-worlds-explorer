@@ -12,6 +12,8 @@ import { mulberry32 } from '../grid/gen.ts';
  *
  *   level 1   the next symbol depends on the cell and its two neighbours (an elementary rule)
  *   level 2   on how many cells show the second symbol within two cells either side
+ *   level 3   on how many of the cell and its two neighbours show the second symbol, AND on the
+ *             cell's own symbol in the row before (second order: the present row is not enough)
  *
  * The FAMILY: the same rule and symbols; other ring lengths and other mixes of symbols at
  * the start. Nothing here is told to the learner: the hidden rule is the operator's.
@@ -25,8 +27,12 @@ export interface CellsSpec {
   readonly width: number;
   /** Cells either side a cell's next symbol depends on. */
   readonly radius: 1 | 2;
+  /** Rows the next one depends on: 1 the present row; 2 also the row before it. */
+  readonly order?: 1 | 2;
   /** Level 1: the elementary rule (0-255; bit n is the next state of the neighbourhood read as the number n).
-      Level 2: bit n is the next state when n cells of the neighbourhood show the second symbol. */
+      Level 2: bit n is the next state when n cells of the neighbourhood show the second symbol.
+      Level 3: bit (n + 4 p) is the next state when n cells of the three show the second symbol and the cell showed p
+      (0 or 1) in the row before. */
   readonly rule: number;
   /** The two symbols, as the learner sees them. */
   readonly glyphs: readonly [string, string];
@@ -42,31 +48,37 @@ const GLYPHS = ['.', '#', 'o', 'x', '+', '-', '*', '=', '~', '^', ':', '%'];
 
 export function generateCells(seed: number, level = 1): CellsSpec {
   const rnd = mulberry32(seed * 7919 + level * 104729);
-  const radius: 1 | 2 = level >= 2 ? 2 : 1;
+  const radius: 1 | 2 = level === 2 ? 2 : 1;
+  const order: 1 | 2 = level >= 3 ? 2 : 1;
   /* A rule whose rows keep changing (lively): one that empties or freezes the rows leaves every check trivial - "the
-     same row again" or "an empty row" would hold. */
+     same row again" or "an empty row" would hold. A second-order rule must also depend on both rows. */
   let rule = -1;
   for (let tries = 0; tries < 400; tries++) {
-    const candidate = radius === 1 ? ELEMENTARY[Math.floor(rnd() * ELEMENTARY.length)] : Math.floor(rnd() * 64);
-    if (lively({ radius, rule: candidate })) { rule = candidate; break; }
+    const candidate = order === 2 ? Math.floor(rnd() * 256) : radius === 1 ? ELEMENTARY[Math.floor(rnd() * ELEMENTARY.length)] : Math.floor(rnd() * 64);
+    if (order === 2 && ((candidate & 15) === (candidate >> 4) || !dependsOnPresent(candidate))) continue;
+    if (lively({ radius, order, rule: candidate })) { rule = candidate; break; }
   }
   if (rule < 0) throw new Error('no lively rule for seed ' + seed + ' level ' + level);
   const a = Math.floor(rnd() * GLYPHS.length);
   let b = Math.floor(rnd() * (GLYPHS.length - 1));
   if (b >= a) b++;
-  return { id: 'cells@1:s' + seed + 'L' + level, seed, level, width: 16 + Math.floor(rnd() * 9), radius, rule, glyphs: [GLYPHS[a], GLYPHS[b]], density: 0.3 + rnd() * 0.4, steps: 24 };
+  return { id: 'cells@1:s' + seed + 'L' + level, seed, level, width: 16 + Math.floor(rnd() * 9), radius, ...(order === 2 ? { order } : {}), rule, glyphs: [GLYPHS[a], GLYPHS[b]], density: 0.3 + rnd() * 0.4, steps: 24 };
 }
+
+/** A second-order rule whose next symbol changes with the present count, for some previous symbol. */
+const dependsOnPresent = (rule: number) => [0, 4].some((p) => new Set([0, 1, 2, 3].map((n) => (rule >> (n + p)) & 1)).size > 1);
 
 /** Whether a rule keeps its rows changing: from most random starts (a few ring lengths, half of each symbol), after as
     many steps as an episode, the row still changes within two steps and neither symbol has taken nearly all the cells. */
-export function lively(rule: Pick<CellsSpec, 'radius' | 'rule'>, steps = 24): boolean {
-  const rnd = mulberry32(rule.rule * 31 + rule.radius * 7 + 1);
+export function lively(rule: Pick<CellsSpec, 'radius' | 'rule' | 'order'>, steps = 24): boolean {
+  const rnd = mulberry32(rule.rule * 31 + rule.radius * 7 + (rule.order ?? 1) * 1009 + 1);
   let ok = 0, total = 0;
   for (const width of [12, 20, 31]) {
     for (let k = 0; k < 4; k++, total++) {
-      let row: number[] = Array.from({ length: width }, () => (rnd() < 0.5 ? 1 : 0));
+      const draw = () => Array.from({ length: width }, () => (rnd() < 0.5 ? 1 : 0));
+      let prev: number[] = draw(), row: number[] = draw();
       const seen: number[][] = [row];
-      for (let t = 0; t < steps; t++) { row = stepCells(rule, row); seen.push(row); }
+      for (let t = 0; t < steps; t++) { const next = stepCells(rule, row, prev); prev = row; row = next; seen.push(row); }
       const [a, b, c] = seen.slice(-3).map((r) => r.join(''));
       const share = row.reduce((n, v) => n + v, 0) / width;
       if (c !== b && c !== a && share >= 0.1 && share <= 0.9) ok++;
@@ -75,10 +87,14 @@ export function lively(rule: Pick<CellsSpec, 'radius' | 'rule'>, steps = 24): bo
   return ok >= Math.ceil(total * 0.75);
 }
 
-/** One step of the ring: every cell's next state from its neighbourhood. */
-export function stepCells(spec: Pick<CellsSpec, 'radius' | 'rule'>, row: readonly number[]): number[] {
+/** One step of the ring: every cell's next state from its neighbourhood (and, second order, its state in the row before). */
+export function stepCells(spec: Pick<CellsSpec, 'radius' | 'rule' | 'order'>, row: readonly number[], prev: readonly number[] = row): number[] {
   const n = row.length;
   return row.map((_, i) => {
+    if (spec.order === 2) {
+      const sum = row[(i - 1 + n) % n] + row[i] + row[(i + 1) % n];
+      return (spec.rule >> (sum + 4 * prev[i])) & 1;
+    }
     if (spec.radius === 1) {
       const k = (row[(i - 1 + n) % n] << 2) | (row[i] << 1) | row[(i + 1) % n];
       return (spec.rule >> k) & 1;
@@ -103,11 +119,16 @@ export function readRow(spec: CellsSpec, text: string): number[] | null {
   return row;
 }
 
-/** An episode's rows, as perceived: from a start (drawn with `rnd`, or given), `spec.steps` steps. */
-export function runEpisode(spec: CellsSpec, start: readonly number[] | (() => number)): string[] {
-  let row = typeof start === 'function' ? Array.from({ length: spec.width }, () => (start() < spec.density ? 1 : 0)) : [...start];
-  const rows = [renderRow(spec, row)];
-  for (let t = 0; t < spec.steps; t++) { row = stepCells(spec, row); rows.push(renderRow(spec, row)); }
+/** An episode's rows, as perceived: from a start (drawn with `rnd`, or given rows - the last is the present), then
+    `spec.steps` steps. A second-order ring drawn at random starts from two rows drawn at random; given a single row, the
+    row before it is taken to be the same. */
+export function runEpisode(spec: CellsSpec, start: readonly (readonly number[])[] | readonly number[] | (() => number)): string[] {
+  const draw = (r: () => number) => Array.from({ length: spec.width }, () => (r() < spec.density ? 1 : 0));
+  const given: number[][] = typeof start === 'function' ? (spec.order === 2 ? [draw(start), draw(start)] : [draw(start)])
+    : Array.isArray(start[0]) ? (start as readonly (readonly number[])[]).map((r) => [...r]) : [[...(start as readonly number[])]];
+  const rows = given.map((r) => renderRow(spec, r));
+  let prev = given.length > 1 ? given[given.length - 2] : given[0], row = given[given.length - 1];
+  for (let t = 0; t < spec.steps; t++) { const next = stepCells(spec, row, prev); prev = row; row = next; rows.push(renderRow(spec, row)); }
   return rows;
 }
 
@@ -150,7 +171,12 @@ export function cellsPointWorld(): World<CellsPoint, never> {
 export function describeCellsTruth(spec: CellsSpec): { id: string; statement: string }[] {
   const [g0, g1] = spec.glyphs;
   const out = [{ id: 'ring', statement: 'The row wraps around: the first and the last cell are neighbours.' }];
-  if (spec.radius === 1) {
+  if (spec.order === 2) {
+    const table = [0, 1].flatMap((p) => [0, 1, 2, 3].map((n) => n + ' "' + g1 + '" now, "' + (p ? g1 : g0) + '" before -> ' + (((spec.rule >> (n + 4 * p)) & 1) ? g1 : g0)));
+    out.push({ id: 'locality', statement: 'A cell\'s next symbol depends only on how many of the three cells centred on it (left, itself, right) show "' + g1 + '" in the present row, and on the cell\'s own symbol in the row before.' });
+    out.push({ id: 'history', statement: 'The present row alone does not determine the next: the row before it matters (the process is of second order).' });
+    out.push({ id: 'rule', statement: 'The next symbol for each count of "' + g1 + '" among those three cells and the cell\'s symbol in the row before: ' + table.join('; ') + '.' });
+  } else if (spec.radius === 1) {
     const table = Array.from({ length: 8 }, (_, k) => [(k >> 2) & 1, (k >> 1) & 1, k & 1].map((v) => (v ? g1 : g0)).join('') + ' -> ' + (((spec.rule >> k) & 1) ? g1 : g0));
     out.push({ id: 'locality', statement: 'A cell\'s next symbol depends only on its own symbol and its two neighbours\' (left, itself, right) in the present row.' });
     out.push({ id: 'rule', statement: 'The next symbol for each neighbourhood (left, itself, right): ' + table.join('; ') + '.' });

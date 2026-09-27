@@ -148,3 +148,12 @@ test('operator baselines: a model that knows nothing run on the same cases; a ch
   const hard = await protocol.round(6, { round: 2, attempt: 2, validate: false });
   assert.equal(hard.journal.check_is_trivial, false);
 });
+
+test('the grader separates predicting from understanding: a table that agrees is partial; the form is read back', async () => {
+  const { GRADING_STRUCTURE, formOf } = await import('../src/learn/operator.ts');
+  assert.match(GRADING_STRUCTURE, /lookup table/);
+  assert.match(GRADING_STRUCTURE, /"partial"/);
+  assert.deepEqual(formOf({ form: 'table', form_evidence: 'a 32-entry lookup' }), { form: 'table', form_evidence: 'a 32-entry lookup' });
+  assert.deepEqual(formOf({ form: 'nonsense' }), { form: null, form_evidence: null });
+  assert.deepEqual(formOf(null), { form: null, form_evidence: null });
+});

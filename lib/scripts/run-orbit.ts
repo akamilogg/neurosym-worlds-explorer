@@ -92,7 +92,7 @@ import { describeOrbitTruth } from '../src/worlds/orbit/describe.ts';
 import { environmentOf, setupWithSources } from '../src/worlds/orbit/family.ts';
 import { orbitObjective, type OrbitCases } from '../src/worlds/orbit/objective.ts';
 import { Protocol } from '../src/learn/protocol.ts';
-import { operatorSummary, tokensOf, type AblationRecord } from '../src/learn/operator.ts';
+import { GRADING_STRUCTURE, formOf, operatorSummary, tokensOf, type AblationRecord } from '../src/learn/operator.ts';
 import type { OrbitSpec } from '../src/worlds/orbit/index.ts';
 import type { MeasureDecl } from '../src/core/types.ts';
 import { ROOT } from '../test/support.ts';
@@ -543,14 +543,15 @@ async function gradeRecovery(): Promise<void> {
     + 'The learner answers the next row of the launched body\'s columns, so d = its answer - 2·p(now) + p(previous). Read its law as code: what its observations, rules and output compute is what it claims. Judge what it holds, not what it dropped. Quote the learner briefly as evidence. '
     + 'Separate the learner\'s FORCE LAW (how the pull depends on where the body is) from how it carries that pull over a row: integrating the motion within a row, or fitting the body\'s current velocity to do so, is kinematics, not a term of the law that depends on speed. '
     + 'Judge a formula\'s form over the whole range of distances: a different function that agrees with the true one only over part of the range (e.g. a softened power whose exponent drifts with distance) is "partial", not "exact". '
-    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims of the learner that no true statement supports]}';
+    + GRADING_STRUCTURE + ' '
+    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims of the learner that no true statement supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
   try {
     const content = (await llm.complete({ system, user: JSON.stringify({ true_statements: truth, learner: learned }) })).content;
     const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string; evidence?: string }[]; false_beliefs?: unknown[] } | null;
     const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
     const points = grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0);
     const score = Math.round(points / truth.length * 100) / 100;
-    log('operator_law_recovery', { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, grader_model: env.LLM_MODEL });
+    log('operator_law_recovery', { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: env.LLM_MODEL });
     say('operator: law recovery ' + score + ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')');
   } catch (e) {
     log('operator_law_recovery', { truth, error: String((e as Error).message ?? e) });

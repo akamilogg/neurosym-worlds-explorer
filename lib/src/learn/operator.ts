@@ -12,6 +12,20 @@ import type { ProtocolSummary } from './protocol.ts';
  *                against the same observations with no Judge
  * ========================================================================== */
 
+/** For the operator's grader: a model that reproduces a law is not a statement of its structure. A lookup table (or a
+    fit over cases) that agrees with the law shows its OUTPUTS; a statement about its STRUCTURE - what it depends on, a
+    symmetry, a count, a threshold - is exact only when the learner states or computes that structure. */
+export const GRADING_STRUCTURE = 'Separate PREDICTING from UNDERSTANDING: a lookup table, a list of cases or a fit that merely agrees with a true statement shows its outputs, not its structure. '
+  + 'For a statement about the structure of the law (what it depends on, a symmetry, a count, a threshold, a compact form), grade "exact" only when the learner states that structure or its code computes it as such; '
+  + 'a table or case list that happens to agree with it is "partial", and say so in the evidence. '
+  + 'Also say how the learner\'s final model expresses the law: "compact" (it computes the structure), "table" (it enumerates cases or outputs) or "mixed", in a field "form" with a one-line "form_evidence".';
+
+/** How the learner's model expresses the law, as the grader read it. */
+export const formOf = (parsed: { form?: unknown; form_evidence?: unknown } | null): { form: string | null; form_evidence: string | null } => ({
+  form: parsed && ['compact', 'table', 'mixed'].includes(String(parsed.form)) ? String(parsed.form) : null,
+  form_evidence: parsed && typeof parsed.form_evidence === 'string' ? parsed.form_evidence : null
+});
+
 /** One round's ablation: the model's score and the same model's without the Judge, on the same cases. */
 export interface AblationRecord {
   readonly round: number;

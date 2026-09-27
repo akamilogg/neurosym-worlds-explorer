@@ -135,7 +135,8 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | `lib/scripts/run-orbit.ts`, `calibrate-orbit.ts` | runs the physical-world experiment; finds laws that leave room to discover (Newton misses clearly above the noise) |
 | `lib/src/learn/objective.ts`, `protocol.ts`, `operator.ts`, `law-session.ts` | the operator's objective as a contract, the researcher's protocol (the same for every world), the operator's common measures, a session with System 2 for a world whose answer is a model ([SPEC-OBJETIVO.md](SPEC-OBJETIVO.md)) |
 | `lib/src/worlds/*/objective.ts` | each world's objective: the form of its answer, its cases, its verdict and its criterion |
-| `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts` | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule; the answer is the next row |
+| `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts` | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule (level 3: of second order); the answer is the next row |
+| `lib/src/worlds/messages/`, `lib/scripts/run-messages.ts` | a world whose percept is text - the test of the Judge: short texts marked 0 or 1 by a hidden rule over what they say; the family keeps the rule and changes the wording |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
 
@@ -191,7 +192,15 @@ A third world, `cells@1`, uses the same prompt and protocol with nothing of its 
 and objective (`lib/run-cells.example.ps1` / `.sh`):
 
 ```bash
-./run-cells.sh --seed 1 --level 1
+./run-cells.sh --seed 1 --level 1     # --level 2: a count over five cells; --level 3: the row before matters too
+```
+
+`messages@1` is the test of the Judge (`lib/run-messages.example.ps1` / `.sh`). Everything perceived is text: code
+written against the laboratory's wording breaks on the family's, and a reader of meaning does not. The flat-judge
+ablation in the journal says what the Judge's rules added:
+
+```bash
+./run-messages.sh --seed 1
 ```
 
 Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the

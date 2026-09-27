@@ -86,3 +86,18 @@ test('a session: an investigation step, then a proposal; a draft travels back as
   assert.deepEqual(events, ['investigation', 'proposal']);
   assert.deepEqual((session.notebookBrief().models as unknown[]).length, 1);
 });
+
+test('level 3 is of second order: the same present row after different rows before leads to different next rows', () => {
+  const spec = generateCells(1, 3);
+  assert.equal(spec.order, 2);
+  assert.ok(lively(spec));
+  /* From the same present row, two different rows before it. */
+  const now = readRow(spec, spec.glyphs[1].repeat(spec.width))!;
+  const a = runEpisode(spec, [readRow(spec, spec.glyphs[0].repeat(spec.width))!, now]);
+  const b = runEpisode(spec, [now, now]);
+  assert.equal(a[1], b[1], 'the same present row');
+  assert.notEqual(a[2], b[2], 'the row before it decides the next');
+  assert.equal(runEpisode(spec, now).length, spec.steps + 1, 'a single row: the row before it is taken to be the same');
+  assert.equal(runEpisode(spec, () => 0.3).length, spec.steps + 2, 'drawn at random: two rows to start from');
+  assert.match(describeCellsTruth(spec).map((t) => t.id).join(','), /history/);
+});

@@ -16,3 +16,5 @@ lib/run-orbit.sh
 lib/run-orbit.ps1
 lib/run-cells.sh
 lib/run-cells.ps1
+lib/run-messages.sh
+lib/run-messages.ps1
