@@ -137,6 +137,7 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | `lib/src/worlds/*/objective.ts` | each world's objective: the form of its answer, its cases, its verdict and its criterion |
 | `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts` | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule (level 3: of second order); the answer is the next row |
 | `lib/src/worlds/messages/`, `lib/scripts/run-messages.ts` | a world whose percept is text - the test of the Judge: short texts marked 0 or 1 by a hidden rule over what they say; the family keeps the rule and changes the wording |
+| `lib/src/view/`, `lib/scripts/journal-view.ts`, `journal-viewer.html` | the journal viewer: a visual synthesis of a finished run, built from its journal (open `journal-viewer.html` and drop a journal on it) |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
 
@@ -207,6 +208,28 @@ Every journal ends with `operator_summary`: rounds, the first round the model he
 cost (Judge calls and evaluations it was not asked, LLM calls and tokens) in all and up to the acceptance, what the
 Judge's rules added in the ablations, and - where the run declares baselines that know nothing (cells, orbit) - the checks
 one of them passed too (`check_is_trivial`): an acceptance there would tell nothing.
+
+### Seeing a run
+
+A journal can be turned into a single self-contained page, a visual synthesis of the exploration (built afterwards from
+the data, not live):
+
+```bash
+cd lib && npm run view -- runs/<journal>.json     # writes runs/<journal>.html next to it
+```
+
+or open [`journal-viewer.html`](journal-viewer.html) in a browser and drop any journal on it (`npm run view -- --blank`
+rebuilds it). Nothing leaves the browser. The page shows:
+
+- **Síntesis**: the relevant moments in order, as cards. Each moment has a relevance: it rises when the final model cites
+  its evidence, when a check changed the verdict or first held, and when a validation or acceptance happened. A slider
+  sets the minimum relevance, and "solo el camino al modelo final" keeps only the path to the final model: the evidence
+  its surviving beliefs cite, the proposals that introduced them, the checks they refer to, and the validations. Click a
+  card for its detail: space-time pictures for rows, frames, messages with their marks, the check's result.
+- **Comprobaciones**: the check score per round, with a table view.
+- **Creencias**: each belief's lineage (new, revised, confirmed, dropped) across rounds.
+- **Línea temporal**: every event by kind and round, sized by relevance, with the path outlined.
+- **Modelo final**, and, apart, what only the operator sees (the truth, the grades, `operator_summary`).
 
 ## License
 
