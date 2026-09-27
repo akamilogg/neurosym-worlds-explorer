@@ -127,3 +127,24 @@ test('operator measures: what the Judge added over the ablated rounds, and the t
   assert.deepEqual(s.first_held, { round: 1, attempt: 1 });
   assert.equal(s.accepted, null);
 });
+
+test('operator baselines: a model that knows nothing run on the same cases; a check it passes too is trivial', async () => {
+  const places: ToyPlace[] = [{ id: 'lab1', role: 'laboratory', seen: true, height: 1 }, { id: 'place1', role: 'family', seen: false, height: 1 }];
+  const protocol = new Protocol(toy, {
+    places: () => places, blindPlaces: (set, round) => [{ id: 'blind' + set + '-' + round, role: 'confirmation', seen: false, height: 1 }],
+    fingerprint: (m) => String(m), validations: 1, pairedRegression: false,
+    baselines: [{ name: 'tall enough anyway', model: 1 }, { name: 'nothing', model: 0 }]
+  });
+  const r = await protocol.round(3, { round: 1, attempt: 1, validate: true });
+  assert.equal(r.accepted, true);
+  assert.equal(r.journal.check_is_trivial, true, 'a baseline cleared every hurdle too');
+  assert.deepEqual((r.journal.laboratories as { baselines_that_hold_too?: string[] }[])[0].baselines_that_hold_too, ['tall enough anyway']);
+  assert.equal(JSON.stringify(r.view).includes('tall enough'), false, 'never shown to System 2');
+  const s = protocol.summary();
+  assert.deepEqual(s.trivialChecks, [1]);
+  assert.equal(s.acceptedTrivially, true);
+  places[0] = { ...places[0], height: 5 } as ToyPlace;
+  protocol.restart();
+  const hard = await protocol.round(6, { round: 2, attempt: 2, validate: false });
+  assert.equal(hard.journal.check_is_trivial, false);
+});

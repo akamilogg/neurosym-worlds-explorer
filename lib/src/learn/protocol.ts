@@ -36,6 +36,9 @@ export interface ProtocolOptions<M, P extends Place> {
   readonly say?: (line: string) => void;
   /** How System 2 is told the role of a place it knows. */
   readonly roleWords?: { readonly laboratory: string; readonly validated: string };
+  /** Operator only: models that know nothing (e.g. "the same row again"), run on the same cases as every check. A place
+      where one of them holds too is one whose check cannot tell a model from knowing nothing: journalled, never shown. */
+  readonly baselines?: readonly { readonly name: string; readonly model: M }[];
 }
 
 /** A model's check in one place. */
@@ -46,6 +49,8 @@ export interface PlaceOutcome<P, R> {
   readonly rerun: Rerun<R> | null;
   /** The host's own detail for this place (RunOutput.detail). */
   readonly detail?: unknown;
+  /** Operator only: the baselines that hold here too. */
+  readonly baselinesHolding?: readonly string[];
 }
 
 export interface BlindSet<P, R> {
@@ -94,6 +99,10 @@ export interface ProtocolSummary {
   readonly cost: Readonly<Record<string, number>>;
   /** The cost up to the acceptance (null when nothing was accepted). */
   readonly costPerAcceptance: Readonly<Record<string, number>> | null;
+  /** Rounds whose laboratory check a baseline passed as well (in every laboratory): checks that tell nothing. */
+  readonly trivialChecks: readonly number[];
+  /** Whether the acceptance was on validations and confirmations a baseline passed as well. */
+  readonly acceptedTrivially: boolean | null;
 }
 
 const diff = (now: Readonly<Record<string, number>>, before: Readonly<Record<string, number>>): Record<string, number> =>
@@ -108,7 +117,8 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
   private readonly previous = new Map<string, { cases: K; results: readonly R[] }>();
   private heldAt: { fingerprint: string; round: number; labs: string; outcomes: readonly PlaceOutcome<P, R>[]; operator?: Record<string, unknown> } | null = null;
   private readonly milestones: { rounds: number; checks: number; firstHeld: ProtocolSummary['firstHeld']; validations: ProtocolSummary['validations'][number][];
-    accepted: ProtocolSummary['accepted']; costAtAcceptance: Record<string, number> | null } = { rounds: 0, checks: 0, firstHeld: null, validations: [], accepted: null, costAtAcceptance: null };
+    accepted: ProtocolSummary['accepted']; costAtAcceptance: Record<string, number> | null; trivialChecks: number[]; acceptedTrivially: boolean | null } =
+    { rounds: 0, checks: 0, firstHeld: null, validations: [], accepted: null, costAtAcceptance: null, trivialChecks: [], acceptedTrivially: null };
   private readonly costAtStart: Readonly<Record<string, number>>;
 
   constructor(objective: Objective<M, P, K, R>, options: ProtocolOptions<M, P>) {
@@ -144,6 +154,15 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     if (!places.length) return { outcomes: [] };
     const drawn = places.map((place, index) => ({ place, cases: this.objective.casesIn(place, { ...context, index }) }));
     const out: RunOutput<R> = await this.objective.run(model, drawn, { round: context.round, attempt: context.attempt, purpose: context.purpose });
+    /* Operator only: which baselines hold on the very same cases, per place. */
+    let baselines: string[][] | null = null;
+    if (this.options.baselines?.length) {
+      baselines = drawn.map(() => []);
+      for (const b of this.options.baselines) {
+        const run = await this.objective.run(b.model, drawn, { round: context.round, attempt: context.attempt, purpose: 'baseline' });
+        drawn.forEach(({ place }, i) => { if (this.objective.holds(run.byPlace[i] ?? [], { place })) baselines![i].push(b.name); });
+      }
+    }
     const outcomes: PlaceOutcome<P, R>[] = [];
     for (const [i, { place, cases }] of drawn.entries()) {
       const results = out.byPlace[i] ?? [];
@@ -155,7 +174,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       }
       if (context.purpose === 'check' && place.role === 'laboratory') this.previous.set(place.id, { cases, results });
       const holds = this.objective.holds(results, { place, ...(rerun ? { rerun } : {}) });
-      outcomes.push({ place, results, holds, rerun, ...(out.detail ? { detail: out.detail[i] } : {}) });
+      outcomes.push({ place, results, holds, rerun, ...(out.detail ? { detail: out.detail[i] } : {}), ...(baselines ? { baselinesHolding: baselines[i] } : {}) });
       this.say('  ' + context.purpose + ' in ' + place.id + ': ' + (this.objective.line ? this.objective.line(results, place, rerun ?? undefined) : results.length + ' cases') + (holds ? ' holds' : ''));
     }
     return { outcomes, ...(out.operator ? { operator: out.operator } : {}) };
@@ -171,6 +190,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
   /** The operator's record of a place's check. */
   private placeJournal(o: PlaceOutcome<P, R>): Record<string, unknown> {
     return { place: o.place.id, holds: o.holds, ...(this.objective.operatorView?.(o.results, o.place) ?? {}),
+      ...(o.baselinesHolding?.length ? { baselines_that_hold_too: o.baselinesHolding } : {}),
       ...(o.rerun ? { rerun: this.objective.rerunView ? this.objective.rerunView(o.rerun, o.place) : { cases: o.rerun.now.length } } : {}) };
   }
 
@@ -199,6 +219,9 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     const held = laboratories.length > 0 && laboratories.every((o) => o.holds);
     if (!reused) this.heldAt = held ? { fingerprint, round, labs: labIds, outcomes: laboratories, ...(operator ? { operator } : {}) } : null;
     if (held && !this.milestones.firstHeld) this.milestones.firstHeld = { round, attempt };
+    const trivial = (os: readonly PlaceOutcome<P, R>[]) => os.length > 0 && os.every((o) => (o.baselinesHolding?.length ?? 0) > 0);
+    const checkTrivial = this.options.baselines?.length ? trivial(laboratories) : null;
+    if (checkTrivial && !reused) this.milestones.trivialChecks.push(round);
 
     /* 2. The validation, when System 2 asks for it and its model holds in its laboratories. */
     const quickStop = !!this.options.quick && context.validate;
@@ -235,7 +258,11 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       if (refused) this.say('  validation refused: ' + refused);
     }
     const costNow = this.cost();
-    if (accepted && !this.milestones.accepted) { this.milestones.accepted = { round, attempt }; this.milestones.costAtAcceptance = diff(costNow, this.costAtStart); }
+    if (accepted && !this.milestones.accepted) {
+      this.milestones.accepted = { round, attempt };
+      this.milestones.costAtAcceptance = diff(costNow, this.costAtStart);
+      if (this.options.baselines?.length && validation) this.milestones.acceptedTrivially = trivial(validation.places) && (validation.blind ?? []).every((b) => trivial(b.places));
+    }
 
     const view: Record<string, unknown> = {
       round,
@@ -251,6 +278,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     const journal: Record<string, unknown> = {
       round, attempt, ...(reused ? { reused_check_of_round: reused.round } : {}),
       laboratories: laboratories.map((o) => this.placeJournal(o)), ...(operator ? { check_operator: operator } : {}),
+      ...(checkTrivial !== null ? { check_is_trivial: checkTrivial } : {}),
       asked_to_validate: context.validate,
       ...(validation ? { validation: {
         family: validation.places.map((o) => this.placeJournal(o)), ...(validation.operator ? { family_operator: validation.operator } : {}),
@@ -267,6 +295,6 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
   summary(): ProtocolSummary {
     const m = this.milestones;
     return { rounds: m.rounds, checks: m.checks, firstHeld: m.firstHeld, validations: m.validations, accepted: m.accepted,
-      cost: diff(this.cost(), this.costAtStart), costPerAcceptance: m.costAtAcceptance };
+      cost: diff(this.cost(), this.costAtStart), costPerAcceptance: m.costAtAcceptance, trivialChecks: m.trivialChecks, acceptedTrivially: m.acceptedTrivially };
   }
 }

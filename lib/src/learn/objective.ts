@@ -29,8 +29,9 @@ export interface Place {
 }
 
 /** Why cases are drawn or run: a check in the laboratories, a validation in the family, a blind confirmation, or the
-    previous check's cases run again with a new model (the paired regression). */
-export type Purpose = 'check' | 'validation' | 'blind' | 'rerun';
+    previous check's cases run again with a new model (the paired regression), or a model that knows nothing run on the
+    same cases (the operator's baseline: never the learner's). */
+export type Purpose = 'check' | 'validation' | 'blind' | 'rerun' | 'baseline';
 
 export interface CaseContext {
   readonly round: number;

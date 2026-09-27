@@ -639,6 +639,7 @@ var Neurosym = (() => {
     cloneJson: () => cloneJson,
     codeOnlyFormula: () => codeOnlyFormula,
     codeOnlyJudge: () => codeOnlyJudge,
+    codeRequest: () => codeRequest,
     compose: () => compose,
     concordance: () => concordance,
     consensusPayload: () => consensusPayload,
@@ -681,6 +682,7 @@ var Neurosym = (() => {
     normaliseDistribution: () => normaliseDistribution,
     normalizeWeights: () => normalizeWeights,
     obj: () => obj,
+    onOf: () => onOf,
     opDialect: () => opDialect,
     openAiChatClient: () => openAiChatClient,
     orderMoves: () => orderMoves,
@@ -3784,6 +3786,13 @@ var Neurosym = (() => {
   };
   var EXPLORER_TOOLS = ["view", "inspect", "act", "measure", "replay", "table"];
   var INVESTIGATION_TOOLS2 = ["view", "inspect", "act", "measure", "replay", "table"];
+  function codeRequest(raw, kind) {
+    const m = raw ?? {};
+    const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === "number") ? [m.range[0], m.range[1]] : null;
+    if (typeof m.source !== "string" || m.range !== void 0 && m.range !== null && !range) return kind + ' needs "source" (and a valid "range" for a number)';
+    return { source: m.source, range };
+  }
+  var onOf = (q, inner) => q.on ?? (inner ?? {}).on;
   function explorerSystem(tools = new Set(EXPLORER_TOOLS)) {
     return system2Prompt(GRID_INTERFACE, tools);
   }
@@ -3858,13 +3867,12 @@ var Neurosym = (() => {
           }
           requests.push({ act: q.act ?? q.try, from, to });
         } else if (q.table && typeof q.table === "object") {
-          const m = q.table;
-          const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === "number") ? [m.range[0], m.range[1]] : null;
-          if (typeof m.source !== "string" || !range) {
-            warnings.push("request #" + i + ': table needs "source" and "range"');
+          const code = codeRequest(q.table, "table");
+          if (typeof code === "string") {
+            warnings.push("request #" + i + ": " + code);
             continue;
           }
-          requests.push({ table: { source: m.source, range }, on: q.on === "final" ? "final" : "in_play" });
+          requests.push({ table: code, on: onOf(q, q.table) === "final" ? "final" : "in_play" });
         } else if (typeof (q.replay ?? q.play) === "string") {
           const at = q.replay ?? q.play;
           const model = q.model !== void 0 ? q.model : q.formula;
@@ -3883,14 +3891,13 @@ var Neurosym = (() => {
           }
         } else if (typeof q.inspect === "string") {
           requests.push({ inspect: q.inspect });
-        } else if (q.measure && typeof q.measure === "object" && Array.isArray(q.on)) {
-          const m = q.measure;
-          const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === "number") ? [m.range[0], m.range[1]] : null;
-          if (typeof m.source !== "string" || m.range !== void 0 && !range) {
-            warnings.push("request #" + i + ': measure needs "source" (and a valid "range" for a number)');
+        } else if (q.measure && typeof q.measure === "object" && Array.isArray(onOf(q, q.measure))) {
+          const code = codeRequest(q.measure, "measure");
+          if (typeof code === "string") {
+            warnings.push("request #" + i + ": " + code);
             continue;
           }
-          requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
+          requests.push({ measure: code, on: onOf(q, q.measure).slice(0, 40).map(String) });
         } else {
           const t = JSON.stringify(r) ?? String(r);
           warnings.push("request #" + i + " ignored (" + (t.length > 200 ? t.slice(0, 199) + "…" : t) + "): use view, inspect, act, replay, measure or table");

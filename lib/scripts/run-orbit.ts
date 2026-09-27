@@ -335,7 +335,10 @@ const protocol = new Protocol(objective, {
   validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
   cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
   say: (line) => say(line),
-  roleWords: { laboratory: 'your laboratory: you can act here', validated: 'a place where your model was validated' }
+  roleWords: { laboratory: 'your laboratory: you can act here', validated: 'a place where your model was validated' },
+  /* OPERATOR ONLY: a law that knows nothing - the last step repeated. If it holds too, the check could not tell. */
+  baselines: [{ name: 'the last step repeated', model: { world: world.id, observations: {}, rules: {}, weights: {}, output: { kind: 'code', lang: 'js',
+    source: '(p) => { const g = p.symbols, i = p.t.length - 1, q = p.series[g[g.length - 1]]; return [2 * q.x[i] - q.x[i - 1], 2 * q.y[i] - q.y[i - 1]]; }' } } }]
 });
 
 /* --- Operator-only measures ---------------------------------------------------------- */
@@ -490,7 +493,7 @@ async function runRequest(req: LawRequest, budget: { acts: number }): Promise<un
   }
   /* table: the points of its launches or of the tests, the code's value, and the residual of its latest law there. */
   const law = latest()?.law ?? null;
-  const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, range: req.table.range };
+  const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, ...(req.table.range ? { range: req.table.range } : {}) };
   const samples = req.on === 'checks' ? [...testPoints.values()].flat().slice(-60) : ownSamples().slice(-60);
   const rows: unknown[] = [];
   for (const s of samples) {
@@ -505,7 +508,7 @@ async function runRequest(req: LawRequest, budget: { acts: number }): Promise<un
         residual = { next_row_minus_your_answer: r.map(round2), verdict: scoreOf(pr.vector, s.target).map((v) => Math.round(v * 1000) / 1000) };
       } catch (e) { residual = { error: String((e as Error).message ?? e) }; }
     }
-    rows.push({ point: s.ref, ...(err ? { error: err.error } : { value: o.values.m }), the_next_row_showed: departureAsNext(s.target, s.state).map(round2), residual });
+    rows.push({ point: s.ref, ...(err ? { error: err.error } : { value: o.values.m ?? o.texts.m }), the_next_row_showed: departureAsNext(s.target, s.state).map(round2), residual });
   }
   return { table: req.table.source, on: req.on, residuals_of: law ? 'your latest model' : 'no model yet', rows };
 }

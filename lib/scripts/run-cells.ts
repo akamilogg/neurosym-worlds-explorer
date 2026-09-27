@@ -160,8 +160,8 @@ function resolve(ref: string): { point: CellsPoint; next: string | null } | null
   return { point: { rows: e.rows.slice(0, step + 1) }, next: e.rows[step + 1] ?? null };
 }
 
-/** Points of episodes: every `every`-th step that has a next row. */
-const pointsOf = (e: StoredEpisode, every = cfg.every) => Array.from({ length: e.rows.length - 1 }, (_, t) => t).filter((t) => t % every === every - 1)
+/** Points of episodes: every `every`-th step from the start (the first steps carry the most), each with a next row. */
+const pointsOf = (e: StoredEpisode, every = cfg.every) => Array.from({ length: e.rows.length - 1 }, (_, t) => t).filter((t) => t % every === 0)
   .map((t): CellsCase => ({ point: e.id + '@' + t, state: { rows: e.rows.slice(0, t + 1) }, next: e.rows[t + 1] }));
 const ownPoints = () => [...episodes.values()].filter((e) => e.by === 'you' || e.by === 'the environment').flatMap((e) => pointsOf(e, 2));
 const checkPoints = new Map<number, CellsCase[]>();
@@ -202,6 +202,11 @@ const protocol = new Protocol(objective, {
   fingerprint: (law) => lawFingerprint(law),
   validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
   cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
+  /* OPERATOR ONLY: models that know nothing. If one holds too, the check could not tell a model from knowing nothing. */
+  baselines: ([['the same row again', '(p) => p.rows[p.rows.length - 1]'],
+    ['the row before it', '(p) => p.rows[Math.max(0, p.rows.length - 2)]'],
+    ...spec.glyphs.map((g) => ['a row of "' + g + '" only', '(p) => ' + JSON.stringify(g) + '.repeat(p.rows[p.rows.length - 1].length)'])] as const)
+    .map(([name, source]) => ({ name, model: { world: world.id, observations: {}, rules: {}, weights: {}, output: { kind: 'code' as const, lang: 'js', source } } })),
   say
 });
 
@@ -290,12 +295,12 @@ async function runRequest(req: LawRequest<CellsAct>, budget: { acts: number }): 
     return { simulate: req.simulate, steps };
   }
   /* table: code on every point of its episodes or of the checks, with the row that came next there. */
-  const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, range: req.table.range };
+  const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, ...(req.table.range ? { range: req.table.range } : {}) };
   const points = req.on === 'checks' ? [...checkPoints.values()].flat().slice(-60) : ownPoints().slice(-60);
   return { table: req.table.source, on: req.on, rows: points.map((p) => {
     const o = observer.observe(p.state, { m: decl });
     const err = o.errors.find((e) => e.id === 'm');
-    return { point: p.point, ...(err ? { error: err.error } : { value: o.values.m }), the_next_row_was: p.next };
+    return { point: p.point, ...(err ? { error: err.error } : { value: o.values.m ?? o.texts.m }), the_next_row_was: p.next };
   }) };
 }
 

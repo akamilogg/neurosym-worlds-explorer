@@ -64,6 +64,27 @@ Sin validación: se agotó el presupuesto en el laboratorio.
   comprobaciones. Desde la ronda 4 la observación era un JSON de la posición entera, distinto en cada posición, así que
   la caché no servía: 6 739 llamadas (129–209 por partida) cuya respuesta no leyó nadie.
 
+### 1.2 `cells@1` con LLM real
+
+**Nivel 1 (regla 105).** Resuelta en la ronda 1: midió la tabla completa "vecindario → símbolo" con `measure`,
+comprobó el anillo con una semilla junto al borde y se aceptó con validación y confirmación ciega. Grader: 1,0. Jev no
+participó (0 llamadas, 192 evaluaciones sin preguntar).
+
+**Nivel 2 (regla 32).** También grader 1,0, y hasta diseñó una racha que cruzaba el borde para distinguir anillo de
+bordes abiertos. Pero la regla vaciaba toda fila en uno o dos pasos, y los puntos de comprobación empezaban en el paso
+2: "fila vacía → fila vacía" habría pasado todo. **La aceptación no distinguía el modelo de no saber nada.**
+
+**Correcciones:**
+- **Generador:** solo reglas vivas. Desde comienzos al azar, las filas siguen cambiando al final y ningún símbolo
+  llena casi toda la fila. Quedan fuera 32, 204, 105, 150…
+- **Puntos de comprobación:** desde el paso 0.
+- **Líneas base del operador** (`baselines` en el protocolo, O4): modelos que no saben nada se corren sobre los mismos
+  casos de cada comprobación. En `cells`: "la misma fila", "la fila anterior", "fila de un solo símbolo". En orbit:
+  "repetir el último paso". Si una se sostiene también, el journal marca `check_is_trivial`, y el resumen da
+  `trivial_checks` y `accepted_trivially`. System 2 no lo ve nunca.
+- **Parser:** acepta `on` dentro de `measure` y de `table`, y `range` es opcional en `table`. En los dos runs, System 2
+  perdió pasos por esas formas.
+
 ## 2. Principios (heredados; ninguno se relaja)
 
 1. **Cero pistas (`SPEC-MUNDO-FISICO.md` I5).** El objetivo dice la **forma** de la respuesta y los parámetros de lo que
@@ -224,7 +245,7 @@ de añadir nada.
 | O1 | Tipos `Objective`, `Protocol`, `Place`; el bucle del protocolo en la biblioteca (comprobación, validación, laboratorios nuevos, confirmación ciega, `--quick`, reinicio para una etapa nueva) | `lib/src/learn/objective.ts`, `lib/src/learn/protocol.ts` | hecho |
 | O2 | orbit@1 y la cuadrícula como instancias; los runners quedan en configuración, E/S, instrumentos y journal | `lib/src/worlds/*/objective.ts`, `lib/scripts/run-*.ts` | hecho |
 | O3 | La regresión emparejada como parámetro, también en orbit (`--regression`; la ley debe seguir sosteniéndose en los puntos de la comprobación anterior) | `lib/src/learn/protocol.ts`, `lib/src/worlds/orbit/objective.ts` | hecho |
-| O4 | Medidas del operador comunes en el journal (`operator_summary`): hitos, coste en total y hasta la aceptación, cuánto aportan las reglas de Jev en las ablaciones, evaluaciones sin preguntar a Jev | `lib/src/learn/operator.ts`, `lib/src/learn/protocol.ts` | hecho |
+| O4 | Medidas del operador comunes en el journal (`operator_summary`): hitos, coste en total y hasta la aceptación, cuánto aportan las reglas de Jev en las ablaciones, evaluaciones sin preguntar a Jev, y comprobaciones que una línea base que no sabe nada también pasa (`check_is_trivial`; en `cells` y orbit, no en la cuadrícula, donde costaría partidas enteras) | `lib/src/learn/operator.ts`, `lib/src/learn/protocol.ts` | hecho |
 | O5 | Un tercer entorno pequeño, conectado solo con mundo + sentidos + acciones + objetivo: `cells@1` | `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts`, `lib/src/learn/law-session.ts` | hecho |
 | O6 (opcional) | Objetivos con rúbrica y juez (§6) | — | no empezado |
 

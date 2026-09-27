@@ -43,20 +43,40 @@ const GLYPHS = ['.', '#', 'o', 'x', '+', '-', '*', '=', '~', '^', ':', '%'];
 export function generateCells(seed: number, level = 1): CellsSpec {
   const rnd = mulberry32(seed * 7919 + level * 104729);
   const radius: 1 | 2 = level >= 2 ? 2 : 1;
-  let rule: number;
-  if (radius === 1) rule = ELEMENTARY[Math.floor(rnd() * ELEMENTARY.length)];
-  else {
-    /* A totalistic rule over 0..5 cells: never all-dead from all-dead, never a constant. */
-    do { rule = Math.floor(rnd() * 64); } while ((rule & 1) || rule === 0 || rule === 63 - 1);
+  /* A rule whose rows keep changing (lively): one that empties or freezes the rows leaves every check trivial - "the
+     same row again" or "an empty row" would hold. */
+  let rule = -1;
+  for (let tries = 0; tries < 400; tries++) {
+    const candidate = radius === 1 ? ELEMENTARY[Math.floor(rnd() * ELEMENTARY.length)] : Math.floor(rnd() * 64);
+    if (lively({ radius, rule: candidate })) { rule = candidate; break; }
   }
+  if (rule < 0) throw new Error('no lively rule for seed ' + seed + ' level ' + level);
   const a = Math.floor(rnd() * GLYPHS.length);
   let b = Math.floor(rnd() * (GLYPHS.length - 1));
   if (b >= a) b++;
   return { id: 'cells@1:s' + seed + 'L' + level, seed, level, width: 16 + Math.floor(rnd() * 9), radius, rule, glyphs: [GLYPHS[a], GLYPHS[b]], density: 0.3 + rnd() * 0.4, steps: 24 };
 }
 
+/** Whether a rule keeps its rows changing: from most random starts (a few ring lengths, half of each symbol), after as
+    many steps as an episode, the row still changes within two steps and neither symbol has taken nearly all the cells. */
+export function lively(rule: Pick<CellsSpec, 'radius' | 'rule'>, steps = 24): boolean {
+  const rnd = mulberry32(rule.rule * 31 + rule.radius * 7 + 1);
+  let ok = 0, total = 0;
+  for (const width of [12, 20, 31]) {
+    for (let k = 0; k < 4; k++, total++) {
+      let row: number[] = Array.from({ length: width }, () => (rnd() < 0.5 ? 1 : 0));
+      const seen: number[][] = [row];
+      for (let t = 0; t < steps; t++) { row = stepCells(rule, row); seen.push(row); }
+      const [a, b, c] = seen.slice(-3).map((r) => r.join(''));
+      const share = row.reduce((n, v) => n + v, 0) / width;
+      if (c !== b && c !== a && share >= 0.1 && share <= 0.9) ok++;
+    }
+  }
+  return ok >= Math.ceil(total * 0.75);
+}
+
 /** One step of the ring: every cell's next state from its neighbourhood. */
-export function stepCells(spec: CellsSpec, row: readonly number[]): number[] {
+export function stepCells(spec: Pick<CellsSpec, 'radius' | 'rule'>, row: readonly number[]): number[] {
   const n = row.length;
   return row.map((_, i) => {
     if (spec.radius === 1) {

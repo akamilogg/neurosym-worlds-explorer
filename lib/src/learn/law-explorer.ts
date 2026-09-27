@@ -3,7 +3,7 @@ import { INVESTIGATION_TOOLS as INVESTIGATION, system2Prompt, type WorldInterfac
 import { normalizeWeights } from '../core/formula.ts';
 import { checkLaw, type Law } from '../core/predict.ts';
 import type { MeasureDecl, Rule } from '../core/types.ts';
-import { ID, obj, parseNotes, parseObservation, parseReflective, parseRule } from './explorer.ts';
+import { ID, codeRequest, obj, onOf, parseNotes, parseObservation, parseReflective, parseRule } from './explorer.ts';
 import type { BeliefStance, NoteOp } from './notebook.ts';
 import { objectiveLines } from './objective.ts';
 import { ORBIT_ANSWER, orbitVerdict } from '../worlds/orbit/objective.ts';
@@ -180,7 +180,7 @@ export type LawRequest<A = OrbitAct> =
   | { readonly act: A }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   | { readonly simulate: string; readonly law: number | Law | null; readonly rows: number }
-  | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'episodes' | 'checks' };
+  | { readonly table: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: 'episodes' | 'checks' };
 
 export type LawTurn<A = OrbitAct> =
   | { kind: 'investigate'; requests: LawRequest<A>[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
@@ -240,16 +240,15 @@ export function parseLawTurn<A = OrbitAct>(content: string, context: { world: st
         const n = q.steps ?? q.rows;
         const rows = Number.isInteger(n) ? Math.max(1, Math.min(40, n as number)) : 20;
         requests.push({ simulate: q.simulate, law, rows });
-      } else if (obj(q.measure) && Array.isArray(q.on)) {
-        const m = obj(q.measure)!;
-        const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
-        if (typeof m.source !== 'string' || (m.range !== undefined && !range)) { warnings.push('request #' + i + ': measure needs "source" (and a valid "range" for a number)'); continue; }
-        requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
+      } else if (obj(q.measure) && Array.isArray(onOf(q, q.measure))) {
+        const code = codeRequest(q.measure, 'measure');
+        if (typeof code === 'string') { warnings.push('request #' + i + ': ' + code); continue; }
+        requests.push({ measure: code, on: (onOf(q, q.measure) as unknown[]).slice(0, 40).map(String) });
       } else if (obj(q.table)) {
-        const m = obj(q.table)!;
-        const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
-        if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': table needs "source" and "range"'); continue; }
-        requests.push({ table: { source: m.source, range }, on: q.on === 'checks' || q.on === 'tests' ? 'checks' : 'episodes' });
+        const code = codeRequest(q.table, 'table');
+        if (typeof code === 'string') { warnings.push('request #' + i + ': ' + code); continue; }
+        const on = onOf(q, q.table);
+        requests.push({ table: code, on: on === 'checks' || on === 'tests' ? 'checks' : 'episodes' });
       } else warnings.push('request #' + i + ' ignored (' + clipJson(r) + '): use view, act, inspect, measure, simulate or table');
     }
     if (o.investigate.length > max) warnings.push('only the first ' + max + ' requests were run');

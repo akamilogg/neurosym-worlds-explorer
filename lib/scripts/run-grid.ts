@@ -596,11 +596,11 @@ async function runRequest(req: ExplorerRequest, current: Formula | null, plays: 
   }
   if ('table' in req) {
     /* The rows behind the probe facts: each position probes use, the code's value, and the score that game ended with. */
-    const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, range: req.table.range };
+    const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, ...(req.table.range ? { range: req.table.range } : {}) };
     const rows = (await probeSet()).filter((p) => !!p.final === (req.on === 'final')).map((p) => {
       const o = multiObserver.observe(p.state, { ...SENSES, m: decl });
       const err = o.errors.find((e) => e.id === 'm');
-      return { point: p.ref, episode_score: p.score, ...(err ? { error: err.error } : { value: o.values.m }) };
+      return { point: p.ref, episode_score: p.score, ...(err ? { error: err.error } : { value: o.values.m ?? o.texts.m }) };
     });
     return { table: req.table.source, on: req.on, rows };
   }

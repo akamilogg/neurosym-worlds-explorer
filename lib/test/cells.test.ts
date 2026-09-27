@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCells, placeOf, readRow, renderRow, runEpisode, stepCells, describeCellsTruth, type CellsSpec } from '../src/worlds/cells/world.ts';
+import { generateCells, lively, placeOf, readRow, renderRow, runEpisode, stepCells, describeCellsTruth, type CellsSpec } from '../src/worlds/cells/world.ts';
 import { cellsObjective, differences, CELLS_ANSWER, cellsVerdict } from '../src/worlds/cells/objective.ts';
 import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import { LawSession, lawFingerprint } from '../src/learn/law-session.ts';
@@ -25,6 +25,13 @@ test('the ring steps by its local rule, wrapping around; the family keeps the ru
   assert.equal(placeOf(spec, 0), spec);
   assert.equal(generateCells(1, 2).radius, 2);
   assert.match(describeCellsTruth(rule110)[2].statement, /\.\.# -> #/);
+});
+
+test('the generator draws only lively rules: none that empties or freezes the rows', () => {
+  assert.equal(lively({ radius: 2, rule: 32 }), false, 'only five of five: every row empties at once');
+  assert.equal(lively({ radius: 1, rule: 204 }), false, 'the identity freezes');
+  assert.equal(lively({ radius: 1, rule: 110 }), true);
+  for (const level of [1, 2]) for (let seed = 1; seed <= 6; seed++) assert.ok(lively(generateCells(seed, level)), 'seed ' + seed + ' level ' + level);
 });
 
 test('the verdict is where the answer differs; the model holds when every point is exact, also on the previous check', async () => {

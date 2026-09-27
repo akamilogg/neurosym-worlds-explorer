@@ -195,8 +195,9 @@ and objective (`lib/run-cells.example.ps1` / `.sh`):
 ```
 
 Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the
-cost (Judge calls and evaluations it was not asked, LLM calls and tokens) in all and up to the acceptance, and what the
-Judge's rules added in the ablations.
+cost (Judge calls and evaluations it was not asked, LLM calls and tokens) in all and up to the acceptance, what the
+Judge's rules added in the ablations, and - where the run declares baselines that know nothing (cells, orbit) - the checks
+one of them passed too (`check_is_trivial`): an acceptance there would tell nothing.
 
 ## License
 

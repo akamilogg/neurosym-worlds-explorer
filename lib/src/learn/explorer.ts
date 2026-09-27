@@ -55,6 +55,18 @@ export type ExplorerTool = typeof EXPLORER_TOOLS[number];
 type Tools = ReadonlySet<ExplorerTool>;
 /** The requests of an investigation answer; without any of them there is no investigating at all. */
 export const INVESTIGATION_TOOLS: readonly ExplorerTool[] = ['view', 'inspect', 'act', 'measure', 'replay', 'table'];
+/** The code of a measure or a table request: its source, and its range when it answers a number (without one, the code
+    composes a text - what the judge would read). Or why it cannot be read. */
+export function codeRequest(raw: unknown, kind: string): { source: string; range: readonly [number, number] | null } | string {
+  const m = (raw ?? {}) as Record<string, unknown>;
+  const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
+  if (typeof m.source !== 'string' || (m.range !== undefined && m.range !== null && !range)) return kind + ' needs "source" (and a valid "range" for a number)';
+  return { source: m.source, range };
+}
+
+/** Where a measure or a table request applies: "on" beside it, or inside it (both are read). */
+export const onOf = (q: Record<string, unknown>, inner: unknown): unknown => q.on ?? ((inner ?? {}) as Record<string, unknown>).on;
+
 /** The explorer's system prompt for the instruments it is given (all of them by default): the common prompt. */
 export function explorerSystem(tools: Tools = new Set(EXPLORER_TOOLS)): string {
   return system2Prompt(GRID_INTERFACE, tools);
@@ -125,7 +137,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
 export type ExplorerRequest =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string }
-  | { readonly table: { readonly source: string; readonly range: readonly [number, number] }; readonly on: 'in_play' | 'final' }
+  | { readonly table: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: 'in_play' | 'final' }
   | { readonly act: string; readonly from: readonly [number, number]; readonly to: readonly [number, number] }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   /** `formula`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its best formula. */
@@ -170,10 +182,9 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         if (!from || !to) { warnings.push('request #' + i + ': act needs "from" and "to" as [row, col]'); continue; }
         requests.push({ act: (q.act ?? q.try) as string, from, to });
       } else if (q.table && typeof q.table === 'object') {
-        const m = q.table as Record<string, unknown>;
-        const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
-        if (typeof m.source !== 'string' || !range) { warnings.push('request #' + i + ': table needs "source" and "range"'); continue; }
-        requests.push({ table: { source: m.source, range }, on: q.on === 'final' ? 'final' : 'in_play' });
+        const code = codeRequest(q.table, 'table');
+        if (typeof code === 'string') { warnings.push('request #' + i + ': ' + code); continue; }
+        requests.push({ table: code, on: onOf(q, q.table) === 'final' ? 'final' : 'in_play' });
       } else if (typeof (q.replay ?? q.play) === 'string') {
         const at = (q.replay ?? q.play) as string;
         const model = q.model !== undefined ? q.model : q.formula;
@@ -186,12 +197,10 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         } else { warnings.push('request #' + i + ': replay needs "model" as a round number or a draft { observations, rules, weights }'); continue; }
       } else if (typeof q.inspect === 'string') {
         requests.push({ inspect: q.inspect });
-      } else if (q.measure && typeof q.measure === 'object' && Array.isArray(q.on)) {
-        const m = q.measure as Record<string, unknown>;
-        const range = Array.isArray(m.range) && m.range.length === 2 && m.range.every((x) => typeof x === 'number') ? [m.range[0] as number, m.range[1] as number] as const : null;
-        /* Without a range, the code composes a text: what the judge would read. */
-        if (typeof m.source !== 'string' || (m.range !== undefined && !range)) { warnings.push('request #' + i + ': measure needs "source" (and a valid "range" for a number)'); continue; }
-        requests.push({ measure: { source: m.source, range }, on: q.on.slice(0, 40).map(String) });
+      } else if (q.measure && typeof q.measure === 'object' && Array.isArray(onOf(q, q.measure))) {
+        const code = codeRequest(q.measure, 'measure');
+        if (typeof code === 'string') { warnings.push('request #' + i + ': ' + code); continue; }
+        requests.push({ measure: code, on: (onOf(q, q.measure) as unknown[]).slice(0, 40).map(String) });
       } else { const t = JSON.stringify(r) ?? String(r); warnings.push('request #' + i + ' ignored (' + (t.length > 200 ? t.slice(0, 199) + '…' : t) + '): use view, inspect, act, replay, measure or table'); }
     }
     if (o.investigate.length > (context.maxRequests ?? 8)) warnings.push('only the first ' + (context.maxRequests ?? 8) + ' requests were run');

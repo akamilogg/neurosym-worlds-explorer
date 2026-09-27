@@ -52,6 +52,9 @@ export function operatorSummary(summary: ProtocolSummary, ablations: readonly Ab
     accepted: summary.accepted,
     cost: summary.cost,
     cost_per_acceptance: summary.costPerAcceptance,
+    /* Checks a model that knows nothing passed too (only when the run declares baselines). */
+    trivial_checks: summary.trivialChecks,
+    accepted_trivially: summary.acceptedTrivially,
     judge: judgeContribution(ablations)
   };
 }
