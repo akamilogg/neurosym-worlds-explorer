@@ -1201,7 +1201,9 @@ var Neurosym = (() => {
         this.stats.computations++;
       }
       parts.sort();
-      return { values, texts, percepts, errors, vector: parts.join("|"), count: parts.length + Object.keys(percepts).length, view, timings };
+      const result = { values, texts, percepts, errors, vector: parts.join("|"), count: parts.length + Object.keys(percepts).length, view, timings };
+      Object.defineProperty(result, "context", { value: context(), enumerable: false });
+      return result;
     }
   };
   function validRange(range) {
@@ -1235,7 +1237,8 @@ var Neurosym = (() => {
       rules: formula.rules,
       weights: formula.weights,
       policy_weights: formula.policy_weights ?? {},
-      confidence_floor: formula.confidence_floor ?? null
+      confidence_floor: formula.confidence_floor ?? null,
+      ...formula.output ? { output: formula.output } : {}
     }));
   }
   function judgmentHash(formula) {
@@ -1309,7 +1312,8 @@ var Neurosym = (() => {
     const obsIds = Object.keys(formula.observations || {});
     if (!obsIds.length) errors.push("a formula must observe at least one fact");
     const values = valueRuleIds(formula);
-    if (!values.length) errors.push("a formula needs at least one VALUE rule (otherwise V(s) is constant)");
+    if (!values.length && !formula.output) errors.push("a formula needs at least one VALUE rule, or an output (otherwise its answer is constant)");
+    if (formula.output && (formula.output.kind !== "code" || !String(formula.output.source ?? "").trim())) errors.push("output needs code: (p, m) => answer");
     for (const id of Object.keys(formula.rules || {})) {
       const missing = placeholdersOf(formula.rules[id]).filter((p) => !obsIds.includes(p));
       if (missing.length) errors.push('rule "' + id + '" references undeclared observation(s): ' + missing.join(", "));
@@ -1638,6 +1642,36 @@ var Neurosym = (() => {
     return { mode: "weighted_mean", prior: merged, used: list.map((e) => e.id), ignored: [] };
   }
 
+  // src/core/output.ts
+  var OutputRunner = class {
+    constructor(runners = []) {
+      __publicField(this, "runners", /* @__PURE__ */ new Map());
+      __publicField(this, "compiled", /* @__PURE__ */ new Map());
+      for (const r of [jsFunctionRunner(), ...runners]) this.runners.set(r.lang, r);
+    }
+    run(spec, p, m) {
+      const key = spec.lang + "|" + spec.source;
+      let fn = this.compiled.get(key);
+      if (!fn) {
+        const runner = this.runners.get(spec.lang);
+        if (!runner) throw new Error('no runner for language "' + spec.lang + '"');
+        fn = runner.compile("(__a) => (" + String(spec.source).trim() + "\n)(__a.p, __a.m)");
+        this.compiled.set(key, fn);
+      }
+      const out = fn({ p, m });
+      if (out && typeof out === "object" && !Array.isArray(out) && "answer" in out) {
+        const { answer, ...parts } = out;
+        return { answer, parts };
+      }
+      return { answer: out, parts: {} };
+    }
+  };
+  function outputInputs(values, texts, answers, V) {
+    const rules = {};
+    for (const [id, v] of Object.entries(answers)) if (typeof v === "number" && Number.isFinite(v)) rules[id] = v;
+    return { observations: { ...values, ...texts }, rules, V };
+  }
+
   // src/core/evaluate.ts
   var MeasurementError = class extends Error {
     constructor(errors) {
@@ -1663,12 +1697,14 @@ var Neurosym = (() => {
       __publicField(this, "inflight", /* @__PURE__ */ new Map());
       __publicField(this, "priors");
       __publicField(this, "options");
+      __publicField(this, "outputs");
       this.observer = observer;
       this.judge = judge;
       this.options = options;
       this.cache = options.cache ?? /* @__PURE__ */ new Map();
       this.priors = options.priorCache ?? /* @__PURE__ */ new Map();
       this.maximizer = options.maximizer ?? observer.world.actors[0];
+      this.outputs = new OutputRunner(options.runners ?? []);
     }
     /** Whose turn it is. A world that describes its rules names its sides there, so the name means something to the
         Judge; a world that describes nothing leaves the name meaningless, and the Judge learns it from the maximizer's side. */
@@ -1750,7 +1786,7 @@ var Neurosym = (() => {
       const ids = valueRuleIds(formula);
       const key = jHash + "|" + side + "|" + context.id + "|" + observation.vector;
       const texts = observation.texts ?? {};
-      const { answers, live } = await this.ask(key, "value", state, {
+      const { answers, live } = !ids.length ? { answers: {}, live: false } : await this.ask(key, "value", state, {
         world: world.id,
         rulesOfTheWorld: world.describeRules(),
         sideToMove: this.sideLabel(side),
@@ -1764,8 +1800,16 @@ var Neurosym = (() => {
       for (const id of Object.keys(answers)) scalar[id] = answers[id]?.value;
       const composition = compose(scalar, formula.weights);
       this.stats.fallbacks += composition.fallbacks.length;
+      let value = composition.value;
+      let output;
+      if (formula.output) {
+        output = this.outputs.run(formula.output, observation.context ?? null, outputInputs(observation.values, texts, scalar, ids.length ? composition.value : null));
+        const v = Number(output.answer);
+        if (typeof output.answer !== "number" || !Number.isFinite(v)) throw new Error("output must answer a number here (it answered " + JSON.stringify(output.answer) + ")");
+        value = Math.min(1, Math.max(0, v));
+      }
       return {
-        value: round(composition.value, 4),
+        value: round(value, 4),
         confidence: evaluationConfidence(answers, formula.rules),
         observation,
         answers,
@@ -1774,7 +1818,8 @@ var Neurosym = (() => {
         judgmentHash: jHash,
         provenance: live ? "live" : "cached-vector",
         outcome: null,
-        judgmentKey: key
+        judgmentKey: key,
+        ...formula.output ? { composed: round(composition.value, 4), output } : {}
       };
     }
     /** The Judge's merged distribution over the legal actions of `state`, or null when the formula declares
@@ -3541,10 +3586,11 @@ var Neurosym = (() => {
     "You face an environment nobody has described to you. You perceive it ONLY through what it shows you (its form is described in `percept`) and through what your instruments return. You are told nothing else about it: not what it is, not what anything in it means, not what it allows, not how anything in it ends. Nobody will tell you what is right: everything you learn, you find out yourself.",
     "What you perceive is recorded in EPISODES; `<episode>@<step>` names a point of one (step 0 is its start), and `notebook.episodes` lists them.",
     "",
-    "YOUR TASK is to write a MODEL. What it must produce is stated in THIS ENVIRONMENT'S INTERFACE, at the end. A model has these parts:",
+    "YOUR TASK is to write a MODEL that gives the ANSWER the environment asks for; the form of that answer is stated in THIS ENVIRONMENT'S INTERFACE, at the end. A model has these parts:",
     "  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived at a point (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge. They can only compute from what is perceived.",
     "  - RULES: questions a semantic judge answers. The judge does NOT see what you perceive: it sees only the words of your rules and your observations (cite a number inside a rule as {{observation_id}}; a text observation reaches it as written, whether or not a rule cites it). Whatever the judge needs to know, an observation of yours must give it. A rule's answer is a number from 0 to 1. The judge knows nothing about this environment either.",
-    "  - How they COMBINE into what the model produces: see the interface.",
+    "  - WEIGHTS over your rules: V = Σ w_i · r_i, the sum of your rules' answers r_i, each weighted by w_i. Weights are non-negative and normalised to sum 1, so V is a number from 0 to 1.",
+    '  - OUTPUT (optional): code `(p, m) => answer` over what is perceived (`p`, as for your observations) and `m` = { observations: { <id>: value }, rules: { <id>: answer }, V }. Without it, your answer is V. With it, you build the answer as you see fit from what you measured and what the judge answered. It may return the answer itself, or { "answer": ..., <other names>: ... } - the other named values are shown to you when you inspect the model.',
     "Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your model says.",
     "",
     ...f.has("check") ? [
@@ -3611,7 +3657,9 @@ var Neurosym = (() => {
     (t) => '  "beliefs": [ { "id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "the belief (required for new and revise)", "why": "...", "evidence": ["<episode, point, ' + (t.has("probes") ? "probe " : "") + 'or round>"] } ],',
     '  "notes": [ { "do": "write", "id": "<id>", "text": "...", "points": ["<episode>@<step>"] } | { "do": "forget", "id": "<id>" } ],',
     '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } | { "definition": "what it shows the judge", "source": "(p) => <text>" } },',
-    '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },'
+    '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
+    '  "weights": { "<rule id>": number },',
+    '  "output": "(p, m) => ..." (optional),'
   ];
   var ANSWER_TAIL = (f) => [
     [["probes"], '  "probes": [ { "id": "<id>", "hypothesis": "...", "observation": { "definition": "...", "source": "(p) => ...", "range": [min, max] } , "question": { "type": ..., "instructions": ..., "criteria": ... } } ],'],
@@ -3638,7 +3686,6 @@ var Neurosym = (() => {
       ...render(world.lines, given),
       "",
       ...render(ANSWER_HEAD, given),
-      ...world.modelFields,
       ...render(ANSWER_TAIL(features), given)
     ].join("\n");
   }
@@ -3648,17 +3695,16 @@ var Neurosym = (() => {
     tools: ["view", "inspect", "act", "replay", "measure", "table", "probes"],
     features: ["surprises", "record"],
     lines: [
-      "What your model produces: a VALUE of a point, for you. The steps that are yours are chosen by a search that looks a few steps ahead and values each point it imagines with your model. Its parts combine as WEIGHTS over your rules (normalised to sum 1): the weighted mean of their answers, from 0 to 1, where high means good for you.",
+      "YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.",
       "At the end of each episode you learn how it ended for you: a score from -1 to 1.",
       [INVESTIGATION_TOOLS, "Requests:"],
       [["view"], '  {"view": "<episode>", "from": <step>, "to": <step>}   the pictures of a stretch of one of your episodes (at most 30 per request)'],
       [["inspect"], '  {"inspect": "<episode>@<step>"}   on a step of yours: the point your search chose (named "<episode>@<step>/<k>", with its picture), the value your model gave it looking ahead and directly, what each rule answered and what each observation measured there, and the finished episodes your search ran into after it within its horizon, and how they ended'],
       [["act"], '  {"act": "<point>", "from": [row, col], "to": [row, col]}   on a point of your episodes where the next step is yours: ask the environment to take what is at (row, col) of the picture to (row, col). The environment answers whether it accepted it and, if so, the picture that results (named "act<n>", usable in later requests) and whether the episode ended there, and how. Acting changes nothing in any episode.'],
-      [["replay"], '  {"replay": "<point>", "model": <round> | { "observations": ..., "rules": ..., "weights": ... }}   from any point of your episodes ("<episode>@0" is its start, "act<n>" where an act left you), your steps chosen with the model of that round or a draft in the same shape as a proposal (without "model": your_model). You get a new episode (its name, how it ended, how many steps). At most `replays_left` this round.'],
+      [["replay"], '  {"replay": "<point>", "model": <round> | { "observations": ..., "rules": ..., "weights": ..., "output": ... }}   from any point of your episodes ("<episode>@0" is its start, "act<n>" where an act left you), your steps chosen with the model of that round or a draft in the same shape as a proposal (without "model": your_model). You get a new episode (its name, how it ended, how many steps). At most `replays_left` this round.'],
       [["measure"], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", "<episode>@<step>/<k>", ...]}'],
       [["table"], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   the points probes use - still in play, or final - each with the score its episode ended with']
-    ],
-    modelFields: ['  "weights": { "<rule id>": number },']
+    ]
   };
   var EXPLORER_TOOLS = ["view", "inspect", "act", "measure", "replay", "table", "probes"];
   var INVESTIGATION_TOOLS2 = ["view", "inspect", "act", "measure", "replay", "table"];
@@ -3675,7 +3721,7 @@ var Neurosym = (() => {
     }
     const rules = {};
     for (const [id, r] of Object.entries(formula.rules)) rules[id] = { type: r.type, instructions: r.instructions, criteria: r.criteria };
-    return { observations, rules, weights: formula.weights };
+    return { observations, rules, weights: formula.weights, ...formula.output ? { output: formula.output.source } : {} };
   }
   function explorerPayload(brief) {
     return {
@@ -3907,12 +3953,19 @@ var Neurosym = (() => {
       if (rule) rules[id] = rule;
     }
     const { weights, warnings: weightWarnings } = normalizeWeights(obj(data.weights) ?? {}, Object.keys(rules));
-    warnings.push(...weightWarnings);
+    if (Object.keys(rules).length) warnings.push(...weightWarnings);
+    let output;
+    if (data.output !== void 0 && data.output !== null) {
+      const source = typeof data.output === "string" ? data.output.trim() : typeof obj(data.output)?.source === "string" ? String(obj(data.output).source).trim() : "";
+      if (!source) errors.push('"output" must be a JavaScript function (p, m) => answer');
+      else output = { kind: "code", lang, source };
+    }
     const formula = makeFormula({
       world: context.world,
       observations,
       rules,
       weights,
+      ...output ? { output } : {},
       meta: { source: "explorer", round: context.round ?? 0, rationale: typeof data.rationale === "string" ? data.rationale : "" }
     });
     const check = checkFormula(formula);

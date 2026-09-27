@@ -203,6 +203,9 @@ export interface Formula {
   readonly weights: Readonly<Record<string, number>>;
   readonly policy_weights?: Readonly<Record<string, number>>;
   readonly confidence_floor?: number;
+  /** Optional code `(p, m) => answer` over what is perceived and m = { observations, rules, V } (core/output.ts): the
+      model's answer. Without it the answer is V(s). It never changes what the Judge is asked. */
+  readonly output?: CodeSpec;
   /** Bookkeeping: never part of the formula's identity. */
   readonly meta?: Readonly<Record<string, unknown>>;
 }

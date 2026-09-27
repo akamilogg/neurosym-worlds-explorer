@@ -11,7 +11,8 @@ const GIVEAWAYS = /\b(gravit\w*|newton\w*|mass(es)?|forces?|orbit\w*|planet\w*|s
 const draft = {
   observations: { dist: { definition: 'distance to the first body', source: '(p) => { const i = p.t.length - 1, a = p.series[p.symbols[0]], b = p.series[p.symbols[p.symbols.length - 1]]; return Math.hypot(a.x[i] - b.x[i], a.y[i] - b.y[i]); }', range: [0, 40] } },
   rules: { near: { type: 'noul', instructions: 'Is {{dist}} small?', criteria: { yes: 'small', no: 'large' } } },
-  components: { toward: { definition: 'toward the first body', direction: '(p) => { const i = p.t.length - 1, a = p.series[p.symbols[0]], b = p.series[p.symbols[p.symbols.length - 1]]; return [a.x[i] - b.x[i], a.y[i] - b.y[i]]; }', weights: { near: 2 }, range: [0.001, 1], scale: 'log' } }
+  weights: { near: 2 },
+  output: '(p, m) => { const i = p.t.length - 1, a = p.series[p.symbols[0]], b = p.series[p.symbols[p.symbols.length - 1]]; return [2 * b.x[i] - b.x[i - 1] + m.V * (a.x[i] - b.x[i]), 2 * b.y[i] - b.y[i - 1] + m.V * (a.y[i] - b.y[i])]; }'
 };
 
 test('the prompt names no science, no law and no quantity of the world; withheld instruments are not mentioned', () => {
@@ -22,19 +23,21 @@ test('the prompt names no science, no law and no quantity of the world; withheld
   const none = lawExplorerSystem(new Set<LawTool>());
   for (const t of LAW_TOOLS) assert.doesNotMatch(none, new RegExp('\\{"' + t + '"'), t + ' withheld');
   assert.doesNotMatch(none, /INVESTIGATE before proposing/);
-  assert.match(none, /"components"/, 'the task and the law remain');
+  assert.match(none, /"output"/, 'the task and the model remain');
+  assert.doesNotMatch(full, /component|magnitude|log scale|\(p\) => \[x, y\]/i, 'no shape is imposed on the answer');
 });
 
-test('a proposal becomes a checked law: weights normalised per component, errors reported, beliefs kept', () => {
+test('a proposal becomes a checked model: weights normalised, output kept, errors reported, beliefs kept', () => {
   const t = parseLawTurn(JSON.stringify({ rationale: 'r', ...draft, beliefs: [{ id: 'b1', stance: 'new', statement: 'closer means larger' }], lessons: ['l'] }), { world: 'orbit@1', round: 2 });
   assert.equal(t.kind, 'proposal');
   if (t.kind !== 'proposal' || !t.parse.ok) throw new Error('not parsed: ' + JSON.stringify(t));
-  assert.deepEqual(t.parse.proposal.law.components.toward.weights, { near: 1 });
+  assert.deepEqual(t.parse.proposal.law.weights, { near: 1 });
+  assert.equal(t.parse.proposal.law.output?.source, draft.output);
   assert.equal(t.parse.proposal.beliefs[0].id, 'b1');
-  const bad = parseLawTurn(JSON.stringify({ ...draft, components: { toward: { ...draft.components.toward, range: [0, 1] } } }), { world: 'orbit@1' });
-  assert.ok(bad.kind === 'proposal' && !bad.parse.ok && bad.parse.errors.some((e) => /log scale needs 0 < lo/.test(e)));
-  const noDir = parseLawTurn(JSON.stringify({ ...draft, components: { toward: { ...draft.components.toward, direction: undefined } } }), { world: 'orbit@1' });
-  assert.ok(noDir.kind === 'proposal' && !noDir.parse.ok);
+  const bad = parseLawTurn(JSON.stringify({ ...draft, output: 3 }), { world: 'orbit@1' });
+  assert.ok(bad.kind === 'proposal' && !bad.parse.ok && bad.parse.errors.some((e) => /"output" must be/.test(e)));
+  const empty = parseLawTurn(JSON.stringify({ observations: {}, rules: {} }), { world: 'orbit@1' });
+  assert.ok(empty.kind === 'proposal' && !empty.parse.ok && empty.parse.errors.some((e) => /needs rules or an output/.test(e)));
 });
 
 test('an investigation: launches, drafts to simulate, measures and tables; malformed requests are reported, not run', () => {
@@ -60,20 +63,18 @@ test('an investigation: launches, drafts to simulate, measures and tables; malfo
 test('only what the explorer wrote travels back, and the payload carries the percept and the budget', () => {
   const t = parseLawTurn(JSON.stringify(draft), { world: 'orbit@1' });
   if (t.kind !== 'proposal' || !t.parse.ok) throw new Error('not parsed');
-  const own = ownLaw(t.parse.proposal.law) as { components: Record<string, { direction: string }> };
-  assert.equal(own.components.toward.direction, draft.components.toward.direction);
+  const own = ownLaw(t.parse.proposal.law) as { output: string; weights: Record<string, number> };
+  assert.equal(own.output, draft.output);
+  assert.deepEqual(own.weights, { near: 1 });
   const payload = lawExplorerPayload({ round: 3, perceptDoc: ORBIT_PERCEPT_DOC, law: t.parse.proposal.law, lawRound: 2, stepsLeft: 2, launchesLeft: 5 });
   assert.equal(payload.acts_left, 5);
   assert.equal((payload.your_model as { from_round: number }).from_round, 2);
 });
 
-test('a component may carry its magnitude in code; an ignored request is echoed back so it can be read', () => {
-  const t = parseLawTurn(JSON.stringify({ observations: {}, rules: {}, components: { toward: { direction: draft.components.toward.direction, magnitude: '(p) => 0.5' } } }), { world: 'orbit@1' });
+test('a model may be code only (no rules, an output); an ignored request is echoed back so it can be read', () => {
+  const t = parseLawTurn(JSON.stringify({ observations: {}, rules: {}, output: draft.output.replaceAll('m.V', '0.5') }), { world: 'orbit@1' });
   if (t.kind !== 'proposal' || !t.parse.ok) throw new Error('not parsed: ' + JSON.stringify(t));
-  assert.equal(t.parse.proposal.law.components.toward.magnitude?.source, '(p) => 0.5');
-  assert.deepEqual(ownLaw(t.parse.proposal.law).components, { toward: { definition: '', direction: draft.components.toward.direction, magnitude: '(p) => 0.5' } });
-  const bad = parseLawTurn(JSON.stringify({ ...draft, components: { toward: { ...draft.components.toward, magnitude: 3 } } }), { world: 'orbit@1' });
-  assert.ok(bad.kind === 'proposal' && !bad.parse.ok);
+  assert.deepEqual(ownLaw(t.parse.proposal.law), { observations: {}, rules: {}, weights: {}, output: draft.output.replaceAll('m.V', '0.5') });
   const inv = parseLawTurn(JSON.stringify({ investigate: [{ plot: 'launch1', from: 2 }] }), { world: 'orbit@1' });
   assert.ok(inv.kind === 'investigate' && /ignored \(\{"plot":"launch1","from":2\}\)/.test(inv.warnings[0]), JSON.stringify(inv));
 });

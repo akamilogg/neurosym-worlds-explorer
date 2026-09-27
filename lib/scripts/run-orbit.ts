@@ -74,7 +74,7 @@ import { Evaluator } from '../src/core/evaluate.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../src/core/jev.ts';
 import { parseJsonLoose, type ApiError } from '../src/core/net.ts';
 import { judgmentHash } from '../src/core/formula.ts';
-import { lawFormula, Predictor, scoreOf, testPredictions, type Law, type PredictionSample, type TestResult, type Vec2 } from '../src/core/predict.ts';
+import { asksJudge, lawFormula, pairOf, Predictor, scoreOf, testPredictions, type Law, type PredictionSample, type TestResult, type Vec2 } from '../src/core/predict.ts';
 import { hashString, stableStringify } from '../src/core/hash.ts';
 import { nodeVmRunner } from '../src/runtime/node-vm.ts';
 import { openAiChatClient } from '../src/learn/system2.ts';
@@ -86,7 +86,7 @@ import { delegatedLaw, fitLawCodeOnly } from '../src/learn/law-ablation.ts';
 import { Notebook } from '../src/learn/notebook.ts';
 import { mulberry32 } from '../src/worlds/grid/gen.ts';
 import { ORBIT_PERCEPT_DOC, fromPercept, generateOrbit, launchNear, launchable, readTable, simulate, tableSense, toPercept, type Trajectory } from '../src/worlds/orbit/index.ts';
-import { observedNoiseVariance, orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
+import { answerAsDeparture, departureAsNext, observedNoiseVariance, orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
 import { accelSamples, fitNewton, lawSummary, relError, sampleLaunches } from '../src/worlds/orbit/operator.ts';
 import { describeOrbitTruth } from '../src/worlds/orbit/describe.ts';
 import { environmentOf, setupWithSources } from '../src/worlds/orbit/family.ts';
@@ -177,8 +177,8 @@ const flatFetch = async (_u: string, init: { body?: string }) => {
 const judge = new JevJudge(cfg.flat
   ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
   : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
-const evaluator = new Evaluator<OrbitPoint>(observer, judge, { maximizer: 'nature' });
-const predictor = new Predictor<OrbitPoint>(evaluator, perceivePoint, { runners: [runner] });
+const evaluator = new Evaluator<OrbitPoint>(observer, judge, { maximizer: 'nature', runners: [runner] });
+const predictor = new Predictor<OrbitPoint>(evaluator, perceivePoint, { runners: [runner], answer: (a, point) => answerAsDeparture(a, point) });
 const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1 });
 
 /* --- The journal ------------------------------------------------------------------ */
@@ -237,8 +237,8 @@ function resolve(ref: string): OrbitPoint | null {
   return { table: lines.slice(0, row + 2).join('\n'), row };
 }
 
-/** The observed d at a point, when the rows around it are seen. */
-function observedD(ref: string): Vec2 | null {
+/** What the next row of the last pair showed at a point, when the rows around it are seen. */
+function observedNext(ref: string): Vec2 | null {
   const m = /^(.+)@(\d+)$/.exec(ref.trim());
   const l = m ? launches.get(m[1]) : undefined;
   if (!m || !l) return null;
@@ -246,7 +246,7 @@ function observedD(ref: string): Vec2 | null {
   const probe = readTable(l.table).series[sense.probeGlyph];
   const xs = [probe.x[i - 1], probe.x[i], probe.x[i + 1]], ys = [probe.y[i - 1], probe.y[i], probe.y[i + 1]];
   if (i < 1 || [...xs, ...ys].some((v) => v === null || v === undefined)) return null;
-  return [round2(xs[2]! - 2 * xs[1]! + xs[0]!), round2(ys[2]! - 2 * ys[1]! + ys[0]!)];
+  return [round2(xs[2]!), round2(ys[2]!)];
 }
 
 /** The index of launches, as the notebook shows it. */
@@ -412,16 +412,17 @@ async function ablate(law: Law, round: number, lawResult: TestResult): Promise<v
   const fitOn = ownSamples();
   const arms: Record<string, unknown> = { law: { error: round2(lawResult.error), median: round2(lawResult.median), truth_error: lawResult.truthError !== null ? round2(lawResult.truthError) : null, by_band: lawResult.byBand, score: round2(lawResult.scores.law), hidden_law_score: lawResult.scores.reference } };
   const summary = (r: TestResult) => ({ error: round2(r.error), median: round2(r.median), truth_error: r.truthError !== null ? round2(r.truthError) : null, by_band: r.byBand, score: round2(r.scores.law) });
-  arms.carried_by = Object.fromEntries(Object.entries(law.components).map(([id, c]) => [id, c.magnitude ? 'code' : 'judge']));
-  if (cfg.ablation && fitOn.length) {
-    const codeOnly = fitLawCodeOnly(observer, perceivePoint, law, fitOn);
-    const flat = fitLawCodeOnly(observer, perceivePoint, law, fitOn, { flat: true });
+  arms.judge_asked = asksJudge(law);
+  arms.output_in_code = !!law.output;
+  if (cfg.ablation && fitOn.length && asksJudge(law)) {
+    const codeOnly = fitLawCodeOnly(predictor, law, fitOn);
+    const flat = fitLawCodeOnly(predictor, law, fitOn, { flat: true });
     arms.code_only = { ...summary(await testPredictions(samples, codeOnly.predict)), coefficients: codeOnly.coefficients };
     arms.flat = summary(await testPredictions(samples, flat.predict));
   }
-  if (cfg.delegated) {
+  if (cfg.delegated && asksJudge(law)) {
     const d = delegatedLaw(law);
-    arms.delegated = summary(await testPredictions(samples, async (s) => (await predictor.predict(d, s)).vector));
+    arms.delegated = summary(await testPredictions(samples, async (s) => (await predictor.predict(d, s, { measure: law.observations })).vector));
   }
   log('ablation', { round, fitted_on_points: fitOn.length, arms });
   say('  ablation (score): law ' + round2(lawResult.scores.law) + (arms.code_only ? ', code only ' + (arms.code_only as { score: number }).score : '') + (arms.flat ? ', flat ' + (arms.flat as { score: number }).score : '') +
@@ -432,16 +433,18 @@ async function ablate(law: Law, round: number, lawResult: TestResult): Promise<v
 
 const lawOf = (ref: number | Law | null): Law | null => (ref === null ? latest()?.law ?? null : typeof ref === 'number' ? lawOfRound(ref) : ref);
 
-/** A law's observations and directions must compute on points of the learner's own launches before anything uses it. */
+/** A law's observations and output must compute on points of the learner's own episodes before anything uses it (the output
+    is tried with every rule answering 0.5: no Judge call). */
 function checkOnPoints(law: Law): string[] {
   const points = [...launches.values()].filter((l) => l.by === 'you' || l.by === 'the environment').slice(-4).flatMap((l) => {
     const n = l.table.split('\n').length - 2;
     return [2, Math.floor(n / 2), n - 1].map((row) => resolve(l.id + '@' + row)).filter((p): p is OrbitPoint => !!p);
   });
   const errors = replayOnEvidence(observer, law.observations, points.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
-  for (const [id, c] of Object.entries(law.components)) {
+  if (!errors.length) {
+    const neutral = Object.fromEntries(Object.keys(law.rules).map((id) => [id, 0.5]));
     for (const p of points.slice(0, 6)) {
-      try { predictor.directionOf(c, perceivePoint(p)); } catch (e) { errors.push('direction of ' + id + ': ' + String((e as Error).message ?? e)); break; }
+      try { predictor.answerWith(law, predictor.measured(law, p), neutral); } catch (e) { errors.push('output: ' + String((e as Error).message ?? e)); break; }
     }
   }
   return errors;
@@ -489,13 +492,10 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
     try {
       const pr = await predictor.predict(law, p);
       return {
-        inspect: req.inspect, predicted_d: pr.vector.map(round2), observed_d: observedD(req.inspect),
-        components: Object.fromEntries(Object.entries(pr.components).map(([id, c]) => [id, { direction: c.direction.map(round2),
-          ...(c.value === null ? { magnitude_from: 'your code' } : { judge_value: round2(c.value) }), magnitude: round2(c.magnitude) }])),
-        ...(pr.evaluation ? {
-          each_rule_answered: Object.fromEntries(Object.entries(pr.evaluation.answers).map(([id, a]) => [id, round2(a.value)])),
-          your_observations_measured: { ...pr.evaluation.observation.values, ...pr.evaluation.observation.texts }
-        } : { the_judge_was_not_asked: true })
+        inspect: req.inspect, your_observations_measured: pr.observations,
+        ...(pr.evaluation ? { each_rule_answered: Object.fromEntries(Object.entries(pr.rules).map(([id, v]) => [id, round2(v)])), V: pr.V } : { the_judge_was_not_asked: true }),
+        your_answer: pairOf(pr.answer).map(round2), ...(Object.keys(pr.parts).length ? { your_output_also_returned: pr.parts } : {}),
+        the_next_row_showed: observedNext(req.inspect)
       };
     } catch (e) { return { inspect: req.inspect, error: String((e as Error).message ?? e) }; }
   }
@@ -515,12 +515,10 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
         const now = readTable(lines.join('\n'));
         const i = now.t.length - 1;
         const pr = await predictor.predict(law, { table: lines.join('\n'), row: i });
-        const probe = now.series[sense.probeGlyph];
-        if (probe.x[i] === null || probe.x[i - 1] === null) break;
-        const next: Vec2 = [2 * probe.x[i]! - probe.x[i - 1]! + pr.vector[0], 2 * probe.y[i]! - probe.y[i - 1]! + pr.vector[1]];
+        /* The model's answer is the next row of the last pair. */
+        const next: Vec2 = pairOf(pr.answer);
         const t = now.t[i] + (now.t[i] - now.t[i - 1]);
-        /* The other bodies keep their last seen positions; the launched body moves as the law says. */
-        /* The same format as the tables: the other bodies keep their last seen positions, then the launched body. */
+        /* The same format as the tables: the other columns keep their last values, then the model's answer. */
         const others = now.symbols.filter((g) => g !== sense.probeGlyph);
         const cells = [t.toFixed(3).padStart(10), ...others.flatMap((g) => [now.series[g].x[i], now.series[g].y[i]].map((v) => (v ?? 0).toFixed(6).padStart(13))),
           next[0].toFixed(6).padStart(13), next[1].toFixed(6).padStart(13)];
@@ -543,11 +541,12 @@ async function runRequest(req: LawRequest, budget: { launches: number }): Promis
     if (law) {
       try {
         const pr = await predictor.predict(law, s.state);
+        /* observed next - answer = observed d - predicted d: the same numbers, in the learner's terms. */
         const r: Vec2 = [s.target[0] - pr.vector[0], s.target[1] - pr.vector[1]];
-        residual = { d_minus_predicted: r.map(round2), verdict: scoreOf(pr.vector, s.target).map((v) => Math.round(v * 1000) / 1000) };
+        residual = { next_row_minus_your_answer: r.map(round2), verdict: scoreOf(pr.vector, s.target).map((v) => Math.round(v * 1000) / 1000) };
       } catch (e) { residual = { error: String((e as Error).message ?? e) }; }
     }
-    rows.push({ point: s.ref, ...(err ? { error: err.error } : { value: o.values.m }), observed_d: s.target.map(round2), residual });
+    rows.push({ point: s.ref, ...(err ? { error: err.error } : { value: o.values.m }), the_next_row_showed: departureAsNext(s.target, s.state).map(round2), residual });
   }
   return { table: req.table.source, on: req.on, residuals_of: law ? 'your latest model' : 'no model yet', rows };
 }
@@ -604,7 +603,11 @@ async function consult(mode: 'propose' | 'reflect'): Promise<LawRecord | null> {
       const results: unknown[] = [];
       for (const r of turn.requests) results.push(await runRequest(r, budget));
       /* A draft travels back as it wrote it, never as the host's law object. */
-      const asWritten = turn.requests.map((r) => ('law' in r && r.law !== null && typeof r.law === 'object' ? { ...r, law: ownLaw(r.law) } : r));
+      /* Echoed in the prompt's words, and a draft as it wrote it, never as the host's objects. */
+      const modelOf = (l: number | Law | null) => (l !== null && typeof l === 'object' ? ownLaw(l) : l);
+      const asWritten = turn.requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
+        : 'inspect' in r ? { inspect: r.inspect, model: modelOf(r.law) }
+        : 'act' in r ? { act: (({ setup, ...rest }) => ({ ...rest, ...(setup ? { place: setup } : {}) }))(r.act) } : r);
       investigation.push({ step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
       log('investigation', { round, requests: asWritten, results, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
       say('  investigates: ' + turn.requests.map((r, i) => {
@@ -635,7 +638,7 @@ async function consult(mode: 'propose' | 'reflect'): Promise<LawRecord | null> {
     }
     const failures = checkOnPoints(parsed.proposal.law);
     if (failures.length) {
-      refused = ['your law failed on points of your launches: ' + failures.join(' | ')]; refusals++;
+      refused = ['your model failed on points of your episodes: ' + failures.join(' | ')]; refusals++;
       log('proposal_refused', { round, errors: refused, content });
       say('  refused: ' + refused[0].slice(0, 200));
       continue;
@@ -647,8 +650,8 @@ async function consult(mode: 'propose' | 'reflect'): Promise<LawRecord | null> {
     laws.push(record);
     log('proposal', { round, investigation_steps: investigation.length, rationale: p.rationale, beliefs: p.beliefs, notes: turn.notes, law: ownLaw(p.law),
       fingerprint: record.fingerprint, lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });
-    say('  proposes: ' + Object.keys(p.law.observations).length + ' observations, ' + Object.keys(p.law.rules).length + ' rules, ' + Object.keys(p.law.components).length +
-      ' components; beliefs ' + p.beliefs.map((x) => x.id + ':' + x.stance).join(' '));
+    say('  proposes: ' + Object.keys(p.law.observations).length + ' observations, ' + Object.keys(p.law.rules).length + ' rules' + (p.law.output ? ', output in code' : '') +
+      '; beliefs ' + p.beliefs.map((x) => x.id + ':' + x.stance).join(' '));
     return record;
   }
   log('no_proposal', { round, refusals });
@@ -665,7 +668,7 @@ async function gradeRecovery(): Promise<void> {
     + 'The learner predicts d: how the next position of the launched body departs from repeating its last step. '
     + 'For each TRUE statement, decide from the learner\'s own law and words whether it stated it: "exact" (the same claim; numbers within about 10%), '
     + '"partial" (the right idea but incomplete, or numbers off by more than that), "wrong" (it states something that contradicts it), or "absent" (nothing about it). '
-    + 'Read the learner\'s law as code: what its components and observations compute is what it claims. Judge what it holds, not what it dropped. Quote the learner briefly as evidence. '
+    + 'The learner answers the next row of the launched body\'s columns, so d = its answer - 2·p(now) + p(previous). Read its law as code: what its observations, rules and output compute is what it claims. Judge what it holds, not what it dropped. Quote the learner briefly as evidence. '
     + 'Separate the learner\'s FORCE LAW (how the pull depends on where the body is) from how it carries that pull over a row: integrating the motion within a row, or fitting the body\'s current velocity to do so, is kinematics, not a term of the law that depends on speed. '
     + 'Judge a formula\'s form over the whole range of distances: a different function that agrees with the true one only over part of the range (e.g. a softened power whose exponent drifts with distance) is "partial", not "exact". '
     + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims of the learner that no true statement supports]}';

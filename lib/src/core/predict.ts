@@ -1,180 +1,151 @@
-import { jsFunctionRunner } from './code-runner.ts';
-import { checkFormula, compose, makeFormula } from './formula.ts';
+import { checkFormula, makeFormula } from './formula.ts';
 import type { Evaluator, Evaluation } from './evaluate.ts';
-import type { CodeRunner, Formula, MeasureDecl, Rule } from './types.ts';
+import { OutputRunner, outputInputs, type OutputResult } from './output.ts';
+import type { CodeRunner, CodeSpec, Formula, MeasureDecl, Rule } from './types.ts';
 
 /* ============================================================================
- * Predict: the same formula, used to PREDICT a vector instead of valuing a position.
+ * Predict: the same model, used to ANSWER with a prediction instead of valuing a position.
  *
- *     â(s) = Σ_k  m_k(s) · d_k(s)
+ *     V(s)   = Σ_i w_i · r_i(O(s))
+ *     answer = output(p, { observations: O(s), rules: r_i, V })      (core/output.ts)
  *
- *   d_k(s)  a direction: code over what is perceived, returning [x, y] (normalised here)
- *   m_k(s)  a magnitude, carried by one of the two:
- *           - the Judge: V_k = Σ_i w_ik · r_ik(O(s)) ∈ [0,1], the familiar composition of its answers
- *             to rules that read observations, carried to the component's declared range, linearly or
- *             on a log scale (magnitudes may span several orders);
- *           - code: `(p) => number` over the percept, in the units of the prediction. The learner
- *             chooses it where the Judge would only get in the way (a number the Judge would have to
- *             reproduce, not a judgement); the choice is written in the law, readable, and the
- *             ablation still shows what the Judge adds where it is kept.
+ * A law is a model like any other: observations in code, rules the Judge answers from
+ * them, weights over the rules, and optional output code. Nothing here imposes a shape
+ * on the prediction (no directions, no magnitudes, no ranges): the learner builds it.
+ * The WORLD says what an answer means - `answer` turns it into what is compared with what
+ * happened (e.g. "the next value" into its departure from repeating the last step).
  *
- * Every component reads the SAME observations and the SAME rules: the Judge is asked once per
- * state, and each component composes the answers with its own weights. Nothing here knows a
- * world: the world supplies the states, what is perceived of them and the samples to test on.
+ * The Judge is asked once per state, with every observation and every rule. Nothing
+ * here knows a world: the world supplies the states, what is perceived of them, the
+ * meaning of an answer and the samples to test on.
  * ========================================================================== */
 
 export type Vec2 = readonly [number, number];
 
-export interface CodeSpec { readonly kind: 'code'; readonly lang: string; readonly source: string }
-
-export interface LawComponent {
-  /** Code over the percept, `(p) => [x, y]`: which way this part of the prediction points. */
-  readonly direction: CodeSpec;
-  /** A magnitude in code, `(p) => number`, in the units of the prediction: the Judge is not asked for this component.
-      Without it, the magnitude is the Judge's: weights, range and scale below. */
-  readonly magnitude?: CodeSpec;
-  /** Weights over the law's rules (non-negative; the composition clamps to [0,1]). */
-  readonly weights?: Readonly<Record<string, number>>;
-  /** Where V_k = 0 and V_k = 1 land. A log scale needs 0 < lo < hi. */
-  readonly range?: readonly [number, number];
-  readonly scale?: 'linear' | 'log';
-  readonly definition?: string;
-}
-
-/** Does the Judge carry this component's magnitude? */
-export const judged = (c: LawComponent): boolean => !c.magnitude;
+export type { CodeSpec };
 
 export interface Law {
   readonly world: string;
   readonly observations: Readonly<Record<string, MeasureDecl>>;
   readonly rules: Readonly<Record<string, Rule>>;
-  readonly components: Readonly<Record<string, LawComponent>>;
+  /** Weights over the rules: V(s) = Σ w_i r_i. */
+  readonly weights: Readonly<Record<string, number>>;
+  /** Optional code `(p, m) => answer`; without it the answer is V(s). */
+  readonly output?: CodeSpec;
 }
 
 export interface LawCheck { readonly ok: boolean; readonly errors: string[]; readonly warnings: string[] }
 
-/** The formula the Evaluator asks the Judge with: every observation and every rule (the weights do not change what is
-    asked, only how the answers compose). */
+/** The formula the Evaluator asks the Judge with: every observation and every rule, and the weights (V). The output
+    runs after it, in the Predictor. */
 export function lawFormula(law: Law): Formula {
-  const first = Object.values(law.components).find(judged);
-  return makeFormula({ world: law.world, observations: law.observations, rules: law.rules, weights: first?.weights ?? {} });
+  return makeFormula({ world: law.world, observations: law.observations, rules: law.rules, weights: law.weights });
 }
 
-/** Does anything in the law ask the Judge? (No rules: the law is code only, and the Judge is never consulted.) */
-export const asksJudge = (law: Law): boolean => Object.keys(law.rules || {}).length > 0 && Object.values(law.components).some(judged);
+/** Does the law ask the Judge? (No rules: it is code only, and the Judge is never consulted.) */
+export const asksJudge = (law: Law): boolean => Object.keys(law.rules || {}).length > 0;
 
 export function checkLaw(law: Law): LawCheck {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const ids = Object.keys(law.components || {});
-  if (!ids.length) errors.push('a law needs at least one component');
-  /* The Judge's part is checked as a formula only when there is one: a law may be code only. */
-  if (Object.values(law.components || {}).some(judged) || Object.keys(law.rules || {}).length) {
+  if (!asksJudge(law) && !law.output) errors.push('a model needs rules or an output');
+  if (asksJudge(law)) {
     const formula = checkFormula(lawFormula(law));
     errors.push(...formula.errors);
     warnings.push(...formula.warnings);
   }
-  for (const id of ids) {
-    const c = law.components[id];
-    if (!c.direction || c.direction.kind !== 'code' || !String(c.direction.source ?? '').trim()) errors.push('component "' + id + '": a direction needs code');
-    if (c.magnitude) {
-      if (c.magnitude.kind !== 'code' || !String(c.magnitude.source ?? '').trim()) errors.push('component "' + id + '": a magnitude in code needs code');
-      if (c.weights && Object.keys(c.weights).length) errors.push('component "' + id + '": a magnitude in code weighs no rule (drop its weights, or its code magnitude)');
-      continue;
-    }
-    const [lo, hi] = Array.isArray(c.range) ? c.range : [NaN, NaN];
-    if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) errors.push('component "' + id + '": range must be [lo, hi] with hi > lo');
-    else if (c.scale === 'log' && !(lo > 0)) errors.push('component "' + id + '": a log scale needs 0 < lo');
-    if (c.scale !== 'linear' && c.scale !== 'log') errors.push('component "' + id + '": scale must be "linear" or "log"');
-    const weights = Object.keys(c.weights || {});
-    if (!weights.length) errors.push('component "' + id + '": it weighs no rule');
-    for (const w of weights) if (!law.rules[w]) errors.push('component "' + id + '": weight "' + w + '" has no rule');
-  }
-  const weighed = new Set(ids.flatMap((id) => Object.keys(law.components[id].weights ?? {})));
-  const idle = Object.keys(law.rules || {}).filter((r) => !weighed.has(r));
-  if (idle.length) warnings.push('rule(s) no component weighs: ' + idle.join(', '));
+  if (law.output && (law.output.kind !== 'code' || !String(law.output.source ?? '').trim())) errors.push('output needs code: (p, m) => answer');
   return { ok: errors.length === 0, errors, warnings };
 }
 
-/** Carry V ∈ [0,1] to the component's range. */
-export function magnitudeOf(value: number, component: Pick<LawComponent, 'range' | 'scale'>): number {
-  const v = Math.min(1, Math.max(0, value));
-  const [lo, hi] = component.range ?? [0, 1];
-  if (v === 0 || v === 1) return v === 0 ? lo : hi;
-  return component.scale === 'log' ? Math.exp(Math.log(lo) + v * (Math.log(hi) - Math.log(lo))) : lo + v * (hi - lo);
-}
-
-export interface ComponentPrediction {
-  /** The Judge's composition V_k; null when the magnitude is code. */
-  readonly value: number | null;
-  readonly magnitude: number;
-  readonly direction: Vec2;
-}
-
 export interface Prediction {
+  /** What is compared with what happened (the world's reading of the answer). */
   readonly vector: Vec2;
-  readonly components: Readonly<Record<string, ComponentPrediction>>;
-  /** The Judge's evaluation; null when nothing in the law asks it. */
+  /** The model's answer, as it gave it. */
+  readonly answer: unknown;
+  /** Named intermediate values its output chose to show. */
+  readonly parts: Readonly<Record<string, unknown>>;
+  readonly observations: Readonly<Record<string, number | string>>;
+  readonly rules: Readonly<Record<string, number>>;
+  readonly V: number | null;
+  /** The Judge's evaluation; null when the law has no rules. */
   readonly evaluation: Evaluation | null;
+}
+
+/** An answer that is a pair of numbers: [x, y] (or { x, y }). */
+export function pairOf(answer: unknown): Vec2 {
+  const xy = Array.isArray(answer) ? answer : answer && typeof answer === 'object' ? [(answer as { x?: unknown }).x, (answer as { y?: unknown }).y] : [];
+  const [x, y] = [Number(xy[0]), Number(xy[1])];
+  if (!Number.isFinite(x) || !Number.isFinite(y) || xy.length < 2) throw new Error('the answer must be a pair of numbers [x, y] (it was ' + JSON.stringify(answer) + ')');
+  return [x, y];
+}
+
+export interface Measured<S = unknown> {
+  readonly state: S;
+  readonly percept: unknown;
+  readonly values: Readonly<Record<string, number>>;
+  readonly texts: Readonly<Record<string, string>>;
 }
 
 export class Predictor<S> {
   readonly evaluator: Evaluator<S>;
   private readonly perceive: (state: S) => unknown;
-  private readonly runners = new Map<string, CodeRunner>();
-  private readonly compiled = new Map<string, (p: unknown) => unknown>();
+  private readonly outputs: OutputRunner;
+  private readonly toCompared: (answer: unknown, state: S, percept: unknown) => Vec2;
 
-  /** `perceive` hands a direction's code what is perceived of a state: the same thing the observations' code reads. */
-  constructor(evaluator: Evaluator<S>, perceive: (state: S) => unknown, options: { runners?: readonly CodeRunner[] } = {}) {
+  /** `perceive` hands the output code what is perceived of a state: the same thing the observations' code reads.
+      `answer` turns a model's answer into what is compared with what happened (default: the answer is that pair). */
+  constructor(evaluator: Evaluator<S>, perceive: (state: S) => unknown,
+    options: { runners?: readonly CodeRunner[]; answer?: (answer: unknown, state: S, percept: unknown) => Vec2 } = {}) {
     this.evaluator = evaluator;
     this.perceive = perceive;
-    for (const r of [jsFunctionRunner(), ...(options.runners ?? [])]) this.runners.set(r.lang, r);
+    this.outputs = new OutputRunner(options.runners ?? []);
+    this.toCompared = options.answer ?? ((a) => pairOf(a));
   }
 
-  private run(spec: CodeSpec, percept: unknown): unknown {
-    const key = spec.lang + '|' + spec.source;
-    let fn = this.compiled.get(key);
-    if (!fn) {
-      const runner = this.runners.get(spec.lang);
-      if (!runner) throw new Error('no runner for language "' + spec.lang + '"');
-      fn = runner.compile(spec.source) as unknown as (p: unknown) => unknown;
-      this.compiled.set(key, fn);
+  /** What a law's observations measure at a state, and what is perceived there: once, for answers without the Judge. */
+  measured(law: Law, state: S): Measured<S> {
+    const o = this.evaluator.observer.observe(state, law.observations);
+    if (o.errors.length) throw new Error('an observation failed: ' + o.errors.map((e) => e.id + ': ' + e.error).join(' | '));
+    return { state, percept: this.perceive(state), values: o.values, texts: o.texts };
+  }
+
+  /** The law's answer with GIVEN rule answers instead of the Judge's (an ablation), read as what is compared. */
+  answerWith(law: Law, m: Measured<S>, rules: Readonly<Record<string, number>>): Vec2 {
+    let V: number | null = null;
+    if (asksJudge(law)) {
+      V = 0;
+      for (const [id, w] of Object.entries(law.weights)) V += w * Math.min(1, Math.max(0, rules[id] ?? 0.5));
+      V = Math.min(1, Math.max(0, V));
     }
-    return fn(percept);
+    const inputs = outputInputs(m.values, m.texts, rules, V);
+    const answer = law.output ? this.outputs.run(law.output, m.percept, inputs).answer : V;
+    return this.toCompared(answer, m.state, m.percept);
   }
 
-  /** A component's magnitude in code on what is perceived of a state (no Judge involved). */
-  codeMagnitudeOf(component: LawComponent, percept: unknown): number {
-    const m = Number(this.run(component.magnitude!, percept));
-    if (!Number.isFinite(m)) throw new Error('a magnitude in code must return a finite number');
-    return m;
-  }
-
-  /** A component's direction on what is perceived of a state (no Judge involved): to check a law before it is used. */
-  directionOf(component: LawComponent, percept: unknown): Vec2 {
-    const out = this.run(component.direction, percept);
-    const xy = Array.isArray(out) ? out : out && typeof out === 'object' ? [(out as { x?: unknown }).x, (out as { y?: unknown }).y] : [];
-    const [x, y] = [Number(xy[0]), Number(xy[1])];
-    const n = Math.hypot(x, y);
-    if (!Number.isFinite(n) || n === 0) throw new Error('a direction must return a non-zero [x, y]');
-    return [x / n, y / n];
-  }
-
-  async predict(law: Law, state: S, signal?: AbortSignal): Promise<Prediction> {
-    const evaluation = asksJudge(law) ? await this.evaluator.eval(lawFormula(law), state, signal) : null;
-    const scalar: Record<string, number | undefined> = {};
-    for (const id of Object.keys(evaluation?.answers ?? {})) scalar[id] = evaluation!.answers[id]?.value;
+  /** `measure`: observations to hand the output instead of the law's own (an ablation: the Judge reads something else,
+      the output still reads what the learner measured). */
+  async predict(law: Law, state: S, options: { signal?: AbortSignal; measure?: Readonly<Record<string, MeasureDecl>> } = {}): Promise<Prediction> {
     const percept = this.perceive(state);
-    const components: Record<string, ComponentPrediction> = {};
-    let vector: Vec2 = [0, 0];
-    for (const [id, c] of Object.entries(law.components)) {
-      const value = judged(c) ? compose(scalar, c.weights ?? {}).value : null;
-      const magnitude = value === null ? this.codeMagnitudeOf(c, percept) : magnitudeOf(value, c);
-      const direction = this.directionOf(c, percept);
-      components[id] = { value, magnitude, direction };
-      vector = [vector[0] + magnitude * direction[0], vector[1] + magnitude * direction[1]];
+    let evaluation: Evaluation | null = null;
+    let values: Readonly<Record<string, number>> = {}, texts: Readonly<Record<string, string>> = {};
+    const rules: Record<string, number | undefined> = {};
+    let V: number | null = null;
+    if (asksJudge(law)) {
+      evaluation = await this.evaluator.eval(lawFormula(law), state, options.signal);
+      ({ values, texts } = evaluation.observation);
+      for (const id of Object.keys(evaluation.answers)) rules[id] = evaluation.answers[id]?.value;
+      V = evaluation.value;
     }
-    return { vector, components, evaluation };
+    if (!asksJudge(law) || options.measure) {
+      const o = this.evaluator.observer.observe(state, options.measure ?? law.observations);
+      if (o.errors.length) throw new Error('an observation failed: ' + o.errors.map((e) => e.id + ': ' + e.error).join(' | '));
+      ({ values, texts } = o);
+    }
+    const inputs = outputInputs(values, texts, rules, V);
+    const out: OutputResult = law.output ? this.outputs.run(law.output, percept, inputs) : { answer: V, parts: {} };
+    return { vector: this.toCompared(out.answer, state, percept), answer: out.answer, parts: out.parts,
+      observations: inputs.observations, rules: inputs.rules, V, evaluation };
   }
 }
 

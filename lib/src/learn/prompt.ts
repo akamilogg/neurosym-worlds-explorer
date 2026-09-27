@@ -36,11 +36,10 @@ export interface WorldInterface {
   /** The instruments this world offers (a run may withhold some). */
   readonly tools: readonly Tool[];
   readonly features: readonly Feature[];
-  /** THIS ENVIRONMENT'S INTERFACE: what a model produces and how its parts combine, the parameters of each instrument,
-      the verdicts. Interface words only; a line tagged with instruments is kept when ANY of them is available. */
+  /** THIS ENVIRONMENT'S INTERFACE: the FORM of the answer it asks for, the parameters of each instrument, the verdicts -
+      never how to build the answer. Interface words only; a line tagged with instruments is kept when ANY of them is
+      available. */
   readonly lines: readonly PromptLine[];
-  /** The model's own parts in a proposal, one JSON line each (after observations and rules). */
-  readonly modelFields: readonly string[];
 }
 
 export type Tools = ReadonlySet<Tool>;
@@ -53,10 +52,11 @@ const COMMON: (f: ReadonlySet<Feature>) => readonly PromptLine[] = (f) => [
   'You face an environment nobody has described to you. You perceive it ONLY through what it shows you (its form is described in `percept`) and through what your instruments return. You are told nothing else about it: not what it is, not what anything in it means, not what it allows, not how anything in it ends. Nobody will tell you what is right: everything you learn, you find out yourself.',
   'What you perceive is recorded in EPISODES; `<episode>@<step>` names a point of one (step 0 is its start), and `notebook.episodes` lists them.',
   '',
-  'YOUR TASK is to write a MODEL. What it must produce is stated in THIS ENVIRONMENT\'S INTERFACE, at the end. A model has these parts:',
+  'YOUR TASK is to write a MODEL that gives the ANSWER the environment asks for; the form of that answer is stated in THIS ENVIRONMENT\'S INTERFACE, at the end. A model has these parts:',
   '  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived at a point (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge. They can only compute from what is perceived.',
   '  - RULES: questions a semantic judge answers. The judge does NOT see what you perceive: it sees only the words of your rules and your observations (cite a number inside a rule as {{observation_id}}; a text observation reaches it as written, whether or not a rule cites it). Whatever the judge needs to know, an observation of yours must give it. A rule\'s answer is a number from 0 to 1. The judge knows nothing about this environment either.',
-  '  - How they COMBINE into what the model produces: see the interface.',
+  '  - WEIGHTS over your rules: V = Σ w_i · r_i, the sum of your rules\' answers r_i, each weighted by w_i. Weights are non-negative and normalised to sum 1, so V is a number from 0 to 1.',
+  '  - OUTPUT (optional): code `(p, m) => answer` over what is perceived (`p`, as for your observations) and `m` = { observations: { <id>: value }, rules: { <id>: answer }, V }. Without it, your answer is V. With it, you build the answer as you see fit from what you measured and what the judge answered. It may return the answer itself, or { "answer": ..., <other names>: ... } - the other named values are shown to you when you inspect the model.',
   'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your model says.',
   '',
   ...(f.has('check') ? [
@@ -125,7 +125,9 @@ const ANSWER_HEAD: readonly PromptLine[] = [
   (t: Tools) => '  "beliefs": [ { "id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "the belief (required for new and revise)", "why": "...", "evidence": ["<episode, point, ' + (t.has('probes') ? 'probe ' : '') + 'or round>"] } ],',
   '  "notes": [ { "do": "write", "id": "<id>", "text": "...", "points": ["<episode>@<step>"] } | { "do": "forget", "id": "<id>" } ],',
   '  "observations": { "<id>": { "definition": "what it measures", "source": "(p) => <number>", "range": [min, max] } | { "definition": "what it shows the judge", "source": "(p) => <text>" } },',
-  '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },'
+  '  "rules": { "<id>": { "type": "noul" | "score" | "choice", "instructions": "a question, may cite {{observation_id}}", "criteria": ... } },',
+  '  "weights": { "<rule id>": number },',
+  '  "output": "(p, m) => ..." (optional),'
 ];
 
 const ANSWER_TAIL: (f: ReadonlySet<Feature>) => readonly PromptLine[] = (f) => [
@@ -159,7 +161,6 @@ export function system2Prompt(world: WorldInterface, tools: Tools = new Set(worl
     ...render(world.lines, given),
     '',
     ...render(ANSWER_HEAD, given),
-    ...world.modelFields,
     ...render(ANSWER_TAIL(features), given)
   ].join('\n');
 }

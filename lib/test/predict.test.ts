@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Observer } from '../src/core/observer.ts';
 import { Evaluator } from '../src/core/evaluate.ts';
-import { checkLaw, magnitudeOf, Predictor, testPredictions, type Law } from '../src/core/predict.ts';
+import { checkLaw, Predictor, testPredictions, type Law } from '../src/core/predict.ts';
 import { delegatedLaw, fitLawCodeOnly } from '../src/learn/law-ablation.ts';
 import { generateOrbit } from '../src/worlds/orbit/index.ts';
-import { orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
+import { answerAsDeparture, orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
 import type { Judge } from '../src/core/types.ts';
 
 /* orbit@1, phase P2: a law predicts, the trial tests it, and the ablations say where the prediction lives. */
@@ -31,6 +31,8 @@ const K = spec.frame.scale * k * spec.dt * spec.dt;
 const mags = samples.map((s) => Math.hypot(s.truth![0], s.truth![1]));
 const [lo, hi] = [Math.min(...mags) / 2, Math.max(...mags) * 2];
 const last = "const g = p.symbols, i = p.t.length - 1, s = p.series[g[0]], q = p.series[g[g.length - 1]];";
+/* The model answers the NEXT row of the last pair: repeating its last step, plus the departure the law gives, along the line
+   to the source, of the size the Judge carries (V, the echo of `mag`) placed on a log scale - all written by the learner. */
 const exact: Law = {
   world: 'orbit@1',
   observations: {
@@ -39,23 +41,17 @@ const exact: Law = {
         + ' return (Math.log(m) - Math.log(' + lo + ')) / (Math.log(' + hi + ') - Math.log(' + lo + ')); }' } }
   },
   rules: { pull: { type: 'noul', used_as: 'value', instructions: '{{mag}}', criteria: { yes: '', no: '' } } },
-  components: {
-    toward: { direction: { kind: 'code', lang: 'js', source: '(p) => { ' + last + ' return [s.x[i] - q.x[i], s.y[i] - q.y[i]]; }' }, weights: { pull: 1 }, range: [lo, hi], scale: 'log' }
-  }
+  weights: { pull: 1 },
+  output: { kind: 'code', lang: 'js', source: '(p, m) => { ' + last + ' const size = Math.exp(Math.log(' + lo + ') + m.V * (Math.log(' + hi + ') - Math.log(' + lo + ')));'
+    + ' const dx = s.x[i] - q.x[i], dy = s.y[i] - q.y[i], n = Math.hypot(dx, dy);'
+    + ' return { answer: [2 * q.x[i] - q.x[i - 1] + size * dx / n, 2 * q.y[i] - q.y[i - 1] + size * dy / n], size }; }' }
 };
+const predictorWith = (judge: Judge) => new Predictor(new Evaluator<OrbitPoint>(observer, judge, { maximizer: 'nature' }), perceivePoint, { answer: answerAsDeparture });
 
-test('a magnitude lands in its range, linearly or on a log scale', () => {
-  assert.equal(magnitudeOf(0.5, { range: [0, 10], scale: 'linear' }), 5);
-  assert.ok(Math.abs(magnitudeOf(0.5, { range: [1, 100], scale: 'log' }) - 10) < 1e-9);
-  assert.equal(magnitudeOf(2, { range: [1, 100], scale: 'log' }), 100, 'clamped');
-});
-
-test('a law is checked before it is used', () => {
+test('a model is checked before it is used: it needs rules or an output', () => {
   assert.deepEqual(checkLaw(exact).errors, []);
-  const bad: Law = { ...exact, components: { a: { ...exact.components.toward, range: [0, 1], scale: 'log', weights: { nothing: 1 } } } };
-  const errors = checkLaw(bad).errors.join(' | ');
-  assert.match(errors, /log scale needs 0 < lo/);
-  assert.match(errors, /weight "nothing" has no rule/);
+  assert.match(checkLaw({ world: 'orbit@1', observations: {}, rules: {}, weights: {} }).errors.join(' '), /needs rules or an output/);
+  assert.match(checkLaw({ ...exact, weights: { nothing: 1 } }).errors.join(' '), /weight "nothing" has no value rule/);
 });
 
 test('a point holds only what is perceived; the target is read from the table, and the noise alone keeps even the truth off it', () => {
@@ -66,48 +62,55 @@ test('a point holds only what is perceived; the target is read from the table, a
   assert.ok(samples.some((s) => s.band === 'outer') && samples.some((s) => s.band === 'view'));
 });
 
-test('the exact law, written in the learner\'s frame, predicts to the noise; the Judge is asked once per point', async () => {
+test('the exact law, written in the learner\'s frame as the next row, predicts to the noise; the Judge is asked once per point', async () => {
   calls = 0;
-  const predictor = new Predictor(new Evaluator<OrbitPoint>(observer, echo, { maximizer: 'nature' }), perceivePoint);
-  const twoParts: Law = { ...exact, components: { toward: exact.components.toward, again: { ...exact.components.toward, range: [lo * 1e-6, lo * 1e-5] } } };
-  const r = await testPredictions(samples, async (s) => (await predictor.predict(twoParts, s)).vector);
+  const predictor = predictorWith(echo);
+  const r = await testPredictions(samples, async (s) => (await predictor.predict(exact, s)).vector);
   assert.deepEqual(r.failed, []);
   /* The law at an instant scores what the hidden law itself scores; the rest of its miss is not noise (the noise floor is
      small) but the second difference over two rows, which departs from the law where the pull changes within a row. */
   assert.ok(Math.abs(r.error - r.reference!) < 0.02 * r.reference! + 1e-3, 'the exact law scores the reference: ' + r.error + ' vs ' + r.reference);
   assert.ok(r.floor! < 0.03 && r.floor! < r.reference!, 'noise floor ' + r.floor + ' below the hidden law\'s own miss ' + r.reference);
   assert.ok(r.error < 0.2, 'against what was observed: ' + r.error);
-  /* One question per distinct observation: two components share it, and points that measure the same share the answer. */
+  /* One question per distinct observation: points that measure the same share the answer. */
   const distinct = new Set(samples.map((x) => observer.observe(x.state, exact.observations).vector)).size;
-  assert.equal(calls, distinct, 'two components, one question per distinct observation');
-  await testPredictions(samples, async (s) => (await predictor.predict(twoParts, s)).vector);
+  assert.equal(calls, distinct, 'one question per distinct observation');
+  await testPredictions(samples, async (s) => (await predictor.predict(exact, s)).vector);
   assert.equal(calls, distinct, 'the same points again: every answer from the cache');
+  /* A different output asks the Judge nothing new: the cache is keyed on the observations and the rules only. */
+  const halved: Law = { ...exact, output: { ...exact.output!, source: exact.output!.source.replace('size * dx / n', '0.5 * size * dx / n') } };
+  await testPredictions(samples, async (s) => (await predictor.predict(halved, s)).vector);
+  assert.equal(calls, distinct, 'a new output, no new question');
+  /* What the output chose to show comes back with the answer. */
+  const pr = await predictor.predict(exact, samples[3].state);
+  assert.ok(typeof pr.parts.size === 'number' && Array.isArray(pr.answer) && pr.V !== null && pr.rules.pull === pr.V);
 });
 
-test('ablations: code alone carries a law written in code; a constant per component is the floor', async () => {
-  const codeOnly = fitLawCodeOnly(observer, perceivePoint, exact, samples);
-  const flat = fitLawCodeOnly(observer, perceivePoint, exact, samples, { flat: true });
+test('ablations: code alone carries a law written in code; a constant per rule is the floor', async () => {
+  const predictor = predictorWith(echo);
+  const codeOnly = fitLawCodeOnly(predictor, exact, samples);
+  const flat = fitLawCodeOnly(predictor, exact, samples, { flat: true });
   const c = await testPredictions(samples, codeOnly.predict);
   const f = await testPredictions(samples, flat.predict);
   assert.ok(c.error < f.error, 'code ' + c.error + ' vs flat ' + f.error);
-  const fit = codeOnly.coefficients.toward;
-  /* With the component's own scale, code alone finds the law written in code (0 and 1 are exact; fitted on the samples it
-     is scored on, it also fits their noise - the runner fits it on other points). */
-  assert.ok(Math.abs(fit.constant) < 0.05 && Math.abs(fit.mag - 1) < 0.05, JSON.stringify(fit));
-  assert.deepEqual(Object.keys(codeOnly.coefficients.toward), ['constant', 'mag']);
+  assert.ok(c.error < 0.5, 'a logistic reading of mag stands in for the echo: ' + c.error);
+  assert.deepEqual(Object.keys(codeOnly.coefficients.pull), ['constant', 'mag']);
+  assert.ok(codeOnly.coefficients.pull.mag > 0, 'the reading grows with mag: ' + JSON.stringify(codeOnly.coefficients));
 });
 
-test('the delegated mode: the Judge reads the latest rows of the table as text, in the harness\'s words', async () => {
+test('the delegated mode: the Judge reads the latest rows of the table as text; the output still reads the learner\'s observations', async () => {
   const d = delegatedLaw(exact);
   assert.deepEqual(checkLaw(d).errors, []);
+  assert.doesNotMatch(d.rules.pull.instructions, /\{\{/, 'no citation of an observation the Judge does not get');
   const seen: string[] = [];
-  const spy: Judge = { id: 'spy', async judge(r) { seen.push(r.texts?.observed_table ?? ''); return { delegated_toward: { value: 0.5, confidence: null } }; } };
-  const predictor = new Predictor(new Evaluator<OrbitPoint>(observer, spy, { maximizer: 'nature' }), perceivePoint);
-  await predictor.predict(d, samples[samples.length - 1].state);
+  const spy: Judge = { id: 'spy', async judge(r) { seen.push(r.texts?.observed_table ?? ''); return { pull: { value: 0.5, confidence: null } }; } };
+  const predictor = predictorWith(spy);
+  const pr = await predictor.predict(d, samples[samples.length - 1].state, { measure: exact.observations });
   const rows = seen[0].split('\n');
   assert.equal(rows[0], samples[samples.length - 1].state.table.split('\n')[0], 'the header');
   assert.equal(rows[rows.length - 1], samples[samples.length - 1].state.table.split('\n').pop(), 'down to the present row');
   assert.ok(seen[0].length < 4000);
+  assert.ok(typeof pr.observations.mag === 'number', 'the output reads what the learner measured');
 });
 
 test('--sampling: the grid repeats its launches every attempt; free draws new ones', () => {
@@ -116,30 +119,42 @@ test('--sampling: the grid repeats its launches every attempt; free draws new on
   assert.notDeepEqual(ids('free', 1), ids('free', 2));
 });
 
-test('a magnitude in code: the Judge is never asked for it, the ablation keeps it, and the delegated mode leaves it alone', async () => {
+test('a law in code only: the Judge is never asked, and there is nothing to ablate', async () => {
   const codeOnlyLaw: Law = {
-    world: 'orbit@1', observations: {}, rules: {},
-    components: { toward: { direction: exact.components.toward.direction, magnitude: { kind: 'code', lang: 'js',
-      source: '(p) => { ' + last + ' const r = Math.hypot(q.x[i] - s.x[i], q.y[i] - s.y[i]) / ' + spec.frame.scale + '; return ' + K + ' * Math.pow(r, -' + p + '); }' } } }
+    world: 'orbit@1', observations: {}, rules: {}, weights: {},
+    output: { kind: 'code', lang: 'js', source: '(p) => { ' + last + ' const r = Math.hypot(q.x[i] - s.x[i], q.y[i] - s.y[i]) / ' + spec.frame.scale
+      + '; const size = ' + K + ' * Math.pow(r, -' + p + '), dx = s.x[i] - q.x[i], dy = s.y[i] - q.y[i], n = Math.hypot(dx, dy);'
+      + ' return [2 * q.x[i] - q.x[i - 1] + size * dx / n, 2 * q.y[i] - q.y[i - 1] + size * dy / n]; }' }
   };
   assert.deepEqual(checkLaw(codeOnlyLaw).errors, []);
   calls = 0;
-  const predictor = new Predictor(new Evaluator<OrbitPoint>(observer, echo, { maximizer: 'nature' }), perceivePoint);
+  const predictor = predictorWith(echo);
   const r = await testPredictions(samples, async (s) => (await predictor.predict(codeOnlyLaw, s)).vector);
   assert.equal(calls, 0, 'no rule, no question');
   assert.ok(Math.abs(r.error - r.reference!) < 0.02 * r.reference! + 1e-3, 'the law in code scores the hidden law: ' + r.error);
   const pr = await predictor.predict(codeOnlyLaw, samples[0].state);
   assert.equal(pr.evaluation, null);
-  assert.equal(pr.components.toward.value, null);
-  /* Mixed: a code component and a Judge component; code-only keeps the first and fits the second. */
-  const mixed: Law = { ...exact, components: { toward: codeOnlyLaw.components.toward, extra: { ...exact.components.toward, range: [lo * 1e-6, lo * 1e-5] } } };
-  assert.deepEqual(checkLaw(mixed).errors, []);
-  const fit = fitLawCodeOnly(observer, perceivePoint, mixed, samples);
-  assert.deepEqual(Object.keys(fit.coefficients), ['extra']);
-  assert.ok((await testPredictions(samples, fit.predict)).error < 0.2);
-  assert.deepEqual(delegatedLaw(mixed).components.toward, mixed.components.toward);
-  const both = { ...codeOnlyLaw.components.toward, weights: { pull: 1 } };
-  assert.match(checkLaw({ ...exact, components: { both } }).errors.join(' '), /weighs no rule/);
+  assert.equal(pr.V, null);
+  assert.deepEqual(fitLawCodeOnly(predictor, codeOnlyLaw, samples).coefficients, {});
+  /* An answer that is not a pair is refused with the reason. */
+  const wrong: Law = { ...codeOnlyLaw, output: { kind: 'code', lang: 'js', source: '(p) => 3' } };
+  await assert.rejects(predictor.predict(wrong, samples[0].state), /must be a pair/);
+});
+
+test('a formula\'s output is the value in the Evaluator (kept to [0, 1]); the judgment hash, and so the cache, ignore it', async () => {
+  const { formulaHash, judgmentHash, makeFormula } = await import('../src/core/formula.ts');
+  const base = makeFormula({ world: 'orbit@1', observations: exact.observations, rules: exact.rules, weights: { pull: 1 } });
+  const flipped = makeFormula({ ...base, output: { kind: 'code', lang: 'js', source: '(p, m) => 1 - m.V' } });
+  const over = makeFormula({ ...base, output: { kind: 'code', lang: 'js', source: '(p, m) => 2 + m.rules.pull' } });
+  assert.equal(judgmentHash(base), judgmentHash(flipped));
+  assert.notEqual(formulaHash(base), formulaHash(flipped));
+  calls = 0;
+  const evaluator = new Evaluator<OrbitPoint>(observer, echo, { maximizer: 'nature' });
+  const a = await evaluator.eval(base, samples[5].state);
+  const b = await evaluator.eval(flipped, samples[5].state);
+  assert.equal(calls, 1, 'one question for both');
+  assert.ok(Math.abs(b.value - (1 - a.value)) < 1e-4 && b.composed === a.value);
+  assert.equal((await evaluator.eval(over, samples[5].state)).value, 1, 'kept to [0, 1]');
 });
 
 test('the environment\'s verdict: per axis, in [-1, 1], 0 where the prediction agrees, relative to what happened there', async () => {

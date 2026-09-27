@@ -3,7 +3,8 @@ import { checkFormula, compose, formulaHash, judgmentHash, materializeRules, pol
 import { evaluationConfidence } from './jev.ts';
 import { mergePolicyDistributions, type PolicyMerge } from './policy.ts';
 import type { Observation } from './observer.ts';
-import type { Formula, Judge, JudgeAnswer, JudgeRequest, MeasureDecl, Outcome, Rule, World } from './types.ts';
+import type { CodeRunner, Formula, Judge, JudgeAnswer, JudgeRequest, MeasureDecl, Outcome, Rule, World } from './types.ts';
+import { OutputRunner, outputInputs, type OutputResult } from './output.ts';
 
 /** Anything that can measure O(s) in a world: the library's Observer, or a host's own measuring code. */
 export interface ObserverLike<S> {
@@ -47,6 +48,10 @@ export interface Evaluation {
   readonly outcome: Outcome | null;
   /** The cache identity of the judgment (null for a finished state): hosts key their own memos on it. */
   readonly judgmentKey: string | null;
+  /** V(s) = Σ w_i r_i before the model's output (when it has one). */
+  readonly composed?: number;
+  /** What the model's output code returned (when it has one). */
+  readonly output?: OutputResult;
 }
 
 export interface EvaluatorOptions<S> {
@@ -56,6 +61,8 @@ export interface EvaluatorOptions<S> {
       a judgment made against a different opponent is an answer about a different game. */
   readonly context?: (state: S) => { id: string; facts: Readonly<Record<string, unknown>> };
   readonly cacheLimit?: number;
+  /** Runners for a model's output code (the same sandbox as the observations'); JavaScript by default. */
+  readonly runners?: readonly CodeRunner[];
   /** Measures that fail make the evaluation fail (default). `false` lets the Judge see the gap. */
   readonly strictMeasures?: boolean;
   /** Where judgments are kept (default: a private Map). A host passes its own to clear or inspect it. */
@@ -108,7 +115,10 @@ export class Evaluator<S = unknown> {
     this.cache = options.cache ?? new Map();
     this.priors = options.priorCache ?? new Map();
     this.maximizer = options.maximizer ?? observer.world.actors[0];
+    this.outputs = new OutputRunner(options.runners ?? []);
   }
+
+  private readonly outputs: OutputRunner;
 
   /** Whose turn it is. A world that describes its rules names its sides there, so the name means something to the
       Judge; a world that describes nothing leaves the name meaningless, and the Judge learns it from the maximizer's side. */
@@ -183,7 +193,7 @@ export class Evaluator<S = unknown> {
     const texts = observation.texts ?? {};
     /* What the Judge reads is exactly what the formula observes: the measured numbers and the texts its code composed.
        What the senses perceive feeds that code, never the Judge. */
-    const { answers, live } = await this.ask(key, 'value', state, {
+    const { answers, live } = !ids.length ? { answers: {} as Record<string, JudgeAnswer>, live: false } : await this.ask(key, 'value', state, {
       world: world.id,
       rulesOfTheWorld: world.describeRules(),
       sideToMove: this.sideLabel(side),
@@ -197,10 +207,19 @@ export class Evaluator<S = unknown> {
     for (const id of Object.keys(answers)) scalar[id] = answers[id]?.value;
     const composition = compose(scalar, formula.weights);
     this.stats.fallbacks += composition.fallbacks.length;
+    /* The model's output, when it has one: its answer is the value (a number, kept to [0, 1]). */
+    let value = composition.value;
+    let output: OutputResult | undefined;
+    if (formula.output) {
+      output = this.outputs.run(formula.output, observation.context ?? null, outputInputs(observation.values, texts, scalar, ids.length ? composition.value : null));
+      const v = Number(output.answer);
+      if (typeof output.answer !== 'number' || !Number.isFinite(v)) throw new Error('output must answer a number here (it answered ' + JSON.stringify(output.answer) + ')');
+      value = Math.min(1, Math.max(0, v));
+    }
     return {
-      value: round(composition.value, 4), confidence: evaluationConfidence(answers, formula.rules), observation, answers,
+      value: round(value, 4), confidence: evaluationConfidence(answers, formula.rules), observation, answers,
       fallbacks: composition.fallbacks, formulaHash: fHash, judgmentHash: jHash, provenance: live ? 'live' : 'cached-vector', outcome: null,
-      judgmentKey: key
+      judgmentKey: key, ...(formula.output ? { composed: round(composition.value, 4), output } : {})
     };
   }
 

@@ -102,13 +102,15 @@ The same principle, applied to discovering a **law of motion**. Bodies move in a
 seed and, on purpose, not the one a model knows: a pull that falls as r^-2.37 instead of r^-2, a hidden mass, a
 term in the velocity, a screened or anisotropic pull. System 2 perceives only noisy tables of positions, in a
 rotated, mirrored and rescaled frame with neutral symbols, and launches bodies of its own to experiment. Its task
-is to write a law that predicts how each next position departs from repeating the last step:
+is to answer, at any row, the next row of the body it launched. The model is the same artifact in every world:
 
 ```
-d̂(s) = Σ_k  m_k(s) · d_k(s)      d_k: a direction, in code
-                                 m_k: a magnitude, the judge's answers to rules over code observations,
-                                      placed in a declared range (linear or log)
+V(s)   = Σ_i w_i · r_i(O(s))                          the judge's answers to rules over code observations, weighted
+answer = output(p, { observations: O(s), rules: r_i, V })     optional code; without it the answer is V(s)
 ```
+
+Nothing imposes a shape on the answer (no directions, magnitudes or ranges): System 2 builds it, and may combine its
+rules with any logic it writes - the rule network of `SPEC-RULENET.md`, in its own code.
 
 Every round the law is tested on launches it has never seen, some starting beyond the region it observes, where
 a law that only fits what it has seen breaks down. Ablations compare the law against the same observations
@@ -129,7 +131,7 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | `lib/scripts/run-grid.ts` | runs the unknown-world experiment and writes a JSON journal to `runs/` (journals are not published) |
 | `lib/scripts/calibrate-grid.ts` | finds seeds that leave room to learn (forced win, learnable, not won by a flat judge, not a known game) |
 | `lib/src/worlds/orbit/` | the physical world: laws by level, the table sense, prediction points and test launches, operator-only tools |
-| `lib/src/core/predict.ts`, `lib/src/learn/law-*.ts` | the predictor (a law as components), the law explorer (System 2's protocol there), the law ablations |
+| `lib/src/core/output.ts`, `lib/src/core/predict.ts`, `lib/src/learn/law-*.ts` | a model's output code, the predictor, the law explorer (System 2's protocol there), the law ablations |
 | `lib/scripts/run-orbit.ts`, `calibrate-orbit.ts` | runs the physical-world experiment; finds laws that leave room to discover (Newton misses clearly above the noise) |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |

@@ -31,7 +31,8 @@ export function formulaHash(formula: Formula): string {
     format: formula.format, format_version: formula.format_version, world: formula.world,
     observations: observationProgram(formula.observations),
     rules: formula.rules, weights: formula.weights,
-    policy_weights: formula.policy_weights ?? {}, confidence_floor: formula.confidence_floor ?? null
+    policy_weights: formula.policy_weights ?? {}, confidence_floor: formula.confidence_floor ?? null,
+    ...(formula.output ? { output: formula.output } : {})
   }));
 }
 
@@ -136,7 +137,8 @@ export function checkFormula(formula: Formula): FormulaCheck {
   const obsIds = Object.keys(formula.observations || {});
   if (!obsIds.length) errors.push('a formula must observe at least one fact');
   const values = valueRuleIds(formula);
-  if (!values.length) errors.push('a formula needs at least one VALUE rule (otherwise V(s) is constant)');
+  if (!values.length && !formula.output) errors.push('a formula needs at least one VALUE rule, or an output (otherwise its answer is constant)');
+  if (formula.output && (formula.output.kind !== 'code' || !String(formula.output.source ?? '').trim())) errors.push('output needs code: (p, m) => answer');
   for (const id of Object.keys(formula.rules || {})) {
     const missing = placeholdersOf(formula.rules[id]).filter((p) => !obsIds.includes(p));
     if (missing.length) errors.push('rule "' + id + '" references undeclared observation(s): ' + missing.join(', '));

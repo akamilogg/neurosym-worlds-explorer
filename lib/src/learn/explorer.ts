@@ -33,17 +33,16 @@ export const GRID_INTERFACE: WorldInterface = {
   tools: ['view', 'inspect', 'act', 'replay', 'measure', 'table', 'probes'],
   features: ['surprises', 'record'],
   lines: [
-    'What your model produces: a VALUE of a point, for you. The steps that are yours are chosen by a search that looks a few steps ahead and values each point it imagines with your model. Its parts combine as WEIGHTS over your rules (normalised to sum 1): the weighted mean of their answers, from 0 to 1, where high means good for you.',
+    'YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.',
     'At the end of each episode you learn how it ended for you: a score from -1 to 1.',
     [COMMON_INVESTIGATION, 'Requests:'],
     [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   the pictures of a stretch of one of your episodes (at most 30 per request)'],
     [['inspect'], '  {"inspect": "<episode>@<step>"}   on a step of yours: the point your search chose (named "<episode>@<step>/<k>", with its picture), the value your model gave it looking ahead and directly, what each rule answered and what each observation measured there, and the finished episodes your search ran into after it within its horizon, and how they ended'],
     [['act'], '  {"act": "<point>", "from": [row, col], "to": [row, col]}   on a point of your episodes where the next step is yours: ask the environment to take what is at (row, col) of the picture to (row, col). The environment answers whether it accepted it and, if so, the picture that results (named "act<n>", usable in later requests) and whether the episode ended there, and how. Acting changes nothing in any episode.'],
-    [['replay'], '  {"replay": "<point>", "model": <round> | { "observations": ..., "rules": ..., "weights": ... }}   from any point of your episodes ("<episode>@0" is its start, "act<n>" where an act left you), your steps chosen with the model of that round or a draft in the same shape as a proposal (without "model": your_model). You get a new episode (its name, how it ended, how many steps). At most `replays_left` this round.'],
+    [['replay'], '  {"replay": "<point>", "model": <round> | { "observations": ..., "rules": ..., "weights": ..., "output": ... }}   from any point of your episodes ("<episode>@0" is its start, "act<n>" where an act left you), your steps chosen with the model of that round or a draft in the same shape as a proposal (without "model": your_model). You get a new episode (its name, how it ended, how many steps). At most `replays_left` this round.'],
     [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", "<episode>@<step>/<k>", ...]}'],
     [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   the points probes use - still in play, or final - each with the score its episode ended with']
   ],
-  modelFields: ['  "weights": { "<rule id>": number },']
 };
 
 /** The instruments System 2 can be given. An experiment may withhold any of them (the baseline): the prompt then
@@ -96,7 +95,7 @@ export function ownFormula(formula: Formula): Record<string, unknown> {
   }
   const rules: Record<string, unknown> = {};
   for (const [id, r] of Object.entries(formula.rules)) rules[id] = { type: r.type, instructions: r.instructions, criteria: r.criteria };
-  return { observations, rules, weights: formula.weights };
+  return { observations, rules, weights: formula.weights, ...(formula.output ? { output: formula.output.source } : {}) };
 }
 
 export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
@@ -317,10 +316,16 @@ function buildFormula(data: Record<string, unknown>, context: { world: string; s
     if (rule) rules[id] = rule;
   }
   const { weights, warnings: weightWarnings } = normalizeWeights(obj(data.weights) ?? {}, Object.keys(rules));
-  warnings.push(...weightWarnings);
+  if (Object.keys(rules).length) warnings.push(...weightWarnings);
+  let output: Formula['output'];
+  if (data.output !== undefined && data.output !== null) {
+    const source = typeof data.output === 'string' ? data.output.trim() : typeof obj(data.output)?.source === 'string' ? String(obj(data.output)!.source).trim() : '';
+    if (!source) errors.push('"output" must be a JavaScript function (p, m) => answer');
+    else output = { kind: 'code', lang, source };
+  }
 
   const formula = makeFormula({
-    world: context.world, observations, rules, weights,
+    world: context.world, observations, rules, weights, ...(output ? { output } : {}),
     meta: { source: 'explorer', round: context.round ?? 0, rationale: typeof data.rationale === 'string' ? data.rationale : '' }
   });
   const check = checkFormula(formula);

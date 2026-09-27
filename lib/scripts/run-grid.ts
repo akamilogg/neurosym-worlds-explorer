@@ -44,6 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Observer } from '../src/core/observer.ts';
 import { Evaluator } from '../src/core/evaluate.ts';
+import { OutputRunner, outputInputs } from '../src/core/output.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../src/core/jev.ts';
 import { searchBestMove, PLAY_PV_ALPHA_BETA } from '../src/core/search.ts';
 import { createPlanner } from '../src/core/truth.ts';
@@ -178,7 +179,22 @@ const flatFetch = async (_u: string, init: { body?: string }) => {
 const judge = new JevJudge(cfg.flat
   ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
   : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
-const evaluator = new Evaluator<GridState>(observer, judge, { maximizer: 'A' });
+const evaluator = new Evaluator<GridState>(observer, judge, { maximizer: 'A', runners: [nodeVmRunner({ timeoutMs: 2000 })] });
+const outputs = new OutputRunner([nodeVmRunner({ timeoutMs: 2000 })]);
+/** A model's output must answer a number on points of its own episodes before anything plays with it (every rule answering
+    0.5: no Judge call). */
+function outputFailures(formula: Formula, states: readonly GridState[]): string[] {
+  if (!formula.output) return [];
+  const neutral = Object.fromEntries(Object.keys(formula.rules).map((id) => [id, 0.5]));
+  for (const state of states.filter((x) => !world.outcome(x).over).slice(-10)) {
+    try {
+      const o = observer.observe(state, formula.observations);
+      const out = outputs.run(formula.output, o.context ?? null, outputInputs(o.values, o.texts, neutral, Object.keys(neutral).length ? 0.5 : null));
+      if (typeof out.answer !== 'number' || !Number.isFinite(out.answer)) return ['output must answer a number (it answered ' + JSON.stringify(out.answer) + ')'];
+    } catch (e) { return ['output: ' + String((e as Error).message ?? e)]; }
+  }
+  return [];
+}
 const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1 });
 
 let level = 0;
@@ -325,7 +341,7 @@ async function trial(formula: Formula, attempt: number, using: Evaluator<GridSta
 /* OPERATOR ONLY: the same observations read linearly, no Judge, the same games. Never shown to System 2. */
 async function ablate(formula: Formula, attempt: number, score: Measured): Promise<void> {
   const fit = fitCodeOnly(observer, formula, (await probeSet()).filter((p) => !p.final));
-  const plain = new Evaluator<GridState>(observer, codeOnlyJudge(fit), { maximizer: 'A' });
+  const plain = new Evaluator<GridState>(observer, codeOnlyJudge(fit), { maximizer: 'A', runners: [nodeVmRunner({ timeoutMs: 2000 })] });
   const ablated = await trial(codeOnlyFormula(formula), attempt, plain, '  [code-only] ', false);
   const carrier = ablated.wins > score.wins ? 'the observations alone won MORE than the formula (' + ablated.wins + ' vs ' + score.wins + ')'
     : ablated.wins === score.wins ? (score.wins ? 'the observations carry it' : 'neither wins')
@@ -422,8 +438,9 @@ async function runRequest(req: ExplorerRequest, base: Formula | null, plays: { l
     if (!formula) return { replay: req.replay, error: req.formula === null ? 'you have no model yet: write a draft' : 'no model of round ' + req.formula };
     if (typeof req.formula === 'object' && req.formula !== null) {
       const recent = [...games.values()].flatMap((g) => g.states).slice(-60);
-      const failures = replayOnEvidence(observer, formula.observations, recent.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
-      if (failures.length) return { replay: req.replay, error: 'an observation of your draft failed on points of your episodes: ' + failures.join(' | ') };
+      const observed = replayOnEvidence(observer, formula.observations, recent.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
+      const failures = observed.length ? observed : outputFailures(formula, recent);
+      if (failures.length) return { replay: req.replay, error: 'your draft failed on points of your episodes: ' + failures.join(' | ') };
     }
     plays.left--;
     const how = req.formula === null ? 'your_model' + (base && roundOf.has(base) ? ' (round ' + roundOf.get(base) + ')' : '')
@@ -592,9 +609,10 @@ async function propose(from: Formula | null, directive: string | null = null, mo
     const replay = replayOnEvidence(observer, parsed.proposal.formula.observations, recent.map((state) => ({ state })));
     const probeObs = Object.fromEntries(parsed.proposal.probes.filter((p) => p.observation).map((p) => ['probe_' + p.id, p.observation!]));
     const probeReplay = replayOnEvidence(observer, { ...SENSES, ...probeObs }, recent.slice(-20).map((state) => ({ state })));
-    const failures = [...replay.errors, ...probeReplay.errors].slice(0, 8).map((e) => (e.observation ?? '') + ': ' + e.error);
+    const failures = [...[...replay.errors, ...probeReplay.errors].slice(0, 8).map((e) => (e.observation ?? '') + ': ' + e.error),
+      ...(replay.errors.length ? [] : outputFailures(parsed.proposal.formula, recent))];
     if (failures.length) {
-      refused = ['an observation failed on positions of your games: ' + failures.join(' | ')]; refusals++;
+      refused = ['your model failed on points of your episodes: ' + failures.join(' | ')]; refusals++;
       log('proposal_refused', { round, errors: refused, content });
       say('  refused: ' + refused[0].slice(0, 200));
       continue;

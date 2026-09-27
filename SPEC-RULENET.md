@@ -1,8 +1,14 @@
 # SPEC · Semantic RuleNet: una red pequeña de reglas semánticas
 
 **Fichero:** `SPEC-RULENET.md`
-**Estado (26/09/2026):** propuesta, sin implementar. Aplica a los dos mundos del experimento: los juegos de cuadrícula
-(`run-grid.ts`) y el mundo físico (`run-orbit.ts`, ver `SPEC-MUNDO-FISICO.md`).
+**Estado (27/09/2026):** en gran parte **cubierta por `output`** (`lib/src/core/output.ts`, `SPEC-MUNDO-FISICO.md` I7).
+Un modelo puede llevar código `(p, m) => respuesta` que lee cada juicio rᵢ, las observaciones y V(s): System 2 escribe
+ahí sus nodos (`and`, `or`, `not`, umbrales, capas lineales con pesos negativos y sesgo) sin que le demos una lista de
+operadores, que también sería una forma de decirle cómo pensar. Como pedía §4, cambiar la red no cuesta llamadas: la
+caché de Jev depende solo de observaciones y reglas. Lo que `output` devuelve con nombre (`{ answer, ... }`) lo muestra
+`inspect`, que cubre en parte §6. **Siguen sin cubrir:** los nodos Jev de segundo nivel (R6: una regla que lee la
+respuesta de otra), el ajuste de parámetros por el harness (`fit`, R4) y las sensibilidades en el journal (§7.1).
+El resto del documento es la propuesta original.
 
 ---
 

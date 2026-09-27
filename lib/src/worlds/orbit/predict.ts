@@ -1,5 +1,5 @@
 import { hashString } from '../../core/hash.ts';
-import type { PredictionSample } from '../../core/predict.ts';
+import { pairOf, type PredictionSample, type Vec2 } from '../../core/predict.ts';
 import type { World } from '../../core/types.ts';
 import { mulberry32 } from '../grid/gen.ts';
 import { launchNear } from './gen.ts';
@@ -133,4 +133,29 @@ export function predictionSamples(spec: OrbitSpec, trajectories: readonly Trajec
     }
   }
   return out;
+}
+
+/* --- A model's answer, and what is compared ------------------------------------------ */
+
+/** The last pair of the table at its current row and the row before (null where the table shows no number). */
+function lastPair(point: OrbitPoint): { now: [number | null, number | null]; before: [number | null, number | null] } {
+  const t = readTable(point.table);
+  const s = t.series[t.symbols[t.symbols.length - 1]];
+  const i = t.t.length - 1;
+  return { now: [s.x[i] ?? null, s.y[i] ?? null], before: [i > 0 ? s.x[i - 1] ?? null : null, i > 0 ? s.y[i - 1] ?? null : null] };
+}
+
+/** A model's ANSWER - the pair the last columns will show in the next row - read as what is compared with what happened:
+    its departure from repeating the last step, d = answer - 2·p(now) + p(before). The learner is never told this reading. */
+export function answerAsDeparture(answer: unknown, point: OrbitPoint): Vec2 {
+  const [x, y] = pairOf(answer);
+  const { now, before } = lastPair(point);
+  if ([...now, ...before].some((v) => v === null)) throw new Error('the last pair shows no number in this row or the one before');
+  return [x - 2 * now[0]! + before[0]!, y - 2 * now[1]! + before[1]!];
+}
+
+/** The inverse: what the next row shows (or a model answers), from a departure d at a point. */
+export function departureAsNext(d: Vec2, point: OrbitPoint): Vec2 {
+  const { now, before } = lastPair(point);
+  return [d[0] + 2 * now[0]! - before[0]!, d[1] + 2 * now[1]! - before[1]!];
 }

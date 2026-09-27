@@ -1,7 +1,7 @@
 import { parseJsonLoose } from '../core/net.ts';
 import { INVESTIGATION_TOOLS as INVESTIGATION, system2Prompt, type WorldInterface } from './prompt.ts';
 import { normalizeWeights } from '../core/formula.ts';
-import { checkLaw, type Law, type LawComponent } from '../core/predict.ts';
+import { checkLaw, type Law } from '../core/predict.ts';
 import type { MeasureDecl, Rule } from '../core/types.ts';
 import { ID, obj, parseNotes, parseObservation, parseReflective, parseRule } from './explorer.ts';
 import type { BeliefStance, NoteOp } from './notebook.ts';
@@ -12,9 +12,9 @@ import type { BeliefStance, NoteOp } from './notebook.ts';
  * The same stance as the game explorer (explorer.ts): it is told NOTHING about the
  * world - no law, no names, no units, no word that points to a known science - and it
  * learns ONLY from the tables it perceives, the bodies it launches itself, what its own
- * code measures and how its laws predicted. Its artifact is a LAW (core/predict.ts):
- * observations in code, rules the judge answers from them, and components - a direction
- * in code and a magnitude placed in a range by the judge's answers.
+ * code measures and how its laws predicted. Its artifact is the same MODEL as in every
+ * world (core/predict.ts, core/output.ts): observations in code, rules the judge answers
+ * from them, weights over the rules (V) and optional output code - no imposed shape.
  *
  * ZERO HINTS: the prompt is a persona, a research method and a general account of the
  * instruments and the protocol. It says nothing about the nature of the world - not what
@@ -32,18 +32,16 @@ export const ORBIT_INTERFACE: WorldInterface = {
   tools: ['view', 'inspect', 'act', 'measure', 'simulate', 'table'],
   features: ['check'],
   lines: [
-    'What your model produces: at any row of any episode, how far the NEXT value of the LAST pair of columns, p = (x, y), departs from simply repeating its last step: the vector d = p(next) - 2·p(now) + p(previous), in the units of the table.',
-    'Its parts combine as COMPONENTS: the prediction is a sum of components, each a DIRECTION times a MAGNITUDE. The direction is code, `(p) => [x, y]` (it is normalised for you). The magnitude is carried by one of two: either the JUDGE - it is placed in the component\'s range by the judge\'s answers: the weighted mean of the rules the component weighs (weights normalised to sum 1) is a number from 0 to 1, and 0 lands on the low end of the range, 1 on the high end, linearly or on a log scale (for magnitudes that span several orders) - or CODE, `(p) => number`, in the units of the table, and then the judge is not asked for that component.',
-    'A VERDICT is a pair of numbers from -1 to 1, one per column of the pair (x, then y); 0 on one means no difference in it between your prediction and what happened there. What the rest of the range means is for you to work out.',
+    'YOUR ANSWER, at any row of any episode: the pair [x, y] the LAST pair of columns will show in the NEXT row, in the units of the table.',
+    'A VERDICT is a pair of numbers from -1 to 1, one per column of the pair (x, then y); 0 on one means no difference in it between your answer and what happened there. What the rest of the range means is for you to work out.',
     [INVESTIGATION, 'Requests:'],
     [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   rows of one of your tables (at most 60 per request)'],
     [['act'], '  {"act": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>, "place": "<laboratory>"}}   start an episode yourself in one of your laboratories (default: the first): its last pair of columns starts at (x, y) and changes at first by (vx, vy) per unit of the first column; "m" is a positive number you choose (default 1). You get its table (named "act<n>"). It may be refused, and you are not told why. At most `acts_left` this round.'],
-    [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model (without "model": your latest) produced at that point, part by part: each component\'s direction, its magnitude and the judge\'s answer behind it, what each rule answered and what each observation measured there - and what was observed'],
+    [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model (without "model": your latest) answered at that point, part by part: what each observation measured, what each rule answered, V, its answer and the named values its output returned - and what was observed in the next row'],
     [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
-    [['simulate'], '  {"simulate": "<episode>@<step>", "model": <round> | <draft>, "steps": <n>}   each next value of the last pair is the current one plus its last step plus the model\'s predicted d, row after row (at most 40)'],
-    [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the points of your own episodes, or of the checks, each with the RESIDUAL of your latest model there (observed d minus predicted d) and the environment\'s verdict at that point']
+    [['simulate'], '  {"simulate": "<episode>@<step>", "model": <round> | <draft>, "steps": <n>}   each next row of the last pair is the model\'s answer, row after row (at most 40), next to what was observed there if anything was'],
+    [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the points of your own episodes, or of the checks, each with the RESIDUAL of your latest model there (what the next row showed minus your answer) and the environment\'s verdict at that point']
   ],
-  modelFields: ['  "components": { "<id>": { "definition": "what this part of the prediction is", "direction": "(p) => [x, y]", "weights": { "<rule id>": number }, "range": [low, high], "scale": "linear" | "log" } | { "definition": "...", "direction": "(p) => [x, y]", "magnitude": "(p) => <number>" } },']
 };
 
 export const LAW_TOOLS = ['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const;
@@ -84,13 +82,7 @@ export function ownLaw(law: Law): Record<string, unknown> {
   }
   const rules: Record<string, unknown> = {};
   for (const [id, r] of Object.entries(law.rules)) rules[id] = { type: r.type, instructions: r.instructions, criteria: r.criteria };
-  const components: Record<string, unknown> = {};
-  for (const [id, c] of Object.entries(law.components)) {
-    components[id] = c.magnitude
-      ? { definition: c.definition ?? '', direction: c.direction.source, magnitude: c.magnitude.source }
-      : { definition: c.definition ?? '', direction: c.direction.source, weights: c.weights, range: c.range, scale: c.scale };
-  }
-  return { observations, rules, components };
+  return { observations, rules, weights: law.weights, ...(law.output ? { output: law.output.source } : {}) };
 }
 
 export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unknown> {
@@ -113,7 +105,7 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
 
 /* --- Building a law from the explorer's text ------------------------------------------ */
 
-/** The law part of an answer (observations, rules, components), built and checked: a proposal's, or a draft. */
+/** The model part of an answer (observations, rules, weights, output), built and checked: a proposal's, or a draft. */
 export function buildLaw(data: Record<string, unknown>, context: { world: string; lang?: string }): { law: Law; errors: string[]; warnings: string[] } {
   const lang = context.lang ?? 'js';
   const errors: string[] = [];
@@ -130,30 +122,15 @@ export function buildLaw(data: Record<string, unknown>, context: { world: string
     const rule = parseRule(raw, 'rule "' + id + '"', errors);
     if (rule) rules[id] = rule;
   }
-  const components: Record<string, LawComponent> = {};
-  for (const [id, raw] of Object.entries(obj(data.components) ?? {})) {
-    const where = 'component "' + id + '"';
-    if (!ID.test(id)) { errors.push('component id "' + id + '" must be lowercase snake_case'); continue; }
-    const c = obj(raw);
-    if (!c) { errors.push(where + ': a component must be an object'); continue; }
-    const source = typeof c.direction === 'string' ? c.direction.trim() : typeof obj(c.direction)?.source === 'string' ? String(obj(c.direction)!.source).trim() : '';
-    if (!source) { errors.push(where + ': "direction" (a JavaScript function (p) => [x, y]) is required'); continue; }
-    const magnitude = typeof c.magnitude === 'string' ? c.magnitude.trim() : typeof obj(c.magnitude)?.source === 'string' ? String(obj(c.magnitude)!.source).trim() : '';
-    if (magnitude) {
-      if (c.weights !== undefined || c.range !== undefined) warnings.push(where + ': a magnitude in code: its "weights" and "range" are ignored');
-      components[id] = { direction: { kind: 'code', lang, source }, magnitude: { kind: 'code', lang, source: magnitude }, ...(typeof c.definition === 'string' ? { definition: c.definition } : {}) };
-      continue;
-    }
-    if (c.magnitude !== undefined) { errors.push(where + ': "magnitude" must be a JavaScript function (p) => number'); continue; }
-    const range = Array.isArray(c.range) && c.range.length === 2 && c.range.every((n) => typeof n === 'number' && Number.isFinite(n)) ? [c.range[0] as number, c.range[1] as number] as const : null;
-    if (!range) { errors.push(where + ': "range" must be [low, high]'); continue; }
-    const scale = c.scale === undefined ? 'linear' : c.scale;
-    if (scale !== 'linear' && scale !== 'log') { errors.push(where + ': "scale" must be "linear" or "log"'); continue; }
-    const { weights, warnings: w } = normalizeWeights(obj(c.weights) ?? {}, Object.keys(rules));
-    warnings.push(...w.map((x) => where + ': ' + x));
-    components[id] = { direction: { kind: 'code', lang, source }, weights, range, scale, ...(typeof c.definition === 'string' ? { definition: c.definition } : {}) };
+  const { weights, warnings: w } = normalizeWeights(obj(data.weights) ?? {}, Object.keys(rules));
+  if (Object.keys(rules).length) warnings.push(...w);
+  let output: Law['output'];
+  if (data.output !== undefined && data.output !== null) {
+    const source = typeof data.output === 'string' ? data.output.trim() : typeof obj(data.output)?.source === 'string' ? String(obj(data.output)!.source).trim() : '';
+    if (!source) errors.push('"output" must be a JavaScript function (p, m) => answer');
+    else output = { kind: 'code', lang, source };
   }
-  const law: Law = { world: context.world, observations, rules, components };
+  const law: Law = { world: context.world, observations, rules, weights, ...(output ? { output } : {}) };
   if (!errors.length) {
     const check = checkLaw(law);
     errors.push(...check.errors);
@@ -207,7 +184,7 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
   const notes = o ? parseNotes(o.notes, warnings) : [];
   const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
   const max = context.maxRequests ?? 8;
-  if (o && Array.isArray(o.investigate) && !o.components) {
+  if (o && Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output) {
     const requests: LawRequest[] = [];
     const lawOf = (raw: unknown, i: number, kind: string): number | Law | null | undefined => {
       if (raw === undefined || raw === null || raw === 'best') return null;
@@ -217,7 +194,7 @@ export function parseLawTurn(content: string, context: { world: string; lang?: s
         if (built.errors.length) { warnings.push('request #' + i + ': the draft model of ' + kind + ' was refused: ' + built.errors.slice(0, 4).join(' | ')); return undefined; }
         return built.law;
       }
-      warnings.push('request #' + i + ': "model" must be a round number or a draft { observations, rules, components }');
+      warnings.push('request #' + i + ': "model" must be a round number or a draft { observations, rules, weights, output }');
       return undefined;
     };
     const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);

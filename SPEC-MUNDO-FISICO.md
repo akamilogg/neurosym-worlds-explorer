@@ -46,6 +46,10 @@ equivoca la ley.
   nada de la naturaleza del mundo ni del tipo de observaciones que convienen: ni qué se mueve, ni qué varía entre los
   sitios donde se comprueba la ley, ni que hay ruido o una región que no se ve, ni qué ley buscar. La tarea (qué se
   predice) y los parámetros de las herramientas son la interfaz; la forma de lo percibido la describe `percept`.
+- **I7 · Un solo artefacto, sin forma impuesta (27/09/2026).** El modelo de System 2 es, en todos los mundos:
+  observaciones (código), reglas (Jev), pesos sobre las reglas, V(s) = Σ wᵢ·rᵢ(O(s)), y `output` opcional
+  (`lib/src/core/output.ts`). La interfaz de cada mundo dice solo la forma de la respuesta (un número de 0 a 1 por punto;
+  un par por fila), nunca cómo construirla. La clave de la caché de Jev no incluye `output`: cambiarlo no cuesta llamadas.
 - **I6 · Un solo prompt para todos los mundos (26/09/2026).** `lib/src/learn/prompt.ts` tiene el texto común (persona,
   método, herramientas, protocolo) con vocabulario común: episodio, paso, punto, modelo. Las herramientas tienen nombres
   comunes: `view`, `inspect`, `act` (antes `try` y `launch`), `replay` (antes `play`), `simulate`, `measure`, `table`,
@@ -140,6 +144,16 @@ imponga. La comparación "el mundo discretiza" frente a "System 2 decide discret
 rasgo general de la arquitectura o una casualidad del juego.
 
 ## 5. La fórmula: predecir con código y reglas
+
+> **Sustituido el 27/09/2026 (I7).** Las componentes (dirección × magnitud, rango, escala) le decían a System 2 que la
+> respuesta es una suma de vectores: una pista sobre la topología del mundo, y una invitación a escribir una regla por
+> componente. Ahora el modelo es el mismo artefacto que en la cuadrícula: observaciones, reglas, pesos
+> (V(s) = Σ wᵢ·rᵢ(O(s))) y `output` opcional, código `(p, m) => respuesta` con m = { observaciones, reglas, V }. Sin
+> `output`, la respuesta es V(s). La tarea ya no nombra d: System 2 responde **la fila siguiente del último par de
+> columnas**, y el entorno la convierte en d (respuesta − 2·p(ahora) + p(antes)) para el veredicto y la aceptación, que no
+> cambian. Ablaciones: sin Jev (cada regla, una lectura logística ajustada de las observaciones, a través de su propio
+> `output`), plano (una constante por regla) y delegado (Jev lee la tabla; `output` sigue leyendo sus observaciones). Lo
+> que sigue describe el diseño anterior.
 
 La misma estructura que en los juegos, V(s) = Σ wᵢ·rᵢ(O(s)), usada como **magnitud** de una componente de la
 aceleración. Una ley es una lista de **componentes**:

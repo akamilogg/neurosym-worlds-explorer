@@ -50,6 +50,8 @@ export interface Observation {
   readonly view: View;
   /** Wall time per measure (ms): the observable cost of each fact. */
   readonly timings: Readonly<Record<string, number>>;
+  /** What the measures' code read (the perceived object), for code that runs after them (a model's output). */
+  readonly context?: object | null;
 }
 
 export interface ObserverStats {
@@ -236,7 +238,10 @@ export class Observer<S = unknown> {
       this.stats.computations++;
     }
     parts.sort();
-    return { values, texts, percepts, errors, vector: parts.join('|'), count: parts.length + Object.keys(percepts).length, view, timings };
+    const result: Observation = { values, texts, percepts, errors, vector: parts.join('|'), count: parts.length + Object.keys(percepts).length, view, timings };
+    /* Not enumerable: it is for code that runs after the measures, never part of a log or a comparison. */
+    Object.defineProperty(result, 'context', { value: context(), enumerable: false });
+    return result;
   }
 }
 
