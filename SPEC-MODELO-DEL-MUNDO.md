@@ -1,8 +1,9 @@
 # SPEC · El modelo del mundo: descubrir las reglas y validarlas como un investigador
 
 **Fichero:** `SPEC-MODELO-DEL-MUNDO.md`
-**Estado (26/09/2026):** la parte del mundo físico está implementada (`SPEC-MUNDO-FISICO.md` §8.4–8.5, commit
-`9656ef2`). De la cuadrícula está hecha G1 (la familia de tableros) y la calibración de §7; G2 a G5 están pendientes.
+**Estado (27/09/2026):** la parte del mundo físico está implementada (`SPEC-MUNDO-FISICO.md` §8.4–8.5, commit
+`9656ef2`). De la cuadrícula está hecha G1 (la familia de tableros) y la calibración de §7. **G2 y G3 (el artefacto de
+reglas y su prueba) quedan descartados de momento** (§8.1); G4 y G5 siguen pendientes.
 
 ---
 
@@ -162,6 +163,21 @@ mundo físico su ley es su modelo. Entonces unas reglas equivocadas harían perd
 | G3 | Prueba de reglas y veredicto por posición; aceptación exacta con confirmación ciega; `--quick` como en orbit (parar cuando System 2 da sus reglas por buenas) | `lib/scripts/run-grid.ts`, `lib/src/learn/rules-test.ts` |
 | G4 | La fórmula en tableros de la familia y la regresión emparejada | `lib/scripts/run-grid.ts` |
 | G5 | Tests de calibración de §7 y medidas del operador en el journal | `lib/test/grid-rules.test.ts` |
+
+### 8.1 Decisión del 27/09/2026: sin artefacto de reglas en la cuadrícula
+
+G2 y G3 no se implementan por ahora:
+- **Filtraría información del entorno al prompt.** Pedir "qué cambios acepta el entorno y cuándo termina un episodio"
+  ya le dice a System 2 qué forma tiene el mundo.
+- **No hace falta para interpretar.** La estrategia se lee en las observaciones y las reglas que genera System 2: ahí
+  está lo que entendió.
+- **El caso de "ganar sin entender" no lo pide.** En ese run, System 2 no tenía instrumentos para plantear y contrastar
+  hipótesis, y delegó el juicio en Jev sobre la observación en bruto: el modo delegado, que ya se sabe que no es
+  interpretable. Sirve como referencia para comparar con la solución con instrumentos, y como prueba de que System 2
+  se adapta y resuelve el mismo problema con estrategias muy distintas según las herramientas que tiene.
+
+`worlds/grid/rules-check.ts` (G1) se queda como instrumento del operador: comprueba la calibración de la familia de
+tableros y puede servir para medir, solo en el journal, las reglas que System 2 describa.
 
 ## 9. Preguntas abiertas
 
