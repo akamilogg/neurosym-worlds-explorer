@@ -254,3 +254,16 @@ test('zero hints: the explorer prompt says nothing about what the world is', () 
   const NATURE = /\b(two players|turn-based|other side|other player|famil(y|ies)|boards?|pieces?)\b/i;
   assert.doesNotMatch(EXPLORER_SYSTEM, NATURE, 'hint: ' + (EXPLORER_SYSTEM.match(NATURE)?.[0] ?? ''));
 });
+
+/* G4: the researcher's protocol in the grid (SPEC-MODELO-DEL-MUNDO §1.1). */
+test('the grid follows the researcher\'s protocol: "validate" on a proposal, the protocol in the prompt, its facts in the payload', () => {
+  const draft = { observations: { x: { source: '(p) => p.step', range: [0, 40] } }, rules: { a: { type: 'noul', instructions: 'Is {{x}} small?', criteria: { yes: 'y', no: 'n' } } }, weights: { a: 1 } };
+  const yes = parseExplorerProposal(JSON.stringify({ ...draft, validate: true }), { world: world.id, senses: SENSES });
+  const no = parseExplorerProposal(JSON.stringify(draft), { world: world.id, senses: SENSES });
+  assert.ok(yes.ok && yes.proposal.validate === true && no.ok && no.proposal.validate === false);
+  assert.match(EXPLORER_SYSTEM, /"validate": true/);
+  assert.match(EXPLORER_SYSTEM, /becomes one of your laboratories/);
+  assert.match(EXPLORER_SYSTEM, /run again there with this model/);
+  const payload = explorerPayload({ round: 2, perceptDoc: '', places: [{ place: 'lab1', role: 'your laboratory' }], validationsLeft: 2, lastCheck: { accepted: false } }) as any;
+  assert.deepEqual([payload.places.length, payload.validations_left, payload.last_check.accepted], [1, 2, false]);
+});

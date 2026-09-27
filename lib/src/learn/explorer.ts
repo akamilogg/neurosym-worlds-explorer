@@ -31,15 +31,16 @@ import { INVESTIGATION_TOOLS as COMMON_INVESTIGATION, system2Prompt, type WorldI
     instruments. Interface words only (SPEC-MUNDO-FISICO I5). */
 export const GRID_INTERFACE: WorldInterface = {
   tools: ['view', 'inspect', 'act', 'replay', 'measure', 'table', 'probes'],
-  features: ['surprises', 'record'],
+  features: ['surprises', 'record', 'check'],
   lines: [
     'YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.',
     'At the end of each episode you learn how it ended for you: a score from -1 to 1.',
+    'In a check, the VERDICT on an episode is the score it ended with. The episodes of your previous check in a laboratory are also run again there with this model, from the same starts and with everything you do not control the same: you learn how many changed score, each way. Your model holds in a place when every episode of its check there scored 1 and none of those run again scored less than before.',
     [COMMON_INVESTIGATION, 'Requests:'],
     [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   the pictures of a stretch of one of your episodes (at most 30 per request)'],
     [['inspect'], '  {"inspect": "<episode>@<step>"}   on a step of yours: the point your search chose (named "<episode>@<step>/<k>", with its picture), the value your model gave it looking ahead and directly, what each rule answered and what each observation measured there, and the finished episodes your search ran into after it within its horizon, and how they ended'],
-    [['act'], '  {"act": "<point>", "from": [row, col], "to": [row, col]}   on a point of your episodes where the next step is yours: ask the environment to take what is at (row, col) of the picture to (row, col). The environment answers whether it accepted it and, if so, the picture that results (named "act<n>", usable in later requests) and whether the episode ended there, and how. Acting changes nothing in any episode.'],
-    [['replay'], '  {"replay": "<point>", "model": <round> | { "observations": ..., "rules": ..., "weights": ..., "output": ... }}   from any point of your episodes ("<episode>@0" is its start, "act<n>" where an act left you), your steps chosen with the model of that round or a draft in the same shape as a proposal (without "model": your_model). You get a new episode (its name, how it ended, how many steps). At most `replays_left` this round.'],
+    [['act'], '  {"act": "<point>", "from": [row, col], "to": [row, col]}   on a point of an episode in one of your laboratories, where the next step is yours: ask the environment to take what is at (row, col) of the picture to (row, col). The environment answers whether it accepted it and, if so, the picture that results (named "act<n>", usable in later requests) and whether the episode ended there, and how. Acting changes nothing in any episode.'],
+    [['replay'], '  {"replay": "<point>", "model": <round> | { "observations": ..., "rules": ..., "weights": ..., "output": ... }}   from any point of an episode in one of your laboratories ("<episode>@0" is its start, "act<n>" where an act left you), your steps chosen with the model of that round or a draft in the same shape as a proposal (without "model": your_model). You get a new episode (its name, how it ended, how many steps). At most `replays_left` this round.'],
     [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", "<episode>@<step>/<k>", ...]}'],
     [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   the points probes use - still in play, or final - each with the score its episode ended with']
   ],
@@ -83,6 +84,11 @@ export interface ExplorerBrief {
   readonly directive?: string | null;
   /** What this consultation is for, when it is not a proposal (e.g. a reflection round). */
   readonly task?: string | null;
+  /** The places it knows: its laboratories, and those where it was validated. */
+  readonly places?: readonly unknown[];
+  readonly validationsLeft?: number;
+  /** The environment's verdicts on its latest model. */
+  readonly lastCheck?: unknown;
 }
 
 /** Only what the explorer wrote travels back: its own code and words, never the host's internals. */
@@ -114,6 +120,9 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.replaysLeft !== undefined ? { replays_left: brief.replaysLeft } : {}),
+    ...(brief.places && brief.places.length ? { places: brief.places } : {}),
+    ...(brief.validationsLeft !== undefined ? { validations_left: brief.validationsLeft } : {}),
+    ...(brief.lastCheck ? { last_check: brief.lastCheck } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
     ...(brief.directive ? { operator_directive: brief.directive } : {}),
     ...(brief.task ? { task: brief.task } : {})
@@ -211,6 +220,8 @@ export interface ExplorerProposal {
   readonly lessons: string[];
   readonly nextExperiment: string;
   readonly evidenceRef: unknown;
+  /** It asks the environment to validate this model where it has not looked. */
+  readonly validate: boolean;
   readonly warnings: string[];
 }
 
@@ -383,7 +394,8 @@ export function parseExplorerProposal(content: string, context: {
       formula, probes, warnings,
       rationale: typeof data.rationale === 'string' ? data.rationale : '',
       beliefs, lessons, nextExperiment,
-      evidenceRef: data.evidence_ref ?? null
+      evidenceRef: data.evidence_ref ?? null,
+      validate: data.validate === true
     }
   };
 }

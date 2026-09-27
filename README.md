@@ -166,8 +166,10 @@ node --experimental-strip-types scripts/run-grid.ts --seed 22
 ```
 
 Useful options: `--tools none` (or a subset such as `view,inspect,probes`) for the baseline without
-instruments, `--flat` for a judge that knows nothing, `--variants N` for generalization starts. The header of
-`run-grid.ts` documents them all.
+instruments, `--flat` for a judge that knows nothing, `--variants N` for new starts in each check, `--family N` and
+`--validations N` for the researcher's protocol (the model is checked on its laboratory board every round, validated on
+boards of other sizes and pieces when System 2 asks, and accepted by boards nobody has seen), and `--quick` to stop the
+first time System 2 judges its model good. The header of `run-grid.ts` documents them all.
 
 The physical world works the same way, with `lib/run-orbit.example.ps1` / `.sh` as launchers:
 

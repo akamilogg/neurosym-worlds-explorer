@@ -2,8 +2,9 @@
 
 **Fichero:** `SPEC-MODELO-DEL-MUNDO.md`
 **Estado (27/09/2026):** la parte del mundo físico está implementada (`SPEC-MUNDO-FISICO.md` §8.4–8.5, commit
-`9656ef2`). De la cuadrícula está hecha G1 (la familia de tableros) y la calibración de §7. **G2 y G3 (el artefacto de
-reglas y su prueba) quedan descartados de momento** (§8.1); G4 y G5 siguen pendientes.
+`9656ef2`). De la cuadrícula están hechas G1 (la familia de tableros), la calibración de §7 y G4 (el protocolo del
+investigador para la estrategia, §8.2). **G2 y G3 (el artefacto de reglas y su prueba) quedan descartados de momento**
+(§8.1); G5 sigue pendiente.
 
 ---
 
@@ -161,7 +162,7 @@ mundo físico su ley es su modelo. Entonces unas reglas equivocadas harían perd
 | G1 | Familia de tableros: `boardOf(spec, index)` con tamaño, salida y número de piezas propios, filtrado por jugabilidad | `lib/src/worlds/grid/family.ts` |
 | G2 | El artefacto de reglas en el protocolo del explorador: parseo, comprobación sobre sus partidas, prompt sin pistas (§6) | `lib/src/learn/explorer.ts` |
 | G3 | Prueba de reglas y veredicto por posición; aceptación exacta con confirmación ciega; `--quick` como en orbit (parar cuando System 2 da sus reglas por buenas) | `lib/scripts/run-grid.ts`, `lib/src/learn/rules-test.ts` |
-| G4 | La fórmula en tableros de la familia y la regresión emparejada | `lib/scripts/run-grid.ts` |
+| G4 | La fórmula en tableros de la familia y la regresión emparejada (hecha, §8.2) | `lib/scripts/run-grid.ts` |
 | G5 | Tests de calibración de §7 y medidas del operador en el journal | `lib/test/grid-rules.test.ts` |
 
 ### 8.1 Decisión del 27/09/2026: sin artefacto de reglas en la cuadrícula
@@ -175,6 +176,26 @@ G2 y G3 no se implementan por ahora:
   hipótesis, y delegó el juicio en Jev sobre la observación en bruto: el modo delegado, que ya se sabe que no es
   interpretable. Sirve como referencia para comparar con la solución con instrumentos, y como prueba de que System 2
   se adapta y resuelve el mismo problema con estrategias muy distintas según las herramientas que tiene.
+
+### 8.2 G4 hecha (27/09/2026): el protocolo del investigador en la cuadrícula
+
+`lib/scripts/run-grid.ts` sigue el protocolo de §1.1, igual que orbit:
+- **Sitios:** el tablero base es `lab1`; la familia son `place1`…`placeN` (`--family 4`), tableros de `boardOf` con el mismo
+  id de mundo, así que un modelo sirve en todos. Cada sitio tiene su mundo, su dibujo, su observador y su evaluador;
+  la caché de Jev es una sola, porque depende solo de lo que miden las observaciones.
+- **Comprobación de cada ronda, en cada laboratorio:** episodios desde la salida habitual y desde `--variants` salidas
+  nunca jugadas, y la **regresión emparejada**: los episodios de la comprobación anterior en ese laboratorio se vuelven a
+  jugar con el modelo nuevo, con las mismas salidas y las mismas semillas del rival. System 2 recibe, por sitio, la
+  puntuación de cada episodio y cuántos subieron o bajaron al volver a jugarlos. El modelo se sostiene en un sitio si
+  todos sus episodios puntúan 1 y ninguno de los vueltos a jugar baja.
+- **Validación** (`"validate": true`, `--validations 3`): en todos los tableros de la familia que no son laboratorio, con
+  `--family-variants` salidas nuevas por tablero. Donde no se sostiene, el tablero pasa a laboratorio (`act` y `replay`
+  solo en laboratorios). Si se sostiene en todos, dos conjuntos de `--confirm-boards` tableros nuevos deciden.
+- **Rival:** aceptado contra un nivel de `--levels`, el rival pasa al siguiente y el protocolo sigue; aceptado contra el
+  último, el run termina. `--quick` para cuando System 2 pide validar.
+- **Ensayo con LLM falso y juez neutro** (semilla 4, rival aleatorio): valida, la confirmación ciega falla en un tablero,
+  vuelve a validar en la ronda siguiente, se confirma y se acepta; en la semilla 22 un tablero donde no se sostiene pasa a
+  laboratorio. Con el mismo modelo, volver a jugar la comprobación anterior da +0 −0, como debe.
 
 `worlds/grid/rules-check.ts` (G1) se queda como instrumento del operador: comprueba la calibración de la familia de
 tableros y puede servir para medir, solo en el journal, las reglas que System 2 describa.

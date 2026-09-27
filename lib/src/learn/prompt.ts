@@ -60,7 +60,7 @@ const COMMON: (f: ReadonlySet<Feature>) => readonly PromptLine[] = (f) => [
   'Both carriers of understanding are welcome: code is exact and readable, the judge understands plain words. Put each part of what you understand where it is clearest, and where the judge would only get in the way, leave it out: which part is carried by which is part of what your model says.',
   '',
   ...(f.has('check') ? [
-    'Every round your model is CHECKED in your LABORATORIES - you begin with one; `places` lists the places you know - on cases there you have never seen. For every point of them the environment gives its VERDICT (its form is in the interface). You also learn, for each laboratory, whether your model holds there. After the check, those cases are yours to study like any other.',
+    'Every round your model is CHECKED in your LABORATORIES - you begin with one; `places` lists the places you know - on cases there you have never seen. The environment gives its VERDICTS on them (their form is in the interface). You also learn, for each laboratory, whether your model holds there. After the check, those cases are yours to study like any other.',
     'When YOU judge that your model holds, add "validate": true to your proposal. If it holds in all your laboratories, the environment VALIDATES it in places you have not seen - for each, whether it holds, with its verdicts - and checks your laboratories again. A place where your model does not hold becomes one of your laboratories: what was seen there is yours to study, and you can experiment there. When your model holds in all of them, it is confirmed once more where nobody has looked, and accepted if it holds there too. `validations_left` says how many times you may still validate; asking while your model does not hold in all your laboratories is refused and costs nothing.',
     ''
   ] : []),
@@ -113,7 +113,8 @@ const COMMON: (f: ReadonlySet<Feature>) => readonly PromptLine[] = (f) => [
   '',
   ...(f.has('surprises') ? ['`surprises` lists, for your latest episodes, the points where the value your own model gave fell the most before your next step (or the end): where your model was most wrong.'] : []),
   ...(f.has('record') ? ['`record` shows what came of each of your models, as facts; a model\'s `fingerprint` is the same exactly when the model is the same. `your_model` is the one that has done best so far - not necessarily your latest. How much a result would vary from one episode to another is something you can find out yourself.']
-    : ['`your_model` is the model you proposed last' + (f.has('check') ? ', and `last_check` holds the environment\'s verdicts on it' : '') + '. Your notebook lists every model you proposed' + (f.has('check') ? ', with whether it was accepted' : '') + '; a model\'s `fingerprint` is the same exactly when the model is the same. Which of your models to build on is yours to decide.']),
+    : ['`your_model` is the model you proposed last. Your notebook lists every model you proposed' + (f.has('check') ? ', with whether it was accepted' : '') + '; a model\'s `fingerprint` is the same exactly when the model is the same. Which of your models to build on is yours to decide.']),
+  ...(f.has('check') ? ['`last_check` holds the environment\'s verdicts on your latest model.'] : []),
   '',
   'If the payload carries a `task`, it says what this consultation is for and what to answer instead of a proposal.'
 ];
