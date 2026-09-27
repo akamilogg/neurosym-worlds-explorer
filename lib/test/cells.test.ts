@@ -52,6 +52,10 @@ test('the verdict is where the answer differs; the model holds when every point 
   assert.equal((o.view(thrown, lab).points as { error?: string }[])[0].error, 'boom');
   assert.equal(o.holds(good, { place: lab, rerun: { before: good, now: bad } }), false);
   assert.deepEqual(o.operatorView!(good, lab), { exact: 2, points: 2, cells_wrong: 0, not_a_row: 0 });
+  /* The journal's trace (operator only): what the model answered against what came; System 2's view has none of it. */
+  assert.deepEqual(o.trace!(good, lab), [{ point: 'e@0', before: '..#', answer: '.##', came: '.##' }, { point: 'e@1', before: '.##', answer: '###', came: '###' }]);
+  assert.equal(o.trace!(thrown, lab)[0] && (o.trace!(thrown, lab)[0] as { error?: string }).error, 'boom');
+  assert.ok(!JSON.stringify(o.view(good, lab)).includes('###'), 'the view shows no answer and no row that came');
 });
 
 test('its interface is the common prompt\'s: the objective\'s lines first, and no word about what the world is', () => {

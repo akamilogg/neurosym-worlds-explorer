@@ -189,7 +189,9 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
 
   /** The operator's record of a place's check. */
   private placeJournal(o: PlaceOutcome<P, R>): Record<string, unknown> {
+    const trace = this.objective.trace?.(o.results, o.place);
     return { place: o.place.id, holds: o.holds, ...(this.objective.operatorView?.(o.results, o.place) ?? {}),
+      ...(trace?.length ? { trace } : {}),
       ...(o.baselinesHolding?.length ? { baselines_that_hold_too: o.baselinesHolding } : {}),
       ...(o.rerun ? { rerun: this.objective.rerunView ? this.objective.rerunView(o.rerun, o.place) : { cases: o.rerun.now.length } } : {}) };
   }

@@ -375,7 +375,8 @@ async function explore(): Promise<void> {
       return moves[Math.floor(rnd() * moves.length)];
     });
     const stored = store(0, 'the environment: your steps chosen at random', ep.states, ep.outcome.winner);
-    log('exploration_game', { game: stored.id, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1 });
+    log('exploration_game', { game: stored.id, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1,
+      frames: ep.states.map((s, step) => ({ step, picture: sense.render(s) })) });
   }
 }
 

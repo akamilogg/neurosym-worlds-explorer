@@ -77,3 +77,13 @@ test('older journals: laboratories as { held } (orbit) and no notebook (beliefs 
   assert.equal(s.beliefs[0].status, 'dropped');
   assert.equal(s.meta.outcome, 'unfinished');
 });
+
+test('a table of positions is read into bodies, for the animation', async () => {
+  const { readPositions } = await import('../src/view/animate.ts');
+  const table = '         t          + x          + y          ^ x          ^ y\n     0.000     7.5     2.2     1.0     1.0\n     0.518     7.5     2.2     1.1     1.07';
+  const p = readPositions(table)!;
+  assert.deepEqual(p.t, [0, 0.518]);
+  assert.deepEqual(p.bodies.map((b) => b.glyph), ['+', '^']);
+  assert.deepEqual(p.bodies[1].x, [1.0, 1.1]);
+  assert.equal(readPositions('not a table'), null);
+});

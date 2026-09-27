@@ -143,6 +143,52 @@ details { margin-top: 10px; } summary { cursor: pointer; color: var(--accent); f
 .drop { border: 2px dashed var(--border); border-radius: 14px; padding: 48px 16px; text-align: center; background: var(--surface); margin-top: 40px; }
 .drop.over { border-color: var(--accent); }
 .err { color: var(--critical); }
+.player { margin: 8px 0; }
+.player-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.player-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.player-bar input[type=range] { flex: 1; min-width: 60px; accent-color: var(--accent); }
+.player-bar select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.play-label { min-width: 110px; font-variant-numeric: tabular-nums; }
+button.play, .show-bar button, button.present { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 3px 10px; cursor: pointer; }
+button.play { min-width: 36px; }
+button.play:hover, .show-bar button:hover, button.present:hover { border-color: var(--accent); }
+button.present { font-weight: 600; }
+.head-right { display: flex; align-items: center; gap: 12px; }
+.st-head { fill: none; stroke: var(--path); stroke-width: 1.5; }
+.st-wrong { fill: none; stroke: var(--critical); stroke-width: 1.5; }
+svg.orbit { width: 100%; height: auto; border-radius: 8px; display: block; }
+.trail { fill: none; stroke-width: 1.5; stroke-linejoin: round; opacity: .55; }
+.body { stroke: var(--surface); stroke-width: 2; }
+.b0 { stroke: var(--accent); } .body.b0 { fill: var(--accent); }
+.b1 { stroke: var(--st-revise); } .body.b1 { fill: var(--st-revise); }
+.b2 { stroke: var(--st-confirm); } .body.b2 { fill: var(--st-confirm); }
+.b3 { stroke: var(--path); } .body.b3 { fill: var(--path); }
+.body { stroke: var(--surface); }
+.body-tag { font: 12px ui-monospace, monospace; fill: var(--text-2); }
+.came { fill: var(--text-2); } .guess { fill: none; stroke: var(--st-revise); stroke-width: 2; }
+.miss { stroke: var(--critical); stroke-width: 1; opacity: .7; }
+g.now .guess { stroke-width: 3; } g.now .came { fill: var(--text); }
+.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: -1px; }
+.legend .sw.came { background: var(--text-2); } .legend .sw.guess { border: 2px solid var(--st-revise); width: 8px; height: 8px; }
+.tries { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.try-head { font-size: 13px; margin-bottom: 6px; }
+.try-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; font-size: 13px; }
+.try-label { width: 88px; flex: none; color: var(--muted); font-size: 12px; }
+.try-text { font-size: 14px; margin: 4px 0 8px; }
+svg.strip { flex: 1; min-width: 0; height: auto; max-height: 26px; }
+.ok { color: var(--good); font-weight: 600; } .bad { color: var(--critical); font-weight: 600; }
+.tally { font-size: 12px; color: var(--text-2); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.try-dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.try-dot { width: 9px; height: 9px; border-radius: 2px; background: var(--border); }
+.try-dot.ok { background: var(--good); } .try-dot.bad { background: var(--critical); }
+.try-dot.now { outline: 2px solid var(--text); outline-offset: 1px; }
+.msgs.anim li.now { background: var(--surface-2); border-radius: 6px; }
+pre.frame { min-height: 120px; }
+.card.current { outline: 2px solid var(--path); outline-offset: 1px; }
+.show-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20; display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.15); font-size: 13px; max-width: calc(100vw - 32px); flex-wrap: wrap; }
+.show-bar[hidden] { display: none; }
+.drawer h4 { margin: 12px 0 4px; font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .drawer { transition: none; } }
 @media (max-width: 640px) { .tile-value { font-size: 18px; } #app { padding: 16px 16px 48px; } }
 `;
 

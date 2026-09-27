@@ -32,6 +32,10 @@ export interface CellsResult {
   readonly differsAt: readonly number[] | null;
   /** Operator only: the model threw here. */
   readonly failed?: string;
+  /** Operator only (the trace): the row before, the answer, and the row that came. */
+  readonly before?: string;
+  readonly answer?: unknown;
+  readonly came?: string;
 }
 
 export interface CellsObjectiveHost<M, P extends Place> {
@@ -49,6 +53,9 @@ export function differences(answer: unknown, next: string): number[] | null {
   return out;
 }
 
+/** Cases per place kept in the journal's trace. */
+const TRACE = 24;
+
 export function cellsObjective<M, P extends Place>(host: CellsObjectiveHost<M, P>): Objective<M, P, readonly CellsCase[], CellsResult> {
   const exact = (rs: readonly CellsResult[]) => rs.length > 0 && rs.every((r) => r.differsAt !== null && r.differsAt.length === 0);
   return {
@@ -60,8 +67,9 @@ export function cellsObjective<M, P extends Place>(host: CellsObjectiveHost<M, P
       for (const { place, cases: points } of cases) {
         const rs: CellsResult[] = [];
         for (const c of points) {
-          try { rs.push({ place: place.id, point: c.point, differsAt: differences(await host.answer(model, c.state), c.next) }); }
-          catch (e) { rs.push({ place: place.id, point: c.point, differsAt: null, failed: String((e as Error)?.message ?? e) }); }
+          const seen = { before: c.state.rows[c.state.rows.length - 1], came: c.next };
+          try { const answer = await host.answer(model, c.state); rs.push({ place: place.id, point: c.point, differsAt: differences(answer, c.next), ...seen, answer }); }
+          catch (e) { rs.push({ place: place.id, point: c.point, differsAt: null, failed: String((e as Error)?.message ?? e), ...seen }); }
         }
         byPlace.push(rs);
       }
@@ -73,6 +81,7 @@ export function cellsObjective<M, P extends Place>(host: CellsObjectiveHost<M, P
     rerunView: (rerun) => ({ points: rerun.now.length, your_model_holds_on_them: exact(rerun.now) }),
     operatorView: (results) => ({ exact: results.filter((r) => r.differsAt?.length === 0).length, points: results.length,
       cells_wrong: results.reduce((n, r) => n + (r.differsAt?.length ?? 0), 0), not_a_row: results.filter((r) => r.differsAt === null).length }),
+    trace: (results) => results.slice(0, TRACE).map((r) => ({ point: r.point, before: r.before, answer: typeof r.answer === 'string' ? r.answer : r.failed ? null : JSON.stringify(r.answer ?? null).slice(0, 80), came: r.came, ...(r.failed ? { error: r.failed.slice(0, 120) } : {}) })),
     line: (results, _p, rerun) => results.filter((r) => r.differsAt?.length === 0).length + '/' + results.length + ' exact' +
       (rerun ? ' (run again: ' + rerun.now.filter((r) => r.differsAt?.length === 0).length + '/' + rerun.now.length + ')' : '')
   };

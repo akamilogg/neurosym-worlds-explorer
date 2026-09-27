@@ -1,4 +1,5 @@
 import { keyMoments, synthesize, type Moment, type MomentKind, type Synthesis } from './synthesis.ts';
+import { framesAnim, messagesAnim, orbitAnim, player, playInTurn, readPositions, reducedMotion, rowsAnim, setFilled, stopAll, triesAnim, type Anim, type Player } from './animate.ts';
 
 /* ============================================================================
  * The run viewer: a visual synthesis of a journal, in the browser. Built after the run,
@@ -10,6 +11,8 @@ import { keyMoments, synthesize, type Moment, type MomentKind, type Synthesis } 
  *   Progreso         the laboratories' check, round by round, with validation and acceptance
  *   Creencias        each belief's lineage: new, revised, kept, confirmed, dropped
  *   Línea temporal   every moment, lane by kind, round by round
+ *   Animaciones      a moment opened plays what the environment showed or what the model tried (animate.ts);
+ *                    "Presentar" plays the selected moments in turn
  *   Solo operador    what System 2 never saw: the truth, the grading, the cost, the ablations
  * ========================================================================== */
 
@@ -60,6 +63,7 @@ function chooseFilled(journal: Record<string, any>): void {
   const counts = new Map<string, number>();
   for (const e of journal.events ?? []) for (const r of rowsOf(e) ?? []) for (const ch of r) counts.set(ch, (counts.get(ch) ?? 0) + 1);
   filled = counts.size === 2 ? [...counts.entries()].sort((a, b) => a[1] - b[1])[0][0] : null;
+  setFilled(filled);
 }
 
 /** Rows of two symbols as a space-time picture: one row per step, one symbol filled. Null when they are not. */
@@ -77,15 +81,30 @@ function spacetime(rows: readonly string[], cell = 8): SVGElement | null {
   return svg;
 }
 
-/** Rows as a picture, with the text beside it on demand. */
-function rowsView(rows: readonly string[], steps?: readonly number[]): El {
-  const pic = spacetime(rows);
+/** An animation in a player, collected so the drawer can play them in turn. */
+function played(anim: Anim | null, players: Player[], title?: string): El | null {
+  if (!anim) return null;
+  const p = player(anim, title);
+  players.push(p);
+  return p.el;
+}
+
+/** Rows as an animated picture, with the text beside it on demand. */
+function rowsView(rows: readonly string[], players: Player[], steps?: readonly number[]): El {
   const text = h('pre', { class: 'rows' }, rows.map((r, i) => (steps ? String(steps[i]).padStart(3) + '  ' : '') + r).join('\n'));
+  const pic = played(rowsAnim(rows, steps), players);
   return pic ? h('div', { class: 'rows-view' }, pic, h('details', {}, h('summary', {}, 'Ver como texto'), text)) : text;
+}
+
+/** A table of positions as bodies moving, with the table on demand. */
+function tableView(table: string, players: Player[]): El {
+  const pic = readPositions(table) ? played(orbitAnim(table), players) : null;
+  return pic ? h('div', { class: 'rows-view' }, pic, h('details', {}, h('summary', {}, 'Ver la tabla'), preview(table, 4000))) : preview(table, 2000);
 }
 
 /** The rows an event's results carry, for a thumbnail. */
 export function rowsOf(e: Record<string, any>): string[] | null {
+  if (Array.isArray(e.rows) && e.rows.every((x: unknown) => typeof x === 'string')) return e.rows;
   for (const r of e.results ?? []) {
     if (Array.isArray(r?.rows) && r.rows.every((x: unknown) => typeof x === 'string')) return r.rows;
     if (Array.isArray(r?.rows) && r.rows.length && typeof r.rows[0]?.row === 'string') return r.rows.map((x: any) => x.row);
@@ -94,18 +113,35 @@ export function rowsOf(e: Record<string, any>): string[] | null {
 }
 
 /** A result shown the way its world shows it: rows of symbols, pictures, texts with marks, a table. */
-function renderResult(res: Record<string, any>): El {
+function renderResult(res: Record<string, any>, players: Player[]): El {
   if (!res || typeof res !== 'object') return preview(res);
-  if (Array.isArray(res.rows) && res.rows.every((r: unknown) => typeof r === 'string')) return rowsView(res.rows);
-  if (Array.isArray(res.rows) && res.rows.length && typeof res.rows[0]?.row === 'string') return rowsView(res.rows.map((r: any) => r.row), res.rows.map((r: any) => r.step));
-  if (Array.isArray(res.frames)) return h('div', { class: 'frames' }, ...res.frames.slice(0, 12).map((f: any) => h('figure', {}, h('pre', { class: 'rows' }, String(f.picture)), h('figcaption', {}, 'paso ' + f.step))));
-  if (Array.isArray(res.messages)) return h('ul', { class: 'msgs' }, ...res.messages.map((m: any) => h('li', {}, h('span', { class: 'mark m' + m.mark }, String(m.mark)), ' ', String(m.text))));
-  if (typeof res.table === 'string' && res.table.includes('\n')) return preview(res.table, 2000);
+  if (Array.isArray(res.rows) && res.rows.every((r: unknown) => typeof r === 'string')) return rowsView(res.rows, players);
+  if (Array.isArray(res.rows) && res.rows.length && typeof res.rows[0]?.row === 'string') return rowsView(res.rows.map((r: any) => r.row), players, res.rows.map((r: any) => r.step));
+  if (Array.isArray(res.frames) && res.frames.length) return played(framesAnim(res.frames), players) ?? preview(res.frames);
+  if (Array.isArray(res.messages) && res.messages.length) return played(messagesAnim(res.messages.map((m: any) => ({ step: m.step, text: String(m.text), mark: m.mark }))), players) ?? preview(res.messages);
+  if (typeof res.table === 'string' && res.table.includes('\n')) return tableView(res.table, players);
   if (Array.isArray(res.values)) return h('ul', { class: 'vals' }, ...res.values.slice(0, 12).map((v: any) => h('li', {}, h('b', {}, String(v.point)), ' → ', h('code', {}, String(v.value ?? v.error)))));
   return preview(res, 1500);
 }
 
-function detail(m: Moment): El {
+/** What the environment showed in an episode, as it happened. */
+function environmentView(e: Record<string, any>, players: Player[]): El | null {
+  if (Array.isArray(e.rows)) return rowsView(e.rows, players);
+  if (Array.isArray(e.messages)) return played(messagesAnim(e.messages), players);
+  if (typeof e.table === 'string') return tableView(e.table, players);
+  if (Array.isArray(e.frames)) return played(framesAnim(e.frames), players);
+  return null;
+}
+
+/** What the model tried in each place of a check, case by case (the journal's trace). */
+function triesView(places: readonly Record<string, any>[], players: Player[], heading: string): El | null {
+  const withTrace = places.filter((p) => Array.isArray(p.trace) && p.trace.length);
+  if (!withTrace.length) return null;
+  return h('section', { class: 'req' }, h('h4', {}, heading),
+    ...withTrace.map((p) => played(triesAnim(p.trace), players, p.place + ' · ' + (p.holds ? 'se sostiene ✓' : 'no se sostiene ✗'))));
+}
+
+function detail(m: Moment, players: Player[]): El {
   const e = m.event as Record<string, any>;
   const box = h('div', { class: 'detail-body' },
     h('div', { class: 'kicker' }, KINDS[m.kind].icon + ' ' + KINDS[m.kind].label + ' · ronda ' + m.round + ' · ' + m.t + ' s'),
@@ -114,7 +150,7 @@ function detail(m: Moment): El {
   if (m.kind === 'investigate') {
     const reqs: any[] = e.requests ?? [];
     const res: any[] = e.results ?? [];
-    reqs.forEach((r, i) => box.append(h('section', { class: 'req' }, h('div', { class: 'req-head' }, h('code', {}, JSON.stringify(r).slice(0, 220))), res[i] !== undefined ? renderResult(res[i]) : null)));
+    reqs.forEach((r, i) => box.append(h('section', { class: 'req' }, h('div', { class: 'req-head' }, h('code', {}, JSON.stringify(r).slice(0, 220))), res[i] !== undefined ? renderResult(res[i], players) : null)));
     for (const n of e.notes ?? []) box.append(h('p', { class: 'note' }, h('b', {}, 'nota ' + n.id + ': '), String(n.text)));
     for (const w of e.warnings ?? []) box.append(h('p', { class: 'warn' }, '⚠ ' + w));
   } else if (m.kind === 'propose') {
@@ -127,6 +163,13 @@ function detail(m: Moment): El {
     for (const l of e.lessons ?? []) box.append(h('p', { class: 'note' }, '· ' + l));
   } else {
     for (const l of m.lines) box.append(h('p', {}, l));
+    if (m.kind === 'environment') { const v = environmentView(e, players); if (v) box.append(v); }
+    if (m.kind === 'check') { const v = triesView(e.laboratories ?? [], players, 'Lo que intentó el modelo, caso a caso'); if (v) box.append(v); }
+    if (m.kind === 'validate') {
+      const fam = triesView(e.family ?? [], players, 'En la familia');
+      if (fam) box.append(fam);
+      (e.blind_confirmation?.sets ?? []).forEach((set: any, k: number) => { const v = triesView(set.places ?? [], players, 'Confirmación ciega ' + (k + 1) + (set.ok ? ' ✓' : ' ✗')); if (v) box.append(v); });
+    }
     box.append(h('details', {}, h('summary', {}, 'Datos del evento'), preview(e, 6000)));
   }
   return box;
@@ -160,7 +203,7 @@ function header(syn: Synthesis): El {
       tile('Reglas recuperadas', syn.operator.score !== null ? Math.round(syn.operator.score * 100) + '%' : '—', syn.operator.form ? 'forma: ' + syn.operator.form : 'solo operador')));
 }
 
-function synthesisSection(syn: Synthesis, open: (m: Moment) => void): El {
+function synthesisSection(syn: Synthesis, open: (m: Moment) => void, present: (ms: readonly Moment[]) => void): El {
   const state = { threshold: 0.6, pathOnly: false };
   const list = h('ol', { class: 'story' });
   const count = h('span', { class: 'muted' });
@@ -174,8 +217,9 @@ function synthesisSection(syn: Synthesis, open: (m: Moment) => void): El {
         ...m.lines.slice(0, 3).map((l) => h('div', { class: 'card-line' }, l)));
       /* What the world showed, at a glance (rows of symbols as a picture). */
       const rows = rowsOf(m.event as Record<string, any>);
-      const thumb = rows ? spacetime(rows.slice(0, 26), 4) : null;
+      const thumb = rows && filled && rows.some((r) => r.includes(filled!)) ? spacetime(rows.slice(0, 26), 4) : null;
       if (thumb) { thumb.setAttribute('class', 'spacetime thumb'); li.append(thumb); }
+      li.dataset.moment = m.id;
       li.addEventListener('click', () => open(m));
       li.addEventListener('keydown', (ev) => { if ((ev as KeyboardEvent).key === 'Enter') open(m); });
       return li;
@@ -187,9 +231,11 @@ function synthesisSection(syn: Synthesis, open: (m: Moment) => void): El {
   const path = h('input', { type: 'checkbox' }) as HTMLInputElement;
   path.addEventListener('change', () => { state.pathOnly = path.checked; draw(); });
   draw();
+  const show = h('button', { class: 'present', type: 'button' }, '▶ Presentar');
+  show.addEventListener('click', () => present(keyMoments(syn, state)));
   return h('section', { class: 'panel' },
-    h('div', { class: 'panel-head' }, h('h2', {}, 'Síntesis'), count),
-    h('p', { class: 'hint' }, 'Los momentos más relevantes, en el orden en que ocurrieron. La relevancia sube cuando lo que un paso produjo o miró fue citado después como evidencia por una creencia, y cuando una comprobación cambió el veredicto. El camino: lo que llevó al modelo final.'),
+    h('div', { class: 'panel-head' }, h('h2', {}, 'Síntesis'), h('div', { class: 'head-right' }, count, show)),
+    h('p', { class: 'hint' }, 'Los momentos más relevantes, en el orden en que ocurrieron. La relevancia sube cuando lo que un paso produjo o miró fue citado después como evidencia por una creencia, y cuando una comprobación cambió el veredicto. El camino: lo que llevó al modelo final. Al abrir un momento se anima lo que mostró el entorno o lo que intentó el modelo; «Presentar» recorre los momentos seleccionados uno tras otro.'),
     h('div', { class: 'controls' },
       h('label', {}, 'Relevancia mínima ', slider, ' ', sliderValue),
       h('label', {}, path, ' solo el camino al modelo final')),
@@ -323,14 +369,69 @@ export function mount(root: El, journal: Record<string, unknown>): void {
   const syn = synthesize(journal);
   chooseFilled(journal);
   const drawer = h('aside', { class: 'drawer', 'aria-hidden': 'true' });
-  const close = () => { drawer.classList.remove('open'); drawer.setAttribute('aria-hidden', 'true'); };
-  const open = (m: Moment) => {
-    drawer.replaceChildren(h('button', { class: 'close', 'aria-label': 'Cerrar' }, '×'), detail(m));
+  /* Each opening gets a number: an older chain of animations stops when a newer one starts. */
+  let opening = 0;
+  const close = () => { opening++; stopAll(); drawer.classList.remove('open'); drawer.setAttribute('aria-hidden', 'true'); stopShow(); };
+  /** Opens a moment and plays its animations in turn; resolves when they end (at once without animations). */
+  const show = (m: Moment, autoplay: boolean): Promise<boolean> => {
+    const mine = ++opening;
+    stopAll();
+    const players: Player[] = [];
+    const body = detail(m, players);
+    drawer.replaceChildren(h('button', { class: 'close', 'aria-label': 'Cerrar' }, '×'), body);
     drawer.querySelector('.close')!.addEventListener('click', close);
     drawer.classList.add('open'); drawer.setAttribute('aria-hidden', 'false');
+    drawer.scrollTop = 0;
+    root.querySelectorAll('.card.current').forEach((c) => c.classList.remove('current'));
+    root.querySelector('.card[data-moment="' + CSS.escape(m.id) + '"]')?.classList.add('current');
+    if (!autoplay || !players.length) return Promise.resolve(players.length > 0);
+    return playInTurn(players, () => mine !== opening).then(() => true);
+  };
+  const open = (m: Moment) => { stopShow(); void show(m, !reducedMotion()); };
+
+  /* The presentation: the selected moments, one after another, each with its animations. */
+  let presenting = 0;
+  const bar = h('div', { class: 'show-bar', role: 'status', hidden: true });
+  const stopShow = () => { presenting++; bar.hidden = true; };
+  const present = async (ms: readonly Moment[]) => {
+    if (!ms.length) return;
+    const run = ++presenting;
+    let i = 0, paused = false;
+    const pos = h('span', {});
+    const pauseBtn = h('button', { type: 'button' }, '❚❚');
+    const prev = h('button', { type: 'button', 'aria-label': 'Anterior' }, '⏮');
+    const next = h('button', { type: 'button', 'aria-label': 'Siguiente' }, '⏭');
+    const end = h('button', { type: 'button', 'aria-label': 'Terminar' }, '✕');
+    bar.replaceChildren(h('b', {}, 'Presentación'), pos, prev, pauseBtn, next, end);
+    bar.hidden = false;
+    let jump: (() => void) | null = null;
+    let moved = false;
+    const go = (k: number) => { i = Math.max(0, Math.min(ms.length - 1, k)); moved = true; jump?.(); };
+    prev.addEventListener('click', () => go(i - 1));
+    next.addEventListener('click', () => go(i + 1));
+    end.addEventListener('click', () => { close(); });
+    pauseBtn.addEventListener('click', () => {
+      paused = !paused;
+      pauseBtn.textContent = paused ? '▶' : '❚❚';
+      if (paused) { opening++; stopAll(); } else go(i);
+    });
+    while (run === presenting && i < ms.length) {
+      moved = false;
+      const at = i;
+      pos.textContent = (at + 1) + ' / ' + ms.length + ' · R' + ms[at].round + ' · ' + KINDS[ms[at].kind].label;
+      document.querySelector('.card[data-moment="' + CSS.escape(ms[at].id) + '"]')?.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' });
+      /* Wait for the moment's animations, then a pause to read it; a jump or an unpause cuts the wait. */
+      const waited = new Promise<void>((resolve) => { jump = resolve; });
+      const played = show(ms[at], !paused && !reducedMotion()).then((animated) => new Promise<void>((r) => setTimeout(r, animated ? 1500 : 3500)));
+      await Promise.race([waited, paused ? new Promise<void>(() => {}) : played]);
+      if (run !== presenting) return;
+      if (paused) { await waited; if (run !== presenting) return; }
+      if (!moved) i++;
+    }
+    if (run === presenting) bar.hidden = true;
   };
   document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
-  root.replaceChildren(header(syn), synthesisSection(syn, open), progressSection(syn), beliefsSection(syn), timelineSection(syn, open), modelSection(syn), operatorSection(syn), drawer);
+  root.replaceChildren(header(syn), synthesisSection(syn, open, (ms) => void present(ms)), progressSection(syn), beliefsSection(syn), timelineSection(syn, open), modelSection(syn), operatorSection(syn), drawer, bar);
   document.title = syn.meta.world + ' · síntesis del run';
 }
 

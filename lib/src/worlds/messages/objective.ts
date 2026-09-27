@@ -34,6 +34,8 @@ export interface MessagesResult {
   /** Operator only: the answer as given (a number), or why there was none. */
   readonly answer: number | null;
   readonly failed?: string;
+  /** Operator only (the trace): the text answered. */
+  readonly text?: string;
 }
 
 export interface MessagesObjectiveHost<M, P extends Place> {
@@ -60,8 +62,8 @@ export function messagesObjective<M, P extends Place>(host: MessagesObjectiveHos
         for (const c of points) {
           try {
             const a = await host.answer(model, c.state);
-            rs.push({ place: place.id, point: c.point, mark: c.mark, agreed: sideOf(a) === c.mark, answer: typeof a === 'number' && Number.isFinite(a) ? a : null });
-          } catch (e) { rs.push({ place: place.id, point: c.point, mark: c.mark, agreed: false, answer: null, failed: String((e as Error)?.message ?? e) }); }
+            rs.push({ place: place.id, point: c.point, mark: c.mark, agreed: sideOf(a) === c.mark, answer: typeof a === 'number' && Number.isFinite(a) ? a : null, text: c.state.text });
+          } catch (e) { rs.push({ place: place.id, point: c.point, mark: c.mark, agreed: false, answer: null, failed: String((e as Error)?.message ?? e), text: c.state.text }); }
         }
         byPlace.push(rs);
       }
@@ -71,6 +73,7 @@ export function messagesObjective<M, P extends Place>(host: MessagesObjectiveHos
     view: (results) => ({ points: results.map((r) => ({ point: r.point, mark: r.mark, your_answer_was_on_its_side: r.agreed, ...(r.failed ? { error: r.failed } : r.answer === null ? { not_a_number: true } : {}) })) }),
     rerunView: (rerun) => ({ points: rerun.now.length, your_model_holds_on_them: ok(rerun.now) }),
     operatorView: (results) => ({ agreed: results.filter((r) => r.agreed).length, points: results.length, not_a_number: results.filter((r) => r.answer === null).length }),
+    trace: (results) => results.slice(0, 24).map((r) => ({ point: r.point, text: r.text, answer: r.answer, mark: r.mark, agreed: r.agreed, ...(r.failed ? { error: r.failed.slice(0, 120) } : {}) })),
     line: (results, _p, rerun) => results.filter((r) => r.agreed).length + '/' + results.length + ' agreed' +
       (rerun ? ' (run again: ' + rerun.now.filter((r) => r.agreed).length + '/' + rerun.now.length + ')' : '')
   };

@@ -268,8 +268,8 @@ function explore(): void {
     const launch = launchNear(setup.spec, rnd, 2 * spec.collide + rnd() * (spec.window - 2 * spec.collide), 1);
     if (!launchable(setup.spec, launch.pos)) continue;
     const id = 'ep' + (++launchCounter);
-    store(id, setup, 0, 'the environment', simulate(setup.spec, id, launch));
-    log('exploration_launch', { launch: id, setup: setup.id });
+    const l = store(id, setup, 0, 'the environment', simulate(setup.spec, id, launch));
+    log('exploration_launch', { launch: id, setup: setup.id, from: l.launch, table: l.table });
   }
 }
 

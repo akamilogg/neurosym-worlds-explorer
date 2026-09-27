@@ -95,6 +95,9 @@ export interface Objective<M, P extends Place, K, R extends CaseResult> {
   rerunView?(rerun: Rerun<R>, place: P): unknown;
   /** Operator only, per place: for the journal. */
   operatorView?(results: readonly R[], place: P): Record<string, unknown>;
+  /** Operator only, per place: what the model answered and what happened, case by case (a few), for the journal and
+      its viewer. Never shown. */
+  trace?(results: readonly R[], place: P): readonly unknown[];
   /** One line for the console. */
   line?(results: readonly R[], place: P, rerun?: Rerun<R>): string;
 }

@@ -22,7 +22,8 @@ const toy: Objective<number, ToyPlace, Hurdle[], Cleared> = {
   holds: (rs, { rerun }) => rs.every((r) => r.cleared) && (!rerun || rerun.now.every((r, i) => r.cleared || !rerun.before[i].cleared)),
   view: (rs) => ({ cases: rs.map((r) => ({ case: r.id, cleared: r.cleared })) }),
   rerunView: (r) => ({ worse: r.now.filter((x, i) => !x.cleared && r.before[i].cleared).length }),
-  operatorView: (rs) => ({ cleared: rs.filter((r) => r.cleared).length, of: rs.length })
+  operatorView: (rs) => ({ cleared: rs.filter((r) => r.cleared).length, of: rs.length }),
+  trace: (rs) => rs.map((r) => ({ case: r.id, cleared: r.cleared }))
 };
 
 function setup(options: { pairedRegression?: boolean; quick?: boolean } = {}) {
@@ -57,6 +58,8 @@ test('a check, a refused validation, and a model that held validated on that che
   assert.equal(r2.validation, null);
   const lab = (r2.view.laboratories as Record<string, unknown>[])[0];
   assert.equal(lab.your_model_holds_here, true);
+  assert.equal(lab.trace, undefined, 'the trace is the operator\'s');
+  assert.deepEqual((r2.journal.laboratories as { trace?: unknown[] }[])[0].trace![0], { case: 'lab1-check2-0', cleared: true }, 'the journal keeps the trace');
   assert.deepEqual(lab.your_previous_check_run_again, { worse: 0 }, 'the paired regression, as the objective words it');
 
   const before = runs;

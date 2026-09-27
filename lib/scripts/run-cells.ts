@@ -173,7 +173,7 @@ function explore(): void {
   const lab = places.get('lab1')!;
   for (let k = 0; k < cfg.explore; k++) {
     const e = store('ep' + (++counter), lab, 0, 'the environment', runEpisode(lab.spec, rnd));
-    log('exploration_episode', { episode: e.id });
+    log('exploration_episode', { episode: e.id, rows: e.rows });
   }
 }
 

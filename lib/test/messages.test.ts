@@ -55,6 +55,9 @@ test('the verdict: the mark and whether the answer was on its side; one miss is 
   assert.equal(o.holds(oneMiss, { place: lab }), true);
   assert.equal(o.holds(twoMiss, { place: lab }), false);
   assert.deepEqual((o.view(await run(() => 'x'), lab).points as { not_a_number?: boolean }[])[0].not_a_number, true);
+  /* The journal's trace (operator only) carries the text and the answer; the view carries neither. */
+  assert.deepEqual(o.trace!(oneMiss, lab)[0], { point: 'e@0', text: 't0', answer: 1, mark: 0, agreed: false });
+  assert.ok(!JSON.stringify(o.view(oneMiss, lab)).includes('t0'));
 });
 
 test('its interface is the common prompt\'s, with no word about what the texts are about', () => {

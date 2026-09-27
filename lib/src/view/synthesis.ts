@@ -207,9 +207,13 @@ export function synthesize(journal: Ev): Synthesis {
     if (e.type === 'exploration_game' || e.type === 'exploration_episode' || e.type === 'exploration_launch') {
       const ep = String(e.game ?? e.episode ?? e.launch ?? '');
       const c = citeScore([ep]);
+      /* The first thing the world showed is where the story starts. */
+      const first = !moments.some((m) => m.kind === 'environment');
+      const reading = Array.isArray(e.rows) ? e.rows.length + ' rows' : Array.isArray(e.messages) ? e.messages.length + ' messages'
+        : typeof e.table === 'string' ? e.table.split('\n').length - 1 + ' rows of positions' : Array.isArray(e.frames) ? e.frames.length + ' pictures' : '';
       moments.push({ id: id('environment', 0, t), kind: 'environment', round: 0, t, title: 'The environment ran ' + ep,
-        lines: e.winner !== undefined ? ['ended: ' + (e.winner ?? 'draw') + ' by ' + e.reason + ' after ' + e.plies + ' steps'] : [],
-        relevance: 0.1 + 0.6 * c.s, onPath: c.final, refs: [ep], event: e });
+        lines: [...(e.winner !== undefined ? ['ended: ' + (e.winner ?? 'draw') + ' by ' + e.reason + ' after ' + e.plies + ' steps'] : []), ...(reading ? ['it showed ' + reading] : [])],
+        relevance: Math.max(first ? 0.6 : 0, 0.1 + 0.6 * c.s), onPath: c.final, refs: [ep], event: e });
     } else if (e.type === 'investigation') {
       const reqs: Ev[] = e.requests ?? [];
       const results: Ev[] = e.results ?? [];

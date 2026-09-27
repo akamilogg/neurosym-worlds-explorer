@@ -49,6 +49,9 @@ export interface OrbitPointResult {
   readonly chi: number | null;
   /** When the model threw at this point. */
   readonly failed?: string;
+  /** Operator only (the trace): the model's answer and what happened, in the percept's units. */
+  readonly predicted?: Vec2;
+  readonly target?: Vec2;
 }
 
 export interface OrbitObjectiveHost<M, P extends Place> {
@@ -63,6 +66,8 @@ export interface OrbitObjectiveHost<M, P extends Place> {
   readonly precision: number;
   readonly regression?: boolean;
 }
+
+const round6 = (n: number) => Number(n.toPrecision(6));
 
 function median(values: readonly number[]): number {
   if (!values.length) return 0;
@@ -100,7 +105,7 @@ export function orbitObjective<M, P extends Place>(host: OrbitObjectiveHost<M, P
       const byRef = new Map(result.samples.map((r) => [r.ref, r]));
       const byPlace = cases.map(({ place, cases: k }) => k.samples.map((s): OrbitPointResult => {
         const r = byRef.get(s.ref);
-        return r ? { place: place.id, point: s.ref!, ...(s.band ? { band: s.band } : {}), verdict: r.score, chi: chi(r) }
+        return r ? { place: place.id, point: s.ref!, ...(s.band ? { band: s.band } : {}), verdict: r.score, chi: chi(r), predicted: r.predicted, target: r.target }
           : { place: place.id, point: s.ref!, ...(s.band ? { band: s.band } : {}), verdict: [0, 0], chi: null, failed: failedAt.get(s.ref) ?? 'no prediction' };
       }));
       return { byPlace, detail: cases.map(() => result), ...(host.operatorView ? { operator: host.operatorView(result) } : {}) };
@@ -116,6 +121,8 @@ export function orbitObjective<M, P extends Place>(host: OrbitObjectiveHost<M, P
       return { episodes: [...byEpisode.entries()].map(([episode, points]) => ({ episode, from: host.launchOf(episode), points })) };
     },
     rerunView: (rerun) => ({ points: rerun.now.length, your_model_holds_on_them: holdsOn(rerun.now) }),
+    trace: (results) => results.slice(0, 160).map((r) => ({ point: r.point, ...(r.band ? { band: r.band } : {}),
+      ...(r.failed ? { error: r.failed.slice(0, 120) } : { predicted: r.predicted?.map(round6), target: r.target?.map(round6) }) })),
     operatorView: (results) => ({ chi2_by_band: orbitBands(results), points: results.length, failed: results.filter((r) => r.failed).length }),
     line: (results, _place, rerun) => Object.entries(orbitBands(results)).map(([b, m]) => (b ? b + ' ' : '') + Number(m.toPrecision(4))).join(', ') +
       (rerun ? ' (run again: ' + (holdsOn(rerun.now) ? 'holds' : 'does not hold') + ')' : '')
