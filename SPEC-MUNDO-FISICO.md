@@ -41,6 +41,11 @@ equivoca la ley.
   gato y el ratón, que sí describe sus reglas, conserva el envoltorio de siempre (paridad con el harness).
 - **I2 · Sin investigación precocinada.** El entorno ofrece acciones primitivas (lanzar, simular, medir), nunca
   análisis hechos: no hay ajuste ni regresión que System 2 no escriba él mismo en código.
+  **27/09/2026:** también en la cuadrícula. Se retiran de lo que ve System 2 las sondas (`probes`: AUC, medias por
+  puntuación, test de azar), `surprises` (dónde falló más su modelo) y `record` con "tu mejor modelo" (el harness elegía
+  sobre cuál construir). Siguen en el journal como `operator_analysis`. System 2 recibe hechos (`table` da las filas: el
+  valor de su código en cada punto y la puntuación de su episodio) y los veredictos del protocolo; construye sobre su último
+  modelo o el que elija.
 - **I3 · Jev solo ve observaciones.** Ni la percepción ni el estado: solo los números y textos que calculan las
   observaciones de System 2, y las palabras de sus reglas.
 - **I4 · Métricas del operador aparte.** La ley verdadera, el suelo de ruido, el mejor ajuste newtoniano y la nota

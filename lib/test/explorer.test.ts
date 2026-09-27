@@ -123,19 +123,12 @@ test('ablation: the same observations read linearly, no Judge - the sign is fitt
   assert.ok(Math.abs(e2.value - (1 - early.value)) < 1e-4, 'the output reads the linear reading: ' + e2.value + ' vs ' + early.value);
 });
 
-test('what System 2 reads never carries the operator measurements, nor counts choices', () => {
-  const probe = { id: 'p', hypothesis: 'h', round: 1, status: 'supported' as const, errors: [], tested_by: 'observation' as const, positions: 'siblings' as const,
-    samples_win: 23, samples_loss: 51, mean_when_win: 0.6, mean_when_loss: 0.4, separation: 0.2, auc: 0.8,
-    tests: [{ by: 'observation' as const, positions: 'siblings' as const, sets: 12, samples_win: 23, samples_loss: 51, mean_when_win: 0.6, mean_when_loss: 0.4, auc: 0.8, margin: 0.2, status: 'supported' as const }] };
-  const payload = explorerPayload({ round: 2, perceptDoc: GRID_PERCEPT_DOC, hypotheses: [probe] }) as any;
-  const text = JSON.stringify(payload);
-  assert.deepEqual(payload.probes_reported[0].tests[0].positions, { compared: 12 });
-  /* Facts, no verdict: the explorer judges them against the direction of its own hypothesis. */
-  assert.ok(!/"status"|supported|inverted/.test(text), 'no verdict travels');
-  assert.equal(payload.probes_reported[0].tests[0].could_chance_explain_the_difference, 'no');
-  assert.equal(payload.probes_reported[0].tests[0].mean_in_won_games, 0.6);
-  assert.ok(!text.includes('23') && !text.includes('51'), 'the number of choices is never shown');
-  assert.ok(!/informed|ceiling|tightness|operator|still winning|critical|kept the win/i.test(text + EXPLORER_SYSTEM));
+test('what System 2 reads is facts and the protocol\'s verdicts, never an analysis made for it (I2) nor an operator measure', () => {
+  const payload = explorerPayload({ round: 2, perceptDoc: GRID_PERCEPT_DOC, notebook: { episodes: [] }, lastCheck: { accepted: false } }) as any;
+  const text = JSON.stringify(payload) + EXPLORER_SYSTEM;
+  for (const key of ['probes_reported', 'surprises', 'record', 'your_best_formula']) assert.ok(!(key in payload), key + ' is not handed to it');
+  assert.ok(!/\bprobes?\b|\bAUC\b|surprises|done best so far/i.test(text), 'no probe statistic, no surprise, no best model in the prompt');
+  assert.ok(!/informed|ceiling|tightness|operator|still winning|critical|kept the win/i.test(text));
 });
 
 test('an answer is either an investigation or a proposal; notes ride on both', () => {
@@ -214,8 +207,8 @@ test('play: its best formula, one of its rounds, or a draft built and checked li
 
 test('the thinking guidance is discipline and strategy only: nothing in it names a feature of any world or game', () => {
   const start = EXPLORER_SYSTEM.indexOf('HOW YOU THINK.');
-  const method = EXPLORER_SYSTEM.slice(start, EXPLORER_SYSTEM.indexOf('`surprises` lists', start)).toLowerCase();
-  assert.ok(start >= 0 && method.includes('table') && method.includes('play') && method.includes('methods'));
+  const method = EXPLORER_SYSTEM.slice(start, EXPLORER_SYSTEM.indexOf('`your_model` is the model', start)).toLowerCase();
+  assert.ok(start >= 0 && method.includes('table') && method.includes('replay') && method.includes('methods') && !method.includes('this environment\'s interface'));
   for (const word of ['row', 'column', 'col,', 'edge', 'corner', 'piece', 'capture', 'trap', 'reach', 'immobil', 'block', 'diagonal', 'side', 'goal']) {
     assert.ok(!new RegExp('\\b' + word).test(method), 'method guidance must not mention "' + word + '"');
   }
@@ -242,7 +235,7 @@ test('the baseline: a withheld instrument is never mentioned in the prompt, and 
   const { explorerSystem, EXPLORER_TOOLS } = await import('../src/learn/explorer.ts');
   assert.equal(explorerSystem(), EXPLORER_SYSTEM, 'all instruments: the prompt of the full experiment');
   const none = explorerSystem(new Set());
-  for (const t of EXPLORER_TOOLS.filter((x) => x !== 'probes')) {
+  for (const t of EXPLORER_TOOLS) {
     assert.ok(!none.includes('{"' + t + '"') && !none.includes('`' + t + '`'), 'no request and no lens example for ' + t);
   }
   assert.ok(!/INVESTIGATE before proposing|PROBES|"probes"|steps_left|replays_left/.test(none));

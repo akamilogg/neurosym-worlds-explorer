@@ -482,20 +482,6 @@ async function probeSet(): Promise<Labelled[]> {
   return [...pick(inPlay, third), ...pick(finals, Math.max(5, Math.floor(third / 2)))];
 }
 
-async function experiment(probes: Probe[], baseFormula: Formula): Promise<void> {
-  if (!probes.length) return;
-  const positions = await probeSet();
-  const results = await runProbes(probes, positions, { observer: multiObserver, judge, base: baseFormula, maximizer: 'A' }, { round: currentRound });
-  registry.record(results);
-  notebook.recordProbes(currentRound, results);
-  const count = (final: boolean, score: number) => positions.filter((p) => !!p.final === final && p.score === score).length;
-  const counts = (final: boolean) => ({ won: count(final, 1), draw: count(final, 0), lost: count(final, -1) });
-  log('probes', { round: currentRound, positions: { in_play: counts(false), final: counts(true) }, results });
-  for (const r of results) {
-    say('  probe ' + r.id + ': ' + r.status + ' - ' + r.hypothesis);
-    for (const t of r.tests) say('      ' + t.by + ' on ' + t.positions + ': ' + t.status + ' (auc ' + t.auc + ', ' + t.samples_win + '/' + t.samples_loss + ')');
-  }
-}
 
 /* --- Investigation: System 2 queries its own experience ------------------------------ */
 
@@ -644,9 +630,9 @@ async function propose(from: Formula | null, directive: string | null = null, mo
   while (refusals < 3 && steps <= cfg.steps + 3) {
     const stepsLeft = investigative ? Math.max(0, cfg.steps - steps) : 0;
     const payload = explorerPayload({
-      round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed), surprises: latestSurprises(), scoreboard: scoreboard(),
+      round, perceptDoc: GRID_PERCEPT_DOC, notebook: notebook.brief(unaddressed),
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-      hypotheses: registry.current(), ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
+      ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
       refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
       places: placesView(), validationsLeft, lastCheck
     });
@@ -735,8 +721,8 @@ async function propose(from: Formula | null, directive: string | null = null, mo
       ' rules, ' + proposal.probes.length + ' probes; beliefs ' + proposal.beliefs.map((b) => b.id + ':' + b.stance).join(' ') +
       (stances.unaddressed.length ? '; NO STANCE on ' + stances.unaddressed.join(', ') : ''));
     for (const l of proposal.lessons) say('  lesson: ' + l);
-    if (tools.has('probes')) await experiment(proposal.probes, proposal.formula);
-    else if (proposal.probes.length) log('probes_ignored', { round, reason: 'probes are not an instrument of this experiment', count: proposal.probes.length });
+    /* Probes are not an instrument: their statistics would be an analysis made for System 2 (SPEC-MUNDO-FISICO I2). */
+    if (proposal.probes.length) log('probes_ignored', { round, reason: 'probes are not an instrument (an analysis made for it)', count: proposal.probes.length });
     return proposal.formula;
   }
   return null;
@@ -845,7 +831,9 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   log('check', { attempt, round, level: cfg.levels[level], laboratories: labChecks.map((c) => ({ place: c.place.id, holds: c.holds, wins: c.score.wins, total: c.score.total, rerun: c.rerun })),
     asked_to_validate: asksToValidate.has(candidate), ...(validation ? { validation } : validationView ? { validation: validationView } : {}), accepted: ok, operator,
     jev: { calls: judge.stats.calls, errors: judge.stats.errors, trial_calls: trialCalls, calls_per_game: Math.round(trialCalls / Math.max(1, total) * 10) / 10 },
-    abstraction: abstractionOf(candidate, stored) });
+    abstraction: abstractionOf(candidate, stored),
+    /* OPERATOR ONLY: analyses of the learner's data it is never handed (SPEC-MUNDO-FISICO I2). */
+    operator_analysis: { surprises: latestSurprises(), record: scoreboard() } });
   if (asksToValidate.has(candidate) && !validation && !quickStop) say('  validation refused: ' + String(validationView?.refused ?? ''));
   if (ok) say('  ACCEPTED');
   if (cfg.ablation) await ablate(candidate, attempt, labChecks[0].score, labChecks[0].place);
@@ -872,7 +860,8 @@ for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
     stoppedBy = 'accepted';
     break;
   }
-  const next = await propose(best?.formula ?? candidate);
+  /* It builds on its latest model; which of its models to build on is its own decision (no "best model" handed to it). */
+  const next = await propose(candidate);
   if (!next) { if (!llmFatal) { say('attempt ' + attempt + ': System 2 gave no usable proposal'); stoppedBy = 'no_hypothesis'; } break; }
   candidate = next;
 }

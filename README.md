@@ -50,7 +50,7 @@ model produces and the parameters of each instrument) and the shape of what is p
 | `replay` | run an episode again in the environment from any point, with any of its models (earlier `play`) |
 | `simulate` | run a model forward alone, without the environment |
 | `measure` | run one of its observations over any points |
-| `table` / probes | how an observation or a question separates points by how the episode ended (score -1..1, concordance, a permutation test) |
+| `table` | the rows: the value of its code at every point of a kind, with the score its episode ended with - any statistic over them is System 2's own |
 | notebook | beliefs with a mandatory stance each round, notes pointing to positions, its own methods |
 
 The environment offers primitive actions only: no precooked analysis, no hints, and no environment-specific

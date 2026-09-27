@@ -30,8 +30,8 @@ import { INVESTIGATION_TOOLS as COMMON_INVESTIGATION, system2Prompt, type WorldI
 /** The grid world's interface to the common prompt (learn/prompt.ts): what its model produces, and the parameters of its
     instruments. Interface words only (SPEC-MUNDO-FISICO I5). */
 export const GRID_INTERFACE: WorldInterface = {
-  tools: ['view', 'inspect', 'act', 'replay', 'measure', 'table', 'probes'],
-  features: ['surprises', 'record', 'check'],
+  tools: ['view', 'inspect', 'act', 'replay', 'measure', 'table'],
+  features: ['check'],
   lines: [
     'YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.',
     'At the end of each episode you learn how it ended for you: a score from -1 to 1.',
@@ -42,13 +42,14 @@ export const GRID_INTERFACE: WorldInterface = {
     [['act'], '  {"act": "<point>", "from": [row, col], "to": [row, col]}   on a point of an episode in one of your laboratories, where the next step is yours: ask the environment to take what is at (row, col) of the picture to (row, col). The environment answers whether it accepted it and, if so, the picture that results (named "act<n>", usable in later requests) and whether the episode ended there, and how. Acting changes nothing in any episode.'],
     [['replay'], '  {"replay": "<point>", "model": <round> | { "observations": ..., "rules": ..., "weights": ..., "output": ... }}   from any point of an episode in one of your laboratories ("<episode>@0" is its start, "act<n>" where an act left you), your steps chosen with the model of that round or a draft in the same shape as a proposal (without "model": your_model). You get a new episode (its name, how it ended, how many steps). At most `replays_left` this round.'],
     [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", "<episode>@<step>/<k>", ...]}'],
-    [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   the points probes use - still in play, or final - each with the score its episode ended with']
+    [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "in_play" | "final"}   points of your episodes - still in play, or final - each with the score its episode ended with']
   ],
 };
 
 /** The instruments System 2 can be given. An experiment may withhold any of them (the baseline): the prompt then
     says nothing of what it lacks, and the host refuses any request for it. */
-export const EXPLORER_TOOLS = ['view', 'inspect', 'act', 'measure', 'replay', 'table', 'probes'] as const;
+/* No `probes`: an AUC and a test of chance are an analysis made for it (SPEC-MUNDO-FISICO I2); `table` gives the rows. */
+export const EXPLORER_TOOLS = ['view', 'inspect', 'act', 'measure', 'replay', 'table'] as const;
 export type ExplorerTool = typeof EXPLORER_TOOLS[number];
 type Tools = ReadonlySet<ExplorerTool>;
 /** The requests of an investigation answer; without any of them there is no investigating at all. */
@@ -66,14 +67,10 @@ export interface ExplorerBrief {
   readonly perceptDoc: string;
   /** The notebook as the explorer reads it (Notebook.brief()). */
   readonly notebook?: Record<string, unknown> | null;
-  /** Where its own search was most wrong in its latest games (exploration.surprises). */
-  readonly surprises?: unknown;
-  /** The formula the next one should build on (the best so far), and the round that wrote it. */
+  /** Its latest model, and the round that wrote it. (No "best model", no surprises, no probe statistics: those would be
+      an analysis made for it - SPEC-MUNDO-FISICO I2. They go to the journal only.) */
   readonly formula?: Formula | null;
   readonly formulaRound?: number | null;
-  /** How each of its formulas did, the best and the latest (facts of its own games). */
-  readonly scoreboard?: unknown;
-  readonly hypotheses?: readonly ProbeResult[];
   /** This round's requests and their results so far. */
   readonly investigation?: readonly unknown[];
   readonly stepsLeft?: number;
@@ -109,14 +106,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     round: brief.round,
     percept: brief.perceptDoc,
     ...(brief.notebook ? { notebook: brief.notebook } : {}),
-    ...(brief.surprises ? { surprises: brief.surprises } : {}),
-    ...(brief.scoreboard ? { record: brief.scoreboard } : {}),
     ...(brief.formula ? { your_model: { ...(brief.formulaRound ? { from_round: brief.formulaRound } : {}), ...ownFormula(brief.formula) } } : {}),
-    /* Facts only - no verdict: which direction confirms a hypothesis is for the explorer to say. */
-    ...(brief.hypotheses && brief.hypotheses.length ? { probes_reported: brief.hypotheses.map((h) => ({
-      id: h.id, hypothesis: h.hypothesis, round: h.round, ...(h.code ? { code: h.code } : {}),
-      tests: h.tests.map((t) => describeTest(t)),
-      ...(h.errors.length ? { errors: h.errors } : {}) })) } : {}),
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.replaysLeft !== undefined ? { replays_left: brief.replaysLeft } : {}),
