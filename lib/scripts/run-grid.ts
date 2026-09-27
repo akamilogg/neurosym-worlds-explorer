@@ -46,6 +46,7 @@
                          laboratories is refused and costs nothing)
      --confirm-boards N  boards per blind confirmation set, two sets (default 3)
      --family-variants N episodes from new starts per board in a validation or a confirmation, besides the usual one (default 3)
+     --no-regression     do not run each laboratory's previous check again with the new model (the paired regression)
      --quick             stop the first time System 2 asks to validate (it judges its model good), with no validation: to see
                          whether a change makes the exploration promising. Implies --no-ablation and --no-reflection.
 
@@ -84,6 +85,9 @@ import { describeGridTruth } from '../src/worlds/grid/describe.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
   type GridMove, type GridSense, type GridSpec, type GridState } from '../src/worlds/grid/index.ts';
 import { boardOf } from '../src/worlds/grid/family.ts';
+import { gridObjective } from '../src/worlds/grid/objective.ts';
+import { Protocol } from '../src/learn/protocol.ts';
+import { operatorSummary, tokensOf, type AblationRecord } from '../src/learn/operator.ts';
 import type { ObserverLike } from '../src/core/evaluate.ts';
 import type { Planner } from '../src/core/truth.ts';
 import type { Formula, MeasureDecl } from '../src/core/types.ts';
@@ -116,7 +120,9 @@ const cfg = {
   validations: Math.max(1, Number(arg('validations', '3'))),
   confirmBoards: Math.max(1, Number(arg('confirm-boards', '3'))),
   familyVariants: Math.max(0, Number(arg('family-variants', '3'))),
-  quick: flag('quick')
+  quick: flag('quick'),
+  /* The paired regression: each laboratory's previous check run again with the new model (default on). */
+  regression: !flag('no-regression')
 };
 if (cfg.quick) { cfg.ablation = false; cfg.reflection = false; }
 function parseTools(value: string): ExplorerTool[] {
@@ -224,7 +230,9 @@ function outputFailures(formula: Formula, states: readonly GridState[]): string[
   }
   return [];
 }
-const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1 });
+const llmUse = { calls: 0, tokens: 0 };
+const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1,
+  onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
 
 let level = 0;
 
@@ -377,6 +385,8 @@ interface Measured extends AttemptScore<Formula> {
   readonly scores: number[];
   /* Operator-only measurements (the truth watching): never shown to System 2. */
   readonly samples: ActionSample[];
+  /** The same, per episode. */
+  readonly samplesByEpisode: ActionSample[][];
   readonly held: (number | null)[];
   readonly critical: (number | null)[];
   /** Wins from the starting positions it had never played (the generalization test). */
@@ -393,6 +403,7 @@ async function trial(formula: Formula, attempt: number, place: Place, plans: rea
   const results: TrialGame[] = [];
   const stored: StoredGame[] = [];
   const samples: ActionSample[] = [];
+  const samplesByEpisode: ActionSample[][] = [];
   const held: (number | null)[] = [];
   const criticals: (number | null)[] = [];
   const scores: number[] = [];
@@ -403,6 +414,8 @@ async function trial(formula: Formula, attempt: number, place: Place, plans: rea
     const t0 = Date.now();
     const turns = new Map<number, TurnRecord<GridState>>();
     let stillWinning = 0, critical: number | null = null, knownThroughout = true;
+    const mine: ActionSample[] = [];
+    samplesByEpisode.push(mine);
     const ep = await playEpisode(pw, async (s, actor) => {
       if (actor === 'B') return opponent(s);
       const r = await searchBestMove<GridState, GridMove>(using, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
@@ -412,7 +425,9 @@ async function trial(formula: Formula, attempt: number, place: Place, plans: rea
       const winners = winningMoves(pw, s, 'A', (x) => place.planner.respond(x), 40000);
       if (!winners) { if (critical === null) knownThroughout = false; return chosen; }
       const keeps = winners.some((m) => pw.actionKey!(m) === pw.actionKey!(chosen));
-      samples.push({ winning: keeps, available: pw.actions(s).length, keeping: winners.length });
+      const sample = { winning: keeps, available: pw.actions(s).length, keeping: winners.length };
+      samples.push(sample);
+      mine.push(sample);
       if (critical === null && winners.length) { if (keeps) stillWinning++; else critical = s.ply; }
       return chosen;
     }, plan.start ? { start: plan.start } : {});
@@ -427,10 +442,11 @@ async function trial(formula: Formula, attempt: number, place: Place, plans: rea
   }
   const wins = results.filter((g) => g.outcome === 'win').length;
   const variantWins = results.slice(cfg.games).filter((g) => g.outcome === 'win').length;
-  return { formula, wins, total: results.length, perfect: wins === results.length, games: results, stored, plans: [...plans], scores, samples, held, critical: criticals, variantWins };
+  return { formula, wins, total: results.length, perfect: wins === results.length, games: results, stored, plans: [...plans], scores, samples, samplesByEpisode, held, critical: criticals, variantWins };
 }
 
 /* OPERATOR ONLY: the same observations read linearly, no Judge, the same episodes. Never shown to System 2. */
+const ablations: AblationRecord[] = [];
 async function ablate(formula: Formula, attempt: number, score: Measured, place: Place): Promise<void> {
   const fit = fitCodeOnly(multiObserver, formula, (await probeSet()).filter((p) => !p.final));
   const plain = new Evaluator<GridState>(place.observer, codeOnlyJudge(fit), { maximizer: 'A', runners: [nodeVmRunner({ timeoutMs: 2000 })] });
@@ -438,6 +454,7 @@ async function ablate(formula: Formula, attempt: number, score: Measured, place:
   const carrier = ablated.wins > score.wins ? 'the observations alone won MORE than the formula (' + ablated.wins + ' vs ' + score.wins + ')'
     : ablated.wins === score.wins ? (score.wins ? 'the observations carry it' : 'neither wins')
     : 'the rules of the Judge add ' + (score.wins - ablated.wins) + ' win(s)';
+  ablations.push({ round: roundOf.get(formula) ?? currentRound, model: score.wins, withoutJudge: ablated.wins, better: 'higher' });
   log('operator_ablation_code_only', { attempt, place: place.id, level: cfg.levels[level], fit, formula_wins: score.wins, code_only_wins: ablated.wins, total: score.total,
     formula_held: score.held, code_only_held: ablated.held, code_only_action_accuracy: actionAccuracy(ablated.samples), reading: carrier });
   say('  [operator] ablation: formula ' + score.wins + '/' + score.total + ', observations alone ' + ablated.wins + '/' + ablated.total + ' -> ' + carrier);
@@ -450,14 +467,29 @@ let currentRound = 0;
 const roundOf = new WeakMap<Formula, number>();
 const formulaOfRound = new Map<number, Formula>();
 let lastScore: Measured | null = null;
-/* The protocol's state: what System 2 asked of each model, the validations left, the latest verdicts, and each laboratory's
-   previous check (to run it again with the next model). */
+/* The researcher's protocol (learn/protocol.ts) on the grid's objective (worlds/grid/objective.ts): what System 2 asked
+   of each model, and the protocol that checks, validates and confirms it. */
 const asksToValidate = new WeakSet<Formula>();
-let validationsLeft = cfg.validations;
-let lastCheck: unknown = null;
-const previousCheck = new Map<string, { plans: Plan[]; scores: number[]; ids: string[] }>();
-const placesView = () => [...places.values()].filter((p) => p.role !== 'confirmation' && p.seen)
-  .map((p) => ({ place: p.id, role: p.role === 'laboratory' ? 'your laboratory: you can act and replay here' : 'a place where your model was validated' }));
+let confirmCounter = 0;
+const objective = gridObjective<Formula, Place, Plan[]>({
+  /* A check draws --variants new starts besides the usual one; a validation or a confirmation --family-variants. */
+  casesIn: (place, c) => plansFor(place, c.attempt, c.purpose === 'check' ? cfg.variants : cfg.familyVariants),
+  async play(formula, place, plans, c) {
+    const how = c.purpose === 'check' ? 'the check of round ' + c.round : c.purpose === 'validation' ? 'the validation of round ' + c.round : 'blind';
+    const score = await trial(formula, c.attempt, place, plans, { record: c.record, how, ...(c.purpose === 'rerun' ? { tag: '  [run again] ' } : {}) });
+    return { episodes: score.scores.map((sc, i) => ({ place: place.id, ...(score.stored[i] ? { episode: score.stored[i].id } : {}), score: sc,
+      held: score.held[i], critical: score.critical[i], samples: score.samplesByEpisode[i] })), detail: score };
+  }
+});
+const protocol = new Protocol(objective, {
+  places: () => [...places.values()],
+  blindPlaces: () => Array.from({ length: cfg.confirmBoards }, () => { const k = ++confirmCounter; return makePlace('blind' + k, 1000 + k, 'confirmation'); }),
+  fingerprint: (f) => formulaHash(f),
+  validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
+  cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: judgeUnread(), llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
+  say: (line) => say(line),
+  roleWords: { laboratory: 'your laboratory: you can act and replay here', validated: 'a place where your model was validated' }
+});
 let unaddressed: string[] = [];
 
 type Labelled = LabelledPosition<GridState> & { readonly ref: string };
@@ -637,7 +669,7 @@ async function propose(from: Formula | null, directive: string | null = null, mo
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
       ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
       refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
-      places: placesView(), validationsLeft, lastCheck
+      places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView
     });
     say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
     steps++;
@@ -747,36 +779,9 @@ await explore();
 const first = await propose(null);
 if (!first) { log('end', { stoppedBy: llmFatal ? 'llm_error' : 'no_first_proposal', ...(llmFatal ? { llm_error: llmFatal } : {}), notebook }); say('no usable first proposal'); process.exit(1); }
 
-/* --- The researcher's protocol (SPEC-MODELO-DEL-MUNDO §1.1): check in the laboratories every round; validate on boards not
-   seen when System 2 asks; a board where the model does not hold becomes a laboratory; boards nobody has seen decide. */
-
-type CheckOfPlace = { place: Place; score: Measured; holds: boolean; rerun: { went_up: number; went_down: number; changed: { episode: string; before: number; now: number }[] } | null };
-/** Facts only: per place, whether the model holds, each episode's score, and how its previous check's episodes fared again. */
-const describeChecks = (checks: readonly CheckOfPlace[]) => checks.map((c) => ({ place: c.place.id, your_model_holds_here: c.holds,
-  episodes: c.score.stored.length ? c.score.stored.map((g, i) => ({ episode: g.id, score: c.score.scores[i] })) : c.score.scores.map((score) => ({ score })),
-  ...(c.rerun ? { your_previous_check_run_again: c.rerun } : {}) }));
-
-/** A place's check: episodes from its usual start and starts never played, and - in a laboratory - the episodes of its
-    previous check run again with this model (same starts, same seeds). */
-async function checkIn(place: Place, formula: Formula, attempt: number, count: number, record: boolean, how: string): Promise<CheckOfPlace> {
-  const score = await trial(formula, attempt, place, plansFor(place, attempt, count), { record, how });
-  let rerun: CheckOfPlace['rerun'] = null;
-  const prev = previousCheck.get(place.id);
-  if (prev && place.role === 'laboratory') {
-    const again = await trial(formula, attempt, place, prev.plans, { record: false, tag: '  [run again] ' });
-    const changed = again.scores.map((now, i) => ({ episode: prev.ids[i], before: prev.scores[i], now })).filter((x) => x.now !== x.before);
-    rerun = { went_up: changed.filter((x) => x.now > x.before).length, went_down: changed.filter((x) => x.now < x.before).length, changed };
-  }
-  if (place.role === 'laboratory') previousCheck.set(place.id, { plans: score.plans, scores: score.scores, ids: score.stored.map((g) => g.id) });
-  return { place, score, holds: score.perfect && (rerun?.went_down ?? 0) === 0, rerun };
-}
-
-const allHold = (checks: readonly CheckOfPlace[]) => checks.every((c) => c.holds);
-let confirmCounter = 0;
-/** The model that held in every laboratory at the latest check. Asking to validate that same model (the same fingerprint,
-    the same laboratories) validates it on the check it held in: a new check could fail by chance, and then the model that
-    held would never be validated. */
-let heldAt: { hash: string; round: number; labs: string; checks: CheckOfPlace[] } | null = null;
+/* --- The researcher's protocol (SPEC-MODELO-DEL-MUNDO §1.1, learn/protocol.ts): check in the laboratories every round;
+   validate on boards not seen when System 2 asks; a board where the model does not hold becomes a laboratory; boards
+   nobody has seen decide. */
 
 let candidate: Formula = first;
 let accepted: { formula: Formula; round: number | null } | null = null;
@@ -787,89 +792,39 @@ let escalations = 0;
 for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   const round = roundOf.get(candidate) ?? currentRound;
   say('attempt ' + attempt + ' (round ' + round + ') against opponent level ' + cfg.levels[level] + (cfg.epsilon ? ' (errs ' + cfg.epsilon + ')' : '') + '; laboratories: ' + labs().map((l) => l.id).join(', '));
-  /* 1. The check in the laboratories. */
-  const callsBefore = judge.stats.calls, unreadBefore = judgeUnread();
-  const labIds = labs().map((l) => l.id).join(',');
-  const reused = asksToValidate.has(candidate) && heldAt && heldAt.hash === formulaHash(candidate) && heldAt.labs === labIds ? heldAt : null;
-  const labChecks: CheckOfPlace[] = reused ? reused.checks : [];
-  if (reused) say('  this model held in every laboratory in round ' + reused.round + ': validated on that check, without checking again');
-  else for (const lab of labs()) labChecks.push(await checkIn(lab, candidate, attempt, cfg.variants, true, 'the check of round ' + round));
-  if (!reused) heldAt = allHold(labChecks) ? { hash: formulaHash(candidate), round, labs: labIds, checks: labChecks } : null;
-  const trialCalls = judge.stats.calls - callsBefore, trialUnread = judgeUnread() - unreadBefore;
-  const stored = reused ? [] : labChecks.flatMap((c) => c.score.stored);
-  const wins = labChecks.reduce((n, c) => n + c.score.wins, 0), total = labChecks.reduce((n, c) => n + c.score.total, 0);
+  const outcome = await protocol.round(candidate, { round, attempt, validate: asksToValidate.has(candidate) });
+  const measured = outcome.laboratories.map((o) => o.detail as Measured);
+  const reused = outcome.reused !== null;
+  const stored = reused ? [] : measured.flatMap((m) => m.stored);
+  const wins = measured.reduce((n, m) => n + m.wins, 0), total = measured.reduce((n, m) => n + m.total, 0);
   if (!reused) {
-    lastScore = { ...labChecks[0].score, stored };
+    lastScore = { ...measured[0], stored };
     notebook.recordGames(round, stored.map((g) => g.result));
+    if (!best || wins / Math.max(1, total) > best.wins / Math.max(1, best.total)) best = { formula: candidate, wins, total };
   }
-  if (!reused && (!best || wins / Math.max(1, total) > best.wins / Math.max(1, best.total))) best = { formula: candidate, wins, total };
-  const operator = labChecks.map((c) => ({ place: c.place.id, action_accuracy: actionAccuracy(c.score.samples), turns_still_winning: c.score.held, critical: c.score.critical }));
-  if (!reused) say('  check in the laboratories: ' + labChecks.map((c) => c.place.id + ' ' + c.score.wins + '/' + c.score.total + (c.rerun ? ' (run again: +' + c.rerun.went_up + ' -' + c.rerun.went_down + ')' : '') + (c.holds ? ' holds' : '')).join(', '));
-  /* 2. The validation, when System 2 asks for it and its model holds in its laboratories. */
-  let validation: Record<string, unknown> | null = null;
-  let validationView: Record<string, unknown> | null = null;
-  let ok = false;
-  const quickStop = cfg.quick && asksToValidate.has(candidate);
-  if (asksToValidate.has(candidate) && !quickStop) {
-    if (!allHold(labChecks)) validationView = { refused: 'your model does not yet hold in every one of your laboratories: nothing was spent' };
-    else if (validationsLeft <= 0) validationView = { refused: 'you have no validations left' };
-    else {
-      validationsLeft--;
-      heldAt = null;
-      /* Every board of the family that is not a laboratory: the ones seen before are checked again (a regression). */
-      const family = [...places.values()].filter((p) => p.role === 'family');
-      const famChecks: CheckOfPlace[] = [];
-      for (const f of family) { f.seen = true; famChecks.push(await checkIn(f, candidate, attempt, cfg.familyVariants, true, 'the validation of round ' + round)); }
-      const becameLabs = famChecks.filter((c) => !c.holds).map((c) => { c.place.role = 'laboratory'; return c.place.id; });
-      validationView = { validated_in: describeChecks(famChecks), ...(becameLabs.length ? { now_your_laboratories: becameLabs } : {}) };
-      validation = { family: famChecks.map((c) => ({ place: c.place.id, holds: c.holds, wins: c.score.wins, total: c.score.total })), became_laboratories: becameLabs };
-      say('  validation (' + (cfg.validations - validationsLeft) + '/' + cfg.validations + '): ' + famChecks.map((c) => c.place.id + ' ' + c.score.wins + '/' + c.score.total).join(', ') + (becameLabs.length ? '; now laboratories: ' + becameLabs.join(', ') : ''));
-      /* 3. It holds everywhere: boards nobody has seen decide. */
-      if (!becameLabs.length) {
-        const sets: { ok: boolean; places: { place: string; wins: number; total: number }[] }[] = [];
-        for (let k = 0; k < 2; k++) {
-          const checks: CheckOfPlace[] = [];
-          for (let j = 0; j < cfg.confirmBoards; j++) {
-            const blind = makePlace('blind' + (++confirmCounter), 1000 + confirmCounter, 'confirmation');
-            checks.push(await checkIn(blind, candidate, attempt, cfg.familyVariants, false, 'blind'));
-          }
-          sets.push({ ok: allHold(checks), places: checks.map((c) => ({ place: c.place.id, wins: c.score.wins, total: c.score.total })) });
-        }
-        ok = sets.every((x) => x.ok);
-        validation.blind_confirmation = { confirmed: ok, sets };
-        say('  holds on every board of the family; blind confirmation: ' + sets.map((x) => '[' + x.places.map((p) => p.wins + '/' + p.total).join(' ') + ']').join(' ') + (ok ? ' CONFIRMED' : ' NOT confirmed'));
-      }
-    }
-  }
-  lastCheck = { round, ...(reused ? { not_checked_again: 'this model already held in every one of your laboratories in round ' + reused.round + ': these are the verdicts of that check' } : {}),
-    laboratories: describeChecks(labChecks), ...(validationView ? { validation: validationView } : {}), accepted: ok, validations_left: validationsLeft };
-  log('check', { attempt, round, level: cfg.levels[level], ...(reused ? { reused_check_of_round: reused.round } : {}), laboratories: labChecks.map((c) => ({ place: c.place.id, holds: c.holds, wins: c.score.wins, total: c.score.total, rerun: c.rerun })),
-    asked_to_validate: asksToValidate.has(candidate), ...(validation ? { validation } : validationView ? { validation: validationView } : {}), accepted: ok, operator,
-    jev: { calls: judge.stats.calls, errors: judge.stats.errors, trial_calls: trialCalls, calls_per_game: Math.round(trialCalls / Math.max(1, total) * 10) / 10,
+  log('check', { ...outcome.journal, level: cfg.levels[level],
+    jev: { calls: judge.stats.calls, errors: judge.stats.errors, calls_per_game: Math.round((outcome.cost.jev_calls ?? 0) / Math.max(1, reused ? 1 : total) * 10) / 10,
       /* Evaluations where the model's output read none of its rules: the Judge was not asked (its rules are decorative). */
-      ...(Object.keys(candidate.rules).length && candidate.output ? { not_asked_output_ignores_rules: trialUnread } : {}) },
+      ...(Object.keys(candidate.rules).length && candidate.output ? { not_asked_output_ignores_rules: outcome.cost.jev_not_asked ?? 0 } : {}) },
     abstraction: abstractionOf(candidate, stored),
     /* OPERATOR ONLY: analyses of the learner's data it is never handed (SPEC-MUNDO-FISICO I2). */
     operator_analysis: { surprises: latestSurprises(), record: scoreboard() } });
-  if (asksToValidate.has(candidate) && !validation && !quickStop) say('  validation refused: ' + String(validationView?.refused ?? ''));
-  if (ok) say('  ACCEPTED');
-  if (cfg.ablation && !reused) await ablate(candidate, attempt, labChecks[0].score, labChecks[0].place);
-  if (quickStop) {
+  if (outcome.accepted) say('  ACCEPTED');
+  if (cfg.ablation && !reused) await ablate(candidate, attempt, measured[0], outcome.laboratories[0].place);
+  if (outcome.quickStop) {
     satisfied = candidate; stoppedBy = 'quick_stop';
-    log('quick_stop', { round, held_in_laboratories: Object.fromEntries(labChecks.map((c) => [c.place.id, c.holds])), model: ownFormula(candidate) });
-    say('  --quick: System 2 judges its model good in round ' + round + ' (in its laboratories: ' + (allHold(labChecks) ? 'holds' : 'does NOT hold') + '); stopping without validation');
+    log('quick_stop', { round, held_in_laboratories: Object.fromEntries(outcome.laboratories.map((o) => [o.place.id, o.holds])), model: ownFormula(candidate) });
+    say('  --quick: System 2 judges its model good in round ' + round + ' (in its laboratories: ' + (outcome.held ? 'holds' : 'does NOT hold') + '); stopping without validation');
     break;
   }
-  if (ok) {
+  if (outcome.accepted) {
     /* Accepted against this opponent: the next one plans further ahead, if the curriculum has one. */
     if (level < cfg.levels.length - 1) {
       level++;
       escalations++;
       for (const p of places.values()) p.planner = plannerFor(p.world, p.spec);
       evaluator.reset();
-      previousCheck.clear();
-      heldAt = null;
-      validationsLeft = cfg.validations;
+      protocol.restart();
       log('escalate', { level: cfg.levels[level] });
       say('accepted: the opponent now plans ' + cfg.levels[level] + ' turns ahead');
       continue;
@@ -899,6 +854,8 @@ log('end', {
   places: [...places.values()].map((p) => ({ id: p.id, index: p.index, role: p.role, seen: p.seen, size: p.spec.width + 'x' + p.spec.height, pieces: p.spec.A.count + '/' + p.spec.B.count })),
   best: result.best ? { formula: result.best.formula, round: roundOf.get(result.best.formula) ?? null, wins: result.best.wins, total: result.best.total } : null,
   hypotheses: registry.all(), summary: registry.summary(), notebook,
+  /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
+  operator_summary: operatorSummary(protocol.summary(), ablations),
   jev: { calls: judge.stats.calls, errors: judge.stats.errors }
 });
 if (satisfied) say('the model System 2 judged good (round ' + (roundOf.get(satisfied) ?? '?') + '):\n' + JSON.stringify(ownFormula(satisfied), null, 2));

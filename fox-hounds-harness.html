@@ -3753,14 +3753,26 @@ var Neurosym = (() => {
     ].join("\n");
   }
 
+  // src/learn/objective.ts
+  var objectiveLines = (o) => [...o.answer.form, ...o.verdictForm];
+
+  // src/worlds/grid/objective.ts
+  var GRID_ANSWER = {
+    form: ["YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines."],
+    use: "act"
+  };
+  var GRID_VERDICT = [
+    "At the end of each episode you learn how it ended for you: a score from -1 to 1.",
+    "In a check, the VERDICT on an episode is the score it ended with. The episodes of your previous check in a laboratory are also run again there with this model, from the same starts and with everything you do not control the same: you learn how many changed score, each way. Your model holds in a place when every episode of its check there scored 1 and none of those run again scored less than before."
+  ];
+
   // src/learn/explorer.ts
   var GRID_INTERFACE = {
     tools: ["view", "inspect", "act", "replay", "measure", "table"],
     features: ["check"],
     lines: [
-      "YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.",
-      "At the end of each episode you learn how it ended for you: a score from -1 to 1.",
-      "In a check, the VERDICT on an episode is the score it ended with. The episodes of your previous check in a laboratory are also run again there with this model, from the same starts and with everything you do not control the same: you learn how many changed score, each way. Your model holds in a place when every episode of its check there scored 1 and none of those run again scored less than before.",
+      /* The objective's: the form of the answer and of a verdict (worlds/grid/objective.ts). */
+      ...objectiveLines({ answer: GRID_ANSWER, verdictForm: GRID_VERDICT }),
       [INVESTIGATION_TOOLS, "Requests:"],
       [["view"], '  {"view": "<episode>", "from": <step>, "to": <step>}   the pictures of a stretch of one of your episodes (at most 30 per request)'],
       [["inspect"], '  {"inspect": "<episode>@<step>"}   on a step of yours: the point your search chose (named "<episode>@<step>/<k>", with its picture), the value your model gave it looking ahead and directly, what each rule answered and what each observation measured there, and the finished episodes your search ran into after it within its horizon, and how they ended'],

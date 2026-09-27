@@ -4,6 +4,8 @@ import type { Formula, MeasureDecl, QuestionType, Rule } from '../core/types.ts'
 import { describeTest, type Probe, type ProbeResult } from './experiments.ts';
 import { STANCES, type BeliefStance, type NoteOp, type Stance } from './notebook.ts';
 import { INVESTIGATION_TOOLS as COMMON_INVESTIGATION, system2Prompt, type WorldInterface } from './prompt.ts';
+import { objectiveLines } from './objective.ts';
+import { GRID_ANSWER, GRID_VERDICT } from '../worlds/grid/objective.ts';
 
 /* ============================================================================
  * The explorer: System 2 in a world it has never seen.
@@ -33,9 +35,8 @@ export const GRID_INTERFACE: WorldInterface = {
   tools: ['view', 'inspect', 'act', 'replay', 'measure', 'table'],
   features: ['check'],
   lines: [
-    'YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.',
-    'At the end of each episode you learn how it ended for you: a score from -1 to 1.',
-    'In a check, the VERDICT on an episode is the score it ended with. The episodes of your previous check in a laboratory are also run again there with this model, from the same starts and with everything you do not control the same: you learn how many changed score, each way. Your model holds in a place when every episode of its check there scored 1 and none of those run again scored less than before.',
+    /* The objective's: the form of the answer and of a verdict (worlds/grid/objective.ts). */
+    ...objectiveLines({ answer: GRID_ANSWER, verdictForm: GRID_VERDICT }),
     [COMMON_INVESTIGATION, 'Requests:'],
     [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   the pictures of a stretch of one of your episodes (at most 30 per request)'],
     [['inspect'], '  {"inspect": "<episode>@<step>"}   on a step of yours: the point your search chose (named "<episode>@<step>/<k>", with its picture), the value your model gave it looking ahead and directly, what each rule answered and what each observation measured there, and the finished episodes your search ran into after it within its horizon, and how they ended'],

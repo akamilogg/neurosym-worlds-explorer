@@ -63,6 +63,8 @@
                          laboratories is refused and costs nothing)
      --confirm-setups N  setups per blind confirmation set, two sets (default 3)
      --vary-strength     stage 2: each body gets a strength of its own in every setup (the law must infer it)
+     --regression        the paired regression (SPEC-OBJETIVO §3.2): each laboratory's previous check is answered again by the
+                         new law, which must still hold there (default off)
 
    System 2 learns ONLY from the tables it perceives, the bodies it launches, what its code measures and how its laws
    predicted. The journal also keeps OPERATOR-ONLY measurements (the hidden law, the noise floor, the error against the
@@ -86,10 +88,13 @@ import { delegatedLaw, fitLawCodeOnly } from '../src/learn/law-ablation.ts';
 import { Notebook } from '../src/learn/notebook.ts';
 import { mulberry32 } from '../src/worlds/grid/gen.ts';
 import { ORBIT_PERCEPT_DOC, fromPercept, generateOrbit, launchNear, launchable, readTable, simulate, tableSense, toPercept, type Trajectory } from '../src/worlds/orbit/index.ts';
-import { answerAsDeparture, departureAsNext, observedNoiseVariance, orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
+import { answerable, answerAsDeparture, departureAsNext, observedNoiseVariance, orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
 import { accelSamples, fitNewton, lawSummary, relError, sampleLaunches } from '../src/worlds/orbit/operator.ts';
 import { describeOrbitTruth } from '../src/worlds/orbit/describe.ts';
 import { environmentOf, setupWithSources } from '../src/worlds/orbit/family.ts';
+import { orbitObjective, type OrbitCases } from '../src/worlds/orbit/objective.ts';
+import { Protocol } from '../src/learn/protocol.ts';
+import { operatorSummary, tokensOf, type AblationRecord } from '../src/learn/operator.ts';
 import type { OrbitSpec } from '../src/worlds/orbit/index.ts';
 import type { MeasureDecl } from '../src/core/types.ts';
 import { ROOT } from '../test/support.ts';
@@ -132,11 +137,13 @@ const cfg = {
   family: Math.max(1, Number(arg('family', '4'))),
   validations: Math.max(1, Number(arg('validations', '3'))),
   confirmSetups: Math.max(1, Number(arg('confirm-setups', '3'))),
-  varyStrength: flag('vary-strength')
+  varyStrength: flag('vary-strength'),
+  /* The paired regression: each laboratory's previous check answered again by the new law, which must still hold there. */
+  regression: flag('regression')
 };
 const tools: ReadonlySet<LawTool> = new Set(cfg.tools);
 const investigative = cfg.tools.length > 0;
-const SYSTEM_PROMPT = lawExplorerSystem(tools);
+const SYSTEM_PROMPT = lawExplorerSystem(tools, { regression: cfg.regression });
 const env = process.env;
 if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
 if (!cfg.flat && !env.JEV_KEY) { console.error('JEV_KEY is required (or run the --flat control).'); process.exit(2); }
@@ -179,7 +186,9 @@ const judge = new JevJudge(cfg.flat
   : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
 const evaluator = new Evaluator<OrbitPoint>(observer, judge, { maximizer: 'nature', runners: [runner] });
 const predictor = new Predictor<OrbitPoint>(evaluator, perceivePoint, { runners: [runner], answer: (a, point) => answerAsDeparture(a, point) });
-const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1 });
+const llmUse = { calls: 0, tokens: 0 };
+const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1,
+  onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
 
 /* --- The journal ------------------------------------------------------------------ */
 
@@ -302,88 +311,62 @@ function notebookBrief(): Record<string, unknown> {
 
 /* --- Checks: in the laboratories every round; in the family when System 2 validates -------------------- */
 
-let lastTest: unknown = null;
 /** Operator: the main evaluator's cumulative questions to Jev, live against answered from the cache (same observation vector). */
 const cacheStats = () => ({ live: evaluator.stats.judgeCalls, hits: evaluator.stats.vectorHits, not_asked_output_ignores_rules: evaluator.stats.judgeUnread,
   hit_rate: round2(evaluator.stats.vectorHits / Math.max(1, evaluator.stats.judgeCalls + evaluator.stats.vectorHits)) });
 /** Every point checked so far, by round: the rows `table` can show "on tests". */
 const testPoints = new Map<number, PredictionSample<OrbitPoint>[]>();
-let validationsLeft = cfg.validations;
 
-interface CheckSet { readonly samples: PredictionSample<OrbitPoint>[]; readonly noise: number }
-
-/** Fresh launches in some setups: --test-view in view and --test-beyond beyond, per setup. With `name`, they are stored as the
-    learner's launches ("<name>-<k>", in their setup) to study afterwards; without, they stay unseen (blind confirmation). */
-function launchesIn(list: readonly Setup[], attempt: number, round: number, name?: (setup: Setup) => string): CheckSet {
+/** Fresh launches in one setup (--test-view in view and --test-beyond beyond), the j-th of those drawn together. With
+    `name`, they are stored as the learner's launches ("<name>-<k>", in their setup) to study afterwards; without, they stay
+    unseen (blind confirmation). */
+function launchesIn(setup: Setup, j: number, attempt: number, round: number, name?: string): OrbitCases {
   const samples: PredictionSample<OrbitPoint>[] = [];
-  const all: { spec: OrbitSpec; tr: Trajectory }[] = [];
-  list.forEach((setup, j) => {
-    trialLaunches(setup.spec, { sampling: cfg.sampling, attempt: attempt * 16 + j, inView: cfg.testView, beyond: cfg.testBeyond }).forEach((tr, k) => {
-      const id = name ? name(setup) + '-' + (k + 1) : setup.id + '/' + k;
-      if (name) store(id, setup, round, 'the check of round ' + round, tr, Math.hypot(tr.launch.pos[0], tr.launch.pos[1]) > spec.window);
-      all.push({ spec: setup.spec, tr });
-      for (const s of predictionSamples(setup.spec, [tr], { resolution: cfg.resolution, every: cfg.every })) samples.push({ ...s, ref: id + '@' + s.state.row, group: setup.id });
-    });
+  const noise: { variance: number; weight: number }[] = [];
+  trialLaunches(setup.spec, { sampling: cfg.sampling, attempt: attempt * 16 + j, inView: cfg.testView, beyond: cfg.testBeyond }).forEach((tr, k) => {
+    const id = name ? name + '-' + (k + 1) : setup.id + '/' + k;
+    if (name) store(id, setup, round, 'the check of round ' + round, tr, Math.hypot(tr.launch.pos[0], tr.launch.pos[1]) > spec.window);
+    /* The noise of what is observed: the sources do not move, so the second differences of their columns are pure noise. */
+    noise.push({ variance: observedNoiseVariance(setup.spec, [tr], { resolution: cfg.resolution }), weight: setup.spec.sources.length });
+    for (const s of predictionSamples(setup.spec, [tr], { resolution: cfg.resolution, every: cfg.every })) samples.push({ ...s, ref: id + '@' + s.state.row, group: setup.id });
   });
   if (name) testPoints.set(round, [...(testPoints.get(round) ?? []), ...samples]);
-  return { samples, noise: pooledNoise(all) };
+  return { samples, noise };
 }
 
-function pooledNoise(all: readonly { spec: OrbitSpec; tr: Trajectory }[]): number {
-  let sum = 0, n = 0;
-  for (const { spec: s, tr } of all) { const v = observedNoiseVariance(s, [tr], { resolution: cfg.resolution }); sum += v * s.sources.length; n += s.sources.length; }
-  return n ? sum / n : 0;
-}
-
-async function evaluate(law: Law, set: CheckSet): Promise<{ result: TestResult; calls: number; set: CheckSet }> {
-  const before = judge.stats.calls;
-  const result = await testPredictions(set.samples, async (x) => (await predictor.predict(law, x)).vector, { noiseVariance: set.noise, relativePrecision: cfg.precision });
-  return { result, calls: judge.stats.calls - before, set };
-}
-
-/** The criterion, a researcher's, per setup: in each band, the law's residuals are compatible with the noise of what is
-    observed and a declared precision - the median over points of |observed d - predicted d|² / (2 (σ² + (ε|d|)²)) is at
-    most --accept, σ estimated from the motionless sources. Nothing hidden enters it; every point weighs the same. */
-function heldIn(result: TestResult, setupIds: readonly string[], set: CheckSet): Record<string, boolean> {
-  /* A point where the law threw counts against its setup. */
-  const groupOf = new Map(set.samples.map((x) => [x.ref, x.group]));
-  const failed = new Set(result.failed.map((f) => groupOf.get(f.ref)));
-  return Object.fromEntries(setupIds.map((id) => {
-    const bands = result.chi2?.byGroup[id];
-    return [id, !!bands && !failed.has(id) && Object.values(bands).every((m) => m <= cfg.accept)];
-  }));
-}
-const allHeld = (held: Record<string, boolean>) => Object.values(held).every(Boolean);
-
-/** A blind confirmation: two sets of setups nobody has seen, never shown to the learner nor stored as its launches. */
-async function confirmBlind(law: Law, round: number): Promise<{ ok: boolean; sets: { result: TestResult; ok: boolean }[]; calls: number }> {
-  let calls = 0;
-  const sets: { result: TestResult; ok: boolean }[] = [];
-  for (const offset of [100000, 200000]) {
-    const list = Array.from({ length: cfg.confirmSetups }, (_, j) => ({ id: 'blind' + (offset + round * 10 + j), spec: environmentOf(spec, offset + round * 10 + j, { varyStrength: cfg.varyStrength }), role: 'confirmation' as const, seen: false }));
-    const e = await evaluate(law, launchesIn(list, offset + round, round));
-    calls += e.calls;
-    sets.push({ result: e.result, ok: allHeld(heldIn(e.result, list.map((x) => x.id), e.set)) });
-  }
-  return { ok: sets.every((x) => x.ok), sets, calls };
-}
-
-/** What System 2 learns of a check: per setup, whether the law holds there, and the verdict at every point. Facts only. */
-function describeCheck(result: TestResult, held: Record<string, boolean>): unknown {
-  const byLaunch = new Map<string, { point: string; verdict: number[] }[]>();
-  for (const x of result.samples) {
-    const id = x.ref!.split('@')[0];
-    byLaunch.set(id, [...(byLaunch.get(id) ?? []), { point: x.ref!, verdict: x.score.map((v) => Math.round(v * 1000) / 1000) }]);
-  }
-  return Object.entries(held).map(([setup, holds]) => ({ place: setup, your_model_holds_here: holds,
-    episodes: [...byLaunch.entries()].filter(([id]) => launches.get(id)?.setup === setup).map(([id, points]) => ({ episode: id, from: launches.get(id)!.launch, points })) }));
-}
-
-/** What the operator keeps of a test result. */
-const operatorView = (r: TestResult) => ({ chi2: r.chi2, error: round2(r.error), median: round2(r.median), by_band: r.byBand, noise_floor: r.floor, hidden_law: r.reference,
+/** What the operator keeps of a whole check's result. */
+const operatorOf = (r: TestResult) => ({ chi2: r.chi2, error: round2(r.error), median: round2(r.median), by_band: r.byBand, noise_floor: r.floor, hidden_law: r.reference,
   truth_error: r.truthError, scores: r.scores, points: r.samples.length });
-const chi2Text = (r: TestResult) => (r.chi2 ? Object.entries(r.chi2.byGroup).map(([g, bands]) => g + ' ' + Object.values(bands).map((m) => round2(m)).join('/')).join(', ') : '-');
 const labs = () => [...setups.values()].filter((x) => x.role === 'laboratory');
+
+/* The researcher's protocol (learn/protocol.ts) on orbit's objective (worlds/orbit/objective.ts). The criterion is a
+   researcher's, per setup: in each band, the law's residuals are compatible with the noise of what is observed and a
+   declared precision - the median over points of |observed d - predicted d|² / (2 (σ² + (ε|d|)²)) is at most --accept,
+   σ estimated from the motionless sources. Nothing hidden enters it; every point weighs the same. */
+const objective = orbitObjective<Law, Setup>({
+  casesIn(setup, c) {
+    if (c.purpose === 'check') return launchesIn(setup, c.index, c.round, c.round, 'check' + c.round + '-' + setup.id);
+    if (c.purpose === 'validation') return launchesIn(setup, c.index, 5000 + c.round, c.round, 'valid' + c.round + '-' + setup.id);
+    return launchesIn(setup, c.index, (c.set === 1 ? 200000 : 100000) + c.round, c.round);
+  },
+  predict: async (law, x) => (await predictor.predict(law, x)).vector,
+  launchOf: (episode) => launches.get(episode)?.launch ?? null,
+  operatorView: (r) => operatorOf(r),
+  accept: cfg.accept, precision: cfg.precision, regression: cfg.regression
+});
+const protocol = new Protocol(objective, {
+  places: () => [...setups.values()],
+  /* Two sets of setups nobody has seen, never shown to the learner nor stored as its launches. */
+  blindPlaces: (set, round) => Array.from({ length: cfg.confirmSetups }, (_, j) => {
+    const k = (set === 1 ? 200000 : 100000) + round * 10 + j;
+    return { id: 'blind' + k, spec: environmentOf(spec, k, { varyStrength: cfg.varyStrength }), role: 'confirmation' as const, seen: false };
+  }),
+  fingerprint: (law) => fingerprint(law),
+  validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
+  cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
+  say: (line) => say(line),
+  roleWords: { laboratory: 'your laboratory: you can act here', validated: 'a place where your model was validated' }
+});
 
 /* --- Operator-only measures ---------------------------------------------------------- */
 
@@ -407,6 +390,7 @@ function ownSamples(): PredictionSample<OrbitPoint>[] {
     predictionSamples(setups.get(l.setup)!.spec, [l.trajectory], { resolution: cfg.resolution, every: 4 }).map((s) => ({ ...s, ref: l.id + '@' + s.state.row })));
 }
 
+const ablations: AblationRecord[] = [];
 async function ablate(law: Law, round: number, lawResult: TestResult): Promise<void> {
   const samples = lawResult.samples.map((r) => testPoints.get(round)!.find((x) => x.ref === r.ref)!).filter(Boolean);
   const fitOn = ownSamples();
@@ -419,6 +403,7 @@ async function ablate(law: Law, round: number, lawResult: TestResult): Promise<v
     const flat = fitLawCodeOnly(predictor, law, fitOn, { flat: true });
     arms.code_only = { ...summary(await testPredictions(samples, codeOnly.predict)), coefficients: codeOnly.coefficients };
     arms.flat = summary(await testPredictions(samples, flat.predict));
+    ablations.push({ round, model: lawResult.scores.law, withoutJudge: (arms.code_only as { score: number }).score, better: 'lower' });
   }
   if (cfg.delegated && asksJudge(law)) {
     const d = delegatedLaw(law);
@@ -438,13 +423,16 @@ const lawOf = (ref: number | Law | null): Law | null => (ref === null ? latest()
 function checkOnPoints(law: Law): string[] {
   const points = [...launches.values()].filter((l) => l.by === 'you' || l.by === 'the environment').slice(-4).flatMap((l) => {
     const n = l.table.split('\n').length - 2;
-    return [2, Math.floor(n / 2), n - 1].map((row) => resolve(l.id + '@' + row)).filter((p): p is OrbitPoint => !!p);
+    /* Points where an answer can be asked (the last pair is seen there and in the row before). */
+    return [2, Math.floor(n / 2), n - 1].map((row) => resolve(l.id + '@' + row)).filter((p): p is OrbitPoint => !!p && answerable(p));
   });
   const errors = replayOnEvidence(observer, law.observations, points.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
   if (!errors.length) {
     const neutral = Object.fromEntries(Object.keys(law.rules).map((id) => [id, 0.5]));
     for (const p of points.slice(0, 6)) {
-      try { predictor.answerWith(law, predictor.measured(law, p), neutral); } catch (e) { errors.push('output: ' + String((e as Error).message ?? e)); break; }
+      /* Its code must compute and answer a pair; how the answer is compared is the environment's (and needs rows that
+         may not be seen at every point). */
+      try { pairOf(predictor.rawAnswerWith(law, predictor.measured(law, p), neutral)); } catch (e) { errors.push('output: ' + String((e as Error).message ?? e)); break; }
     }
   }
   return errors;
@@ -572,9 +560,9 @@ async function consult(mode: 'propose' | 'reflect'): Promise<LawRecord | null> {
     const stepsLeft = investigative ? Math.max(0, cfg.steps - steps) : 0;
     const payload = lawExplorerPayload({
       round, perceptDoc: ORBIT_PERCEPT_DOC, notebook: notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
-      setups: [...setups.values()].filter((x) => x.role !== 'confirmation' && (x.role === 'laboratory' || x.seen)).map((x) => ({ place: x.id, role: x.role === 'laboratory' ? 'your laboratory: you can act here' : 'a place where your model was validated' })),
-      validationsLeft,
-      lastTest, ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('act') ? { launchesLeft: budget.launches } : {}),
+      setups: protocol.placesView(),
+      validationsLeft: protocol.validationsLeft,
+      lastTest: protocol.lastView, ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('act') ? { launchesLeft: budget.launches } : {}),
       refused, task: mode === 'reflect' ? REFLECTION_TASK : null
     });
     say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
@@ -694,73 +682,32 @@ explore();
 let accepted: LawRecord | null = null;
 /** --quick: the law System 2 judged good, where the run stopped. */
 let satisfied: LawRecord | null = null;
-/** The law that held in every laboratory at the latest check. Asking to validate that same law (the same fingerprint, the
-    same laboratories) validates it on the check it held in: a new check could fail by chance, and then the law that held
-    would never be validated. */
-type LabCheck = { result: TestResult; calls: number; set: CheckSet };
-let heldAt: { fingerprint: string; round: number; labs: string; labCheck: LabCheck; labHeld: Record<string, boolean> } | null = null;
 for (let attempt = 1; attempt <= cfg.attempts && !llmFatal; attempt++) {
   const record = await consult('propose');
   if (!record) { if (llmFatal) break; continue; }
   const round = record.round;
-  /* 1. The check in the laboratories, on launches there it has not seen. */
-  const inLabs = labs();
-  const labIds = inLabs.map((x) => x.id).join(',');
-  const reused: { round: number; labCheck: LabCheck; labHeld: Record<string, boolean> } | null = record.validate && heldAt && heldAt.fingerprint === record.fingerprint && heldAt.labs === labIds ? heldAt : null;
-  if (reused) say('  this law held in every laboratory in round ' + reused.round + ': validated on that check, without checking again');
-  const labCheck: LabCheck = reused ? reused.labCheck : await evaluate(record.law, launchesIn(inLabs, round, round, (x) => 'check' + round + '-' + x.id));
-  const labHeld: Record<string, boolean> = reused ? reused.labHeld : heldIn(labCheck.result, inLabs.map((x) => x.id), labCheck.set);
-  if (!reused) heldAt = allHeld(labHeld) ? { fingerprint: record.fingerprint, round, labs: labIds, labCheck, labHeld } : null;
-  record.test = { error: labCheck.result.error, median: labCheck.result.median, score: labCheck.result.scores.law };
-  let validation: Record<string, unknown> | null = null;
-  let validationView: unknown = null;
-  let ok = false;
-  /* --quick: System 2 judges its law good; stop here, before any validation, to analyze the run. */
-  const quickStop = cfg.quick && record.validate;
-  /* 2. The validation, when System 2 asks for it and its law holds where it was born. */
-  if (record.validate && !quickStop) {
-    if (!allHeld(labHeld)) validationView = { refused: 'your model does not yet hold in every one of your laboratories: nothing was spent' };
-    else if (validationsLeft <= 0) validationView = { refused: 'you have no validations left' };
-    else {
-      validationsLeft--;
-      heldAt = null;
-      const family = [...setups.values()].filter((x) => x.role === 'family');
-      for (const x of family) x.seen = true;
-      const famCheck = family.length ? await evaluate(record.law, launchesIn(family, 5000 + round, round, (x) => 'valid' + round + '-' + x.id)) : null;
-      const famHeld = famCheck ? heldIn(famCheck.result, family.map((x) => x.id), famCheck.set) : {};
-      /* A setup where the law does not hold becomes a laboratory. */
-      const becameLabs = family.filter((x) => !famHeld[x.id]).map((x) => { x.role = 'laboratory'; return x.id; });
-      validationView = { validated_in: famCheck ? describeCheck(famCheck.result, famHeld) : [], ...(becameLabs.length ? { now_your_laboratories: becameLabs } : {}) };
-      validation = { family: famCheck ? { held: famHeld, ...operatorView(famCheck.result) } : null, became_laboratories: becameLabs };
-      say('  validation (' + (cfg.validations - validationsLeft) + '/' + cfg.validations + '): family ' + (famCheck ? chi2Text(famCheck.result) : '-') + (becameLabs.length ? '; now laboratories: ' + becameLabs.join(', ') : ''));
-      /* 3. It holds everywhere: the blind confirmation decides. */
-      if (!becameLabs.length) {
-        const c = await confirmBlind(record.law, round);
-        ok = c.ok;
-        validation.blind_confirmation = { confirmed: c.ok, sets: c.sets.map((x) => ({ ok: x.ok, ...operatorView(x.result) })), jev_calls: c.calls };
-        say('  holds in every setup of the family; blind confirmation: ' + c.sets.map((x) => '[' + chi2Text(x.result) + ']').join(' ') + (c.ok ? ' CONFIRMED' : ' NOT confirmed'));
-      }
-    }
-  }
-  record.accepted = ok;
-  lastTest = { round, ...(reused ? { not_checked_again: 'this model already held in every one of your laboratories in round ' + reused.round + ': these are the verdicts of that check' } : {}),
-    laboratories: describeCheck(labCheck.result, labHeld), ...(validationView ? { validation: validationView } : {}), accepted: ok, validations_left: validationsLeft };
-  log('check', { round, ...(reused ? { reused_check_of_round: reused.round } : {}), laboratories: { held: labHeld, ...operatorView(labCheck.result) }, asked_to_validate: record.validate, ...(validation ? { validation } : validationView ? { validation: validationView } : {}), accepted: ok,
-    jev: { calls: judge.stats.calls, errors: judge.stats.errors, check_calls: reused ? 0 : labCheck.calls, calls_per_point: round2(labCheck.calls / Math.max(1, labCheck.result.samples.length)), cache: cacheStats() },
+  /* The protocol: the check in the laboratories on launches there it has not seen; the validation when System 2 asks and
+     its law holds in all of them; the blind confirmation when it holds in every setup of the family. */
+  const outcome = await protocol.round(record.law, { round, attempt, validate: record.validate });
+  const reused = outcome.reused !== null;
+  const check = (outcome.laboratories[0]?.detail as TestResult | undefined) ?? null;
+  if (check) record.test = { error: check.error, median: check.median, score: check.scores.law };
+  record.accepted = outcome.accepted;
+  log('check', { ...outcome.journal,
+    jev: { calls: judge.stats.calls, errors: judge.stats.errors, check_calls: reused ? 0 : outcome.cost.jev_calls, cache: cacheStats() },
     /* What Jev's cache is keyed on besides the observation vector: the law's observations and rules. Unchanged across rounds,
        recurring points (--sampling grid) can hit; changed, nothing from earlier rounds can. */
     judgment_hash: judgmentHash(lawFormula(record.law)),
-    abstraction: abstractionOf(record.law, testPoints.get(reused ? reused.round : round) ?? []) });
-  say('  check in the laboratories: ' + chi2Text(labCheck.result) + ' (accept <= ' + cfg.accept + '; operator: hidden law ' + round2(labCheck.result.scores.reference ?? 0) + ' vs law ' + round2(labCheck.result.scores.law) + ')' +
-    (record.validate && !validation && !quickStop ? '; validation refused' : '') + (ok ? '  ACCEPTED' : ''));
-  if (quickStop) {
+    abstraction: abstractionOf(record.law, testPoints.get(outcome.reused ?? round) ?? []) });
+  if (check) say('  [operator] hidden law ' + round2(check.scores.reference ?? 0) + ' vs law ' + round2(check.scores.law) + (outcome.accepted ? '  ACCEPTED' : ''));
+  if (outcome.quickStop) {
     satisfied = record;
-    log('quick_stop', { round, held_in_laboratories: labHeld, law: ownLaw(record.law) });
-    say('  --quick: System 2 judges its law good in round ' + round + ' (in its laboratories: ' + (allHeld(labHeld) ? 'holds' : 'does NOT hold') + '); stopping without validation');
+    log('quick_stop', { round, held_in_laboratories: Object.fromEntries(outcome.laboratories.map((o) => [o.place.id, o.holds])), law: ownLaw(record.law) });
+    say('  --quick: System 2 judges its law good in round ' + round + ' (in its laboratories: ' + (outcome.held ? 'holds' : 'does NOT hold') + '); stopping without validation');
     break;
   }
-  if ((cfg.ablation || cfg.delegated) && !reused) await ablate(record.law, round, labCheck.result);
-  if (ok) { accepted = record; log('accepted', { round }); break; }
+  if ((cfg.ablation || cfg.delegated) && !reused && check) await ablate(record.law, round, check);
+  if (outcome.accepted) { accepted = record; log('accepted', { round }); break; }
 }
 
 if (cfg.reflection && !llmFatal) {
@@ -774,7 +721,9 @@ log('end', {
   stoppedBy: llmFatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : 'budget', ...(llmFatal ? { llm_error: llmFatal } : {}),
   final: final ? { round: final.round, fingerprint: final.fingerprint, test: final.test, law: ownLaw(final.law) } : null,
   best_for_the_operator: top ? { round: top.round, fingerprint: top.fingerprint, test: top.test } : null,
-  notebook, launches: launchIndex(), jev: { calls: judge.stats.calls, errors: judge.stats.errors, cache: cacheStats() }
+  notebook, launches: launchIndex(), jev: { calls: judge.stats.calls, errors: judge.stats.errors, cache: cacheStats() },
+  /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
+  operator_summary: operatorSummary(protocol.summary(), ablations)
 });
 if (satisfied) say('the law System 2 judged good (round ' + satisfied.round + '):\n' + JSON.stringify(ownLaw(satisfied.law), null, 2));
 say('done: ' + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted; best score ' + (top?.test ? round2(top.test.score) : '-')) + '; journal ' + outFile);

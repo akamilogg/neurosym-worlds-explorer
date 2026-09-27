@@ -5,6 +5,8 @@ import { checkLaw, type Law } from '../core/predict.ts';
 import type { MeasureDecl, Rule } from '../core/types.ts';
 import { ID, obj, parseNotes, parseObservation, parseReflective, parseRule } from './explorer.ts';
 import type { BeliefStance, NoteOp } from './notebook.ts';
+import { objectiveLines } from './objective.ts';
+import { ORBIT_ANSWER, orbitVerdict } from '../worlds/orbit/objective.ts';
 
 /* ============================================================================
  * The law explorer: System 2 in a world where things move, and nobody told it why.
@@ -28,29 +30,33 @@ const clipJson = (v: unknown): string => { const t = JSON.stringify(v) ?? String
 
 /** The physical world's interface to the common prompt (learn/prompt.ts): what its model produces, how its parts combine,
     the parameters of its instruments and the form of a verdict. Interface words only (SPEC-MUNDO-FISICO I5). */
-export const ORBIT_INTERFACE: WorldInterface = {
-  tools: ['view', 'inspect', 'act', 'measure', 'simulate', 'table'],
-  features: ['check'],
-  lines: [
-    'YOUR ANSWER, at any row of any episode: the pair [x, y] the LAST pair of columns will show in the NEXT row, in the units of the table.',
-    'A VERDICT is a pair of numbers from -1 to 1, one per column of the pair (x, then y); 0 on one means no difference in it between your answer and what happened there. What the rest of the range means is for you to work out.',
-    [INVESTIGATION, 'Requests:'],
-    [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   rows of one of your tables (at most 60 per request)'],
-    [['act'], '  {"act": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>, "place": "<laboratory>"}}   start an episode yourself in one of your laboratories (default: the first): its last pair of columns starts at (x, y) and changes at first by (vx, vy) per unit of the first column; "m" is a positive number you choose (default 1). You get its table (named "act<n>"). It may be refused, and you are not told why. At most `acts_left` this round.'],
-    [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model (without "model": your latest) answered at that point, part by part: what each observation measured, what each rule answered, V, its answer and the named values its output returned - and what was observed in the next row'],
-    [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
-    [['simulate'], '  {"simulate": "<episode>@<step>", "model": <round> | <draft>, "steps": <n>}   each next row of the last pair is the model\'s answer, row after row (at most 40), next to what was observed there if anything was'],
-    [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the points of your own episodes, or of the checks, each with the RESIDUAL of your latest model there (what the next row showed minus your answer) and the environment\'s verdict at that point']
-  ],
-};
+export function orbitInterface(options: { regression?: boolean } = {}): WorldInterface {
+  return {
+    tools: ['view', 'inspect', 'act', 'measure', 'simulate', 'table'],
+    features: ['check'],
+    lines: [
+      /* The objective's: the form of the answer and of a verdict (worlds/orbit/objective.ts). */
+      ...objectiveLines({ answer: ORBIT_ANSWER, verdictForm: orbitVerdict(options) }),
+      [INVESTIGATION, 'Requests:'],
+      [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   rows of one of your tables (at most 60 per request)'],
+      [['act'], '  {"act": {"x": <number>, "y": <number>, "vx": <number>, "vy": <number>, "m": <number>, "place": "<laboratory>"}}   start an episode yourself in one of your laboratories (default: the first): its last pair of columns starts at (x, y) and changes at first by (vx, vy) per unit of the first column; "m" is a positive number you choose (default 1). You get its table (named "act<n>"). It may be refused, and you are not told why. At most `acts_left` this round.'],
+      [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model (without "model": your latest) answered at that point, part by part: what each observation measured, what each rule answered, V, its answer and the named values its output returned - and what was observed in the next row'],
+      [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
+      [['simulate'], '  {"simulate": "<episode>@<step>", "model": <round> | <draft>, "steps": <n>}   each next row of the last pair is the model\'s answer, row after row (at most 40), next to what was observed there if anything was'],
+      [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the points of your own episodes, or of the checks, each with the RESIDUAL of your latest model there (what the next row showed minus your answer) and the environment\'s verdict at that point']
+    ]
+  };
+}
+
+export const ORBIT_INTERFACE: WorldInterface = orbitInterface();
 
 export const LAW_TOOLS = ['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const;
 export type LawTool = typeof LAW_TOOLS[number];
 type Tools = ReadonlySet<LawTool>;
 
 /** The law explorer's system prompt for the instruments it is given (all of them by default): the common prompt. */
-export function lawExplorerSystem(tools: Tools = new Set(LAW_TOOLS)): string {
-  return system2Prompt(ORBIT_INTERFACE, tools);
+export function lawExplorerSystem(tools: Tools = new Set(LAW_TOOLS), options: { regression?: boolean } = {}): string {
+  return system2Prompt(options.regression ? orbitInterface(options) : ORBIT_INTERFACE, tools);
 }
 
 export interface LawExplorerBrief {

@@ -112,6 +112,11 @@ export class Predictor<S> {
 
   /** The law's answer with GIVEN rule answers instead of the Judge's (an ablation), read as what is compared. */
   answerWith(law: Law, m: Measured<S>, rules: Readonly<Record<string, number>>): Vec2 {
+    return this.toCompared(this.rawAnswerWith(law, m, rules), m.state, m.percept);
+  }
+
+  /** The law's answer as it gives it, with GIVEN rule answers: whether its code computes, before anything reads it. */
+  rawAnswerWith(law: Law, m: Measured<S>, rules: Readonly<Record<string, number>>): unknown {
     let V: number | null = null;
     if (asksJudge(law)) {
       V = 0;
@@ -119,8 +124,7 @@ export class Predictor<S> {
       V = Math.min(1, Math.max(0, V));
     }
     const inputs = outputInputs(m.values, m.texts, rules, V);
-    const answer = law.output ? this.outputs.run(law.output, m.percept, inputs).answer : V;
-    return this.toCompared(answer, m.state, m.percept);
+    return law.output ? this.outputs.run(law.output, m.percept, inputs).answer : V;
   }
 
   /** `measure`: observations to hand the output instead of the law's own (an ablation: the Judge reads something else,

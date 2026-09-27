@@ -145,6 +145,12 @@ function lastPair(point: OrbitPoint): { now: [number | null, number | null]; bef
   return { now: [s.x[i] ?? null, s.y[i] ?? null], before: [i > 0 ? s.x[i - 1] ?? null : null, i > 0 ? s.y[i - 1] ?? null : null] };
 }
 
+/** Whether a model can be asked for an answer at a point: the last pair shows numbers in its row and the row before. */
+export function answerable(point: OrbitPoint): boolean {
+  const { now, before } = lastPair(point);
+  return ![...now, ...before].some((v) => v === null);
+}
+
 /** A model's ANSWER - the pair the last columns will show in the next row - read as what is compared with what happened:
     its departure from repeating the last step, d = answer - 2·p(now) + p(before). The learner is never told this reading. */
 export function answerAsDeparture(answer: unknown, point: OrbitPoint): Vec2 {
