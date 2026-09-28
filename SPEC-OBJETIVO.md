@@ -274,6 +274,11 @@ de añadir nada.
 | O5 | Un tercer entorno pequeño, conectado solo con mundo + sentidos + acciones + objetivo: `cells@1` | `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts`, `lib/src/learn/law-session.ts` | hecho |
 | Visor | Síntesis visual de un run terminado, construida a partir de su journal: momentos por relevancia, el camino al modelo final, linajes de creencias, comprobaciones por ronda; animaciones de lo que mostró el entorno y de lo que intentó el modelo caso a caso, y un modo de presentación. Para ello el journal guarda, solo para el operador, las lecturas de los episodios de exploración y una traza por lugar de cada comprobación (`Objective.trace`). No toca lo que ve System 2 | `lib/src/view/`, `lib/scripts/journal-view.ts`, `journal-viewer.html` | hecho |
 | O6 (opcional) | Objetivos con rúbrica y juez (§6) | — | no empezado |
+| O7 | Exportar la API de laboratorio: `objective`, `protocol`, `law-session`, `prompt`, `operator` desde `learn/index.ts`; `cells` y `messages` en los `exports` del paquete (§10) | `lib/src/learn/index.ts`, `lib/package.json` | no empezado |
+| O8 | Desacoplar de orbit la sesión y el predictor: `LawSession` sin `OrbitAct` por defecto; el nombre del presupuesto de actos (`launchesLeft`) lo declara el mundo, de modo que el prompt de orbit no cambie; respuesta de tipo genérico en lugar de `Vec2` (§10) | `lib/src/learn/law-session.ts`, `lib/src/core/predict.ts` | no empezado |
+| O9 | Contrato `Lab` y un runner único (`run-lab.ts --lab <id>`); los `run-*.ts` quedan como definiciones; la cuadrícula al final (§10) | `lib/src/learn/lab.ts`, `lib/scripts/run-lab.ts` | no empezado |
+| O10 | El hallazgo como entregable (`finding.json`), derivado del journal por el operador (§10) | `lib/src/learn/finding.ts` | no empezado |
+| O11 | Ejecución reanudable: punto de control por ronda, cancelación y presupuesto de tiempo y tokens (resuelve la pregunta abierta 3) (§10) | `lib/src/learn/protocol.ts` | no empezado |
 
 **Criterio de éxito de la SPEC:** O5 se conecta sin tocar el prompt ni el protocolo. **Cumplido.** `cells@1` usa el prompt
 común, el protocolo y la sesión de System 2 tal cual. Del código común solo necesitó dos cosas generales:
@@ -296,6 +301,11 @@ búsqueda y tiene instrumentos propios como `replay`. Unificarlo con `LawSession
   debería ganar al código donde el código expresa mal.
 - **H3 (`messages@1`)**: con Jev real y con `--flat`, mismo seed. ¿El modelo aceptado pregunta a Jev, y la ablación
   muestra que sus reglas aportan en la familia?
+  - Primer run (seed 1, 27/09): se aceptó sin Jev, con regex. Para que el mundo discrimine:
+    - vocabulario abierto en la confirmación ciega;
+    - tolerancia 0 a ciegas;
+    - verdad por regla (`factors` y `meaning` no deben mencionar la prisa si la regla no la usa);
+    - que el grader no penalice distinciones que el mundo no produce, como un tono neutro.
 - **O5**: `cells@1` con LLM real (`./run-cells.sh --seed 1 --level 1`, y `--level 2`): ¿recupera la regla desde cero y
   la valida en la familia? Es un mundo sin conocimiento previo útil tan claro como la mecánica. ¿Aporta Jev algo cuando
   la respuesta es una fila entera?
@@ -329,3 +339,104 @@ búsqueda y tiene instrumentos propios como `replay`. Unificarlo con `LawSession
 
    §3.3 ya evita el peor caso (no validar un modelo que se sostuvo). Recomendado: (b) donde haya solver y (a) donde no.
    Pendiente de decidir.
+
+## 10. Auditoría externa (28/09/2026): valoración e incorporación
+
+### 10.1 Qué dice
+
+La auditoría considera que la parte genérica ya es real en el protocolo (`Objective`, laboratorios, validación,
+regresión, confirmación ciega, notebook, sesión) y solo parcial en la integración.
+
+Hoy es un núcleo reutilizable con adaptadores de dominio escritos a mano. Su siguiente salto no consiste en añadir más
+mundos, sino en dos cosas:
+
+- que un laboratorio nuevo se conecte mediante un contrato pequeño;
+- que entregue evidencia reutilizable a un agente que lo invoque. Por ejemplo, un coordinador que convierte una
+  incertidumbre en una pregunta comprobable, deja que el arnés la investigue y usa el resultado.
+
+### 10.2 Contraste con el código
+
+Todas las señales de acoplamiento se confirman:
+
+- **Tamaño de los runners:**
+
+  | Runner | Líneas |
+  |---|---|
+  | `run-messages.ts` | 367 |
+  | `run-cells.ts` | 397 |
+  | `run-orbit.ts` | 613 |
+  | `run-grid.ts` | 865 |
+
+  Mezclan configuración, instrumentos, journal y ejecución.
+- **`LawSession` sigue atada a orbit:** su parámetro de tipo por defecto es `OrbitAct` y el presupuesto se llama
+  `launchesLeft`.
+- **El predictor convierte a `Vec2`:** `rawAnswerWith` fue el parche para `cells`.
+- **Lo nuevo no se exporta:** `learn/index.ts` no exporta `objective`, `protocol`, `law-session`, `prompt` ni
+  `operator`, y el paquete solo expone `foxhounds` y `orbit`.
+
+### 10.3 Qué se incorpora (fases O7–O11 de §7)
+
+- **O7 y O8. Exportar y desacoplar.**
+  - Son baratas y no tocan lo que ve System 2.
+  - `launchesLeft` pasa a ser un nombre que declara el mundo en su `WorldInterface`, de modo que el prompt de orbit
+    queda idéntico.
+  - Criterio: journals equivalentes en ensayos con LLM falso, como en O1–O5.
+- **O9. El contrato `Lab`.**
+  - Es la continuación natural del criterio de O5: un mundo se conecta con mundo, sentidos, actos y objetivo.
+  - Un `Lab` reúne en una definición declarativa:
+    - mundo, sentidos, actos (`parseAct`) y objetivo;
+    - la familia (`placeOf(index)`);
+    - los instrumentos que ofrece;
+    - los presupuestos por defecto;
+    - la verdad del operador, que es opcional (un laboratorio real no la tiene).
+  - Criterio de éxito: `messages` y `cells` corren con `run-lab.ts` sin runner propio.
+  - La cuadrícula va al final, porque conserva su propio bucle (§7, "queda fuera de O5").
+- **O10. El hallazgo como entregable.** Encaja de lleno con el objetivo de interpretabilidad. `finding.json` contiene:
+  - la pregunta, que es el objetivo;
+  - el modelo final, con su fingerprint;
+  - dónde se sostuvo: los lugares con su rol y la variación de la familia;
+  - evidencia y contraejemplos: las creencias con sus referencias y los lugares que fallaron y por qué;
+  - las limitaciones conocidas, de la reflexión y de los fallos tolerados. Dos ejemplos:
+    - "a pair of" en la confirmación ciega de `messages@1`;
+    - el paso 0 no identificado en `cells@1`;
+  - el coste;
+  - cómo reproducirlo: seed, config y commit.
+
+  Lo deriva el operador desde el journal. System 2 no ve nada nuevo. El visor puede leerlo.
+- **O11. Ejecución reanudable.**
+  - Incluye un punto de control por ronda, cancelación y un presupuesto de tiempo y tokens.
+  - El servicio completo (iniciar, consultar, cancelar y reanudar para otros agentes) se deja hasta que haya un
+    consumidor.
+- **Invariante nuevo: quien diseña el laboratorio no evalúa.**
+  - Hoy ya se cumple: System 2 nunca toca el criterio ni los lugares ciegos.
+  - Cuando un agente monte laboratorios, el criterio, la familia y la semilla de los lugares ciegos quedarán fijados
+    antes del primer turno de System 2.
+  - Su hash irá en el journal (`start`), para que nadie pueda relajar el criterio sin que se note.
+
+### 10.4 Qué queda como horizonte, y por qué
+
+- **Coordinación de varios laboratorios y composición.**
+  - Validar las piezas por separado no valida su composición.
+  - Cada hallazgo tendrá que llevar sus condiciones de aplicación (O10 las prepara).
+  - Se aborda después de O9 y O10.
+- **Primer laboratorio no sintético.**
+  - La auditoría da un encaje alto a descubrir el comportamiento de una API o protocolo local.
+  - Es el candidato natural tras O9, porque pondría a prueba el contrato con una verdad que no es nuestra.
+- **Modo herramienta (conocimiento previo, estimadores, análisis especializados).**
+  - La auditoría tiene razón en que ocultar estadísticas y orientación de dominio es una elección del experimento, no
+    un requisito universal.
+  - Pero en este proyecto esa elección es la tesis: el entorno solo da su veredicto, System 2 aprende de fuentes
+    propias y no hay investigación precocinada.
+  - Si se hace, será un modo separado, marcado en el journal y nunca comparado con los runs del modo experimento.
+  - Decisión del autor. No se implementa ahora.
+
+### 10.5 Matiz a la auditoría
+
+- **En ingeniería, estamos de acuerdo:** la genericidad ya no depende de más mundos.
+- **Para la tesis sí falta uno:** un mundo donde leer por significado (Jev) sea necesario.
+  - Los tres mundos de los runs recientes se resolvieron solo con código.
+  - En `messages@1` fue así porque el vocabulario es cerrado y los laboratorios lo muestran casi entero.
+- Esa línea sigue en §8:
+  - vocabulario abierto en la confirmación ciega;
+  - tolerancia 0 en la confirmación a ciegas;
+  - verdad por regla, sin mencionar factores que la regla no usa.
