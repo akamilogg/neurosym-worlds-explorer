@@ -18,6 +18,7 @@ import { GRADING_STRUCTURE, formOf, operatorSummary, tokensOf, type AblationReco
 import type { Place } from '../learn/objective.ts';
 import type { AnyLab, LabCase, LabOptions } from '../learn/lab.ts';
 import { findingOf, findingText } from '../learn/finding.ts';
+import { ReplayLog } from './replay.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -55,6 +56,31 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
 ];
 
+/** Options that control the run, not the experiment: a resumed run takes them anew (SPEC-OBJETIVO O11). */
+const CONTROLS: readonly { name: string; value: string; help: string }[] = [
+  { name: 'max-minutes', value: 'N', help: 'stop before asking System 2 again once N minutes have passed (this process)' },
+  { name: 'max-tokens', value: 'N', help: 'stop before asking System 2 again once its answers have used N tokens (the whole run)' },
+  { name: 'resume', value: 'FILE', help: 'resume the run of that journal: its answers are replayed, then it goes on live' }
+];
+const CONTROL_NAMES = new Set(['out', ...CONTROLS.map((c) => c.name)]);
+
+/** The experiment's arguments, without the run's controls (what a resumed run repeats). */
+export function experimentArgs(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i].startsWith('--') && CONTROL_NAMES.has(argv[i].slice(2))) { i++; continue; }
+    out.push(argv[i]);
+  }
+  return out;
+}
+
+/** The run's budgets given now (a resumed run takes these, and the journal it resumes as --out). */
+export function budgetArgs(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) if (argv[i] === '--max-minutes' || argv[i] === '--max-tokens') out.push(argv[i], argv[++i] ?? '');
+  return out;
+}
+
 /** The command line's help for a laboratory. */
 export function labUsage(lab: AnyLab, command: string): string {
   const pad = (s: string) => s.padEnd(22);
@@ -64,6 +90,8 @@ export function labUsage(lab: AnyLab, command: string): string {
     'Common options:',
     ...COMMON.map((o) => '  ' + pad('--' + o.name + ' ' + (o.name === 'tools' ? 'LIST' : o.name === 'out' ? 'FILE' : 'N')) + o.help + (defaults[o.name] ? ' (default ' + defaults[o.name] + ')' : '')),
     ...FLAGS.map((f) => '  ' + pad('--' + f.name) + f.help),
+    'Run controls (Ctrl+C stops before the next question to System 2; a second Ctrl+C stops at once):',
+    ...CONTROLS.map((c) => '  ' + pad('--' + c.name + ' ' + c.value) + c.help),
     '', 'Endpoints and keys come from the environment: LLM_URL, LLM_MODEL, LLM_KEY; JEV_URL, JEV_KEY (not needed with --flat).'].join('\n');
 }
 
@@ -76,9 +104,18 @@ function commitOf(root: string): string | null {
   } catch { return null; }
 }
 
-export async function runLab(lab: AnyLab, argv: readonly string[], context: { root: string; command: string }): Promise<void> {
+export async function runLab(lab: AnyLab, given: readonly string[], context: { root: string; command: string }): Promise<void> {
   /* --- Configuration ---------------------------------------------------------------- */
-  if (argv.includes('--help') || argv.includes('-h')) { console.log(labUsage(lab, context.command)); return; }
+  if (given.includes('--help') || given.includes('-h')) { console.log(labUsage(lab, context.command)); return; }
+  /* Resuming: the experiment's arguments are the journal's; the budgets are the ones given now. */
+  const r = given.indexOf('--resume');
+  const resumeFrom = r >= 0 ? given[r + 1] : undefined;
+  let previous: Record<string, any> | null = null;
+  if (resumeFrom) {
+    try { previous = JSON.parse(fs.readFileSync(resumeFrom, 'utf8')); } catch (e) { console.error('--resume: cannot read ' + resumeFrom + ': ' + String((e as Error).message ?? e)); process.exit(2); }
+    if (previous!.experiment !== lab.id || !Array.isArray(previous!.argv)) { console.error('--resume: ' + resumeFrom + ' is not a resumable journal of ' + lab.id); process.exit(2); }
+  }
+  const argv: readonly string[] = previous ? [...(previous.argv as string[]), ...budgetArgs(given), '--out', resumeFrom!] : given;
   const defaults: Record<string, string> = { ...Object.fromEntries(COMMON.map((o) => [o.name, o.default])), ...(lab.defaults ?? {}) };
   const arg = (name: string, fallback = defaults[name] ?? ''): string => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback; };
   const flag = (name: string): boolean => argv.includes('--' + name);
@@ -115,6 +152,8 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
   const tools: ReadonlySet<Tool> = new Set(cfg.tools);
   const investigative = cfg.tools.length > 0;
   const SYSTEM_PROMPT = system2Prompt(lab.interface({ regression: cfg.regression }), tools);
+  const maxMinutes = Number(arg('max-minutes', '0')) || null;
+  const maxTokens = Number(arg('max-tokens', '0')) || null;
   const env = process.env;
   if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
   if (!cfg.flat && !env.JEV_KEY) { console.error('JEV_KEY is required (or run the --flat control).'); process.exit(2); }
@@ -143,24 +182,30 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
     const text = JSON.stringify({ answers });
     return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
   };
+  /* Every answer that comes over the network is logged as it arrives, next to the journal: the run can be resumed. */
+  const started = new Date();
+  const outFile = arg('out') || path.join(context.root, 'runs', lab.runName(cfg.seed, worldOptions) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  const replay = new ReplayLog(outFile.replace(/\.json$/, '') + '.replay.jsonl', { resume: Boolean(previous) });
   const judge = new JevJudge(cfg.flat
     ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
-    : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
+    : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev') });
   const evaluator = new Evaluator<Point>(observer, judge, { maximizer: 'nature', runners: [runner] });
   /* The objective compares answers (Lab.objective): the Predictor hands them as given. */
   const predictor = new Predictor<Point>(evaluator, (s) => lab.perceive(s), { runners: [runner] });
   const llmUse = { calls: 0, tokens: 0 };
-  const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1,
+  const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1, fetch: replay.wrap('llm'),
     onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
 
   /* --- The journal ------------------------------------------------------------------ */
-  const started = new Date();
-  const outFile = arg('out') || path.join(context.root, 'runs', lab.runName(cfg.seed, worldOptions) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
-  fs.mkdirSync(path.dirname(outFile), { recursive: true });
   const truth = lab.truth(spec);
   const commit = commitOf(context.root);
   const journal: Record<string, any> = {
-    experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}), config: { ...cfg, ...(acts !== undefined ? { acts } : {}), llm_model: env.LLM_MODEL, jev_model: env.JEV_MODEL ?? null },
+    experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}),
+    /* The experiment's arguments (never a key: those come from the environment), for --resume. */
+    argv: experimentArgs(argv),
+    ...(previous ? { resumed: { from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
+    config: { ...cfg, ...(acts !== undefined ? { acts } : {}), llm_model: env.LLM_MODEL, jev_model: env.JEV_MODEL ?? null },
     hidden_from_the_learner: { spec, truth, places: [...places.values()].map((p) => ({ id: p.id, role: p.role, ...lab.placeInfo(p.spec) })) },
     events: [] as unknown[]
   };
@@ -322,6 +367,19 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
     }) };
   };
 
+  /* Stopping: Ctrl+C (or SIGTERM) and the budgets are asked before each question to System 2. */
+  let cancelled = false;
+  const onSignal = (): void => {
+    if (cancelled) { say('stopped at once; resume with --resume ' + outFile); process.exit(130); }
+    cancelled = true;
+    say('stopping before the next question to System 2 (Ctrl+C again to stop at once)');
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  const halt = (): string | null => cancelled ? 'cancelled'
+    : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
+    : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
+
   const session: LawSession<unknown> = new LawSession<unknown>({
     llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: lab.perceptDoc, steps: cfg.steps, investigative,
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
@@ -331,7 +389,7 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
     failures,
     episodes: episodeIndex,
     places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
-    log, say
+    log, say, halt
   });
 
   /* --- Operator only ------------------------------------------------------------------------- */
@@ -377,11 +435,12 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
 
   /* --- The run ------------------------------------------------------------------------------- */
   say(lab.id + ' seed ' + cfg.seed + ' ' + lab.headline(spec) + '; journal ' + outFile);
-  log('start', {});
+  log('start', previous ? { resumed_from: resumeFrom, answers_logged: replay.pending() } : {});
+  if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
   explore();
   let accepted: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
-  for (let attempt = 1; attempt <= cfg.attempts && !session.fatal; attempt++) {
+  for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
     const record = await session.consult('propose');
     if (!record) { if (session.fatal) break; continue; }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });
@@ -397,14 +456,17 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
     if (cfg.ablation && outcome.reused === null) await ablate(record.law, record.round);
     if (outcome.accepted) { accepted = { law: record.law, round: record.round }; log('accepted', { round: record.round }); break; }
   }
-  if (cfg.reflection && !session.fatal) {
+  if (cfg.reflection && !session.fatal && !session.halted) {
     say('reflection round: the model is final; System 2 looks back');
     await session.consult('reflect', reflectionTask(investigative));
   }
   const final = accepted?.law ?? session.latest()?.law ?? null;
-  if (cfg.grade && !session.fatal) await gradeRecovery(final);
+  if (cfg.grade && !session.fatal && !session.halted) await gradeRecovery(final);
   log('end', {
-    stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : 'budget', ...(session.fatal ? { llm_error: session.fatal } : {}),
+    stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', ...(session.fatal ? { llm_error: session.fatal } : {}),
+    ...(session.halted ? { halted: session.halted, resume: 'the same command with --resume ' + outFile } : {}),
+    /* OPERATOR ONLY (SPEC-OBJETIVO O11): answers replayed from the log and asked live; unused ones mean the resumed run diverged. */
+    replay: replay.stats(),
     final: final ? ownLaw(final) : null,
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
@@ -419,5 +481,8 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
   fs.writeFileSync(findingFile, JSON.stringify(finding, null, 2));
   console.log(findingText(finding));
   say('finding ' + findingFile);
-  say('done: ' + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted') + '; journal ' + outFile);
+  process.off('SIGINT', onSignal);
+  process.off('SIGTERM', onSignal);
+  if (replay.pending()) say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
+  say('done: ' + (session.halted && !accepted ? 'stopped (' + session.halted + '); resume with --resume ' + outFile + '; ' : '') + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted') + '; journal ' + outFile);
 }

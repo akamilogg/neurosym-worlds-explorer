@@ -207,6 +207,16 @@ ablation in the journal says what the Judge's rules added:
 ./run-messages.sh --seed 1
 ```
 
+A laboratory run can be stopped and resumed. Ctrl+C stops it before the next question to System 2 (a second Ctrl+C at
+once), as do `--max-minutes N` and `--max-tokens N`. Every answer from System 2 and the Judge is logged next to the journal
+as it arrives (`<journal>.replay.jsonl`: answers only, never a request or a key). `--resume <journal>` runs the same
+experiment again, serving those answers: the run is back where it stopped, exactly, and goes on live:
+
+```bash
+./run-cells.sh --seed 1 --level 3 --max-tokens 200000
+./run-cells.sh --resume runs/cells-s1L3-<time>.json
+```
+
 Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the
 cost (Judge calls and evaluations it was not asked, LLM calls and tokens) in all and up to the acceptance, what the
 Judge's rules added in the ablations, and - where the run declares baselines that know nothing (cells, orbit) - the checks

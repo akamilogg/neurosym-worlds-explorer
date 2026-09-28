@@ -61,6 +61,8 @@ export interface LawSessionHost<A> {
   actAsWritten?(act: A): unknown;
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
+  /** Asked before each consultation of System 2: a reason to stop now (cancelled, a budget spent), or null. */
+  halt?(): string | null;
 }
 
 /** A law's identity: its own code and words (the same law has the same fingerprint). */
@@ -73,6 +75,8 @@ export class LawSession<A> {
   currentRound = 0;
   /** Set when the LLM service refuses the account itself (no credit, bad key): nothing further can be asked. */
   fatal: string | null = null;
+  /** Set when the host stopped the session (`halt`): nothing further is asked. */
+  halted: string | null = null;
   private unaddressed: string[] = [];
 
   constructor(host: LawSessionHost<A>) { this.host = host; }
@@ -97,7 +101,7 @@ export class LawSession<A> {
   /** One round: investigation steps, then a proposal - or, with `reflect`, a reflection (the law is final). */
   async consult(mode: 'propose' | 'reflect', reflectionTask: string | null = null): Promise<LawRecord | null> {
     const h = this.host;
-    if (this.fatal) return null;
+    if (this.fatal || this.halted) return null;
     this.currentRound++;
     const round = this.currentRound;
     const b = this.latest();
@@ -106,6 +110,13 @@ export class LawSession<A> {
     let steps = 0, refusals = 0;
     const budget = { acts: h.acts ?? 0 };
     while (refusals < 3 && steps <= h.steps + 3) {
+      const halt = h.halt?.() ?? null;
+      if (halt) {
+        this.halted = halt;
+        h.log('halted', { round, step: steps, reason: halt });
+        h.say('stopping before asking System 2 again: ' + halt);
+        return null;
+      }
       const stepsLeft = h.investigative ? Math.max(0, h.steps - steps) : 0;
       const payload = lawExplorerPayload({
         round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
