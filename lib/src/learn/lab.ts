@@ -18,9 +18,15 @@ import type { WorldInterface } from './prompt.ts';
  *   the actions       optionally, how System 2 starts an episode itself, and how a model's
  *                     answer is played forward (`simulate`)
  *   the objective     the form of the answer, the verdict and the criterion
- *   the operator's    the hidden truth, models that know nothing (baselines), when an answer
- *                     agrees with what happened (the Judge ablation), and, optionally, measures
- *                     of its own (`operator`)
+ *   the operator's    models that know nothing (baselines), when an answer agrees with what
+ *                     happened (the Judge ablation), and, optionally, measures of its own
+ *                     (`operator`) and a truth to grade the learner against (`truth`)
+ *
+ * What a laboratory must have is a world it can observe or act on, and a family of places
+ * where a model is checked: the criterion is decided from what the world answered, never
+ * from a truth. A TRUTH is optional: only a world someone wrote (the synthetic ones) has
+ * one; it lets the operator grade how much of it the learner recovered, and nothing else
+ * depends on it. A real laboratory - someone else's service, an experiment - declares none.
  *
  * Optional parts have a default that is what cells@1 and messages@1 need; orbit@1 declares
  * more of them. The criterion, the family and the blind places are fixed by the laboratory
@@ -126,8 +132,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   headline(spec: S): string;
   /** What the journal keeps about a place (operator only). */
   placeInfo(spec: S): Record<string, unknown>;
-  /** OPERATOR ONLY: the hidden truth, as statements the grader compares with the learner's words. */
-  truth(spec: S, options: LabOptions): readonly { readonly id: string; readonly statement: string }[];
+  /** OPERATOR ONLY, optional: the rule the world was written with, as statements the grader compares with the learner's
+      words. Only a world someone wrote has one; without it the learner's recovery is not graded, and nothing else changes. */
+  truth?(spec: S, options: LabOptions): readonly { readonly id: string; readonly statement: string }[];
   /** The seed of the environment's exploration episodes. */
   explorationSeed(seed: number, options: LabOptions): number;
 
@@ -200,9 +207,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   readonly agreement: string;
   /** OPERATOR ONLY: models that know nothing, as output code. If one holds too, the check could not tell. */
   baselines(spec: S): readonly { readonly name: string; readonly source: string }[];
-  /** OPERATOR ONLY: the grader's system prompt, the journal event its grade goes to, and what the learner's final model
-      is called there. */
-  readonly grading: { readonly system: string; readonly event?: string; readonly finalKey?: string };
+  /** OPERATOR ONLY, with a `truth`: the grader's system prompt, the journal event its grade goes to, and what the
+      learner's final model is called there. */
+  readonly grading?: { readonly system: string; readonly event?: string; readonly finalKey?: string };
   /** OPERATOR ONLY: measures of the laboratory's own, in place of or besides the common ones. */
   readonly operator?: {
     /** What the journal's hidden part and its start keep besides the common. */

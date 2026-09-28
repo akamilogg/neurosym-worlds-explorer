@@ -9,7 +9,7 @@
  *   2. the CASES a model is checked on, in a place, never seen by System 2 before;
  *   3. the VERDICT - facts per case, shown as they are (no statistic over them);
  *   4. the CRITERION - whether the model holds in a place, from those facts only (never
- *      from the hidden truth), with the previous check's cases run again when the
+ *      from a truth, which a world need not have), with the previous check's cases run again when the
  *      protocol asks for it (the paired regression).
  *
  * Operator-only measures (truth, noise floor, reference) come back apart and go to the
@@ -87,7 +87,7 @@ export interface Objective<M, P extends Place, K, R extends CaseResult> {
   /** Runs a model on the cases of several places at once (a world may pool across them, e.g. a noise estimate). */
   run(model: M, cases: readonly { readonly place: P; readonly cases: K }[], context: RunContext): Promise<RunOutput<R>>;
   /** The operator's criterion: does the model hold in this place? From the facts of its cases (and, with the paired
-      regression, of the previous check's cases run again) - never from the hidden truth. */
+      regression, of the previous check's cases run again) - never from a truth (a world need not have one). */
   holds(results: readonly R[], context: { readonly place: P; readonly rerun?: Rerun<R> }): boolean;
   /** The facts System 2 is shown for a place: one verdict per case, as they are. */
   view(results: readonly R[], place: P): Record<string, unknown>;

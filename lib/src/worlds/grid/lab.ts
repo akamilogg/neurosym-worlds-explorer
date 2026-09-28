@@ -244,7 +244,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   /* --- The journal (the runner's): what the learner is never told, and what it is asked -------------------------- */
 
-  Object.assign(s.journal.hidden_from_the_learner, { spec, generator: report, glyphs: { you: sense.glyphA, other: sense.glyphB }, orientation: sense.orientation });
+  Object.assign(s.journal.hidden_from_the_learner, { spec, generator: report, glyphs: { you: sense.glyphA, other: sense.glyphB }, orientation: sense.orientation,
+    /* The hidden rules, where every laboratory keeps them (the operator's finding reads them). */
+    truth: describeGridTruth(spec, sense) });
   s.journal.objective = { answer: GRID_ANSWER.form, verdict: GRID_VERDICT };
   const log = s.log;
   const say = s.say;

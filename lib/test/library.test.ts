@@ -43,6 +43,12 @@ test('a run is a call: it returns why it stopped, its journal and its finding, a
   assert.equal(journal.config.llm_model, 'stand-in');
   assert.ok(fs.existsSync(r.findingFile));
   assert.ok(lines.some((l) => /done:/.test(l)));
+  /* Two views: the operator's (with the hidden truth) and the researcher's (what another agent is given). */
+  assert.equal(r.finding.view, 'operator');
+  assert.equal(r.researcher.view, 'researcher');
+  assert.ok(r.finding.operator?.truth);
+  const given = fs.readFileSync(r.researcherFile, 'utf8');
+  for (const t of r.finding.operator!.truth as { statement: string }[]) assert.ok(!given.includes(t.statement));
 });
 
 test('a configuration it cannot run is a LabError, not an exit', async () => {
@@ -88,4 +94,22 @@ test('a resumed run that does not diverge ends as the whole run did', async () =
   assert.equal(r.stoppedBy, whole.stoppedBy);
   const strip = (f: string) => JSON.parse(fs.readFileSync(f, 'utf8')).events.filter((e: { type: string }) => e.type !== 'start' && e.type !== 'end').map(({ t: _t, ...e }: { t: number }) => e);
   assert.deepEqual(strip(r.journal), strip(whole.journal));
+});
+
+test('a laboratory without a truth runs, resumes and reports the same way: nothing but the grade depends on one', async () => {
+  const dir = root();
+  /* A world nobody wrote down: its truth, and so its grader, are not declared. */
+  const { truth: _t, grading: _g, ...rest } = cellsLab;
+  const unknown = rest as typeof cellsLab;
+  const r = await runLaboratory(unknown, base(dir, ['--seed', '1', '--level', '1', '--attempts', '2', '--flat']));
+  assert.ok(['accepted', 'budget'].includes(r.stoppedBy));
+  const journal = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  assert.equal(journal.hidden_from_the_learner.truth, undefined);
+  assert.ok(!journal.events.some((e: { type: string }) => /recovery/.test(e.type)), 'no grade without a truth');
+  assert.equal(r.finding.operator?.truth, undefined);
+  assert.equal(r.finding.operator?.rule_recovery, undefined);
+  assert.ok(r.finding.model && r.finding.claims.length, 'the finding is complete without it');
+  const again = await runLaboratory(unknown, { args: ['--resume', r.journal, '--out', path.join(dir, 'again.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' },
+    fetch: async () => { throw new Error('everything is replayed'); } });
+  assert.equal(again.stoppedBy, r.stoppedBy);
 });

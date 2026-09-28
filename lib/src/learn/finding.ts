@@ -12,18 +12,33 @@
  *   counterexamples  places where a validation failed, and when
  *   limitations      misses the criterion tolerated, checks a model that knows nothing
  *                    also passed, and what the learner itself said it did not settle
- *   operator         what only the operator knows: the grade against the hidden truth, the
- *                    Judge ablation, the truth itself (a real laboratory has none)
+ *   operator         what only the operator measured: the Judge ablation and, for a world
+ *                    someone wrote, its truth and the grade against it (a real laboratory has
+ *                    none: its finding is complete without them)
  *   cost, reproduce  what it took, and how to run it again
  *
  * The same for every world: a place's facts are kept as its objective reported them.
+ *
+ * Two VIEWS (SPEC-OBJETIVO O14). The operator's (the one above) is for audit: it keeps every
+ * measure of the operator - the Judge ablation, what it computed with what only it has (a
+ * solver's view of each move, a known law's score) and, for a world someone wrote, its truth
+ * and the grade against it. The researcher's is for another agent that will use or extend
+ * the result: only what the world answered. The operator part is gone, a place is only its
+ * name and role (the operator's description of it is gone), and of a place's facts only what
+ * anyone could observe is kept - whether the model held, and the counts of its cases. A fact
+ * is kept only if it is known to be observable: a new measure of the operator stays out
+ * until it is added here.
  * ========================================================================== */
 
 type J = Record<string, any>;
 type Facts = Record<string, unknown>;
 
+export type FindingView = 'operator' | 'researcher';
+
 export interface Finding {
   readonly format: 'finding@1';
+  /** Whose view: the operator's (every measure, for audit) or a researcher's (only what the world answered). */
+  readonly view: FindingView;
   readonly question: { readonly world: string; readonly answer_form?: readonly string[]; readonly verdict_form?: readonly string[] };
   readonly outcome: { readonly status: string; readonly round: number | null; readonly attempt: number | null };
   readonly model: { readonly round: number | null; readonly fingerprint: string | null; readonly law: unknown } | null;
@@ -45,7 +60,8 @@ export interface Finding {
     readonly accepted_trivially: boolean;
     readonly learner: { readonly rationale?: string; readonly lessons: readonly string[]; readonly next_experiment?: string } | null;
   };
-  readonly operator: { readonly rule_recovery?: Facts; readonly judge?: unknown; readonly truth?: unknown };
+  /** The operator's view only. */
+  readonly operator?: { readonly rule_recovery?: Facts; readonly judge?: unknown; readonly truth?: unknown };
   readonly cost: { readonly total?: Facts; readonly to_acceptance?: Facts };
   readonly reproduce: { readonly experiment: string; readonly started?: string; readonly config?: unknown; readonly journal?: string; readonly commit?: string };
 }
@@ -110,7 +126,7 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
 
   const reflections: J[] = events.filter((e) => e.type === 'reflection');
   const last = reflections[reflections.length - 1];
-  /* The grade against the hidden truth: of a rule (grid, cells, messages) or of a law (orbit). */
+  /* The grade against the truth, where the world has one: of a rule (grid, cells, messages, tank) or of a law (orbit). */
   const recovery = [...events].reverse().find((e) => e.type === 'operator_rule_recovery' || e.type === 'operator_law_recovery');
   const status = String(end.stoppedBy ?? (acceptedRound !== null ? 'accepted' : 'unfinished'));
   const places: J[] = end.places ?? journal.hidden_from_the_learner?.places ?? [];
@@ -118,6 +134,7 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
 
   return {
     format: 'finding@1',
+    view: 'operator',
     question: { world: String(journal.experiment ?? ''), ...(journal.objective?.answer ? { answer_form: journal.objective.answer } : {}),
       ...(journal.objective?.verdict ? { verdict_form: journal.objective.verdict } : {}) },
     outcome: { status, round: status === 'accepted' ? acceptedRound : round, attempt: summary.accepted?.attempt ?? acceptance?.attempt ?? null },
@@ -143,6 +160,28 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
   };
 }
 
+/** The facts of a place anyone could observe: whether the model held there, and the counts of its cases. */
+const OBSERVED = new Set(['place', 'holds', 'points', 'agreed', 'exact', 'failed', 'not_a_number', 'not_a_row', 'cells_wrong', 'wins', 'total', 'chi2_by_band']);
+const observed = (p: Facts): Facts => Object.fromEntries(Object.entries(p).filter(([k]) => OBSERVED.has(k)));
+
+/** A finding as a given audience may read it: the operator's as it is, or a researcher's without what only the operator knows. */
+export function findingView(f: Finding, view: FindingView): Finding {
+  if (view === 'operator') return f;
+  const { operator: _hidden, ...rest } = f;
+  const a = f.tested.at_acceptance;
+  return {
+    ...rest,
+    view: 'researcher',
+    tested: {
+      places: f.tested.places.map((p) => ({ id: p.id, role: p.role, ...(p.seen !== undefined ? { seen: p.seen } : {}) })),
+      at_acceptance: a ? { round: a.round, laboratories: a.laboratories.map(observed), family: a.family.map(observed),
+        blind: a.blind.map((s) => ({ set: s.set, ok: s.ok, places: s.places.map(observed) })) } : null,
+      validations: f.tested.validations
+    },
+    counterexamples: f.counterexamples.map((c) => ({ ...c, facts: observed(c.facts) }))
+  };
+}
+
 /** A finding in a few lines, for a person (the console, a report). */
 export function findingText(f: Finding): string {
   const lines: string[] = [];
@@ -159,7 +198,7 @@ export function findingText(f: Finding): string {
   for (const t of f.limitations.tolerated_misses) lines.push('  tolerated: ' + t.missed + ' of ' + t.points + ' missed in ' + t.place);
   if (f.limitations.accepted_trivially) lines.push('  WARNING: a model that knows nothing passed the accepting check too');
   if (f.limitations.learner?.next_experiment) lines.push('  open (the learner): ' + f.limitations.learner.next_experiment);
-  if (f.operator.rule_recovery) lines.push('  operator: rule recovery ' + String(f.operator.rule_recovery.score) + ' (' + String(f.operator.rule_recovery.form ?? '') + ')');
+  if (f.operator?.rule_recovery) lines.push('  operator: rule recovery ' + String(f.operator.rule_recovery.score) + ' (' + String(f.operator.rule_recovery.form ?? '') + ')');
   if (f.cost.total) lines.push('  cost: ' + Object.entries(f.cost.total).map(([k, v]) => k + ' ' + String(v)).join(', '));
   return lines.join('\n');
 }

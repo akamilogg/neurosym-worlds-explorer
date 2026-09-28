@@ -139,7 +139,7 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | `lib/src/worlds/cells/` (`lab.ts`) | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule (level 3: of second order); the answer is the next row |
 | `lib/src/worlds/messages/` (`lab.ts`) | a world whose percept is text - the test of the Judge: short texts marked 0 or 1 by a hidden rule over what they say; the family keeps the rule and changes the wording |
 | `lib/src/worlds/tank/`, `lib/scripts/tank-service.ts` | a laboratory whose environment is OUTSIDE the harness: a service in a process of its own that keeps state and acts; each request is done once (an idempotency key) and its answer logged, so a run stopped and resumed never makes it act twice |
-| `lib/src/learn/finding.ts`, `lib/scripts/finding.ts` | the finding of a run (`finding@1`), derived from its journal for whoever uses the result: the question, the model, what it claims, where it held and where it failed, the known limits, the cost and how to reproduce it; the lab runner writes it next to the journal, and the script derives it from any journal |
+| `lib/src/learn/finding.ts`, `lib/scripts/finding.ts` | the finding of a run (`finding@1`), derived from its journal for whoever uses the result: the question, the model, what it claims, where it held and where it failed, the known limits, the cost and how to reproduce it. Two views: the operator's (`.finding.json`, every measure of the operator for audit - and, for a world someone wrote, its truth and the grade against it) and the researcher's (`.finding.researcher.json`, what another agent is given: only what the world answered). The lab runner writes both next to the journal, and the script derives them from any journal |
 | `lib/src/view/`, `lib/scripts/journal-view.ts`, `journal-viewer.html` | the journal viewer: an animated visual synthesis of a finished run, built from its journal (open `journal-viewer.html` and drop a journal on it) |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
@@ -245,7 +245,8 @@ const result = await runLaboratory(cellsLab, {
   llm: { url: 'https://.../chat/completions', model: '...', key: '...' }, judge: { key: '...' }
 });
 result.stoppedBy;  // accepted, budget, cancelled, diverged, ...
-result.finding;    // finding@1: the model, what it claims, where it held and failed, its limits, its cost
+result.researcher; // finding@1 for another agent: the model, what it claims, where it held and failed, its limits, its cost
+result.finding;    // the same with every measure of the operator (for audit)
 ```
 
 Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the

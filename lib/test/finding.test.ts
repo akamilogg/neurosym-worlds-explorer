@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findingOf, findingText } from '../src/learn/finding.ts';
+import { findingOf, findingText, findingView } from '../src/learn/finding.ts';
 
 /* SPEC-OBJETIVO O10: the finding of a run, derived from its journal alone, the same for every world. */
 
@@ -62,8 +62,8 @@ test('counterexamples are the failed validations; limitations name the misses th
 
 test('the operator part keeps the grade, the Judge ablation and the truth, apart from the rest', () => {
   const f = findingOf(journal);
-  assert.equal(f.operator.rule_recovery?.score, 0.63);
-  assert.deepEqual(f.operator.truth, journal.hidden_from_the_learner.truth);
+  assert.equal(f.operator!.rule_recovery?.score, 0.63);
+  assert.deepEqual(f.operator!.truth, journal.hidden_from_the_learner.truth);
   assert.deepEqual(f.cost, { total: { llm_calls: 11 }, to_acceptance: { llm_calls: 8 } });
 });
 
@@ -74,7 +74,7 @@ test('orbit: a final wrapped as { round, fingerprint, law } and a law recovery a
   const f = findingOf(orbit);
   assert.deepEqual(f.model, { round: 5, fingerprint: 'o5', law });
   assert.equal(f.outcome.status, 'budget');
-  assert.equal(f.operator.rule_recovery?.score, 0.75);
+  assert.equal(f.operator!.rule_recovery?.score, 0.75);
   assert.equal(f.tested.at_acceptance, null);
 });
 
@@ -84,4 +84,31 @@ test('an unfinished journal still has a finding, and its text says so', () => {
   assert.equal(f.model, null);
   assert.match(findingText(f), /^cells@1: unfinished/);
   assert.match(findingText(findingOf(journal)), /tolerated: 1 of 24 missed in blind1/);
+});
+
+/* SPEC-OBJETIVO O14: the researcher's view - what another agent is given - keeps nothing only the operator knows. */
+
+test('the researcher view drops the operator part, the hidden description of places and any fact measured with the truth', () => {
+  const withSolver = JSON.parse(JSON.stringify(journal));
+  /* A grid-like place: a solver's view of each move is measured with the hidden rules. */
+  withSolver.events[3].laboratories[0] = { ...withSolver.events[3].laboratories[0], wins: 3, total: 3, critical: [8, 4], turns_still_winning: [4, 2], action_accuracy: { rate: 0.6 } };
+  withSolver.events.at(-1).places = [{ id: 'lab1', role: 'laboratory', seen: true, sources: [{ pos: [3, 4] }], frame: { theta: 1 } }];
+  const operator = findingOf(withSolver);
+  const researcher = findingView(operator, 'researcher');
+  assert.equal(operator.view, 'operator');
+  assert.equal(researcher.view, 'researcher');
+  assert.equal(researcher.operator, undefined);
+  assert.deepEqual(researcher.tested.places, [{ id: 'lab1', role: 'laboratory', seen: true }]);
+  assert.deepEqual(researcher.tested.at_acceptance!.laboratories[0], { place: 'lab1', holds: true, agreed: 24, points: 24, not_a_number: 0, wins: 3, total: 3 });
+  assert.deepEqual(researcher.counterexamples[0].facts, { place: 'place1', holds: false, agreed: 17, points: 24, not_a_number: 0 });
+  const text = JSON.stringify(researcher);
+  for (const hidden of ['the truth', 'critical', 'turns_still_winning', 'action_accuracy', 'sources', 'theta', 'rule_recovery', 'grades', 'trace'])
+    assert.ok(!text.includes(hidden), hidden + ' must not reach a researcher');
+  /* What the result is, is all there. */
+  assert.deepEqual(researcher.model, operator.model);
+  assert.deepEqual(researcher.claims, operator.claims);
+  assert.deepEqual(researcher.limitations, operator.limitations);
+  assert.deepEqual(researcher.reproduce, operator.reproduce);
+  assert.equal(findingView(operator, 'operator'), operator);
+  assert.doesNotMatch(findingText(researcher), /operator:/);
 });

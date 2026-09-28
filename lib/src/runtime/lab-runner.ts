@@ -17,7 +17,7 @@ import { Protocol } from '../learn/protocol.ts';
 import { formOf, operatorSummary, tokensOf, type AblationRecord } from '../learn/operator.ts';
 import type { Place } from '../learn/objective.ts';
 import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
-import { findingOf, findingText, type Finding } from '../learn/finding.ts';
+import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
@@ -29,8 +29,9 @@ import { mulberry32 } from '../worlds/grid/gen.ts';
  * Endpoints and keys come from the environment (never from the command line, never
  * written to the journal): JEV_URL, JEV_KEY, JEV_MODEL; LLM_URL, LLM_KEY, LLM_MODEL.
  *
- * The protocol is the researcher's (learn/protocol.ts). The journal keeps the hidden truth
- * and the operator's measures; they never reach System 2 or the Judge.
+ * The protocol is the researcher's (learn/protocol.ts): it decides from what the world answered.
+ * The journal keeps the operator's measures (and, for a world someone wrote, its truth); they
+ * never reach System 2 or the Judge.
  * ========================================================================== */
 
 /** The common options, with their defaults (a laboratory may change a default: `Lab.defaults`). */
@@ -148,8 +149,12 @@ export interface LabResult {
   /** accepted, quick_stop, budget, cancelled, time_budget, token_budget, diverged, llm_error... */
   readonly stoppedBy: string;
   readonly journal: string;
+  /** The operator's finding (with all its measures, for audit). */
   readonly findingFile: string;
   readonly finding: Finding;
+  /** The researcher's (without what only the operator knows): what another agent is given (SPEC-OBJETIVO O14). */
+  readonly researcherFile: string;
+  readonly researcher: Finding;
 }
 
 /** The command line: --help, the endpoints from the environment, Ctrl+C as a cancel (twice: stop at once), exit codes. */
@@ -379,10 +384,14 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(outFile) });
       const findingFile = outFile.replace(/\.json$/, '') + '.finding.json';
       fs.writeFileSync(findingFile, JSON.stringify(finding, null, 2));
+      /* OPERATOR ONLY above; the researcher's view is what another agent is given (SPEC-OBJETIVO O14). */
+      const researcher = findingView(finding, 'researcher');
+      const researcherFile = outFile.replace(/\.json$/, '') + '.finding.researcher.json';
+      fs.writeFileSync(researcherFile, JSON.stringify(researcher, null, 2));
       if (!closed) print(findingText(finding));
       say('finding ' + findingFile);
       if (replay.pending() && stop.stoppedBy !== 'diverged') say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
-      return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding };
+      return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding, researcherFile, researcher };
   }
   return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged };
 }
@@ -426,8 +435,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* An answer as given, and as compared with what happened (Lab.compare; by default the same). */
   const predictor = new Predictor<Point, unknown>(evaluator, (s) => lab.perceive(s), { runners: [runner], ...(lab.compare ? { answer: (a: unknown, s: Point) => lab.compare!(a, s) } : {}) });
 
-  const truth = lab.truth(spec, worldOptions);
-  Object.assign(journal.hidden_from_the_learner, { spec, truth, ...(lab.operator?.hidden?.(spec, ctx) ?? {}),
+  /* A truth only where the world was written by someone (optional: nothing but the grade depends on it). */
+  const truth = lab.truth?.(spec, worldOptions) ?? null;
+  Object.assign(journal.hidden_from_the_learner, { spec, ...(truth ? { truth } : {}), ...(lab.operator?.hidden?.(spec, ctx) ?? {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, ...lab.placeInfo(p.spec) })) });
   /* --- The learner's episodes ------------------------------------------------------------ */
   interface StoredEpisode { readonly id: string; readonly place: string; readonly round: number; readonly by: string; readonly data: unknown }
@@ -657,6 +667,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   };
 
   const gradeRecovery = async (final: Law | null): Promise<void> => {
+    if (!truth?.length || !lab.grading) return;
     const event = lab.grading.event ?? 'operator_rule_recovery';
     const brief = session.notebook.brief();
     const learned = { [lab.grading.finalKey ?? 'final_model']: final ? ownLaw(final) : null, beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: session.notebook.reflections };

@@ -43,8 +43,9 @@ for (const [name, lab] of LAW_LABS) {
     }
   });
 
-  test(name + ': the operator has a truth, baselines, and an agreement that a known answer passes', () => {
-    assert.ok(lab.truth(spec, options).length > 0);
+  test(name + ': the operator has baselines and an agreement that a known answer passes (and, a world written here, its truth)', () => {
+    if (lab.truth) assert.ok(lab.truth(spec, options).length > 0);
+    assert.equal(Boolean(lab.truth), Boolean(lab.grading), 'a grader only where there is a truth to grade against');
     assert.ok(lab.baselines(spec).length > 0);
     const e = lab.episode(spec, mulberry32(3));
     const [c] = lab.cases(spec, 'ep1', e, 1);
