@@ -14,7 +14,7 @@ test('law requests: "on" beside or inside measure and table; a table without a r
     { table: { source: '(p) => "x"' }, on: 'checks' },
     { table: { source: '(p) => 1', range: [0, 1], on: 'checks' } },
     { table: { source: '(p) => 1', range: 'wide' } }
-  ]), { world: 'cells@1' });
+  ]), { world: 'cells@1', parseAct: () => 'no act here' });
   assert.equal(t.kind, 'investigate');
   if (t.kind !== 'investigate') return;
   assert.deepEqual(t.requests, [

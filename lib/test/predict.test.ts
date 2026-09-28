@@ -65,7 +65,7 @@ test('a point holds only what is perceived; the target is read from the table, a
 test('the exact law, written in the learner\'s frame as the next row, predicts to the noise; the Judge is asked once per point', async () => {
   calls = 0;
   const predictor = predictorWith(echo);
-  const r = await testPredictions(samples, async (s) => (await predictor.predict(exact, s)).vector);
+  const r = await testPredictions(samples, async (s) => (await predictor.predict(exact, s)).compared);
   assert.deepEqual(r.failed, []);
   /* The law at an instant scores what the hidden law itself scores; the rest of its miss is not noise (the noise floor is
      small) but the second difference over two rows, which departs from the law where the pull changes within a row. */
@@ -75,11 +75,11 @@ test('the exact law, written in the learner\'s frame as the next row, predicts t
   /* One question per distinct observation: points that measure the same share the answer. */
   const distinct = new Set(samples.map((x) => observer.observe(x.state, exact.observations).vector)).size;
   assert.equal(calls, distinct, 'one question per distinct observation');
-  await testPredictions(samples, async (s) => (await predictor.predict(exact, s)).vector);
+  await testPredictions(samples, async (s) => (await predictor.predict(exact, s)).compared);
   assert.equal(calls, distinct, 'the same points again: every answer from the cache');
   /* A different output asks the Judge nothing new: the cache is keyed on the observations and the rules only. */
   const halved: Law = { ...exact, output: { ...exact.output!, source: exact.output!.source.replace('size * dx / n', '0.5 * size * dx / n') } };
-  await testPredictions(samples, async (s) => (await predictor.predict(halved, s)).vector);
+  await testPredictions(samples, async (s) => (await predictor.predict(halved, s)).compared);
   assert.equal(calls, distinct, 'a new output, no new question');
   /* What the output chose to show comes back with the answer. */
   const pr = await predictor.predict(exact, samples[3].state);
@@ -129,7 +129,7 @@ test('a law in code only: the Judge is never asked, and there is nothing to abla
   assert.deepEqual(checkLaw(codeOnlyLaw).errors, []);
   calls = 0;
   const predictor = predictorWith(echo);
-  const r = await testPredictions(samples, async (s) => (await predictor.predict(codeOnlyLaw, s)).vector);
+  const r = await testPredictions(samples, async (s) => (await predictor.predict(codeOnlyLaw, s)).compared);
   assert.equal(calls, 0, 'no rule, no question');
   assert.ok(Math.abs(r.error - r.reference!) < 0.02 * r.reference! + 1e-3, 'the law in code scores the hidden law: ' + r.error);
   const pr = await predictor.predict(codeOnlyLaw, samples[0].state);
@@ -195,7 +195,7 @@ test('an output that reads none of the rules answers alone: the Judge is not ask
   assert.ok(typeof pr.observations.mag === 'number');
   const shown = await predictor.predict(law, samples[3].state, { askRules: true });
   assert.equal(calls, 1);
-  assert.deepEqual(shown.vector, pr.vector);
+  assert.deepEqual(shown.compared, pr.compared);
   assert.ok('pull' in shown.rules);
 });
 

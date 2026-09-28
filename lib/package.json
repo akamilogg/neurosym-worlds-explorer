@@ -7,6 +7,10 @@
     ".": "./src/index.ts",
     "./foxhounds": "./src/worlds/foxhounds/index.ts",
     "./orbit": "./src/worlds/orbit/index.ts",
+    "./grid": "./src/worlds/grid/index.ts",
+    "./cells": "./src/worlds/cells/index.ts",
+    "./messages": "./src/worlds/messages/index.ts",
+    "./lab": "./src/lab.ts",
     "./node": "./src/runtime/node-vm.ts",
     "./browser": "./src/browser.ts"
   },

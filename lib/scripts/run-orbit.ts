@@ -81,7 +81,8 @@ import { nodeVmRunner } from '../src/runtime/node-vm.ts';
 import { openAiChatClient } from '../src/learn/system2.ts';
 import { replayOnEvidence } from '../src/learn/gates.ts';
 import { reflectionTask, toolOf } from '../src/learn/prompt.ts';
-import { LAW_TOOLS, lawExplorerSystem, ownLaw, type LawRequest, type LawTool } from '../src/learn/law-explorer.ts';
+import { ownLaw, type LawRequest } from '../src/learn/law-explorer.ts';
+import { ORBIT_TOOLS, orbitSystem, parseOrbitAct, type OrbitAct, type OrbitTool } from '../src/worlds/orbit/interface.ts';
 import { delegatedLaw, fitLawCodeOnly } from '../src/learn/law-ablation.ts';
 import { LawSession, lawFingerprint, type LawRecord } from '../src/learn/law-session.ts';
 import { mulberry32 } from '../src/worlds/grid/gen.ts';
@@ -102,13 +103,13 @@ import { ROOT } from '../test/support.ts';
 const argv = process.argv.slice(2);
 const arg = (name: string, fallback: string): string => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback; };
 const flag = (name: string): boolean => argv.includes('--' + name);
-function parseTools(value: string): LawTool[] {
-  if (value === 'all') return [...LAW_TOOLS];
+function parseTools(value: string): OrbitTool[] {
+  if (value === 'all') return [...ORBIT_TOOLS];
   if (value === 'none') return [];
   const asked = value.split(',').map((t) => t.trim()).filter(Boolean).map((t) => toolOf(t) ?? t);
-  const unknown = asked.filter((t) => !(LAW_TOOLS as readonly string[]).includes(t));
-  if (unknown.length) { console.error('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + LAW_TOOLS.join(', ') + ', or all / none)'); process.exit(2); }
-  return LAW_TOOLS.filter((t) => asked.includes(t));
+  const unknown = asked.filter((t) => !(ORBIT_TOOLS as readonly string[]).includes(t));
+  if (unknown.length) { console.error('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + ORBIT_TOOLS.join(', ') + ', or all / none)'); process.exit(2); }
+  return ORBIT_TOOLS.filter((t) => asked.includes(t));
 }
 const cfg = {
   seed: Number(arg('seed', '3')),
@@ -139,9 +140,9 @@ const cfg = {
   /* The paired regression: each laboratory's previous check answered again by the new law, which must still hold there. */
   regression: flag('regression')
 };
-const tools: ReadonlySet<LawTool> = new Set(cfg.tools);
+const tools: ReadonlySet<OrbitTool> = new Set(cfg.tools);
 const investigative = cfg.tools.length > 0;
-const SYSTEM_PROMPT = lawExplorerSystem(tools, { regression: cfg.regression });
+const SYSTEM_PROMPT = orbitSystem(tools, { regression: cfg.regression });
 const env = process.env;
 if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
 if (!cfg.flat && !env.JEV_KEY) { console.error('JEV_KEY is required (or run the --flat control).'); process.exit(2); }
@@ -183,7 +184,7 @@ const judge = new JevJudge(cfg.flat
   ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
   : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
 const evaluator = new Evaluator<OrbitPoint>(observer, judge, { maximizer: 'nature', runners: [runner] });
-const predictor = new Predictor<OrbitPoint>(evaluator, perceivePoint, { runners: [runner], answer: (a, point) => answerAsDeparture(a, point) });
+const predictor = new Predictor<OrbitPoint, Vec2>(evaluator, perceivePoint, { runners: [runner], answer: (a, point) => answerAsDeparture(a, point) });
 const llmUse = { calls: 0, tokens: 0 };
 const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1,
   onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
@@ -319,7 +320,7 @@ const objective = orbitObjective<Law, Setup>({
     if (c.purpose === 'validation') return launchesIn(setup, c.index, 5000 + c.round, c.round, 'valid' + c.round + '-' + setup.id);
     return launchesIn(setup, c.index, (c.set === 1 ? 200000 : 100000) + c.round, c.round);
   },
-  predict: async (law, x) => (await predictor.predict(law, x)).vector,
+  predict: async (law, x) => (await predictor.predict(law, x)).compared,
   launchOf: (episode) => launches.get(episode)?.launch ?? null,
   operatorView: (r) => operatorOf(r),
   accept: cfg.accept, precision: cfg.precision, regression: cfg.regression
@@ -380,7 +381,7 @@ async function ablate(law: Law, round: number, lawResult: TestResult): Promise<v
   }
   if (cfg.delegated && asksJudge(law)) {
     const d = delegatedLaw(law);
-    arms.delegated = summary(await testPredictions(samples, async (s) => (await predictor.predict(d, s, { measure: law.observations })).vector));
+    arms.delegated = summary(await testPredictions(samples, async (s) => (await predictor.predict(d, s, { measure: law.observations })).compared));
   }
   log('ablation', { round, fitted_on_points: fitOn.length, arms });
   say('  ablation (score): law ' + round2(lawResult.scores.law) + (arms.code_only ? ', code only ' + (arms.code_only as { score: number }).score : '') + (arms.flat ? ', flat ' + (arms.flat as { score: number }).score : '') +
@@ -411,7 +412,7 @@ function checkOnPoints(law: Law): string[] {
   return errors;
 }
 
-async function runRequest(req: LawRequest, budget: { acts: number }): Promise<unknown> {
+async function runRequest(req: LawRequest<OrbitAct>, budget: { acts: number }): Promise<unknown> {
   const kind = (['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const).find((k) => k in req)!;
   if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
   if ('view' in req) {
@@ -504,8 +505,8 @@ async function runRequest(req: LawRequest, budget: { acts: number }): Promise<un
       try {
         const pr = await predictor.predict(law, s.state);
         /* observed next - answer = observed d - predicted d: the same numbers, in the learner's terms. */
-        const r: Vec2 = [s.target[0] - pr.vector[0], s.target[1] - pr.vector[1]];
-        residual = { next_row_minus_your_answer: r.map(round2), verdict: scoreOf(pr.vector, s.target).map((v) => Math.round(v * 1000) / 1000) };
+        const r: Vec2 = [s.target[0] - pr.compared[0], s.target[1] - pr.compared[1]];
+        residual = { next_row_minus_your_answer: r.map(round2), verdict: scoreOf(pr.compared, s.target).map((v) => Math.round(v * 1000) / 1000) };
       } catch (e) { residual = { error: String((e as Error).message ?? e) }; }
     }
     rows.push({ point: s.ref, ...(err ? { error: err.error } : { value: o.values.m ?? o.texts.m }), the_next_row_showed: departureAsNext(s.target, s.state).map(round2), residual });
@@ -517,7 +518,7 @@ async function runRequest(req: LawRequest, budget: { acts: number }): Promise<un
 
 const REFLECTION_TASK = reflectionTask(investigative);
 
-const session = new LawSession({
+const session = new LawSession<OrbitAct>({
   llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: ORBIT_PERCEPT_DOC, steps: cfg.steps, investigative,
   ...(tools.has('act') ? { acts: cfg.launches } : {}),
   runRequest: (r, budget) => runRequest(r, budget),
@@ -526,6 +527,7 @@ const session = new LawSession({
   episodes: () => launchIndex(),
   places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
   /* Echoed in the prompt's words: "place", not the host's name for it. */
+  parseAct: parseOrbitAct,
   actAsWritten: ({ setup, ...rest }) => ({ ...rest, ...(setup ? { place: setup } : {}) }),
   log, say
 });

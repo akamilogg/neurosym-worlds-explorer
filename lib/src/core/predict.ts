@@ -58,9 +58,9 @@ export function checkLaw(law: Law): LawCheck {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-export interface Prediction {
-  /** What is compared with what happened (the world's reading of the answer). */
-  readonly vector: Vec2;
+export interface Prediction<C = unknown> {
+  /** What is compared with what happened: the world's reading of the answer (orbit: a pair of numbers). */
+  readonly compared: C;
   /** The model's answer, as it gave it. */
   readonly answer: unknown;
   /** Named intermediate values its output chose to show. */
@@ -87,20 +87,22 @@ export interface Measured<S = unknown> {
   readonly texts: Readonly<Record<string, string>>;
 }
 
-export class Predictor<S> {
+/** Makes a model's answers and reads them as what is compared with what happened: `C`, the world's (orbit: a pair of
+    numbers, `pairOf`; a row of cells or a mark, the answer as given). */
+export class Predictor<S, C = unknown> {
   readonly evaluator: Evaluator<S>;
   private readonly perceive: (state: S) => unknown;
   private readonly outputs: OutputRunner;
-  private readonly toCompared: (answer: unknown, state: S, percept: unknown) => Vec2;
+  private readonly toCompared: (answer: unknown, state: S, percept: unknown) => C;
 
   /** `perceive` hands the output code what is perceived of a state: the same thing the observations' code reads.
-      `answer` turns a model's answer into what is compared with what happened (default: the answer is that pair). */
+      `answer` turns a model's answer into what is compared with what happened (default: the answer as given). */
   constructor(evaluator: Evaluator<S>, perceive: (state: S) => unknown,
-    options: { runners?: readonly CodeRunner[]; answer?: (answer: unknown, state: S, percept: unknown) => Vec2 } = {}) {
+    options: { runners?: readonly CodeRunner[]; answer?: (answer: unknown, state: S, percept: unknown) => C } = {}) {
     this.evaluator = evaluator;
     this.perceive = perceive;
     this.outputs = new OutputRunner(options.runners ?? []);
-    this.toCompared = options.answer ?? ((a) => pairOf(a));
+    this.toCompared = options.answer ?? ((a) => a as C);
   }
 
   /** What a law's observations measure at a state, and what is perceived there: once, for answers without the Judge. */
@@ -111,7 +113,7 @@ export class Predictor<S> {
   }
 
   /** The law's answer with GIVEN rule answers instead of the Judge's (an ablation), read as what is compared. */
-  answerWith(law: Law, m: Measured<S>, rules: Readonly<Record<string, number>>): Vec2 {
+  answerWith(law: Law, m: Measured<S>, rules: Readonly<Record<string, number>>): C {
     return this.toCompared(this.rawAnswerWith(law, m, rules), m.state, m.percept);
   }
 
@@ -129,7 +131,7 @@ export class Predictor<S> {
 
   /** `measure`: observations to hand the output instead of the law's own (an ablation: the Judge reads something else,
       the output still reads what the learner measured). */
-  async predict(law: Law, state: S, options: { signal?: AbortSignal; measure?: Readonly<Record<string, MeasureDecl>>; askRules?: boolean } = {}): Promise<Prediction> {
+  async predict(law: Law, state: S, options: { signal?: AbortSignal; measure?: Readonly<Record<string, MeasureDecl>>; askRules?: boolean } = {}): Promise<Prediction<C>> {
     const percept = this.perceive(state);
     /* An output that reads none of the rules answers alone: the Judge is not asked questions nobody reads. */
     if (law.output && asksJudge(law) && !options.askRules) {
@@ -139,7 +141,7 @@ export class Predictor<S> {
       const alone = this.outputs.runIfJudgeUnread(law.output, percept, observations);
       if (alone) {
         this.evaluator.stats.judgeUnread++;
-        return { vector: this.toCompared(alone.answer, state, percept), answer: alone.answer, parts: alone.parts,
+        return { compared: this.toCompared(alone.answer, state, percept), answer: alone.answer, parts: alone.parts,
           observations, rules: {}, V: null, evaluation: null };
       }
     }
@@ -160,7 +162,7 @@ export class Predictor<S> {
     }
     const inputs = outputInputs(values, texts, rules, V);
     const out: OutputResult = law.output ? this.outputs.run(law.output, percept, inputs) : { answer: V, parts: {} };
-    return { vector: this.toCompared(out.answer, state, percept), answer: out.answer, parts: out.parts,
+    return { compared: this.toCompared(out.answer, state, percept), answer: out.answer, parts: out.parts,
       observations: inputs.observations, rules: inputs.rules, V, evaluation };
   }
 }

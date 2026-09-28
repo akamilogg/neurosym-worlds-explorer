@@ -119,7 +119,7 @@ const judge = new JevJudge(cfg.flat
   : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
 const evaluator = new Evaluator<MessagePoint>(observer, judge, { maximizer: 'nature', runners: [runner] });
 /* The answer is a number read on its side of 0.5: the Predictor's pair comparison is unused (the objective compares). */
-const predictor = new Predictor<MessagePoint>(evaluator, perceiveMessage, { runners: [runner], answer: () => [0, 0] });
+const predictor = new Predictor<MessagePoint>(evaluator, perceiveMessage, { runners: [runner] });
 const llmUse = { calls: 0, tokens: 0 };
 const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1,
   onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });

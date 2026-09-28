@@ -53,7 +53,7 @@ export interface LawFit<S> {
 
 /** Fit the code-only reading of `law` (or, with `flat`, a constant per rule) on samples, through the learner's own output:
     r_i = σ(Σ_j c_ij x_j) over the numeric observations scaled to [0,1]. Levenberg-Marquardt with a numeric Jacobian. */
-export function fitLawCodeOnly<S>(predictor: Predictor<S>, law: Law, samples: readonly PredictionSample<S>[],
+export function fitLawCodeOnly<S>(predictor: Predictor<S, Vec2>, law: Law, samples: readonly PredictionSample<S>[],
   options: { flat?: boolean; iterations?: number; maxSamples?: number } = {}): LawFit<S> {
   const ruleIds = Object.keys(law.rules);
   const numeric = options.flat ? [] : Object.entries(law.observations).filter(([, d]) => d.range && d.range[1] > d.range[0]).map(([id]) => id);

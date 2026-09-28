@@ -2,7 +2,7 @@ import { hashString, stableStringify } from '../core/hash.ts';
 import type { ApiError } from '../core/net.ts';
 import type { Law } from '../core/predict.ts';
 import { parseReflection } from './explorer.ts';
-import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest, type OrbitAct } from './law-explorer.ts';
+import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
 import { Notebook } from './notebook.ts';
 import type { ChatClient } from './system2.ts';
 
@@ -44,8 +44,8 @@ export interface LawSessionHost<A> {
   readonly investigative: boolean;
   /** Acts per round, when the world offers `act`. */
   readonly acts?: number;
-  /** The world's act parameters (default: orbit@1's). */
-  readonly parseAct?: (raw: Record<string, unknown>) => A | string;
+  /** The world's act parameters, or why they cannot be read (a world without `act` says so). */
+  readonly parseAct: (raw: Record<string, unknown>) => A | string;
   runRequest(request: LawRequest<A>, budget: { acts: number }, round: number): Promise<unknown>;
   /** Whether a reference names an episode or a point of the learner's. */
   known(ref: string): boolean;
@@ -66,7 +66,7 @@ export interface LawSessionHost<A> {
 /** A law's identity: its own code and words (the same law has the same fingerprint). */
 export const lawFingerprint = (law: Law): string => hashString(stableStringify(ownLaw(law))).slice(0, 10);
 
-export class LawSession<A = OrbitAct> {
+export class LawSession<A> {
   readonly host: LawSessionHost<A>;
   readonly laws: LawRecord[] = [];
   readonly notebook = new Notebook();
@@ -110,7 +110,7 @@ export class LawSession<A = OrbitAct> {
       const payload = lawExplorerPayload({
         round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
         setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(),
-        ...(h.investigative ? { investigation, stepsLeft } : {}), ...(h.acts !== undefined ? { launchesLeft: budget.acts } : {}),
+        ...(h.investigative ? { investigation, stepsLeft } : {}), ...(h.acts !== undefined ? { actsLeft: budget.acts } : {}),
         refused, task: mode === 'reflect' ? reflectionTask : null
       });
       h.say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
@@ -130,7 +130,7 @@ export class LawSession<A = OrbitAct> {
         h.log('proposal_failed', { round, error: String((error as Error)?.message || error) });
         continue;
       }
-      const turn = parseLawTurn<A>(content, { world: h.world, round, ...(h.parseAct ? { parseAct: h.parseAct } : {}) });
+      const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct });
       const noteWarnings = [...this.notebook.applyNotes(round, turn.notes, (ref) => h.known(ref)), ...this.notebook.applyMethods(round, turn.methods)];
       if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }

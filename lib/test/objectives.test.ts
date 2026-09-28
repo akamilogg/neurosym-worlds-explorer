@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { gridObjective, GRID_ANSWER, GRID_VERDICT, type GridEpisode } from '../src/worlds/grid/objective.ts';
 import { orbitObjective, orbitVerdict, ORBIT_ANSWER } from '../src/worlds/orbit/objective.ts';
 import { GRID_INTERFACE } from '../src/learn/explorer.ts';
-import { ORBIT_INTERFACE, lawExplorerSystem } from '../src/learn/law-explorer.ts';
+import { ORBIT_INTERFACE, orbitSystem } from '../src/worlds/orbit/interface.ts';
 import { generateOrbit } from '../src/worlds/orbit/index.ts';
 import { predictionSamples, trialLaunches, type OrbitPoint } from '../src/worlds/orbit/predict.ts';
 import type { Place } from '../src/learn/objective.ts';
@@ -14,8 +14,8 @@ const lab: Place = { id: 'lab1', role: 'laboratory', seen: true };
 test('the interfaces open with their objective\'s form of the answer and of a verdict', () => {
   assert.deepEqual(GRID_INTERFACE.lines.slice(0, 3), [...GRID_ANSWER.form, ...GRID_VERDICT]);
   assert.deepEqual(ORBIT_INTERFACE.lines.slice(0, 2), [...ORBIT_ANSWER.form, ...orbitVerdict()]);
-  assert.doesNotMatch(lawExplorerSystem(), /answered again/);
-  assert.match(lawExplorerSystem(undefined, { regression: true }), /answered again there by this model/);
+  assert.doesNotMatch(orbitSystem(), /answered again/);
+  assert.match(orbitSystem(undefined, { regression: true }), /answered again there by this model/);
 });
 
 test('grid: holds when every episode scored 1 and none run again scored less; the verdict is each episode\'s score', async () => {
