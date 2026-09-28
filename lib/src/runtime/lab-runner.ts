@@ -14,9 +14,9 @@ import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/promp
 import { ownLaw, type LawRequest } from '../learn/law-explorer.ts';
 import { LawSession, lawFingerprint } from '../learn/law-session.ts';
 import { Protocol } from '../learn/protocol.ts';
-import { GRADING_STRUCTURE, formOf, operatorSummary, tokensOf, type AblationRecord } from '../learn/operator.ts';
+import { formOf, operatorSummary, tokensOf, type AblationRecord } from '../learn/operator.ts';
 import type { Place } from '../learn/objective.ts';
-import type { AnyLab, LabCase, LabOptions } from '../learn/lab.ts';
+import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
 import { findingOf, findingText } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
@@ -48,9 +48,8 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'out', default: '', help: 'the journal (default runs/<name>-<time>.json)' }
 ];
 const FLAGS: readonly { name: string; help: string }[] = [
-  { name: 'no-regression', help: 'do not answer each laboratory\'s previous check again with the new model' },
   { name: 'quick', help: 'stop the first time System 2 asks to validate, without validating' },
-  { name: 'no-ablation', help: 'skip the operator\'s flat-judge arm (every rule answering 0.5)' },
+  { name: 'no-ablation', help: 'skip the operator\'s ablation of the Judge' },
   { name: 'no-grade', help: 'skip the operator-only grading of the recovered rule (one LLM call)' },
   { name: 'no-reflection', help: 'skip the final reflection round' },
   { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
@@ -60,7 +59,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
 const CONTROLS: readonly { name: string; value: string; help: string }[] = [
   { name: 'max-minutes', value: 'N', help: 'stop before asking System 2 again once N minutes have passed (this process)' },
   { name: 'max-tokens', value: 'N', help: 'stop before asking System 2 again once its answers have used N tokens (the whole run)' },
-  { name: 'resume', value: 'FILE', help: 'resume the run of that journal: its answers are replayed, then it goes on live' }
+  { name: 'resume', value: 'FILE', help: 'resume the run of that journal in a new one (<journal>.resumed-<time>.json, or --out): its answers are replayed, then it goes on live; the journal resumed is left as it is' }
 ];
 const CONTROL_NAMES = new Set(['out', ...CONTROLS.map((c) => c.name)]);
 
@@ -85,11 +84,16 @@ export function budgetArgs(argv: readonly string[]): string[] {
 export function labUsage(lab: AnyLab, command: string): string {
   const pad = (s: string) => s.padEnd(22);
   const defaults = { ...Object.fromEntries(COMMON.map((o) => [o.name, o.default])), ...(lab.defaults ?? {}) };
+  const regression = lab.regressionByDefault === false
+    ? { name: 'regression', help: 'the paired regression: each laboratory\'s previous check answered again by the new model, which must still hold there' }
+    : { name: 'no-regression', help: 'do not answer each laboratory\'s previous check again with the new model' };
   return [lab.id + ': ' + lab.about, '', '  ' + command + ' [options]', '', 'Options of this world:',
     ...lab.options.map((o) => '  ' + pad('--' + o.name + ' N') + o.help + ' (default ' + o.default + ')'),
+    ...(lab.flags ?? []).map((f) => '  ' + pad('--' + f.name) + f.help),
     'Common options:',
-    ...COMMON.map((o) => '  ' + pad('--' + o.name + ' ' + (o.name === 'tools' ? 'LIST' : o.name === 'out' ? 'FILE' : 'N')) + o.help + (defaults[o.name] ? ' (default ' + defaults[o.name] + ')' : '')),
-    ...FLAGS.map((f) => '  ' + pad('--' + f.name) + f.help),
+    /* A loop of its own draws its checks its own way: the points of an episode are not its. */
+    ...COMMON.filter((o) => !(isGameLab(lab) && (o.name === 'every' || o.name === 'check-episodes'))).map((o) => '  ' + pad('--' + o.name + ' ' + (o.name === 'tools' ? 'LIST' : o.name === 'out' ? 'FILE' : 'N')) + o.help + (defaults[o.name] ? ' (default ' + defaults[o.name] + ')' : '')),
+    ...[regression, ...FLAGS].map((f) => '  ' + pad('--' + f.name) + f.help),
     'Run controls (Ctrl+C stops before the next question to System 2; a second Ctrl+C stops at once):',
     ...CONTROLS.map((c) => '  ' + pad('--' + c.name + ' ' + c.value) + c.help),
     '', 'Endpoints and keys come from the environment: LLM_URL, LLM_MODEL, LLM_KEY; JEV_URL, JEV_KEY (not needed with --flat).'].join('\n');
@@ -115,12 +119,25 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     try { previous = JSON.parse(fs.readFileSync(resumeFrom, 'utf8')); } catch (e) { console.error('--resume: cannot read ' + resumeFrom + ': ' + String((e as Error).message ?? e)); process.exit(2); }
     if (previous!.experiment !== lab.id || !Array.isArray(previous!.argv)) { console.error('--resume: ' + resumeFrom + ' is not a resumable journal of ' + lab.id); process.exit(2); }
   }
-  const argv: readonly string[] = previous ? [...(previous.argv as string[]), ...budgetArgs(given), '--out', resumeFrom!] : given;
+  /* A resumed run is a run of its own, derived from the one it resumes, which stays as it was (its provenance). */
+  const o = given.indexOf('--out');
+  const derived = previous ? (o >= 0 && given[o + 1] ? given[o + 1] : resumeFrom!.replace(/\.json$/, '') + '.resumed-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json') : null;
+  const argv: readonly string[] = previous ? [...(previous.argv as string[]), ...budgetArgs(given), '--out', derived!] : given;
   const defaults: Record<string, string> = { ...Object.fromEntries(COMMON.map((o) => [o.name, o.default])), ...(lab.defaults ?? {}) };
-  const arg = (name: string, fallback = defaults[name] ?? ''): string => { const i = argv.indexOf('--' + name); return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback; };
+  /* An option under its name or one of its aliases (an earlier runner's). */
+  const aliasesOf = (name: string): string[] => [name, ...Object.entries(lab.aliases ?? {}).filter(([, to]) => to === name).map(([from]) => from),
+    ...(lab.options.find((o) => o.name === name)?.aliases ?? [])];
+  const arg = (name: string, fallback = defaults[name] ?? ''): string => {
+    for (const n of aliasesOf(name)) { const i = argv.indexOf('--' + n); if (i >= 0 && argv[i + 1]) return argv[i + 1]; }
+    return fallback;
+  };
   const flag = (name: string): boolean => argv.includes('--' + name);
-  const worldOptions: LabOptions = Object.fromEntries(lab.options.map((o) => [o.name, arg(o.name, o.default)]));
-  const ALL: readonly Tool[] = lab.interface({}).tools;
+  const worldOptions: LabOptions = {
+    ...Object.fromEntries(lab.options.map((o) => [o.name, arg(o.name, o.default)])),
+    ...Object.fromEntries((lab.flags ?? []).map((f) => [f.name, String(flag(f.name))]))
+  };
+  const camel = (s: string) => s.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+  const ALL: readonly Tool[] = (isGameLab(lab) ? lab.tools : lab.interface({}).tools) as readonly Tool[];
   const parseTools = (value: string): Tool[] => {
     if (value === 'all') return [...ALL];
     if (value === 'none') return [];
@@ -131,7 +148,7 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   };
   const cfg = {
     seed: Number(arg('seed')),
-    ...Object.fromEntries(Object.entries(worldOptions).map(([k, v]) => [k, Number.isFinite(Number(v)) ? Number(v) : v])),
+    ...Object.fromEntries(Object.entries(worldOptions).map(([k, v]) => [camel(k), v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v])),
     attempts: Number(arg('attempts')),
     explore: Number(arg('explore')),
     steps: Number(arg('steps')),
@@ -140,7 +157,7 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     family: Math.max(1, Number(arg('family'))),
     validations: Math.max(1, Number(arg('validations'))),
     confirmPlaces: Math.max(1, Number(arg('confirm-places'))),
-    regression: !flag('no-regression'),
+    regression: lab.regressionByDefault === false ? flag('regression') : !flag('no-regression'),
     tools: parseTools(arg('tools')),
     quick: flag('quick'),
     ablation: !flag('no-ablation') && !flag('quick'),
@@ -148,30 +165,51 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat')
   };
-  const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
-  const tools: ReadonlySet<Tool> = new Set(cfg.tools);
-  const investigative = cfg.tools.length > 0;
-  const SYSTEM_PROMPT = system2Prompt(lab.interface({ regression: cfg.regression }), tools);
+  Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
   const maxMinutes = Number(arg('max-minutes', '0')) || null;
   const maxTokens = Number(arg('max-tokens', '0')) || null;
   const env = process.env;
   if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
   if (!cfg.flat && !env.JEV_KEY) { console.error('JEV_KEY is required (or run the --flat control).'); process.exit(2); }
 
-  /* --- The world, as the operator knows it and as the learner perceives it ------------- */
-  type Spec = unknown;
-  type Point = unknown;
-  type Case = LabCase<Point> & Record<string, unknown>;
-  interface LabPlace extends Place { readonly spec: Spec }
-  const spec: Spec = lab.generate(cfg.seed, worldOptions);
-  const places = new Map<string, LabPlace>();
-  places.set('lab1', { id: 'lab1', spec, role: 'laboratory', seen: true });
-  for (let k = 1; k <= cfg.family; k++) places.set('place' + k, { id: 'place' + k, spec: lab.placeOf(spec, k), role: 'family', seen: false });
-  const labs = () => [...places.values()].filter((p) => p.role === 'laboratory');
+  /* --- The run's common services: System 2 and the Judge (their answers logged), the journal, stopping ---------------- */
+  const run = openRun(lab, context, { argv, previous, resumeFrom: resumeFrom ?? null, cfg, arg, config: {} });
+  if (isGameLab(lab)) {
+    const result = await lab.run(run.services);
+    run.finish({ stoppedBy: result.stoppedBy, halted: result.halted ?? null }, result.end);
+    run.say('done: ' + result.stoppedBy + (result.halted ? '; resume with --resume ' + run.outFile : '') + '; journal ' + run.outFile);
+    return;
+  }
+  await runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
+    confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null });
+}
 
-  const world = lab.world();
-  const runner = nodeVmRunner({ timeoutMs: 2000 });
-  const observer = new Observer<Point>(world, { kinds: ['code'], runners: [runner], perceive: (s) => lab.perceive(s) });
+/* ============================================================================
+ * The run's common services, the same for every laboratory.
+ * ========================================================================== */
+
+interface OpenRun {
+  readonly services: import('../learn/lab.ts').LabServices;
+  readonly judge: JevJudge;
+  readonly llm: ReturnType<typeof openAiChatClient>;
+  readonly llmUse: { calls: number; tokens: number };
+  readonly replay: ReplayLog;
+  readonly journal: Record<string, any>;
+  readonly outFile: string;
+  readonly commit: string | null;
+  log(type: string, data?: Record<string, unknown>): void;
+  say(text: string): void;
+  halt(): string | null;
+  /** The end of the run: the end event (common fields, then the laboratory's), the finding, the warnings. */
+  finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): void;
+}
+
+function openRun(lab: AnyLab, context: { root: string; command: string }, o: { argv: readonly string[]; previous: Record<string, any> | null; resumeFrom: string | null;
+  cfg: LabRunConfig & Record<string, unknown>; arg: (name: string, fallback?: string) => string; config: Record<string, unknown> }): OpenRun {
+  const { argv, previous, resumeFrom, cfg, arg } = o;
+  const env = process.env;
+  const maxMinutes = Number(arg('max-minutes', '0')) || null;
+  const maxTokens = Number(arg('max-tokens', '0')) || null;
   const flatFetch = async (_u: string, init: { body?: string }) => {
     const body = JSON.parse(String(init.body));
     const answers: Record<string, unknown> = {};
@@ -184,29 +222,28 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   };
   /* Every answer that comes over the network is logged as it arrives, next to the journal: the run can be resumed. */
   const started = new Date();
-  const outFile = arg('out') || path.join(context.root, 'runs', lab.runName(cfg.seed, worldOptions) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
+  const outFile = arg('out') || path.join(context.root, 'runs', lab.runName(cfg.seed, worldOptionsOf(cfg)) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
-  const replay = new ReplayLog(outFile.replace(/\.json$/, '') + '.replay.jsonl', { resume: Boolean(previous) });
+  const logOf = (journalFile: string) => journalFile.replace(/\.json$/, '') + '.replay.jsonl';
+  /* A request the log of the resumed run does not answer, while answers still wait there: the run diverged. It stops. */
+  let onDiverge: (d: { channel: string; pending: number }) => void = () => {};
+  const replay = new ReplayLog(logOf(outFile), { ...(previous ? { from: logOf(resumeFrom!) } : {}), onDiverge: (d) => onDiverge(d) });
   const judge = new JevJudge(cfg.flat
     ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
     : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev') });
-  const evaluator = new Evaluator<Point>(observer, judge, { maximizer: 'nature', runners: [runner] });
-  /* The objective compares answers (Lab.objective): the Predictor hands them as given. */
-  const predictor = new Predictor<Point>(evaluator, (s) => lab.perceive(s), { runners: [runner] });
   const llmUse = { calls: 0, tokens: 0 };
-  const llm = openAiChatClient({ url: env.LLM_URL, apiKey: env.LLM_KEY, model: env.LLM_MODEL, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1, fetch: replay.wrap('llm'),
+  const llm = openAiChatClient({ url: env.LLM_URL!, apiKey: env.LLM_KEY, model: env.LLM_MODEL!, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1, fetch: replay.wrap('llm'),
     onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
 
-  /* --- The journal ------------------------------------------------------------------ */
-  const truth = lab.truth(spec);
   const commit = commitOf(context.root);
   const journal: Record<string, any> = {
     experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}),
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
     argv: experimentArgs(argv),
-    ...(previous ? { resumed: { from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
-    config: { ...cfg, ...(acts !== undefined ? { acts } : {}), llm_model: env.LLM_MODEL, jev_model: env.JEV_MODEL ?? null },
-    hidden_from_the_learner: { spec, truth, places: [...places.values()].map((p) => ({ id: p.id, role: p.role, ...lab.placeInfo(p.spec) })) },
+    ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
+    config: { ...cfg, ...o.config, llm_model: env.LLM_MODEL, jev_model: env.JEV_MODEL ?? null },
+    /* Filled by the laboratory: what the learner is never told. */
+    hidden_from_the_learner: {},
     events: [] as unknown[]
   };
   const log = (type: string, data: Record<string, unknown> = {}): void => {
@@ -214,13 +251,98 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     fs.writeFileSync(outFile, JSON.stringify(journal, null, 2));
   };
   const say = (text: string): void => console.log('[' + Math.round((Date.now() - started.getTime()) / 1000) + 's] ' + text);
+  onDiverge = (d) => {
+    log('diverged', { channel: d.channel, answers_still_waiting: d.pending });
+    log('end', { stoppedBy: 'diverged', replay: replay.stats(),
+      note: 'the resumed run asked something the run it resumes did not: the code or the configuration changed. This journal stops here; the one it resumes is unchanged.' });
+    say('STOPPED: the resumed run diverged from ' + resumeFrom + ' (' + d.channel + ', ' + d.pending + ' logged answers still waiting); this journal stops here, the one it resumes is unchanged');
+    process.exit(3);
+  };
+  /* Stopping: Ctrl+C (or SIGTERM) and the budgets are asked before each question to System 2. */
+  let cancelled = false;
+  const onSignal = (): void => {
+    if (cancelled) { say('stopped at once; resume with --resume ' + outFile); process.exit(130); }
+    cancelled = true;
+    say('stopping before the next question to System 2 (Ctrl+C again to stop at once)');
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  const halt = (): string | null => cancelled ? 'cancelled'
+    : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
+    : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
 
+  if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
+  const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say, halt };
+  return {
+    services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt,
+    finish(stop, end) {
+      log('end', {
+        stoppedBy: stop.stoppedBy, ...(stop.halted ? { halted: stop.halted, resume: 'the same command with --resume ' + outFile } : {}),
+        /* OPERATOR ONLY (SPEC-OBJETIVO O11): answers replayed from the log and asked live; unused ones mean the resumed run diverged. */
+        replay: replay.stats(),
+        ...end
+      });
+      /* OPERATOR ONLY (SPEC-OBJETIVO O10): the finding, next to the journal, read as it was written. */
+      const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(outFile) });
+      const findingFile = outFile.replace(/\.json$/, '') + '.finding.json';
+      fs.writeFileSync(findingFile, JSON.stringify(finding, null, 2));
+      console.log(findingText(finding));
+      say('finding ' + findingFile);
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+      if (replay.pending()) say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
+    }
+  };
+}
+
+/** The world's options, kept on the configuration under their own names (see runLab). */
+const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__options ?? {}) as LabOptions;
+
+/* ============================================================================
+ * The loop of a laboratory whose model is a LAW (cells, messages, orbit).
+ * ========================================================================== */
+
+async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null }): Promise<void> {
+  const { cfg, worldOptions, ctx, previous, resumeFrom } = o;
+  const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
+  const env = process.env;
+  const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
+  if (acts !== undefined) journal.config = { ...journal.config, acts };
+  const tools: ReadonlySet<Tool> = new Set(cfg.tools as Tool[]);
+  const investigative = cfg.tools.length > 0;
+  const SYSTEM_PROMPT = system2Prompt(lab.interface({ regression: cfg.regression }), tools);
+
+  /* --- The world, as the operator knows it and as the learner perceives it ------------- */
+  type Spec = unknown;
+  type Point = unknown;
+  type Case = LabCase<Point> & Record<string, unknown>;
+  interface LabPlace extends Place { readonly spec: Spec }
+  const spec: Spec = lab.generate(cfg.seed, worldOptions);
+  const places = new Map<string, LabPlace>();
+  const start = lab.places ? lab.places(spec, ctx) : {
+    laboratories: [{ id: 'lab1', spec }],
+    family: Array.from({ length: cfg.family }, (_, j) => ({ id: 'place' + (j + 1), spec: lab.placeOf(spec, j + 1, worldOptions) }))
+  };
+  for (const p of start.laboratories) places.set(p.id, { ...p, role: 'laboratory', seen: true });
+  for (const p of start.family) places.set(p.id, { ...p, role: 'family', seen: false });
+  const labs = () => [...places.values()].filter((p) => p.role === 'laboratory');
+
+  const world = lab.world();
+  const runner = nodeVmRunner({ timeoutMs: 2000 });
+  const observer = new Observer<Point>(world, { kinds: ['code'], runners: [runner], perceive: (s) => lab.perceive(s) });
+  const evaluator = new Evaluator<Point>(observer, judge, { maximizer: 'nature', runners: [runner] });
+  /* An answer as given, and as compared with what happened (Lab.compare; by default the same). */
+  const predictor = new Predictor<Point, unknown>(evaluator, (s) => lab.perceive(s), { runners: [runner], ...(lab.compare ? { answer: (a: unknown, s: Point) => lab.compare!(a, s) } : {}) });
+
+  const truth = lab.truth(spec, worldOptions);
+  Object.assign(journal.hidden_from_the_learner, { spec, truth, ...(lab.operator?.hidden?.(spec, ctx) ?? {}),
+    places: [...places.values()].map((p) => ({ id: p.id, role: p.role, ...lab.placeInfo(p.spec) })) });
   /* --- The learner's episodes ------------------------------------------------------------ */
   interface StoredEpisode { readonly id: string; readonly place: string; readonly round: number; readonly by: string; readonly data: unknown }
   const episodes = new Map<string, StoredEpisode>();
   let counter = 0;
   const store = (id: string, place: LabPlace, round: number, by: string, data: unknown) => { const e = { id, place: place.id, round, by, data }; episodes.set(id, e); return e; };
-  const episodeIndex = () => [...episodes.values()].map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, steps: lab.steps(e.data) }));
+  const episodeIndex = () => [...episodes.values()].map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, ...(lab.indexInfo?.(e.data) ?? {}), steps: lab.steps(e.data) }));
 
   /** "ep3@5": the point at step 5 of ep3, with what is shown there. */
   const resolve = (ref: string): { state: Point; shown: Record<string, unknown> } | null => {
@@ -228,16 +350,18 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     const e = m ? episodes.get(m[1]) : undefined;
     return m && e ? lab.at(e.data, Number(m[2])) : null;
   };
-  const casesOf = (id: string, data: unknown, every = cfg.every): Case[] => lab.cases(spec, id, data, every);
-  const ownPoints = () => [...episodes.values()].filter((e) => e.by === 'you' || e.by === 'the environment').flatMap((e) => casesOf(e.id, e.data, lab.ownEvery));
+  const specOf = (placeId: string): Spec => places.get(placeId)?.spec ?? spec;
+  const ownEpisodes = () => [...episodes.values()].filter((e) => e.by === 'you' || e.by === 'the environment');
+  const ownPoints = (): Case[] => ownEpisodes().flatMap((e) => lab.cases(specOf(e.place), e.id, e.data, lab.ownEvery));
   const checkPoints = new Map<number, Case[]>();
 
   const explore = (): void => {
     const rnd = mulberry32(lab.explorationSeed(cfg.seed, worldOptions));
-    const first = places.get('lab1')!;
-    for (let k = 0; k < cfg.explore; k++) {
-      const e = store('ep' + (++counter), first, 0, 'the environment', lab.episode(first.spec, rnd));
-      log('exploration_episode', { episode: e.id, ...lab.explored(e.data) });
+    const drawn = lab.explore ? lab.explore(labs().map((p) => ({ id: p.id, spec: p.spec })), rnd, cfg.explore, ctx)
+      : Array.from({ length: cfg.explore }, () => ({ place: 'lab1', episode: lab.episode(places.get('lab1')!.spec, rnd) }));
+    for (const d of drawn) {
+      const e = store('ep' + (++counter), places.get(d.place)!, 0, 'the environment', d.episode);
+      log('exploration_episode', { episode: e.id, ...lab.explored(e.data, d.place) });
     }
   };
 
@@ -246,18 +370,22 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   const objective = lab.objective<Law, LabPlace>({
     casesIn(place, c) {
       /* Fresh episodes in the place; a check's and a validation's become the learner's, a blind confirmation's never. */
-      const rnd = mulberry32(cfg.seed * 7717 + c.round * 101 + c.index * 7 + (c.purpose === 'validation' ? 5000 : c.purpose === 'blind' ? 100000 * (1 + (c.set ?? 0)) : 0));
+      const drawn = lab.checkEpisodes ? lab.checkEpisodes(place.spec, c, ctx) : (() => {
+        const rnd = mulberry32(cfg.seed * 7717 + c.round * 101 + c.index * 7 + (c.purpose === 'validation' ? 5000 : c.purpose === 'blind' ? 100000 * (1 + (c.set ?? 0)) : 0));
+        return Array.from({ length: cfg.checkEpisodes }, () => lab.episode(place.spec, rnd));
+      })();
       const cases: Case[] = [];
-      for (let k = 0; k < cfg.checkEpisodes; k++) {
-        const data = lab.episode(place.spec, rnd);
+      drawn.forEach((data, k) => {
         const id = c.purpose === 'blind' ? place.id + '-' + k : (c.purpose === 'check' ? 'check' : 'valid') + c.round + '-' + place.id + '-' + (k + 1);
         if (c.purpose !== 'blind') store(id, place, c.round, 'the ' + c.purpose + ' of round ' + c.round, data);
-        cases.push(...casesOf(id, data));
-      }
+        cases.push(...lab.cases(place.spec, id, data, cfg.every));
+      });
       if (c.purpose !== 'blind') checkPoints.set(c.round, [...(checkPoints.get(c.round) ?? []), ...cases]);
       return cases;
     },
     answer: (law, state) => answerOf(law, state),
+    compared: async (law, state) => (await predictor.predict(law, state)).compared,
+    episode: (id) => episodes.get(id)?.data,
     regression: cfg.regression
   }, worldOptions);
   /* What was asked, in the interface's words (the finding's question). */
@@ -265,10 +393,14 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   let blindCounter = 0;
   const protocol = new Protocol(objective, {
     places: () => [...places.values()],
-    blindPlaces: () => Array.from({ length: cfg.confirmPlaces }, () => { const k = ++blindCounter; return { id: 'blind' + k, spec: lab.placeOf(spec, 1000 + k), role: 'confirmation' as const, seen: false }; }),
+    blindPlaces: (set: number, round: number) => (lab.blindPlaces
+      ? lab.blindPlaces(spec, set, round, ctx)
+      : Array.from({ length: cfg.confirmPlaces }, () => { const k = ++blindCounter; return { id: 'blind' + k, spec: lab.placeOf(spec, 1000 + k, worldOptions) }; }))
+      .map((p) => ({ ...p, role: 'confirmation' as const, seen: false })),
     fingerprint: (law) => lawFingerprint(law),
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
+    ...(lab.roleWords ? { roleWords: lab.roleWords } : {}),
     /* OPERATOR ONLY: models that know nothing. If one holds too, the check could not tell a model from knowing nothing. */
     baselines: lab.baselines(spec).map(({ name, source }) => ({ name, model: { world: world.id, observations: {}, rules: {}, weights: {}, output: { kind: 'code' as const, lang: 'js', source } } })),
     say
@@ -278,13 +410,13 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
 
   /** A law must compute on points of the learner's own episodes and answer in the form asked (no Judge call). */
   const failures = (law: Law): string[] => {
-    const points = ownPoints().slice(-8);
-    const errors = replayOnEvidence(observer, law.observations, points.map((p) => ({ state: p.state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
+    const points: Point[] = lab.trial ? ownEpisodes().slice(-4).flatMap((e) => lab.trial!.points(e.data)) : ownPoints().slice(-8).map((p) => p.state);
+    const errors = replayOnEvidence(observer, law.observations, points.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
     if (errors.length) return errors;
     const neutral = Object.fromEntries(Object.keys(law.rules).map((id) => [id, 0.5]));
-    for (const p of points.slice(0, 4)) {
+    for (const p of points.slice(0, lab.trial?.answers ?? 4)) {
       try {
-        const issue = lab.answerIssue(predictor.rawAnswerWith(law, predictor.measured(law, p.state), neutral));
+        const issue = lab.answerIssue(predictor.rawAnswerWith(law, predictor.measured(law, p), neutral));
         if (issue) return ['output: ' + issue];
       } catch (e) { return ['output: ' + String((e as Error).message ?? e)]; }
     }
@@ -304,11 +436,13 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
       if (budget.acts <= 0) return { act: req.act, error: 'no acts left this round' };
       const place = places.get(lab.act.place(req.act) ?? 'lab1');
       if (!place || place.role !== 'laboratory') return { act: req.act, error: 'you can act only in your laboratories: ' + labs().map((l) => l.id).join(', ') };
-      const data = lab.act.start(place.spec, req.act);
+      const id = 'act' + (counter + 1);
+      const data = lab.act.start(place.spec, req.act, id, ctx);
       /* The environment answers only whether it accepted: never why not. */
       if (data === null) return { act: req.act, accepted: false };
       budget.acts--;
-      const e = store('act' + (++counter), place, session.currentRound, 'you', data);
+      counter++;
+      const e = store(id, place, session.currentRound, 'you', data);
       return { act: req.act, accepted: true, name: e.id, ...lab.act.shown(e.data) };
     }
     if ('measure' in req) {
@@ -332,8 +466,8 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
         /* A model taken apart: its rules are answered even when its output does not read them. */
         const pr = await predictor.predict(law, r.state, { askRules: true });
         return { inspect: req.inspect, your_observations_measured: pr.observations,
-          ...(pr.evaluation ? { each_rule_answered: pr.rules, V: pr.V } : { the_judge_was_not_asked: true }),
-          your_answer: pr.answer, ...(Object.keys(pr.parts).length ? { your_output_also_returned: pr.parts } : {}), ...r.shown };
+          ...(pr.evaluation ? { each_rule_answered: lab.present?.rules ? lab.present.rules(pr.rules) : pr.rules, V: pr.V } : { the_judge_was_not_asked: true }),
+          your_answer: lab.present?.answer ? lab.present.answer(pr.answer) : pr.answer, ...(Object.keys(pr.parts).length ? { your_output_also_returned: pr.parts } : {}), ...r.shown };
       } catch (e) { return { inspect: req.inspect, error: String((e as Error).message ?? e) }; }
     }
     if ('simulate' in req) {
@@ -342,6 +476,10 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
       const r = resolve(req.simulate);
       if (!law) return { simulate: req.simulate, error: 'there is no model yet: name a draft' };
       if (!r) return { simulate: req.simulate, error: 'no such point' };
+      const cannot = lab.simulate.from?.(r.state) ?? null;
+      if (cannot) return { simulate: req.simulate, error: cannot };
+      const f = typeof req.law === 'object' && req.law ? failures(law) : [];
+      if (f.length) return { simulate: req.simulate, error: 'your draft failed on points of your episodes: ' + f.join(' | ') };
       const [id, at] = req.simulate.split('@');
       const seen = episodes.get(id)!.data;
       let state = r.state;
@@ -349,41 +487,40 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
       try {
         for (let k = 0; k < req.rows; k++) {
           const a = await answerOf(law, state);
-          const next = lab.simulate.advance(state, a);
+          const next = lab.simulate.step(state, a, seen, Number(at) + k + 1);
           if (typeof next === 'string') return { simulate: req.simulate, error: next, steps };
-          state = next;
-          steps.push({ step: Number(at) + k + 1, simulated: a, seen: lab.simulate.seen(seen, Number(at) + k + 1) ?? null });
+          state = next.state;
+          steps.push({ step: Number(at) + k + 1, ...next.shown });
         }
       } catch (e) { return { simulate: req.simulate, error: String((e as Error).message ?? e), steps }; }
       return { simulate: req.simulate, steps };
     }
-    /* table: code on every point of its episodes or of the checks, with what is shown there. */
+    /* table: code on every point of its episodes or of the checks, with what is shown there - and, where the laboratory
+       says so, what its latest model answered there. */
     const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, ...(req.table.range ? { range: req.table.range } : {}) };
     const points = req.on === 'checks' ? [...checkPoints.values()].flat().slice(-60) : ownPoints().slice(-60);
-    return { table: req.table.source, on: req.on, rows: points.map((p) => {
+    const latest = lab.residual ? session.latest()?.law ?? null : null;
+    const rows: unknown[] = [];
+    for (const p of points) {
       const o = observer.observe(p.state, { m: decl });
       const err = o.errors.find((e) => e.id === 'm');
-      return { point: p.point, ...(err ? { error: err.error } : { value: o.values.m ?? o.texts.m }), ...lab.shown(p) };
-    }) };
+      let residual: unknown;
+      if (lab.residual) {
+        residual = null;
+        if (latest) {
+          try { residual = lab.residual(p, (await predictor.predict(latest, p.state)).compared); } catch (e) { residual = { error: String((e as Error).message ?? e) }; }
+        }
+      }
+      rows.push({ point: p.point, ...(err ? { error: err.error } : { value: o.values.m ?? o.texts.m }), ...lab.shown(p), ...(lab.residual ? { residual } : {}) });
+    }
+    return { table: req.table.source, on: req.on, ...(lab.residual ? { residuals_of: latest ? 'your latest model' : 'no model yet' } : {}), rows };
   };
-
-  /* Stopping: Ctrl+C (or SIGTERM) and the budgets are asked before each question to System 2. */
-  let cancelled = false;
-  const onSignal = (): void => {
-    if (cancelled) { say('stopped at once; resume with --resume ' + outFile); process.exit(130); }
-    cancelled = true;
-    say('stopping before the next question to System 2 (Ctrl+C again to stop at once)');
-  };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
-  const halt = (): string | null => cancelled ? 'cancelled'
-    : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
-    : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
 
   const session: LawSession<unknown> = new LawSession<unknown>({
     llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: lab.perceptDoc, steps: cfg.steps, investigative,
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
     parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
+    ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
     runRequest: (r, budget) => runRequest(r, budget),
     known: (ref) => episodes.has(ref.trim()) || resolve(ref) !== null,
     failures,
@@ -393,13 +530,22 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   });
 
   /* --- Operator only ------------------------------------------------------------------------- */
+  const operatorContext: LabOperatorContext<Spec, Case> = {
+    spec, ctx, ablation: cfg.ablation, predictor, observer, log, say, own: ownPoints,
+    stats: () => ({ judge: judge.stats, evaluator: evaluator.stats })
+  };
 
   /** The same model with every rule answering 0.5 (a Judge that knows nothing), on the same points: what the rules add,
-      per place (the family's places are where a reader of meaning should matter). */
+      per place (the family's places are where a reader of meaning should matter). A laboratory may ablate its own way. */
   const ablations: AblationRecord[] = [];
-  const ablate = async (law: Law, round: number): Promise<void> => {
-    if (!Object.keys(law.rules).length) { log('operator_ablation_flat_judge', { round, note: 'the model has no rules: nothing is asked of the Judge' }); return; }
+  const ablate = async (law: Law, round: number, detail: unknown): Promise<void> => {
     const points = checkPoints.get(round) ?? [];
+    if (lab.operator?.ablate) {
+      const a = await lab.operator.ablate({ law, round, detail, cases: points }, operatorContext);
+      if (a) ablations.push(a);
+      return;
+    }
+    if (!Object.keys(law.rules).length) { log('operator_ablation_flat_judge', { round, note: 'the model has no rules: nothing is asked of the Judge' }); return; }
     const neutral = Object.fromEntries(Object.keys(law.rules).map((id) => [id, 0.5]));
     let model = 0, flat = 0;
     const byPlace: Record<string, { model: number; flat: number; points: number }> = {};
@@ -416,27 +562,22 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   };
 
   const gradeRecovery = async (final: Law | null): Promise<void> => {
+    const event = lab.grading.event ?? 'operator_rule_recovery';
     const brief = session.notebook.brief();
-    const learned = { final_model: final ? ownLaw(final) : null, beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: session.notebook.reflections };
-    const system = 'You grade how well a learner recovered the hidden rule ' + lab.grading.subject + '. '
-      + 'For each TRUE statement, decide from the learner\'s own model and words whether it stated it: "exact", "partial" (the right idea but incomplete), "wrong" (it contradicts it) or "absent". '
-      + lab.grading.reading + ' Judge what it holds, not what it dropped. Quote the learner briefly as evidence. '
-      + GRADING_STRUCTURE + ' '
-      + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims no true statement supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
+    const learned = { [lab.grading.finalKey ?? 'final_model']: final ? ownLaw(final) : null, beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: session.notebook.reflections };
     try {
-      const content = (await llm.complete({ system, user: JSON.stringify({ true_statements: truth, learner: learned }) })).content;
+      const content = (await llm.complete({ system: lab.grading.system, user: JSON.stringify({ true_statements: truth, learner: learned }) })).content;
       const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-      log('operator_rule_recovery', { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: env.LLM_MODEL });
-      say('operator: rule recovery ' + score);
-    } catch (e) { log('operator_rule_recovery', { truth, error: String((e as Error).message ?? e) }); }
+      log(event, { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: env.LLM_MODEL });
+      say('operator: recovery ' + score + (grades.length ? ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')' : ''));
+    } catch (e) { log(event, { truth, error: String((e as Error).message ?? e) }); }
   };
 
   /* --- The run ------------------------------------------------------------------------------- */
   say(lab.id + ' seed ' + cfg.seed + ' ' + lab.headline(spec) + '; journal ' + outFile);
-  log('start', previous ? { resumed_from: resumeFrom, answers_logged: replay.pending() } : {});
-  if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
+  log('start', { ...(lab.operator?.start?.(spec, ctx) ?? {}), ...(previous ? { resumed_from: resumeFrom, answers_logged: replay.pending() } : {}) });
   explore();
   let accepted: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
@@ -445,7 +586,12 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     if (!record) { if (session.fatal) break; continue; }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });
     record.accepted = outcome.accepted;
-    log('check', { ...outcome.journal, jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+    const detail = outcome.laboratories[0]?.detail ?? null;
+    const own = lab.operator?.check?.({ law: record.law, round: record.round, reused: outcome.reused, detail, cost: outcome.cost,
+      cases: checkPoints.get(outcome.reused ?? record.round) ?? [] }, operatorContext) ?? {};
+    if (own.test) record.test = own.test;
+    log('check', { ...outcome.journal, jev: { calls: judge.stats.calls, errors: judge.stats.errors }, ...(own.journal ?? {}) });
+    if (own.say) say(own.say);
     if (outcome.accepted) say('  ACCEPTED');
     if (outcome.quickStop) {
       satisfied = { law: record.law, round: record.round };
@@ -453,7 +599,7 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
       say('  --quick: System 2 judges its model good in round ' + record.round + ' (in its laboratories: ' + (outcome.held ? 'holds' : 'does NOT hold') + ')');
       break;
     }
-    if (cfg.ablation && outcome.reused === null) await ablate(record.law, record.round);
+    if ((cfg.ablation || lab.operator?.ablates?.(worldOptions)) && outcome.reused === null) await ablate(record.law, record.round, detail);
     if (outcome.accepted) { accepted = { law: record.law, round: record.round }; log('accepted', { round: record.round }); break; }
   }
   if (cfg.reflection && !session.fatal && !session.halted) {
@@ -462,27 +608,15 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   }
   const final = accepted?.law ?? session.latest()?.law ?? null;
   if (cfg.grade && !session.fatal && !session.halted) await gradeRecovery(final);
-  log('end', {
-    stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', ...(session.fatal ? { llm_error: session.fatal } : {}),
-    ...(session.halted ? { halted: session.halted, resume: 'the same command with --resume ' + outFile } : {}),
-    /* OPERATOR ONLY (SPEC-OBJETIVO O11): answers replayed from the log and asked live; unused ones mean the resumed run diverged. */
-    replay: replay.stats(),
+  run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
+    ...(session.fatal ? { llm_error: session.fatal } : {}),
     final: final ? ownLaw(final) : null,
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },
+    ...(lab.operator?.end?.(session.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, test: l.test })), operatorContext) ?? {}),
     /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
     operator_summary: operatorSummary(protocol.summary(), ablations)
   });
-  /* OPERATOR ONLY (SPEC-OBJETIVO O10): the finding, next to the journal. */
-  /* Read as it was written: the notebook and the rest as JSON. */
-  const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(outFile) });
-  const findingFile = outFile.replace(/\.json$/, '') + '.finding.json';
-  fs.writeFileSync(findingFile, JSON.stringify(finding, null, 2));
-  console.log(findingText(finding));
-  say('finding ' + findingFile);
-  process.off('SIGINT', onSignal);
-  process.off('SIGTERM', onSignal);
-  if (replay.pending()) say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
   say('done: ' + (session.halted && !accepted ? 'stopped (' + session.halted + '); resume with --resume ' + outFile + '; ' : '') + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted') + '; journal ' + outFile);
 }

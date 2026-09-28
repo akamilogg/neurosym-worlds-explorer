@@ -2,7 +2,7 @@
 #   .\run-orbit.ps1                       # the experiment, seed 3, level 1, default options
 #   .\run-orbit.ps1 --flat                # the CONTROL: a Judge that knows nothing
 #   .\run-orbit.ps1 --seed 3 --level 2 --sampling free
-# Every argument is passed through to scripts/run-orbit.ts (see its header for the options).
+# Every argument is passed through to scripts/run-orbit.ts (--help lists the options).
 
 # --- System 1 (Jev) ---------------------------------------------------------------
 $env:JEV_URL = "https://api.typesafe.ai/v1/systemone"

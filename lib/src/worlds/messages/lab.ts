@@ -1,4 +1,4 @@
-import type { Lab } from '../../learn/lab.ts';
+import { ruleGradingSystem, type Lab } from '../../learn/lab.ts';
 import { MESSAGES_PERCEPT_DOC, describeMessagesTruth, generateMessages, messagesPointWorld, perceiveMessage, placeOf, runEpisode, type MessagePoint, type MessagesSpec } from './world.ts';
 import { messagesObjective, sideOf, type MessagesCase } from './objective.ts';
 import { messagesInterface } from './interface.ts';
@@ -46,8 +46,7 @@ export const messagesLab: Lab<MessagesSpec, MessagePoint, Episode, MessagesCase>
   agrees: (a, c) => sideOf(a) === c.mark,
   agreement: 'agreed',
   baselines: () => [{ name: 'always 0', source: '(p) => 0' }, { name: 'always 1', source: '(p) => 1' }],
-  grading: {
-    subject: 'by which an environment marks short texts 0 or 1; the learner saw only the texts and their marks',
-    reading: 'Read its model as code and as the questions its rules ask a judge: what its observations, rules and output compute is what it claims.'
-  }
+  grading: { system: ruleGradingSystem(
+    'by which an environment marks short texts 0 or 1; the learner saw only the texts and their marks',
+    'Read its model as code and as the questions its rules ask a judge: what its observations, rules and output compute is what it claims.') }
 };

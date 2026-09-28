@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ReplayLog } from '../src/runtime/replay.ts';
+import { ReplayDivergence, ReplayLog, readReplayLog } from '../src/runtime/replay.ts';
 import { budgetArgs, experimentArgs } from '../src/runtime/lab-runner.ts';
 import { LawSession } from '../src/learn/law-session.ts';
 import type { FetchLike } from '../src/core/net.ts';
 
-/* SPEC-OBJETIVO O11: a run can be stopped (Ctrl+C, a budget) and resumed by replaying what came over the network. */
+/* SPEC-OBJETIVO O11: a run can be stopped (Ctrl+C, a budget) and resumed by replaying what came over the network - in a
+   run of its own, derived from the one it resumes, which stays as it was. */
 
-const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'replay-')), 'run.replay.jsonl');
+const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'replay-'));
 const init = (body: string) => ({ method: 'POST', headers: { Authorization: 'Bearer SECRET-KEY' }, body, signal: new AbortController().signal });
 
 /** A network that answers with a counter, so a replayed answer can be told from a live one. */
@@ -22,31 +23,83 @@ function network(): { fetch: FetchLike; calls: () => number } {
   };
 }
 
-test('answers are logged as they arrive, and a resumed log serves them to the same requests, in order, before the network', async () => {
-  const file = tmp();
-  const first = network();
-  const log = new ReplayLog(file);
-  const llm = log.wrap('llm', first.fetch);
+test('a resumed run serves the logged answers to the same requests, in order and per channel, before the network', async () => {
+  const d = dir(), first = path.join(d, 'a.jsonl'), second = path.join(d, 'b.jsonl');
+  const net = network();
+  const log = new ReplayLog(first);
+  const llm = log.wrap('llm', net.fetch);
   const a1 = await (await llm('u', init('{"q":1}'))).text();
   const a2 = await (await llm('u', init('{"q":1}'))).text();
-  const b = await (await log.wrap('jev', first.fetch)('u', init('{"q":1}'))).text();
+  const b = await (await log.wrap('jev', net.fetch)('u', init('{"q":1}'))).text();
   assert.deepEqual(log.stats(), { replayed: {}, live: { llm: 2, jev: 1 }, unused: 0 });
 
-  const second = network();
-  const resumed = new ReplayLog(file, { resume: true });
+  const again = network();
+  const resumed = new ReplayLog(second, { from: first });
   assert.equal(resumed.pending(), 3);
-  const llm2 = resumed.wrap('llm', second.fetch);
+  const llm2 = resumed.wrap('llm', again.fetch);
   assert.equal(await (await llm2('u', init('{"q":1}'))).text(), a1);
   assert.equal(await (await llm2('u', init('{"q":1}'))).text(), a2, 'the same request twice: its answers in order');
-  assert.equal(await (await resumed.wrap('jev', second.fetch)('u', init('{"q":1}'))).text(), b, 'channels are apart');
-  assert.equal(second.calls(), 0, 'nothing asked of the network while the log has the answer');
+  assert.equal(await (await resumed.wrap('jev', again.fetch)('u', init('{"q":1}'))).text(), b, 'channels are apart');
+  assert.equal(again.calls(), 0, 'nothing asked of the network while the log has the answer');
   await llm2('u', init('{"q":2}'));
-  assert.equal(second.calls(), 1, 'then the network, live');
+  assert.equal(again.calls(), 1, 'then the network, live');
   assert.deepEqual(resumed.stats(), { replayed: { llm: 2, jev: 1 }, live: { llm: 1 }, unused: 0 });
+  assert.equal(readReplayLog(first).length, 3, 'the log resumed is left as it was');
+  assert.equal(readReplayLog(second).length, 4, 'the new log holds every answer it used: it can be resumed in turn');
+});
+
+test('a line cut by a hard stop is dropped, and the answers after it are not lost (the resumed run writes elsewhere)', async () => {
+  const d = dir(), first = path.join(d, 'a.jsonl'), second = path.join(d, 'b.jsonl'), third = path.join(d, 'c.jsonl');
+  await new ReplayLog(first).wrap('llm', network().fetch)('u', init('q1'));
+  fs.appendFileSync(first, '{"channel":"llm","key":"cut');
+  const r1 = new ReplayLog(second, { from: first });
+  await r1.wrap('llm', network().fetch)('u', init('q1'));
+  await r1.wrap('llm', network().fetch)('u', init('q2'));
+  const r2 = new ReplayLog(third, { from: second });
+  assert.equal(r2.pending(), 2, 'q1 replayed and q2 live are both there');
+});
+
+test('a resumed run never writes into the log it resumes', () => {
+  const d = dir(), first = path.join(d, 'a.jsonl');
+  new ReplayLog(first);
+  assert.throws(() => new ReplayLog(first, { from: first }), /log of its own/);
+});
+
+test('a request the log does not answer while answers wait there is a divergence: the network is not asked', async () => {
+  const d = dir(), first = path.join(d, 'a.jsonl');
+  const log = new ReplayLog(first);
+  await log.wrap('llm', network().fetch)('u', init('{"q":1}'));
+  await log.wrap('llm', network().fetch)('u', init('{"q":2}'));
+  const net = network();
+  let told: unknown = null;
+  const resumed = new ReplayLog(path.join(d, 'b.jsonl'), { from: first, stallMs: 30, onDiverge: (x) => { told = x; } });
+  await assert.rejects(resumed.wrap('llm', net.fetch)('u', init('{"q":"other"}')), ReplayDivergence);
+  assert.equal(net.calls(), 0);
+  assert.deepEqual(told, { channel: 'llm', pending: 2 });
+  assert.deepEqual(resumed.stats().diverged, { channel: 'llm', pending: 2 });
+  await assert.rejects(resumed.wrap('llm', net.fetch)('u', init('{"q":1}')).then(() => { throw new Error('served'); }), /served|diverged/);
+});
+
+test('requests that run together may reach the log in another order: one without an answer waits for the others', async () => {
+  const d = dir(), first = path.join(d, 'a.jsonl');
+  const log = new ReplayLog(first);
+  for (const q of ['1', '2', '3']) await log.wrap('jev', network().fetch)('u', init(q));
+  /* The first run was cut while "4" was in flight: "1".."3" were answered. Resumed, "4" is asked before "2" and "3". */
+  const net = network();
+  const resumed = new ReplayLog(path.join(d, 'b.jsonl'), { from: first, stallMs: 200 });
+  const jev = resumed.wrap('jev', net.fetch);
+  const four = jev('u', init('4'));
+  await jev('u', init('1'));
+  await new Promise((r) => setTimeout(r, 20));
+  await jev('u', init('2'));
+  await jev('u', init('3'));
+  assert.ok((await four).ok);
+  assert.equal(net.calls(), 1, 'only "4" went live, once nothing was waiting');
+  assert.equal(resumed.stats().diverged, undefined);
 });
 
 test('the log never holds a request, its headers or a key; failed answers are not logged', async () => {
-  const file = tmp();
+  const file = path.join(dir(), 'a.jsonl');
   const log = new ReplayLog(file);
   await log.wrap('llm', network().fetch)('u', init('{"prompt":"hello"}'));
   const failing: FetchLike = async () => ({ ok: false, status: 503, text: async () => 'busy', headers: { get: () => null } });
@@ -54,15 +107,6 @@ test('the log never holds a request, its headers or a key; failed answers are no
   const text = fs.readFileSync(file, 'utf8');
   assert.doesNotMatch(text, /SECRET-KEY|Authorization|Bearer/);
   assert.equal(text.trim().split('\n').length, 1);
-});
-
-test('a resumed run that asks something else leaves logged answers unused: it is said to have diverged', async () => {
-  const file = tmp();
-  await new ReplayLog(file).wrap('llm', network().fetch)('u', init('{"q":1}'));
-  const resumed = new ReplayLog(file, { resume: true });
-  await resumed.wrap('llm', network().fetch)('u', init('{"q":"other"}'));
-  assert.equal(resumed.stats().unused, 1);
-  assert.equal(new ReplayLog(file).pending(), 0, 'a new run starts a new log');
 });
 
 test('a resumed run repeats the experiment\'s arguments and takes the budgets given now', () => {

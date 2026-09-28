@@ -128,11 +128,11 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | [`lib/`](lib/README.md) | `neurosym`, the portable TypeScript core (no runtime dependencies): World, Observer, Formula, Judge, Evaluator, Search, and the learner |
 | `lib/src/worlds/grid/` | the generated games, their ASCII sense, starting-position variants, and operator-only tools |
 | `lib/src/learn/` | the explorer (System 2's protocol), notebook, experiments and probes, ablations, the learning loop |
-| `lib/scripts/run-grid.ts` | runs the unknown-world experiment and writes a JSON journal to `runs/` (journals are not published) |
+| `lib/src/worlds/grid/` (`lab.ts`) | the unknown-world experiment (the grid): a laboratory with a loop of its own (its model is a formula a search plays with), run by the common runner; it writes a JSON journal to `runs/` (journals are not published) |
 | `lib/scripts/calibrate-grid.ts` | finds seeds that leave room to learn (forced win, learnable, not won by a flat judge, not a known game) |
 | `lib/src/worlds/orbit/` | the physical world: laws by level, the table sense, prediction points and test launches, operator-only tools |
 | `lib/src/core/output.ts`, `lib/src/core/predict.ts`, `lib/src/learn/law-*.ts` | a model's output code, the predictor, the law explorer (System 2's protocol there), the law ablations |
-| `lib/scripts/run-orbit.ts`, `calibrate-orbit.ts` | runs the physical-world experiment; finds laws that leave room to discover (Newton misses clearly above the noise) |
+| `lib/src/worlds/orbit/` (`lab.ts`), `lib/scripts/calibrate-orbit.ts` | the physical world, declared as a laboratory and run by the common runner; finds laws that leave room to discover (Newton misses clearly above the noise) |
 | `lib/src/learn/objective.ts`, `protocol.ts`, `operator.ts`, `law-session.ts` | the operator's objective as a contract, the researcher's protocol (the same for every world), the operator's common measures, a session with System 2 for a world whose answer is a model ([SPEC-OBJETIVO.md](SPEC-OBJETIVO.md)) |
 | `lib/src/worlds/*/objective.ts` | each world's objective: the form of its answer, its cases, its verdict and its criterion |
 | `lib/src/learn/lab.ts`, `lib/src/runtime/lab-runner.ts`, `lib/scripts/run-lab.ts` | a world as one declaration (`Lab`: world, senses, episodes, optional actions, objective, the operator's truth and baselines) and the one runner every such world uses: `run-lab.ts --lab cells` (the laboratory API is exported as `neurosym/lab`) |
@@ -176,7 +176,7 @@ Useful options: `--tools none` (or a subset such as `view,inspect,probes`) for t
 instruments, `--flat` for a judge that knows nothing, `--variants N` for new starts in each check, `--family N` and
 `--validations N` for the researcher's protocol (the model is checked on its laboratory board every round, validated on
 boards of other sizes and pieces when System 2 asks, and accepted by boards nobody has seen), and `--quick` to stop the
-first time System 2 judges its model good. The header of `run-grid.ts` documents them all.
+first time System 2 judges its model good. `--help` lists them all.
 
 The physical world works the same way, with `lib/run-orbit.example.ps1` / `.sh` as launchers:
 
@@ -187,8 +187,9 @@ node --experimental-strip-types scripts/calibrate-orbit.ts 1 20 1
 
 Its options include `--level 1..4`, `--sampling grid|free` (test points that repeat, or new ones every round),
 `--resolution X` (rounded perception), `--tools`, `--delegated` and `--quick` (stop the first time System 2 judges its
-law good, without validating it, to see whether a change makes the exploration promising); the header of `run-orbit.ts`
-documents them. `--regression` answers each laboratory's previous check again with the new law (the paired regression,
+law good, without validating it, to see whether a change makes the exploration promising); `--help` lists them all. It is
+declared as a laboratory (`lib/src/worlds/orbit/lab.ts`) like cells and messages, so it can be stopped and resumed and
+writes its finding. `--regression` answers each laboratory's previous check again with the new law (the paired regression,
 on by default in the grid).
 
 A third world, `cells@1`, uses the same prompt and protocol with nothing of its own but its world, senses, instruments
@@ -210,7 +211,10 @@ ablation in the journal says what the Judge's rules added:
 A laboratory run can be stopped and resumed. Ctrl+C stops it before the next question to System 2 (a second Ctrl+C at
 once), as do `--max-minutes N` and `--max-tokens N`. Every answer from System 2 and the Judge is logged next to the journal
 as it arrives (`<journal>.replay.jsonl`: answers only, never a request or a key). `--resume <journal>` runs the same
-experiment again, serving those answers: the run is back where it stopped, exactly, and goes on live:
+experiment again in a run of its own (`<journal>.resumed-<time>.json`), serving those answers: the run is back where it
+stopped, exactly, and goes on live; the journal it resumes is left as it was. If the resumed run asks something the first
+did not (the code or the configuration changed), it stops there (`diverged`) instead of going on as if it were the same run.
+The budgets stop the run between questions to System 2: they are not a hard ceiling on what a question in flight costs:
 
 ```bash
 ./run-cells.sh --seed 1 --level 3 --max-tokens 200000

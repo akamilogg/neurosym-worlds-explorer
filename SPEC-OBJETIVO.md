@@ -276,9 +276,11 @@ de añadir nada.
 | O6 (opcional) | Objetivos con rúbrica y juez (§6) | — | no empezado |
 | O7 | Exportar la API de laboratorio por una entrada propia, `neurosym/lab` (objetivo, protocolo, sesión, prompt, modelo y predicción, medidas del operador); `grid`, `cells` y `messages` en los `exports` del paquete. El índice principal no cambia: es lo que embebe el bundle del harness del navegador (§10) | `lib/src/lab.ts`, `lib/src/worlds/*/index.ts`, `lib/package.json` | hecho |
 | O8 | Desacoplar de orbit la sesión y el predictor. `LawSession<A>` y `parseLawTurn<A>` sin mundo por defecto: `parseAct` es obligatorio. La interfaz, los instrumentos y el acto de orbit pasan a `worlds/orbit/interface.ts`. `launchesLeft` pasa a `actsLeft` (System 2 ya leía `acts_left`). `Predictor<S, C>` compara la respuesta que declara el mundo (por defecto, la respuesta tal cual; orbit, un par). El prompt de orbit es idéntico byte a byte (§10) | `lib/src/learn/law-session.ts`, `lib/src/learn/law-explorer.ts`, `lib/src/core/predict.ts`, `lib/src/worlds/orbit/interface.ts` | hecho |
-| O9 | Contrato `Lab` y un runner único. Un mundo se declara en un fichero (`worlds/<mundo>/lab.ts`: mundo y familia, sentidos, episodios y cómo se nombran sus puntos, acto y simulación opcionales, objetivo, y del operador la verdad, las líneas base y cuándo una respuesta coincide). `runtime/lab-runner.ts` hace el resto igual para todos, y `run-lab.ts --lab <id>` lo lanza. `run-cells.ts` y `run-messages.ts` quedan en 14 líneas (antes 397 y 367), y los lanzadores siguen igual. Equivalencia comprobada con un LLM falso: journals idénticos en messages; en cells solo se añaden `by_place` en la ablación y la densidad de cada lugar al final. Orbit y la cuadrícula siguen con runner propio (§10.3) | `lib/src/learn/lab.ts`, `lib/src/runtime/lab-runner.ts`, `lib/src/worlds/{cells,messages}/lab.ts`, `lib/scripts/run-lab.ts` | hecho (cells, messages) |
+| O9 | Contrato `Lab` y un runner único. Un mundo se declara en un fichero (`worlds/<mundo>/lab.ts`: mundo y familia, sentidos, episodios y cómo se nombran sus puntos, acto y simulación opcionales, objetivo, y del operador la verdad, las líneas base y cuándo una respuesta coincide). `runtime/lab-runner.ts` hace el resto igual para todos, y `run-lab.ts --lab <id>` lo lanza. `run-cells.ts` y `run-messages.ts` quedan en 14 líneas (antes 397 y 367), y los lanzadores siguen igual. Equivalencia comprobada con un LLM falso: journals idénticos en messages; en cells solo se añaden `by_place` en la ablación y la densidad de cada lugar al final.  `lib/src/learn/lab.ts`, `lib/src/runtime/lab-runner.ts`, `lib/src/worlds/{cells,messages}/lab.ts`, `lib/scripts/run-lab.ts`, `lib/src/worlds/orbit/lab.ts` | hecho (cells, messages, orbit) |
+| O9b | orbit como `Lab`. El contrato admite, opcionales, lo que orbit necesita: sus lugares (varios laboratorios, `setupN`, ciegos `blindN` por ronda), los episodios de una comprobación (lanzamientos en la vista y más allá, con el ruido estimado), la respuesta comparada (`compare`: la desviación d), los puntos de prueba de un borrador, el residuo en `table`, cómo `inspect` presenta la respuesta y las reglas, un `simulate` con presentación propia, opciones con alias y flags (`--launches`, `--confirm-setups`, `--vary-strength`, `--delegated`), la regresión apagada por defecto y medidas del operador propias: prior newtoniano, caché de Jev, `judgment_hash`, abstracción, ablación de tres brazos (sólo-código, plana, delegada) y la mejor ley para el operador. `run-orbit.ts` queda en 14 líneas (antes 615). Equivalencia con un LLM y un Jev falsos: investigación, propuestas, comprobaciones, ablaciones, reflexión y grader idénticos; solo cambia lo del operador (nombres de configuración, `exploration_episode`, el formato común del `end`) y se añaden `argv`, `objective`, `replay` y el finding. Un run de orbit cortado por tokens y reanudado es idéntico al entero. Un cambio visible para System 2: los lanzamientos de una validación figuran ahora como `the validation of round N` (antes `the check of round N`), como en los otros mundos. Queda la cuadrícula, con su bucle propio | `lib/src/worlds/orbit/lab.ts`, `lib/src/learn/lab.ts`, `lib/src/runtime/lab-runner.ts` | hecho |
+| O9c | La cuadrícula como laboratorio **con bucle propio** (`GameLab`). Su modelo es una fórmula con la que juega una búsqueda, y sus instrumentos (`replay`, `inspect` de la búsqueda, `act` como intento, `table` sobre sus episodios), su comprobación y su currículum son suyos: meterla en `LawSession` habría cambiado lo que System 2 ve. El runner se parte en dos capas. **Servicios comunes** (`openRun`): línea de órdenes y `--help`, System 2 y Jev con sus respuestas grabadas, journal con commit y `argv`, parada y presupuestos, reanudación, finding. **Bucle**: el de leyes (cells, messages, orbit) o el propio del laboratorio (`GameLab.run(servicios)`). El bucle de `run-grid.ts` pasó entero a `worlds/grid/lab.ts`, y sólo cambia de dónde salen configuración, clientes, journal y parada. `run-grid.ts` queda en 14 líneas (antes 865). Equivalencia con un LLM falso: todo lo que System 2 ve es idéntico; solo cambian nombres de configuración (`confirmPlaces`; `--confirm-boards` sigue aceptado) y se añaden `argv`, `objective`, `replay` y `final`. Un run cortado por tokens y reanudado es idéntico al entero. **Los cuatro mundos corren con el runner común** | `lib/src/learn/lab.ts` (`GameLab`, `LabServices`), `lib/src/runtime/lab-runner.ts`, `lib/src/worlds/grid/lab.ts` | hecho |
 | O10 | El hallazgo como entregable: `findingOf(journal)` produce `finding@1`. Contiene la pregunta (forma de la respuesta y del veredicto), el resultado, el modelo con su fingerprint, las afirmaciones (creencias mantenidas con su evidencia), dónde se sostuvo al aceptarse (laboratorios, familia y lugares ciegos, sin la traza caso a caso), los contraejemplos (validaciones fallidas), las limitaciones (fallos tolerados, comprobaciones que pasa un modelo que no sabe nada, lo que System 2 dejó abierto), la parte del operador (nota del grader, ablación de Jev, verdad oculta), el coste y cómo reproducirlo (seed, config, journal, commit). También hay una versión en texto de pocas líneas. El runner de laboratorios lo escribe junto al journal (`<journal>.finding.json`) y guarda en el journal el commit (`+changes` si el árbol de trabajo tiene cambios) y el objetivo. `scripts/finding.ts <journal...>` lo obtiene de cualquier journal, también de runs anteriores de grid y orbit. System 2 no ve nada nuevo (§10) | `lib/src/learn/finding.ts`, `lib/scripts/finding.ts`, `lib/src/runtime/lab-runner.ts` | hecho |
-| O11 | Ejecución reanudable, **por reproducción** en lugar de guardar estado. El entorno es determinista con su seed; lo único que no lo es son las respuestas de System 2 y de Jev. Cada una se añade a `<journal>.replay.jsonl` en cuanto llega (un punto de control tras cada respuesta; sólo el cuerpo de la respuesta, nunca la petición, sus cabeceras ni una clave). `--resume <journal>` repite el run con los argumentos del experimento guardados en el journal (`argv`) y sirve las respuestas grabadas a las mismas peticiones (SHA-256 del canal y del cuerpo): protocolo, sesión y notebook vuelven a estar exactamente como estaban y el run sigue en vivo. Si quedan respuestas grabadas sin pedir, el run reanudado divergió (código cambiado), y se avisa. Parada: Ctrl+C o SIGTERM paran antes de la siguiente pregunta a System 2 (`LawSession.halt`; un segundo Ctrl+C para en el acto); `--max-minutes` y `--max-tokens` hacen lo mismo al agotarse. El `end` dice por qué paró (`cancelled`, `time_budget`, `token_budget`) y cómo reanudar; el finding también. Comprobado con un LLM y un Jev falsos: un run cortado por tokens y reanudado da un journal idéntico al del run entero (salvo tiempos y contadores de reproducción). El servicio para otros agentes (iniciar, consultar, cancelar, reanudar) queda hasta que haya un consumidor; orbit y la cuadrícula no lo tienen (no son `Lab`) | `lib/src/runtime/replay.ts`, `lib/src/runtime/lab-runner.ts`, `lib/src/learn/law-session.ts` | hecho (laboratorios) |
+| O11 | Ejecución reanudable, **por reproducción** en lugar de guardar estado. El entorno es determinista con su seed; lo único que no lo es son las respuestas de System 2 y de Jev. Cada una se añade a `<journal>.replay.jsonl` en cuanto llega (un punto de control tras cada respuesta; sólo el cuerpo de la respuesta, nunca la petición, sus cabeceras ni una clave). `--resume <journal>` repite el run en **un run derivado con fichero propio** (`<journal>.resumed-<hora>.json`; el reanudado queda intacto, y el log nuevo guarda todas las respuestas usadas, así que se puede reanudar a su vez) con los argumentos del experimento guardados en el journal (`argv`) y sirve las respuestas grabadas a las mismas peticiones (SHA-256 del canal y del cuerpo): protocolo, sesión y notebook vuelven a estar exactamente como estaban y el run sigue en vivo. Una petición sin respuesta grabada mientras quedan respuestas esperando es una **divergencia**: no se pregunta a la red, el run derivado registra `diverged` y para (salida 3). Las peticiones concurrentes de Jev que llegan en otro orden esperan a que se sirvan las demás; sólo un log que deja de consumirse es divergencia. Una línea cortada por una parada brusca se descarta y nunca se escribe detrás de ella (corregido tras la segunda auditoría, §11). Parada: Ctrl+C o SIGTERM paran antes de la siguiente pregunta a System 2 (`LawSession.halt`; un segundo Ctrl+C para en el acto); `--max-minutes` y `--max-tokens` hacen lo mismo al agotarse. El `end` dice por qué paró (`cancelled`, `time_budget`, `token_budget`) y cómo reanudar; el finding también. Comprobado con un LLM y un Jev falsos: un run cortado por tokens y reanudado da un journal idéntico al del run entero (salvo tiempos y contadores de reproducción). El servicio para otros agentes (iniciar, consultar, cancelar, reanudar) queda hasta que haya un consumidor; orbit y la cuadrícula no lo tienen (no son `Lab`) | `lib/src/runtime/replay.ts`, `lib/src/runtime/lab-runner.ts`, `lib/src/learn/law-session.ts` | hecho (laboratorios) |
 
 **Criterio de éxito de la SPEC:** O5 se conecta sin tocar el prompt ni el protocolo. **Cumplido.** `cells@1` usa el prompt
 común, el protocolo y la sesión de System 2 tal cual. Del código común solo necesitó dos cosas generales:
@@ -442,3 +444,61 @@ Todas las señales de acoplamiento se confirman:
   - vocabulario abierto en la confirmación ciega;
   - tolerancia 0 en la confirmación a ciegas;
   - verdad por regla, sin mencionar factores que la regla no usa.
+
+## 11. Segunda auditoría externa (28/09/2026, sobre `1f6396a`)
+
+### 11.1 Qué dice
+
+- **Valoración:** el proyecto pasó de tener abstracciones reutilizables a una primera infraestructura de laboratorios.
+  - Hay contrato `Lab`, runner común y un entregable (`finding@1`) que otro agente puede consumir.
+  - Se mantiene la separación entre el aprendiz y el criterio.
+- **Dos fallos en la reanudación:**
+  1. Una línea cortada al final del log hacía perder también la respuesta siguiente, porque se escribía pegada a ella.
+  2. Una divergencia seguía en vivo, reescribiendo el journal original, y sólo avisaba al final.
+- **Lo que sigue parcial:**
+  - orbit y la cuadrícula tenían runner propio;
+  - `Lab` supone entornos locales y deterministas (`episode` y `act.start` síncronos; el replay vuelve a ejecutar el
+    entorno);
+  - `runLab` es una función de CLI (entorno, consola, señales, `process.exit`);
+  - los presupuestos son límites de parada, no techos de gasto;
+  - el finding lleva información del operador, incluida la verdad oculta.
+- **Prioridad que recomienda:** corregir el replay y probar un laboratorio externo pequeño.
+
+### 11.2 Qué se hizo
+
+| Punto | Estado |
+|---|---|
+| Línea cortada | Hecho. Un run reanudado nunca escribe en el log que reanuda: lee el log original (del que descarta las líneas cortadas) y escribe uno propio desde cero. El fallo desaparece por construcción. Test que lo reproduce. |
+| Divergencia | Hecho. No se pregunta a la red: `diverged`, fin del run derivado y salida 3. El journal reanudado y su log quedan intactos (comprobado byte a byte). Las peticiones concurrentes que llegan en otro orden no son divergencia. Tests y prueba de extremo a extremo forzando la divergencia. |
+| orbit y la cuadrícula con runner propio | Hecho (O9b, O9c): los cuatro mundos corren con el runner común. |
+| Presupuestos | Documentado: paran entre preguntas a System 2; no cortan una evaluación en curso ni son un techo estricto. |
+
+### 11.3 Qué entra en el roadmap
+
+- **O12. Un laboratorio externo pequeño.** Es la prueba que la auditoría pide, y lo que los mundos sintéticos no
+  demuestran: interrumpir, recuperar y reutilizar una investigación **sin repetir efectos externos** ni perder la
+  procedencia.
+  - **Entorno:** un servicio local en otro proceso, con una regla oculta y efectos con estado, por ejemplo un contador o
+    un inventario que cambia con cada acción.
+  - **Qué exige al contrato:**
+    - `episode` y `act.start` asíncronos;
+    - un **registro de efectos**: lo que el entorno respondió se graba como las respuestas del LLM y de Jev, y al
+      reanudar se sirve desde el registro sin volver a actuar;
+    - la parte determinista que hoy se vuelve a ejecutar pasa a ser un caso particular, en el que el registro es
+      opcional.
+  - **Criterio:**
+    - un run interrumpido y reanudado no repite ninguna acción contra el servicio (el servicio las cuenta);
+    - acaba igual que uno sin interrupción.
+- **O13. `runLab` como biblioteca.**
+  - **Entrada:** opciones y clientes como argumentos, sin variables de entorno ni `process.exit`.
+  - **Salida:** devuelve el finding.
+  - **Cancelación:** mediante un `AbortSignal`.
+  - **CLI:** queda como envoltorio.
+  - **Servicio de trabajos** (identificador, estado, cancelar, reanudar) para un coordinador: encima de esto, cuando
+    haya un consumidor.
+- **O14. Vistas del finding.**
+  - La del operador (la actual) incluye la verdad oculta, la nota del grader y las ablaciones.
+  - La vista para otro agente investigador las excluye, junto con la descripción oculta de los lugares, para mantener la
+    separación experimental.
+
+**Orden propuesto:** O12 antes que ampliar dominios, como recomienda la auditoría, y después O13 y O14, que son pequeñas.

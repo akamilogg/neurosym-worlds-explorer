@@ -1,4 +1,4 @@
-import type { Lab } from '../../learn/lab.ts';
+import { ruleGradingSystem, type Lab } from '../../learn/lab.ts';
 import { CELLS_PERCEPT_DOC, cellsPointWorld, describeCellsTruth, generateCells, perceiveCells, placeOf, readRow, runEpisode, type CellsPoint, type CellsSpec } from './world.ts';
 import { cellsObjective, differences, type CellsCase } from './objective.ts';
 import { cellsInterface } from './interface.ts';
@@ -58,8 +58,8 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
     shown: (rows) => ({ rows })
   },
   simulate: {
-    advance: (state, answer) => (typeof answer === 'string' ? { rows: [...state.rows, answer] } : 'the answer was not a string'),
-    seen: (rows, step) => rows[step] ?? null
+    step: (state, answer, rows, step) => (typeof answer === 'string'
+      ? { state: { rows: [...state.rows, answer] }, shown: { simulated: answer, seen: rows[step] ?? null } } : 'the answer was not a string')
   },
 
   objective: (host) => cellsObjective(host),
@@ -71,8 +71,7 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
     { name: 'the row before it', source: '(p) => p.rows[Math.max(0, p.rows.length - 2)]' },
     ...spec.glyphs.map((g) => ({ name: 'a row of "' + g + '" only', source: '(p) => ' + JSON.stringify(g) + '.repeat(p.rows[p.rows.length - 1].length)' }))
   ],
-  grading: {
-    subject: 'of an environment it could only perceive as rows of symbols',
-    reading: 'Read its model as code: what its observations, rules and output compute is what it claims.'
-  }
+  grading: { system: ruleGradingSystem(
+    'of an environment it could only perceive as rows of symbols',
+    'Read its model as code: what its observations, rules and output compute is what it claims.') }
 };

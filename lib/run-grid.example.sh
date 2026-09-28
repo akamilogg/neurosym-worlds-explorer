@@ -3,7 +3,7 @@
 #   ./run-grid.sh                       # the experiment, seed 22, default options
 #   ./run-grid.sh --flat                # the CONTROL: a Judge that knows nothing (should lose)
 #   ./run-grid.sh --seed 13 --attempts 10 --games 4 --levels 2,4
-# Every argument is passed through to scripts/run-grid.ts (see its header for the options).
+# Every argument is passed through to scripts/run-grid.ts (--help lists the options).
 
 # --- System 1 (Jev) ---------------------------------------------------------------
 export JEV_URL="https://api.typesafe.ai/v1/systemone"
