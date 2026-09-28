@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { Observer } from '../core/observer.ts';
 import { Evaluator } from '../core/evaluate.ts';
@@ -16,6 +17,7 @@ import { Protocol } from '../learn/protocol.ts';
 import { GRADING_STRUCTURE, formOf, operatorSummary, tokensOf, type AblationRecord } from '../learn/operator.ts';
 import type { Place } from '../learn/objective.ts';
 import type { AnyLab, LabCase, LabOptions } from '../learn/lab.ts';
+import { findingOf, findingText } from '../learn/finding.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -63,6 +65,15 @@ export function labUsage(lab: AnyLab, command: string): string {
     ...COMMON.map((o) => '  ' + pad('--' + o.name + ' ' + (o.name === 'tools' ? 'LIST' : o.name === 'out' ? 'FILE' : 'N')) + o.help + (defaults[o.name] ? ' (default ' + defaults[o.name] + ')' : '')),
     ...FLAGS.map((f) => '  ' + pad('--' + f.name) + f.help),
     '', 'Endpoints and keys come from the environment: LLM_URL, LLM_MODEL, LLM_KEY; JEV_URL, JEV_KEY (not needed with --flat).'].join('\n');
+}
+
+/** The commit the run is made from, marked when the working tree has changes (null outside a repository). */
+function commitOf(root: string): string | null {
+  try {
+    const head = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+    const dirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' }).trim();
+    return head + (dirty ? '+changes' : '');
+  } catch { return null; }
 }
 
 export async function runLab(lab: AnyLab, argv: readonly string[], context: { root: string; command: string }): Promise<void> {
@@ -147,8 +158,9 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
   const outFile = arg('out') || path.join(context.root, 'runs', lab.runName(cfg.seed, worldOptions) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   const truth = lab.truth(spec);
+  const commit = commitOf(context.root);
   const journal: Record<string, any> = {
-    experiment: lab.id, started: started.toISOString(), config: { ...cfg, ...(acts !== undefined ? { acts } : {}), llm_model: env.LLM_MODEL, jev_model: env.JEV_MODEL ?? null },
+    experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}), config: { ...cfg, ...(acts !== undefined ? { acts } : {}), llm_model: env.LLM_MODEL, jev_model: env.JEV_MODEL ?? null },
     hidden_from_the_learner: { spec, truth, places: [...places.values()].map((p) => ({ id: p.id, role: p.role, ...lab.placeInfo(p.spec) })) },
     events: [] as unknown[]
   };
@@ -203,6 +215,8 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
     answer: (law, state) => answerOf(law, state),
     regression: cfg.regression
   }, worldOptions);
+  /* What was asked, in the interface's words (the finding's question). */
+  journal.objective = { answer: objective.answer.form, verdict: objective.verdictForm };
   let blindCounter = 0;
   const protocol = new Protocol(objective, {
     places: () => [...places.values()],
@@ -398,5 +412,12 @@ export async function runLab(lab: AnyLab, argv: readonly string[], context: { ro
     /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
     operator_summary: operatorSummary(protocol.summary(), ablations)
   });
+  /* OPERATOR ONLY (SPEC-OBJETIVO O10): the finding, next to the journal. */
+  /* Read as it was written: the notebook and the rest as JSON. */
+  const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(outFile) });
+  const findingFile = outFile.replace(/\.json$/, '') + '.finding.json';
+  fs.writeFileSync(findingFile, JSON.stringify(finding, null, 2));
+  console.log(findingText(finding));
+  say('finding ' + findingFile);
   say('done: ' + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted') + '; journal ' + outFile);
 }
