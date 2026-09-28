@@ -39,7 +39,7 @@ export interface MessagesResult {
 }
 
 export interface MessagesObjectiveHost<M, P extends Place> {
-  casesIn(place: P, context: CaseContext): readonly MessagesCase[];
+  casesIn(place: P, context: CaseContext): readonly MessagesCase[] | Promise<readonly MessagesCase[]>;
   answer(model: M, state: MessagePoint): Promise<unknown>;
   readonly regression?: boolean;
   /** Misses allowed in a place's check (default 1). */

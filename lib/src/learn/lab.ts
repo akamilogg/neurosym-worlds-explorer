@@ -54,6 +54,10 @@ export interface LabContext {
   readonly checkEpisodes: number;
   readonly confirmPlaces: number;
   readonly explore: number;
+  /** For a laboratory whose environment is outside (`Lab.external`): asks it. Each request is done once - it carries a key
+      the environment answers again without acting - and what it answered is logged, so a resumed run replays it instead of
+      acting again (SPEC-OBJETIVO O12). */
+  readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
 }
 
 /** One point of a check: its name, the state perceived there, and what happened next (the laboratory's). */
@@ -64,7 +68,7 @@ export interface LabCase<P> {
 
 /** What a laboratory's objective needs from the runner. */
 export interface LabObjectiveHost<M, P extends Place, K> {
-  casesIn(place: P, context: CaseContext): readonly K[];
+  casesIn(place: P, context: CaseContext): readonly K[] | Promise<readonly K[]>;
   /** The model's answer at a point, as it gives it. */
   answer(model: M, state: unknown): Promise<unknown>;
   /** The model's answer at a point, read as what is compared with what happened (`Lab.compare`). */
@@ -105,6 +109,8 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   readonly aliases?: Readonly<Record<string, string>>;
   /** Whether the paired regression is on unless --no-regression (true), or off unless --regression (false). */
   readonly regressionByDefault?: boolean;
+  /** An environment OUTSIDE the harness, reached over HTTP at this address: the runner gives the laboratory `ctx.effects`. */
+  readonly external?: { url(options: LabOptions): string };
 
   /* --- The world ------------------------------------------------------------------------ */
   generate(seed: number, options: LabOptions): S;
@@ -135,11 +141,11 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   compare?(answer: unknown, state: P): unknown;
 
   /* --- The episodes --------------------------------------------------------------------- */
-  episode(spec: S, rnd: () => number): E;
+  episode(spec: S, rnd: () => number, ctx?: LabContext): E | Promise<E>;
   /** The environment's exploration (default: `explore` episodes of `episode` in the first laboratory). */
-  explore?(laboratories: readonly { id: string; spec: S }[], rnd: () => number, count: number, ctx: LabContext): readonly { place: string; episode: E }[];
+  explore?(laboratories: readonly { id: string; spec: S }[], rnd: () => number, count: number, ctx: LabContext): readonly { place: string; episode: E }[] | Promise<readonly { place: string; episode: E }[]>;
   /** The episodes of a check in a place (default: `checkEpisodes` of `episode`, drawn from the runner's seed). */
-  checkEpisodes?(spec: S, context: CaseContext, ctx: LabContext): readonly E[];
+  checkEpisodes?(spec: S, context: CaseContext, ctx: LabContext): readonly E[] | Promise<readonly E[]>;
   /** How many steps its index shows, and what else the index says of it (e.g. where it started). */
   steps(episode: E): number;
   indexInfo?(episode: E): Record<string, unknown>;
@@ -168,7 +174,7 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
     /** The place it asks for (default: the first laboratory). */
     place(act: A): string | undefined;
     /** The episode it starts (named `id`), or null when the environment refuses it (never saying why). */
-    start(spec: S, act: A, id: string, ctx: LabContext): E | null;
+    start(spec: S, act: A, id: string, ctx: LabContext): E | null | Promise<E | null>;
     /** What the learner is shown of the episode it started. */
     shown(episode: E): Record<string, unknown>;
     /** How an act is echoed back in the prompt's words (default: as parsed). */

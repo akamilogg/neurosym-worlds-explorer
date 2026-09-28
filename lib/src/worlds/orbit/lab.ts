@@ -247,8 +247,8 @@ export const orbitLab: Lab<OrbitSpec, OrbitPoint, OrbitEpisode, OrbitCase, Orbit
   /* --- The objective and the operator --------------------------------------------------- */
   /* The researcher's criterion, per setup (objective.ts): the cases' noise estimates are pooled over the places run together. */
   objective: (host, o) => orbitObjective({
-    casesIn: (place, c) => {
-      const cases = host.casesIn(place, c) as readonly OrbitCase[];
+    casesIn: async (place, c) => {
+      const cases = (await host.casesIn(place, c)) as readonly OrbitCase[];
       const noise = new Map(cases.map((k) => [k.episode, k.noise]));
       return { samples: cases, noise: [...noise.values()] };
     },

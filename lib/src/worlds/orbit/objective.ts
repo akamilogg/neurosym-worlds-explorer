@@ -55,7 +55,7 @@ export interface OrbitPointResult {
 }
 
 export interface OrbitObjectiveHost<M, P extends Place> {
-  casesIn(place: P, context: CaseContext): OrbitCases;
+  casesIn(place: P, context: CaseContext): OrbitCases | Promise<OrbitCases>;
   /** The model's prediction at a point, read as what is compared with what happened. */
   predict(model: M, state: OrbitPoint): Promise<Vec2>;
   /** Where the episode of a point started, as System 2 is shown it. */

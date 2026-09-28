@@ -9,7 +9,8 @@ import { toPercept } from '../src/worlds/orbit/world.ts';
 
 /* SPEC-OBJETIVO O9: a world connects as one declaration. What every declaration must keep consistent. */
 
-const LAW_LABS = Object.entries(LABS).filter(([, l]) => !isGameLab(l)) as [string, LawLab][];
+/* The laboratories whose world runs here (tank@1's runs in a service of its own: test/tank.test.ts). */
+const LAW_LABS = Object.entries(LABS).filter(([, l]) => !isGameLab(l) && !(l as LawLab).external) as [string, LawLab][];
 
 for (const [name, lab] of LAW_LABS) {
   const options = Object.fromEntries(lab.options.map((o) => [o.name, o.default]));

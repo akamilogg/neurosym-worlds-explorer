@@ -39,7 +39,7 @@ export interface CellsResult {
 }
 
 export interface CellsObjectiveHost<M, P extends Place> {
-  casesIn(place: P, context: CaseContext): readonly CellsCase[];
+  casesIn(place: P, context: CaseContext): readonly CellsCase[] | Promise<readonly CellsCase[]>;
   /** The model's answer at a point, as it gives it. */
   answer(model: M, state: CellsPoint): Promise<unknown>;
   readonly regression?: boolean;

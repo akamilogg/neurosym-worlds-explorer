@@ -152,7 +152,9 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       the previous check's cases there run again. */
   async checkIn(model: M, places: readonly P[], context: { round: number; attempt: number; purpose: 'check' | 'validation' | 'blind'; set?: number }): Promise<{ outcomes: PlaceOutcome<P, R>[]; operator?: Record<string, unknown> }> {
     if (!places.length) return { outcomes: [] };
-    const drawn = places.map((place, index) => ({ place, cases: this.objective.casesIn(place, { ...context, index }) }));
+    /* In order, one place after another: drawing cases may act on an environment outside (SPEC-OBJETIVO O12). */
+    const drawn: { place: P; cases: K }[] = [];
+    for (const [index, place] of places.entries()) drawn.push({ place, cases: await this.objective.casesIn(place, { ...context, index }) });
     const out: RunOutput<R> = await this.objective.run(model, drawn, { round: context.round, attempt: context.attempt, purpose: context.purpose });
     /* Operator only: which baselines hold on the very same cases, per place. */
     let baselines: string[][] | null = null;

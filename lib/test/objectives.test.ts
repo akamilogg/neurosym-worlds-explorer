@@ -23,7 +23,7 @@ test('grid: holds when every episode scored 1 and none run again scored less; th
     casesIn: (_p, c) => [c.round, c.round + 1],
     play: async (model, place, cases, c) => ({ episodes: cases.map((k, i): GridEpisode => ({ place: place.id, ...(c.record ? { episode: 'g' + k } : {}), score: model === 'good' ? 1 : i ? -1 : 1 })) })
   });
-  const out = await o.run('good', [{ place: lab, cases: o.casesIn(lab, { round: 1, attempt: 1, purpose: 'check', index: 0 }) }], { round: 1, attempt: 1, purpose: 'check' });
+  const out = await o.run('good', [{ place: lab, cases: await o.casesIn(lab, { round: 1, attempt: 1, purpose: 'check', index: 0 }) }], { round: 1, attempt: 1, purpose: 'check' });
   const good = out.byPlace[0];
   assert.equal(o.holds(good, { place: lab }), true);
   assert.deepEqual(o.view(good, lab), { episodes: [{ episode: 'g1', score: 1 }, { episode: 'g2', score: 1 }] });
@@ -43,7 +43,7 @@ test('orbit: the verdict per point, the criterion per band against the noise of 
     predict: async (m, state: OrbitPoint) => { const s = samples.find((x) => x.state === state)!; return (m === 'truth' ? s.reference! : [0, 0]) as Vec2; },
     launchOf: (e) => ({ launched: e }), accept: 2, precision: 0.01, regression: true
   });
-  const run = async (m: 'truth' | 'nothing') => (await o.run(m, [{ place: lab, cases: o.casesIn(lab, { round: 1, attempt: 1, purpose: 'check', index: 0 }) }], { round: 1, attempt: 1, purpose: 'check' })).byPlace[0];
+  const run = async (m: 'truth' | 'nothing') => (await o.run(m, [{ place: lab, cases: await o.casesIn(lab, { round: 1, attempt: 1, purpose: 'check', index: 0 }) }], { round: 1, attempt: 1, purpose: 'check' })).byPlace[0];
   const truth = await run('truth'), nothing = await run('nothing');
   assert.equal(o.holds(truth, { place: lab }), true, 'the hidden law holds');
   assert.equal(o.holds(nothing, { place: lab }), false, 'predicting nothing does not');

@@ -82,8 +82,8 @@ export interface Objective<M, P extends Place, K, R extends CaseResult> {
   /** Interface lines: what a verdict IS, never what it means for the model. */
   readonly verdictForm: readonly string[];
   /** Fresh cases in a place. For a check or a validation they become the learner's (it can study them afterwards); blind
-      cases never do. */
-  casesIn(place: P, context: CaseContext): K;
+      cases never do. They may come from an environment outside (a promise); places are drawn one after another. */
+  casesIn(place: P, context: CaseContext): K | Promise<K>;
   /** Runs a model on the cases of several places at once (a world may pool across them, e.g. a noise estimate). */
   run(model: M, cases: readonly { readonly place: P; readonly cases: K }[], context: RunContext): Promise<RunOutput<R>>;
   /** The operator's criterion: does the model hold in this place? From the facts of its cases (and, with the paired

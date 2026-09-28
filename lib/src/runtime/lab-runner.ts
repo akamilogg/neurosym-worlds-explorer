@@ -4,7 +4,7 @@ import path from 'node:path';
 import { Observer } from '../core/observer.ts';
 import { Evaluator } from '../core/evaluate.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../core/jev.ts';
-import { parseJsonLoose } from '../core/net.ts';
+import { fetchJson, parseJsonLoose } from '../core/net.ts';
 import { Predictor, type Law } from '../core/predict.ts';
 import type { MeasureDecl } from '../core/types.ts';
 import { nodeVmRunner } from './node-vm.ts';
@@ -197,6 +197,8 @@ interface OpenRun {
   readonly journal: Record<string, any>;
   readonly outFile: string;
   readonly commit: string | null;
+  /** The environment outside, when the laboratory has one. */
+  readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
   halt(): string | null;
@@ -271,10 +273,27 @@ function openRun(lab: AnyLab, context: { root: string; command: string }, o: { a
     : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
     : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
 
+  /* An environment outside (SPEC-OBJETIVO O12): each request done once, by a key that is the same when the run is resumed
+     (the run's lineage and the request's place in it), and what it answered logged like System 2's answers. */
+  const external = !isGameLab(lab) && lab.external ? lab.external.url(worldOptionsOf(cfg)) : null;
+  let effects: { request(route: string, body: unknown): Promise<unknown> } | undefined;
+  if (external) {
+    const lineage = previous?.effects_id ?? lab.id + ':' + started.toISOString();
+    journal.effects_id = lineage;
+    const envFetch = replay.wrap('env');
+    let sequence = 0;
+    effects = {
+      async request(route, body) {
+        const key = lineage + '#' + (++sequence);
+        return (await fetchJson(external.replace(/\/$/, '') + route, { method: 'POST', body, headers: { 'Idempotency-Key': key }, fetch: envFetch,
+          timeoutMs: 15000, retries: 3, retryNetwork: true })).data;
+      }
+    };
+  }
   if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
   const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say, halt };
   return {
-    services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt,
+    services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}),
     finish(stop, end) {
       log('end', {
         stoppedBy: stop.stoppedBy, ...(stop.halted ? { halted: stop.halted, resume: 'the same command with --resume ' + outFile } : {}),
@@ -303,7 +322,8 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * ========================================================================== */
 
 async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null }): Promise<void> {
-  const { cfg, worldOptions, ctx, previous, resumeFrom } = o;
+  const { cfg, worldOptions, previous, resumeFrom } = o;
+  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
   const env = process.env;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
@@ -355,10 +375,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const ownPoints = (): Case[] => ownEpisodes().flatMap((e) => lab.cases(specOf(e.place), e.id, e.data, lab.ownEvery));
   const checkPoints = new Map<number, Case[]>();
 
-  const explore = (): void => {
+  const explore = async (): Promise<void> => {
     const rnd = mulberry32(lab.explorationSeed(cfg.seed, worldOptions));
-    const drawn = lab.explore ? lab.explore(labs().map((p) => ({ id: p.id, spec: p.spec })), rnd, cfg.explore, ctx)
-      : Array.from({ length: cfg.explore }, () => ({ place: 'lab1', episode: lab.episode(places.get('lab1')!.spec, rnd) }));
+    const drawn: { place: string; episode: unknown }[] = [];
+    if (lab.explore) drawn.push(...await lab.explore(labs().map((p) => ({ id: p.id, spec: p.spec })), rnd, cfg.explore, ctx));
+    else for (let k = 0; k < cfg.explore; k++) drawn.push({ place: 'lab1', episode: await lab.episode(places.get('lab1')!.spec, rnd, ctx) });
     for (const d of drawn) {
       const e = store('ep' + (++counter), places.get(d.place)!, 0, 'the environment', d.episode);
       log('exploration_episode', { episode: e.id, ...lab.explored(e.data, d.place) });
@@ -368,12 +389,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* --- The objective and the protocol ------------------------------------------------------------ */
   const answerOf = async (law: Law, state: Point) => (await predictor.predict(law, state)).answer;
   const objective = lab.objective<Law, LabPlace>({
-    casesIn(place, c) {
+    async casesIn(place, c) {
       /* Fresh episodes in the place; a check's and a validation's become the learner's, a blind confirmation's never. */
-      const drawn = lab.checkEpisodes ? lab.checkEpisodes(place.spec, c, ctx) : (() => {
+      const drawn: unknown[] = [];
+      if (lab.checkEpisodes) drawn.push(...await lab.checkEpisodes(place.spec, c, ctx));
+      else {
         const rnd = mulberry32(cfg.seed * 7717 + c.round * 101 + c.index * 7 + (c.purpose === 'validation' ? 5000 : c.purpose === 'blind' ? 100000 * (1 + (c.set ?? 0)) : 0));
-        return Array.from({ length: cfg.checkEpisodes }, () => lab.episode(place.spec, rnd));
-      })();
+        for (let k = 0; k < cfg.checkEpisodes; k++) drawn.push(await lab.episode(place.spec, rnd, ctx));
+      }
       const cases: Case[] = [];
       drawn.forEach((data, k) => {
         const id = c.purpose === 'blind' ? place.id + '-' + k : (c.purpose === 'check' ? 'check' : 'valid') + c.round + '-' + place.id + '-' + (k + 1);
@@ -437,7 +460,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const place = places.get(lab.act.place(req.act) ?? 'lab1');
       if (!place || place.role !== 'laboratory') return { act: req.act, error: 'you can act only in your laboratories: ' + labs().map((l) => l.id).join(', ') };
       const id = 'act' + (counter + 1);
-      const data = lab.act.start(place.spec, req.act, id, ctx);
+      const data = await lab.act.start(place.spec, req.act, id, ctx);
       /* The environment answers only whether it accepted: never why not. */
       if (data === null) return { act: req.act, accepted: false };
       budget.acts--;
@@ -578,7 +601,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* --- The run ------------------------------------------------------------------------------- */
   say(lab.id + ' seed ' + cfg.seed + ' ' + lab.headline(spec) + '; journal ' + outFile);
   log('start', { ...(lab.operator?.start?.(spec, ctx) ?? {}), ...(previous ? { resumed_from: resumeFrom, answers_logged: replay.pending() } : {}) });
-  explore();
+  await explore();
   let accepted: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
   for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {

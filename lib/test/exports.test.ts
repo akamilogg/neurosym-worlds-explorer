@@ -6,6 +6,7 @@ import * as orbit from '../src/worlds/orbit/index.ts';
 import * as grid from '../src/worlds/grid/index.ts';
 import * as cells from '../src/worlds/cells/index.ts';
 import * as messages from '../src/worlds/messages/index.ts';
+import * as tank from '../src/worlds/tank/index.ts';
 import { scoreOf as verdict } from '../src/core/predict.ts';
 import { INVESTIGATION_TOOLS as common } from '../src/learn/prompt.ts';
 
@@ -34,7 +35,8 @@ test('each world entry exposes its world, its family and its objective', () => {
     [orbit, ['environmentOf', 'orbitObjective']],
     [grid, ['boardOf', 'checkRulesAt', 'gridObjective']],
     [cells, ['generateCells', 'placeOf', 'cellsObjective', 'cellsInterface']],
-    [messages, ['messagesObjective', 'messagesInterface']]
+    [messages, ['messagesObjective', 'messagesInterface']],
+    [tank, ['tankObjective', 'tankInterface', 'serveTank', 'createTankService']]
   ] as const)
     for (const name of names) assert.equal(typeof (world as Record<string, unknown>)[name], 'function', name);
 });

@@ -44,7 +44,7 @@ test('the verdict is where the answer differs; the model holds when every point 
     answer: async (m, s) => (m === 'good' ? { '..#': '.##', '.##': '###' }[s.rows[s.rows.length - 1]] : m === 'throws' ? (() => { throw new Error('boom'); })() : 'no'),
     regression: true
   });
-  const run = async (m: string) => (await o.run(m, [{ place: lab, cases: o.casesIn(lab, { round: 1, attempt: 1, purpose: 'check', index: 0 }) }], { round: 1, attempt: 1, purpose: 'check' })).byPlace[0];
+  const run = async (m: string) => (await o.run(m, [{ place: lab, cases: await o.casesIn(lab, { round: 1, attempt: 1, purpose: 'check', index: 0 }) }], { round: 1, attempt: 1, purpose: 'check' })).byPlace[0];
   const good = await run('good'), bad = await run('bad'), thrown = await run('throws');
   assert.equal(o.holds(good, { place: lab }), true);
   assert.equal(o.holds(bad, { place: lab }), false);

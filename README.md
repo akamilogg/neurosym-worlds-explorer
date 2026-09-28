@@ -138,6 +138,7 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | `lib/src/learn/lab.ts`, `lib/src/runtime/lab-runner.ts`, `lib/scripts/run-lab.ts` | a world as one declaration (`Lab`: world, senses, episodes, optional actions, objective, the operator's truth and baselines) and the one runner every such world uses: `run-lab.ts --lab cells` (the laboratory API is exported as `neurosym/lab`) |
 | `lib/src/worlds/cells/` (`lab.ts`) | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule (level 3: of second order); the answer is the next row |
 | `lib/src/worlds/messages/` (`lab.ts`) | a world whose percept is text - the test of the Judge: short texts marked 0 or 1 by a hidden rule over what they say; the family keeps the rule and changes the wording |
+| `lib/src/worlds/tank/`, `lib/scripts/tank-service.ts` | a laboratory whose environment is OUTSIDE the harness: a service in a process of its own that keeps state and acts; each request is done once (an idempotency key) and its answer logged, so a run stopped and resumed never makes it act twice |
 | `lib/src/learn/finding.ts`, `lib/scripts/finding.ts` | the finding of a run (`finding@1`), derived from its journal for whoever uses the result: the question, the model, what it claims, where it held and where it failed, the known limits, the cost and how to reproduce it; the lab runner writes it next to the journal, and the script derives it from any journal |
 | `lib/src/view/`, `lib/scripts/journal-view.ts`, `journal-viewer.html` | the journal viewer: an animated visual synthesis of a finished run, built from its journal (open `journal-viewer.html` and drop a journal on it) |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
@@ -219,6 +220,16 @@ The budgets stop the run between questions to System 2: they are not a hard ceil
 ```bash
 ./run-cells.sh --seed 1 --level 3 --max-tokens 200000
 ./run-cells.sh --resume runs/cells-s1L3-<time>.json
+```
+
+An environment can live outside the harness. `tank@1` is a service in a process of its own that keeps state and acts. The
+laboratory learns only what the service answers. Every request carries an idempotency key, and the answer is logged like
+System 2's: a resumed run replays what the service answered instead of acting again, and a request the service had
+already acted on when the run stopped is answered again without acting:
+
+```bash
+node --experimental-strip-types scripts/tank-service.ts --port 18300
+node --experimental-strip-types scripts/run-lab.ts --lab tank --service http://127.0.0.1:18300
 ```
 
 Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the

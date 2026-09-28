@@ -10,6 +10,7 @@
     "./grid": "./src/worlds/grid/index.ts",
     "./cells": "./src/worlds/cells/index.ts",
     "./messages": "./src/worlds/messages/index.ts",
+    "./tank": "./src/worlds/tank/index.ts",
     "./lab": "./src/lab.ts",
     "./node": "./src/runtime/node-vm.ts",
     "./browser": "./src/browser.ts"
