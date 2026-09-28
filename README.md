@@ -135,8 +135,9 @@ are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
 | `lib/scripts/run-orbit.ts`, `calibrate-orbit.ts` | runs the physical-world experiment; finds laws that leave room to discover (Newton misses clearly above the noise) |
 | `lib/src/learn/objective.ts`, `protocol.ts`, `operator.ts`, `law-session.ts` | the operator's objective as a contract, the researcher's protocol (the same for every world), the operator's common measures, a session with System 2 for a world whose answer is a model ([SPEC-OBJETIVO.md](SPEC-OBJETIVO.md)) |
 | `lib/src/worlds/*/objective.ts` | each world's objective: the form of its answer, its cases, its verdict and its criterion |
-| `lib/src/worlds/cells/`, `lib/scripts/run-cells.ts` | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule (level 3: of second order); the answer is the next row |
-| `lib/src/worlds/messages/`, `lib/scripts/run-messages.ts` | a world whose percept is text - the test of the Judge: short texts marked 0 or 1 by a hidden rule over what they say; the family keeps the rule and changes the wording |
+| `lib/src/learn/lab.ts`, `lib/src/runtime/lab-runner.ts`, `lib/scripts/run-lab.ts` | a world as one declaration (`Lab`: world, senses, episodes, optional actions, objective, the operator's truth and baselines) and the one runner every such world uses: `run-lab.ts --lab cells` (the laboratory API is exported as `neurosym/lab`) |
+| `lib/src/worlds/cells/` (`lab.ts`) | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule (level 3: of second order); the answer is the next row |
+| `lib/src/worlds/messages/` (`lab.ts`) | a world whose percept is text - the test of the Judge: short texts marked 0 or 1 by a hidden rule over what they say; the family keeps the rule and changes the wording |
 | `lib/src/view/`, `lib/scripts/journal-view.ts`, `journal-viewer.html` | the journal viewer: an animated visual synthesis of a finished run, built from its journal (open `journal-viewer.html` and drop a journal on it) |
 | `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
 | `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
@@ -190,7 +191,8 @@ documents them. `--regression` answers each laboratory's previous check again wi
 on by default in the grid).
 
 A third world, `cells@1`, uses the same prompt and protocol with nothing of its own but its world, senses, instruments
-and objective (`lib/run-cells.example.ps1` / `.sh`):
+and objective. It is declared as a laboratory (`lib/src/worlds/cells/lab.ts`) and run by the common runner, as is
+`messages@1`; `--help` lists each world's options (`lib/run-cells.example.ps1` / `.sh`, or `scripts/run-lab.ts --lab cells`):
 
 ```bash
 ./run-cells.sh --seed 1 --level 1     # --level 2: a count over five cells; --level 3: the row before matters too

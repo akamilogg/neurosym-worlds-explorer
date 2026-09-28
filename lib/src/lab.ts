@@ -13,6 +13,8 @@ export * from './learn/law-explorer.ts';
 export * from './learn/law-session.ts';
 export * from './learn/law-ablation.ts';
 export * from './learn/operator.ts';
+export * from './learn/lab.ts';
+export * from './runtime/lab-runner.ts';
 /* Two pairs of names meet. The explorer's score of a game and the grid explorer's instruments keep theirs (they are in
    index.ts); the environment's verdict on a predicted point and the common list of instruments get others. */
 export { scoreOf, INVESTIGATION_TOOLS } from './index.ts';
