@@ -92,6 +92,9 @@ export class ReplayLog {
     fs.writeFileSync(file, '');
   }
 
+  /** The divergence, once found (a method: it may be found by another request while one waits). */
+  divergence(): { channel: string; pending: number } | undefined { return this.diverged; }
+
   /** How many logged answers are still waiting to be served. */
   pending(): number {
     let n = 0;
@@ -121,6 +124,8 @@ export class ReplayLog {
   /** `fetch` for one channel ("llm", "jev"): logged answers first, then the network, logging what it answers. */
   wrap(channel: string, fetch: FetchLike = globalThis.fetch as unknown as FetchLike): FetchLike {
     return async (url, init) => {
+      /* After a divergence nothing is answered, logged or asked: the run has ended. */
+      if (this.diverged) throw new ReplayDivergence(this.diverged.channel, this.diverged.pending);
       const key = createHash('sha256').update(channel + '\n' + (init.body ?? '')).digest('base64url');
       const take = () => {
         const e = this.queue.get(key)?.shift();
@@ -132,7 +137,6 @@ export class ReplayLog {
       };
       const logged = take();
       if (logged) return logged;
-      if (this.diverged) throw new ReplayDivergence(this.diverged.channel, this.diverged.pending);
       if (this.pending() > 0 && !(await this.mayGoLive())) {
         const later = take();
         if (later) return later;
@@ -140,6 +144,9 @@ export class ReplayLog {
         this.onDiverge?.(this.diverged);
         throw new ReplayDivergence(channel, this.diverged.pending);
       }
+      /* Another request may have found the divergence while this one waited: then this one is not asked either. */
+      const stop = this.divergence();
+      if (stop) throw new ReplayDivergence(stop.channel, stop.pending);
       const response = await fetch(url, init);
       if (!response.ok) return response;
       const text = await response.text();

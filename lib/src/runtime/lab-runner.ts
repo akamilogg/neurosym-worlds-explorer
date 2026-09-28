@@ -4,7 +4,7 @@ import path from 'node:path';
 import { Observer } from '../core/observer.ts';
 import { Evaluator } from '../core/evaluate.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../core/jev.ts';
-import { fetchJson, parseJsonLoose } from '../core/net.ts';
+import { fetchJson, parseJsonLoose, type FetchLike } from '../core/net.ts';
 import { Predictor, type Law } from '../core/predict.ts';
 import type { MeasureDecl } from '../core/types.ts';
 import { nodeVmRunner } from './node-vm.ts';
@@ -17,7 +17,7 @@ import { Protocol } from '../learn/protocol.ts';
 import { formOf, operatorSummary, tokensOf, type AblationRecord } from '../learn/operator.ts';
 import type { Place } from '../learn/objective.ts';
 import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
-import { findingOf, findingText } from '../learn/finding.ts';
+import { findingOf, findingText, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
@@ -108,16 +108,89 @@ function commitOf(root: string): string | null {
   } catch { return null; }
 }
 
+/* ============================================================================
+ * A laboratory run as a LIBRARY call (SPEC-OBJETIVO O13): no environment variables, no
+ * console of its own, no process signals, no process.exit. The caller gives the experiment's
+ * arguments, where System 2 and the Judge are, and (optionally) the network, a signal to
+ * cancel, and where to print; it gets back why the run stopped, its journal and its finding.
+ * A configuration it cannot run is a LabError. The command line (runLab) is a wrapper.
+ * ========================================================================== */
+
+/** A configuration the runner cannot run: bad arguments, a journal that cannot be resumed, a missing endpoint. */
+export class LabError extends Error {
+  readonly code: number;
+  constructor(message: string, code = 2) { super(message); this.name = 'LabError'; this.code = code; }
+}
+
+/** Where a model is served: an OpenAI-compatible chat URL (System 2) or the Judge's URL, and the key and model to use. */
+export interface LabConnection { readonly url?: string; readonly key?: string; readonly model?: string }
+
+export interface LabRunOptions {
+  /** The experiment's arguments, as on the command line (e.g. ['--seed', '1', '--level', '3']); the run controls too. */
+  readonly args: readonly string[];
+  /** Where runs/ goes by default, and the repository whose commit the journal records. */
+  readonly root: string;
+  /** System 2: an OpenAI-compatible /chat/completions URL and a model. */
+  readonly llm: LabConnection;
+  /** The Judge (not needed with --flat). */
+  readonly judge?: LabConnection;
+  /** The network (default: the global fetch). Everything that comes over it is logged for --resume. */
+  readonly fetch?: FetchLike;
+  /** Aborted: the run stops before its next question to System 2 (a budget, not a hard stop). */
+  readonly signal?: AbortSignal;
+  /** Where the run's lines go (default: nowhere). */
+  readonly print?: (line: string) => void;
+  /** Told the journal's file as soon as it is known. */
+  readonly onJournal?: (file: string) => void;
+}
+
+export interface LabResult {
+  /** accepted, quick_stop, budget, cancelled, time_budget, token_budget, diverged, llm_error... */
+  readonly stoppedBy: string;
+  readonly journal: string;
+  readonly findingFile: string;
+  readonly finding: Finding;
+}
+
+/** The command line: --help, the endpoints from the environment, Ctrl+C as a cancel (twice: stop at once), exit codes. */
 export async function runLab(lab: AnyLab, given: readonly string[], context: { root: string; command: string }): Promise<void> {
-  /* --- Configuration ---------------------------------------------------------------- */
   if (given.includes('--help') || given.includes('-h')) { console.log(labUsage(lab, context.command)); return; }
+  const env = process.env;
+  const controller = new AbortController();
+  let journal = '';
+  const onSignal = (): void => {
+    if (controller.signal.aborted) { console.log('stopped at once' + (journal ? '; resume with --resume ' + journal : '')); process.exit(130); }
+    controller.abort();
+    console.log('stopping before the next question to System 2 (Ctrl+C again to stop at once)');
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  try {
+    const result = await runLaboratory(lab, {
+      args: given, root: context.root, signal: controller.signal, print: (line) => console.log(line), onJournal: (file) => { journal = file; },
+      llm: { url: env.LLM_URL, key: env.LLM_KEY, model: env.LLM_MODEL },
+      judge: { url: env.JEV_URL || JEV_DEFAULT_URL, key: env.JEV_KEY, model: env.JEV_MODEL }
+    });
+    if (result.stoppedBy === 'diverged') process.exitCode = 3;
+  } catch (e) {
+    if (e instanceof LabError) { console.error(e.message); process.exit(e.code); }
+    throw e;
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+  }
+}
+
+export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promise<LabResult> {
+  /* --- Configuration ---------------------------------------------------------------- */
+  const given = options.args;
   /* Resuming: the experiment's arguments are the journal's; the budgets are the ones given now. */
   const r = given.indexOf('--resume');
   const resumeFrom = r >= 0 ? given[r + 1] : undefined;
   let previous: Record<string, any> | null = null;
   if (resumeFrom) {
-    try { previous = JSON.parse(fs.readFileSync(resumeFrom, 'utf8')); } catch (e) { console.error('--resume: cannot read ' + resumeFrom + ': ' + String((e as Error).message ?? e)); process.exit(2); }
-    if (previous!.experiment !== lab.id || !Array.isArray(previous!.argv)) { console.error('--resume: ' + resumeFrom + ' is not a resumable journal of ' + lab.id); process.exit(2); }
+    try { previous = JSON.parse(fs.readFileSync(resumeFrom, 'utf8')); } catch (e) { throw new LabError('--resume: cannot read ' + resumeFrom + ': ' + String((e as Error).message ?? e)); }
+    if (previous!.experiment !== lab.id || !Array.isArray(previous!.argv)) throw new LabError('--resume: ' + resumeFrom + ' is not a resumable journal of ' + lab.id);
   }
   /* A resumed run is a run of its own, derived from the one it resumes, which stays as it was (its provenance). */
   const o = given.indexOf('--out');
@@ -143,7 +216,7 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     if (value === 'none') return [];
     const asked = value.split(',').map((t) => t.trim()).filter(Boolean).map((t) => toolOf(t) ?? t);
     const unknown = asked.filter((t) => !(ALL as readonly string[]).includes(t));
-    if (unknown.length) { console.error('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + ALL.join(', ') + ', or all / none)'); process.exit(2); }
+    if (unknown.length) throw new LabError('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + ALL.join(', ') + ', or all / none)');
     return ALL.filter((t) => asked.includes(t));
   };
   const cfg = {
@@ -166,22 +239,23 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
     flat: flag('flat')
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
-  const maxMinutes = Number(arg('max-minutes', '0')) || null;
-  const maxTokens = Number(arg('max-tokens', '0')) || null;
-  const env = process.env;
-  if (!env.LLM_URL || !env.LLM_MODEL) { console.error('LLM_URL and LLM_MODEL are required (and LLM_KEY if the endpoint needs one).'); process.exit(2); }
-  if (!cfg.flat && !env.JEV_KEY) { console.error('JEV_KEY is required (or run the --flat control).'); process.exit(2); }
+  if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
+  if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
 
   /* --- The run's common services: System 2 and the Judge (their answers logged), the journal, stopping ---------------- */
-  const run = openRun(lab, context, { argv, previous, resumeFrom: resumeFrom ?? null, cfg, arg, config: {} });
-  if (isGameLab(lab)) {
-    const result = await lab.run(run.services);
-    run.finish({ stoppedBy: result.stoppedBy, halted: result.halted ?? null }, result.end);
-    run.say('done: ' + result.stoppedBy + (result.halted ? '; resume with --resume ' + run.outFile : '') + '; journal ' + run.outFile);
-    return;
-  }
-  await runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
-    confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null });
+  const run = openRun(lab, options, { argv, previous, resumeFrom: resumeFrom ?? null, cfg, arg, config: {} });
+  options.onJournal?.(run.outFile);
+  /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
+  const body = isGameLab(lab)
+    ? lab.run(run.services).then((result) => {
+      const finished = run.finish({ stoppedBy: result.stoppedBy, halted: result.halted ?? null }, result.end);
+      run.say('done: ' + result.stoppedBy + (result.halted ? '; resume with --resume ' + run.outFile : '') + '; journal ' + run.outFile);
+      return finished;
+    })
+    : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
+      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null });
+  body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
+  return Promise.race([body, run.diverged]);
 }
 
 /* ============================================================================
@@ -203,13 +277,15 @@ interface OpenRun {
   say(text: string): void;
   halt(): string | null;
   /** The end of the run: the end event (common fields, then the laboratory's), the finding, the warnings. */
-  finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): void;
+  finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): LabResult;
+  /** Settles with the run's result when a resumed run diverges (the run ends there). */
+  readonly diverged: Promise<LabResult>;
 }
 
-function openRun(lab: AnyLab, context: { root: string; command: string }, o: { argv: readonly string[]; previous: Record<string, any> | null; resumeFrom: string | null;
+function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string[]; previous: Record<string, any> | null; resumeFrom: string | null;
   cfg: LabRunConfig & Record<string, unknown>; arg: (name: string, fallback?: string) => string; config: Record<string, unknown> }): OpenRun {
   const { argv, previous, resumeFrom, cfg, arg } = o;
-  const env = process.env;
+  const network: FetchLike = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
   const maxMinutes = Number(arg('max-minutes', '0')) || null;
   const maxTokens = Number(arg('max-tokens', '0')) || null;
   const flatFetch = async (_u: string, init: { body?: string }) => {
@@ -224,7 +300,7 @@ function openRun(lab: AnyLab, context: { root: string; command: string }, o: { a
   };
   /* Every answer that comes over the network is logged as it arrives, next to the journal: the run can be resumed. */
   const started = new Date();
-  const outFile = arg('out') || path.join(context.root, 'runs', lab.runName(cfg.seed, worldOptionsOf(cfg)) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
+  const outFile = arg('out') || path.join(options.root, 'runs', lab.runName(cfg.seed, worldOptionsOf(cfg)) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   const logOf = (journalFile: string) => journalFile.replace(/\.json$/, '') + '.replay.jsonl';
   /* A request the log of the resumed run does not answer, while answers still wait there: the run diverged. It stops. */
@@ -232,44 +308,44 @@ function openRun(lab: AnyLab, context: { root: string; command: string }, o: { a
   const replay = new ReplayLog(logOf(outFile), { ...(previous ? { from: logOf(resumeFrom!) } : {}), onDiverge: (d) => onDiverge(d) });
   const judge = new JevJudge(cfg.flat
     ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
-    : { url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev') });
+    : { url: options.judge?.url || JEV_DEFAULT_URL, apiKey: options.judge?.key, model: options.judge?.model, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev', network) });
   const llmUse = { calls: 0, tokens: 0 };
-  const llm = openAiChatClient({ url: env.LLM_URL!, apiKey: env.LLM_KEY, model: env.LLM_MODEL!, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1, fetch: replay.wrap('llm'),
+  const llm = openAiChatClient({ url: options.llm.url!, apiKey: options.llm.key, model: options.llm.model!, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1, fetch: replay.wrap('llm', network),
     onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
 
-  const commit = commitOf(context.root);
+  const commit = commitOf(options.root);
   const journal: Record<string, any> = {
     experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}),
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
     argv: experimentArgs(argv),
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
-    config: { ...cfg, ...o.config, llm_model: env.LLM_MODEL, jev_model: env.JEV_MODEL ?? null },
+    config: { ...cfg, ...o.config, llm_model: options.llm.model, jev_model: cfg.flat ? null : options.judge?.model ?? null },
     /* Filled by the laboratory: what the learner is never told. */
     hidden_from_the_learner: {},
     events: [] as unknown[]
   };
+  /* Once a divergence has ended the run where it was, the loop left behind writes nothing more. */
+  let closed = false;
   const log = (type: string, data: Record<string, unknown> = {}): void => {
+    if (closed) return;
     journal.events.push({ t: Math.round((Date.now() - started.getTime()) / 1000), type, ...data });
     fs.writeFileSync(outFile, JSON.stringify(journal, null, 2));
   };
-  const say = (text: string): void => console.log('[' + Math.round((Date.now() - started.getTime()) / 1000) + 's] ' + text);
+  const print = options.print ?? (() => {});
+  const say = (text: string): void => { if (!closed) print('[' + Math.round((Date.now() - started.getTime()) / 1000) + 's] ' + text); };
+  let settleDiverged: (r: LabResult) => void = () => {};
+  const diverged = new Promise<LabResult>((resolve) => { settleDiverged = resolve; });
   onDiverge = (d) => {
     log('diverged', { channel: d.channel, answers_still_waiting: d.pending });
-    log('end', { stoppedBy: 'diverged', replay: replay.stats(),
-      note: 'the resumed run asked something the run it resumes did not: the code or the configuration changed. This journal stops here; the one it resumes is unchanged.' });
     say('STOPPED: the resumed run diverged from ' + resumeFrom + ' (' + d.channel + ', ' + d.pending + ' logged answers still waiting); this journal stops here, the one it resumes is unchanged');
-    process.exit(3);
+    const result = finish({ stoppedBy: 'diverged', halted: null }, {
+      note: 'the resumed run asked something the run it resumes did not: the code or the configuration changed. This journal stops here; the one it resumes is unchanged.' });
+    /* The loop left behind writes nothing more. */
+    closed = true;
+    settleDiverged(result);
   };
-  /* Stopping: Ctrl+C (or SIGTERM) and the budgets are asked before each question to System 2. */
-  let cancelled = false;
-  const onSignal = (): void => {
-    if (cancelled) { say('stopped at once; resume with --resume ' + outFile); process.exit(130); }
-    cancelled = true;
-    say('stopping before the next question to System 2 (Ctrl+C again to stop at once)');
-  };
-  process.on('SIGINT', onSignal);
-  process.on('SIGTERM', onSignal);
-  const halt = (): string | null => cancelled ? 'cancelled'
+  /* Stopping: the caller's signal (Ctrl+C on the command line) and the budgets are asked before each question to System 2. */
+  const halt = (): string | null => options.signal?.aborted ? 'cancelled'
     : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
     : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
 
@@ -280,7 +356,7 @@ function openRun(lab: AnyLab, context: { root: string; command: string }, o: { a
   if (external) {
     const lineage = previous?.effects_id ?? lab.id + ':' + started.toISOString();
     journal.effects_id = lineage;
-    const envFetch = replay.wrap('env');
+    const envFetch = replay.wrap('env', network);
     let sequence = 0;
     effects = {
       async request(route, body) {
@@ -292,9 +368,7 @@ function openRun(lab: AnyLab, context: { root: string; command: string }, o: { a
   }
   if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
   const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say, halt };
-  return {
-    services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}),
-    finish(stop, end) {
+  function finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): LabResult {
       log('end', {
         stoppedBy: stop.stoppedBy, ...(stop.halted ? { halted: stop.halted, resume: 'the same command with --resume ' + outFile } : {}),
         /* OPERATOR ONLY (SPEC-OBJETIVO O11): answers replayed from the log and asked live; unused ones mean the resumed run diverged. */
@@ -305,13 +379,12 @@ function openRun(lab: AnyLab, context: { root: string; command: string }, o: { a
       const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(outFile) });
       const findingFile = outFile.replace(/\.json$/, '') + '.finding.json';
       fs.writeFileSync(findingFile, JSON.stringify(finding, null, 2));
-      console.log(findingText(finding));
+      if (!closed) print(findingText(finding));
       say('finding ' + findingFile);
-      process.off('SIGINT', onSignal);
-      process.off('SIGTERM', onSignal);
-      if (replay.pending()) say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
-    }
-  };
+      if (replay.pending() && stop.stoppedBy !== 'diverged') say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
+      return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding };
+  }
+  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged };
 }
 
 /** The world's options, kept on the configuration under their own names (see runLab). */
@@ -321,11 +394,10 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * The loop of a laboratory whose model is a LAW (cells, messages, orbit).
  * ========================================================================== */
 
-async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null }): Promise<void> {
+async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null }): Promise<LabResult> {
   const { cfg, worldOptions, previous, resumeFrom } = o;
   const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
-  const env = process.env;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
   if (acts !== undefined) journal.config = { ...journal.config, acts };
   const tools: ReadonlySet<Tool> = new Set(cfg.tools as Tool[]);
@@ -593,7 +665,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-      log(event, { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: env.LLM_MODEL });
+      log(event, { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: journal.config.llm_model });
       say('operator: recovery ' + score + (grades.length ? ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')' : ''));
     } catch (e) { log(event, { truth, error: String((e as Error).message ?? e) }); }
   };
@@ -631,7 +703,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   }
   const final = accepted?.law ?? session.latest()?.law ?? null;
   if (cfg.grade && !session.fatal && !session.halted) await gradeRecovery(final);
-  run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
+  const result = run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     final: final ? ownLaw(final) : null,
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
@@ -642,4 +714,5 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     operator_summary: operatorSummary(protocol.summary(), ablations)
   });
   say('done: ' + (session.halted && !accepted ? 'stopped (' + session.halted + '); resume with --resume ' + outFile + '; ' : '') + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted') + '; journal ' + outFile);
+  return result;
 }

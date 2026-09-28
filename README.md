@@ -232,6 +232,22 @@ node --experimental-strip-types scripts/tank-service.ts --port 18300
 node --experimental-strip-types scripts/run-lab.ts --lab tank --service http://127.0.0.1:18300
 ```
 
+Another program (an agent that coordinates investigations, say) runs a laboratory as a call, with no environment variables,
+console, signals or `process.exit`:
+
+```ts
+import { runLaboratory } from 'neurosym/lab';
+import { cellsLab } from 'neurosym/cells';
+
+const controller = new AbortController();          // abort: stop before the next question to System 2
+const result = await runLaboratory(cellsLab, {
+  args: ['--seed', '1', '--level', '3'], root: '.', signal: controller.signal,
+  llm: { url: 'https://.../chat/completions', model: '...', key: '...' }, judge: { key: '...' }
+});
+result.stoppedBy;  // accepted, budget, cancelled, diverged, ...
+result.finding;    // finding@1: the model, what it claims, where it held and failed, its limits, its cost
+```
+
 Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the
 cost (Judge calls and evaluations it was not asked, LLM calls and tokens) in all and up to the acceptance, what the
 Judge's rules added in the ablations, and - where the run declares baselines that know nothing (cells, orbit) - the checks
