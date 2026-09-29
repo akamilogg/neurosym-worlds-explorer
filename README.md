@@ -262,6 +262,15 @@ node --experimental-strip-types scripts/lab.ts send last "look at the cells two 
 node --experimental-strip-types scripts/lab.ts focus last even "the even layer"
 ```
 
+The assisted researcher may also read sources by itself, where the operator allows: `--sources-allow <dir,url,domain>`,
+or `lab source <run> <dir|url|domain>` during the run. It lists a directory (`{"list": ...}`), opens lines of a document
+(`{"open": ..., "from": 1, "to": 120}`, read afresh every time, so it can check a source again) and finds the lines that
+hold some words (`{"find": ..., "in": ...}`). When a find answers too many lines it may add `"select": "what I need"`, and
+the Judge (Jev) picks the lines that speak to it, seeing only the need and the lines: never the world, and never asked
+whether a line is right. It cites what it read (`src:<document>#L3-8`) next to points of its episodes. A source proposes
+and the world decides: the checks never read it, and the finding says, for each claim, whether it rests on the world, on
+the sources, or on both. Every read goes through the run's log, so a resumed run is answered what the first one read.
+
 Another program (an agent that coordinates investigations, say) runs a laboratory as a call, with no environment variables,
 console, signals or `process.exit`:
 

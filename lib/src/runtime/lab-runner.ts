@@ -21,6 +21,7 @@ import { findingOf, findingText, findingView, type Finding } from '../learn/find
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
 import { assistedSession, assistedSystem, deliveredMessages, type OperatorMessage } from '../learn/assisted/session.ts';
+import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -50,6 +51,7 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'tools', default: 'all', help: 'the instruments, a,b,... ("all" or "none")' },
   { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
   { name: 'task', default: '', help: 'what the operator wants understood, in words (the assisted researcher only)' },
+  { name: 'sources-allow', default: '', help: 'origins the assisted researcher may read sources from: directories, URL prefixes or domains, a,b,...' },
   { name: 'out', default: '', help: 'the journal (default runs/<name>-<time>.json)' }
 ];
 const FLAGS: readonly { name: string; help: string }[] = [
@@ -286,11 +288,13 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
     ...(arg('focus') ? { focus: arg('focus') } : {}),
-    ...(arg('task') ? { task: arg('task') } : {})
+    ...(arg('task') ? { task: arg('task') } : {}),
+    ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {})
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
   Object.defineProperty(worldOptions, '__focus', { value: arg('focus') || '', enumerable: false });
   Object.defineProperty(worldOptions, '__task', { value: arg('task') || '', enumerable: false });
+  Object.defineProperty(worldOptions, '__sources_allow', { value: originsOf(arg('sources-allow'), options.root), enumerable: false });
   /* The researcher: as the run it resumes had it, or as asked; then the operator's policy decides. */
   const askedText = previous?.researcher ?? (arg('researcher', '') || options.researcher || 'unknown-world');
   if (!(RESEARCHERS as readonly string[]).includes(askedText)) throw new LabError('--researcher: unknown ' + askedText + ' (researchers: ' + RESEARCHERS.join(', ') + ')');
@@ -301,6 +305,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (focus && (isGameLab(lab) || !lab.facets?.some((f) => f.id === focus)))
     throw new LabError('--focus: ' + focus + ' is not a facet of ' + lab.id + (!isGameLab(lab) && lab.facets ? ' (facets: ' + lab.facets.map((f) => f.id).join(', ') + ')' : ' (it has none)'));
   if (arg('task') && researcher !== 'assisted') throw new LabError('--task: a statement of what to understand is help: only the assisted researcher takes it');
+  if (arg('sources-allow') && researcher !== 'assisted') throw new LabError('--sources-allow: sources are help: only the assisted researcher reads them');
+  for (const o of originsOf(arg('sources-allow'), options.root)) { const problem = originProblem(o); if (problem) throw new LabError('--sources-allow: ' + problem); }
   if (researcher === 'assisted' && isGameLab(lab)) throw new LabError('the assisted researcher of ' + lab.id + ' is not built yet (SPEC-INVESTIGADOR-ASISTIDO, phase A7): run the unknown-world researcher');
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
@@ -321,6 +327,12 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   return Promise.race([body, run.diverged]);
 }
 
+/** The origins of `--sources-allow`: URL prefixes and domains as they are, paths from the root. */
+function originsOf(list: string, root: string): string[] {
+  return list.split(',').map((o) => o.trim()).filter(Boolean)
+    .map((o) => (isUrl(o) || /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(o) ? o : path.resolve(root, o)));
+}
+
 /* ============================================================================
  * The run's common services, the same for every laboratory.
  * ========================================================================== */
@@ -338,6 +350,9 @@ interface OpenRun {
   readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
   /** The operator's messages accepted and not yet delivered (the assisted researcher takes them). */
   readonly operator: { take(): OperatorMessage[] };
+  /** Sources (on the web or on the disk), read through the run's log (channel "source"): a resumed run is answered what the
+      first read, and reads live from there. */
+  readonly sourceFetch: FetchLike;
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
   halt(): string | null;
@@ -451,7 +466,15 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
           log('operator_command', { ...who, accepted: true });
         }
       } else if (researcher === 'assisted' && order.kind === 'source') {
-        log('operator_command_refused', { ...who, reason: 'the assisted researcher takes sources from phase A6 on (SPEC-INVESTIGADOR-ASISTIDO): not built yet' });
+        const where = String((order as { source?: unknown }).source ?? '');
+        const problem = !where ? 'an origin of sources is a directory, a URL prefix or a domain' : isGameLab(lab) ? 'the assisted researcher of ' + lab.id + ' reads no sources yet (A7)' : originProblem(where);
+        if (problem) log('operator_command_refused', { ...who, reason: problem });
+        else {
+          /* Delivered with the next question, and allowed from then on (sources_allowed). */
+          waiting.push({ id: String(order.id ?? 'source-' + consumed), text: 'The operator allows you to read sources from ' + where + '.',
+            ...(order.by ? { by: order.by } : {}), at: new Date().toISOString(), source: where });
+          log('operator_command', { ...who, accepted: true });
+        }
       } else if (order.kind === 'message' || order.kind === 'focus' || order.kind === 'source') {
         log('operator_command_refused', { ...who, reason: researcher === 'assisted' ? 'a message needs a text' : 'the ' + researcher + ' researcher learns only from what the world answers: it takes no ' + order.kind });
       } else log('operator_command_refused', { ...who, reason: 'unknown order ' + JSON.stringify(order.kind) });
@@ -521,7 +544,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding, researcherFile, researcher: researcherView, researcherUsed: researcher };
   }
   return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged,
-    operator: { take: () => waiting.splice(0, waiting.length) } };
+    operator: { take: () => waiting.splice(0, waiting.length) },
+    sourceFetch: replay.wrap('source', sourceFetch(network)) };
 }
 
 /** The world's options, kept on the configuration under their own names (see runLab). */
@@ -662,6 +686,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   };
 
   const runRequest = async (req: LawRequest<unknown>, budget: { acts: number }): Promise<unknown> => {
+    /* A researcher's own instrument is answered by that researcher (the assisted one's library), never by the world. */
+    if ('extra' in req) return { error: 'no such instrument here' };
     const kind = (['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const).find((k) => k in req)!;
     if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
     if ('view' in req) {
@@ -766,6 +792,12 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
     log, say, halt
   };
+  /* The sources the assisted researcher may read (SPEC-INVESTIGADOR-ASISTIDO §6.3): the origins the operator allows, at the
+     start and during the run. It reads them itself; the Judge picks lines for it only when it asks (`find` with `select`),
+     and a --flat run has no Judge. What the Judge scored is the operator's (source_select). */
+  const sources = new Sources({ allow: (worldOptions.__sources_allow as unknown as string[] | undefined) ?? [], fetch: run.sourceFetch,
+    ...(cfg.flat ? {} : { selector: judgeSelector(judge) }), onSelect: (record) => log('source_select', { round: session.currentRound, ...record }) });
+
   /* The researcher that runs: the unknown-world one's session as it is, or the assisted one's (its own prompt, and the
      operator's messages with its questions; resuming, delivered again at the same questions). */
   const session: LawSession<unknown> = journal.researcher === 'assisted'
@@ -774,12 +806,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       system: () => assistedSystem(promptFor(focus)), task: () => task,
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
+        if (m.source) { sources.allow(m.source); log('sources_allowed', { question, origin: m.source }); }
         if (!m.focus) return;
         focus = m.focus.facet === 'all' ? null : m.focus.facet;
         if (m.focus.task) task = m.focus.task;
         protocol.restart();
         log('focus_changed', { question, facet: m.focus.facet, ...(m.focus.task ? { task: m.focus.task } : {}) });
-      }
+      },
+      sources
     })
     : new LawSession<unknown>(sessionHost);
 

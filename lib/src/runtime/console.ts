@@ -110,7 +110,7 @@ export function serveConsole(options: ConsoleOptions): Promise<{ url: string; cl
           const order: RunOrder | null = b.kind === 'stop' ? { kind: 'stop', by: 'console' }
             : b.kind === 'message' && b.text ? { kind: 'message', text: String(b.text), by: 'console' }
             : b.kind === 'focus' && b.facet ? { kind: 'focus', facet: String(b.facet), ...(b.task ? { task: String(b.task) } : {}), by: 'console' }
-            : b.kind === 'source' && b.source ? { kind: 'source', source: String(b.source), by: 'console' } : null;
+            : b.kind === 'source' && b.source ? { kind: 'source', source: /^https?:\/\//i.test(String(b.source)) || /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(String(b.source)) ? String(b.source) : path.resolve(root, String(b.source)), by: 'console' } : null;
           if (!order) return send_(400, { error: 'an order is stop, message (text), focus (facet) or source (source)' });
           return send_(202, order.kind === 'stop' ? stop(run.journal, 'console') : send(run.journal, order));
         }
@@ -275,7 +275,7 @@ async function refreshDetail(full = false) {
     timeline = el('div', { class: 'timeline', id: 'timeline', role: 'log', 'aria-label': 'Eventos del run' });
     const fb = el('div', { class: 'feedback' });
     const msg = el('textarea', { id: 'msg', placeholder: 'Un mensaje para el investigador…', disabled: pure || !live });
-    const facet = el('input', { placeholder: 'faceta', disabled: pure || !live }), source = el('input', { placeholder: 'fichero o carpeta', disabled: pure || !live });
+    const facet = el('input', { placeholder: 'faceta', disabled: pure || !live }), source = el('input', { placeholder: 'carpeta, URL o dominio', disabled: pure || !live });
     $('detail').replaceChildren(
       el('div', { class: 'row' }, el('h2', {}, s.lab), researcherPill(s.researcher), statePill(s.state)),
       el('div', { class: 'run-name' }, s.run),
@@ -291,7 +291,7 @@ async function refreshDetail(full = false) {
           : live ? null : el('p', { class: 'why' }, 'El run no está en curso: no lee órdenes.'),
         msg, el('div', { class: 'actions' }, el('button', { disabled: pure || !live, onclick: () => order('message', { text: msg.value }, fb) }, 'Enviar mensaje'),
           facet, el('button', { disabled: pure || !live, onclick: () => order('focus', { facet: facet.value }, fb) }, 'Cambiar foco'),
-          source, el('button', { disabled: pure || !live, onclick: () => order('source', { source: source.value }, fb) }, 'Añadir fuente'))),
+          source, el('button', { disabled: pure || !live, onclick: () => order('source', { source: source.value }, fb) }, 'Permitir origen'))),
       el('h3', {}, 'Eventos'), timeline,
       el('div', { class: 'two' }, el('div', {}, el('h3', {}, 'Modelo actual'), el('pre', { class: 'code', id: 'model' })),
         el('div', {}, el('h3', {}, 'Última comprobación'), el('div', { id: 'check' }), el('h3', {}, 'Creencias'), el('div', { id: 'beliefs' }))),

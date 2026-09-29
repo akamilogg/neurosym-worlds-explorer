@@ -42,13 +42,13 @@ import type { FetchLike } from '../core/net.ts';
 const CREDENTIAL = /^(api[-_]?key|key|token|access[-_]?token|auth|authorization|signature|sig|secret|password)$/i;
 
 /** What makes a request that request, for the log: channel, method, path and parameters (without the host and without
-    credentials), and body. */
+    credentials), and body. A source (channel "source") is a page anywhere: its host is part of what it is. */
 export function requestIdentity(channel: string, url: string, init: { method?: string; body?: string }): string {
   let where = url;
   try {
     const u = new URL(url);
     const params = [...u.searchParams.entries()].filter(([k]) => !CREDENTIAL.test(k)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    where = u.pathname + (params.length ? '?' + new URLSearchParams(params).toString() : '');
+    where = (channel === 'source' ? u.host : '') + u.pathname + (params.length ? '?' + new URLSearchParams(params).toString() : '');
   } catch { /* not an absolute URL: as it is */ }
   return createHash('sha256').update([channel, (init.method ?? 'POST').toUpperCase() + ' ' + where, init.body ?? ''].join('\n')).digest('base64url');
 }

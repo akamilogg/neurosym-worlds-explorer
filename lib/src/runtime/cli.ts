@@ -14,7 +14,7 @@ import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, 
  *   lab watch <run>
  *   lab send <run> "<text>"        help: only the assisted researcher takes it
  *   lab focus <run> <facet> [task] help
- *   lab source <run> <file|dir>    help
+ *   lab source <run> <origin>      help
  *   lab stop <run>
  *   lab resume <run> [--max-tokens N] [--max-minutes N] [--policy P]
  *   lab finding <run> [--view researcher]
@@ -41,7 +41,7 @@ export const CLI_USAGE = [
   'lab watch <run>                                           its events as they come, until it ends',
   'lab send <run> "<text>"                                   a message to its researcher (only the assisted researcher takes it)',
   'lab focus <run> <facet> [what to understand]              change its focus (only the assisted researcher)',
-  'lab source <run> <file|dir>                               give it a source (only the assisted researcher)',
+  'lab source <run> <dir|url|domain>                         allow it an origin of sources (only the assisted researcher)',
   'lab stop <run>                                            stop it before its next question to System 2',
   'lab resume <run> [--max-tokens N] [--max-minutes N]       resume it as a run derived from it',
   'lab finding <run> [--view researcher]                     its finding (the operator\'s view by default)',
@@ -82,6 +82,8 @@ export function describeEvent(e: Record<string, any>): string {
     case 'operator_command': return at + 'the operator\'s ' + e.kind + (e.by ? ' (' + e.by + ')' : '') + ': accepted';
     case 'operator_message': return at + 'with question ' + e.question + ', System 2 is given the operator\'s message' + ((e.messages ?? []).length > 1 ? 's' : '') + ': '
       + (e.messages ?? []).map((m: { text: string }) => '"' + short(m.text, 70) + '"').join(', ');
+    case 'sources_allowed': return at + 'from question ' + e.question + ', it may read sources from ' + e.origin;
+    case 'source_select': return at + 'the Judge picked lines for "' + e.need + '" among ' + e.lines + (e.error ? ' (failed: ' + e.error + ')' : '');
     case 'focus_changed': return at + 'from question ' + e.question + ', what counts is the facet ' + e.facet + (e.task ? ' (to understand: ' + e.task + ')' : '');
     case 'operator_command_refused': return at + 'the operator\'s ' + (e.kind ?? 'order') + ': refused - ' + e.reason;
     case 'diverged': return at + 'DIVERGED from the run it resumes (' + e.channel + ')';
@@ -179,7 +181,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const journal = resolveRun(ctx.root, args[0]);
         const order: RunOrder = command === 'send' ? { kind: 'message', text: args.slice(1).join(' '), by: 'operator' }
           : command === 'focus' ? { kind: 'focus', facet: String(args[1] ?? ''), ...(args.length > 2 ? { task: args.slice(2).join(' ') } : {}), by: 'operator' }
-          : command === 'source' ? { kind: 'source', source: path.resolve(String(args[1] ?? '')), by: 'operator' }
+          : command === 'source' ? { kind: 'source', source: originOf(String(args[1] ?? '')), by: 'operator' }
           : { kind: 'stop', by: 'operator' };
         if (command !== 'stop' && !args[1]) { out('lab ' + command + ' <run> <' + (command === 'send' ? 'text' : command === 'focus' ? 'facet' : 'file|dir') + '>'); return 2; }
         const state = runStatus(journal).state;
@@ -216,4 +218,9 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
     out(String((e as Error).message ?? e));
     return 1;
   }
+}
+
+/** An origin as the operator wrote it: a URL prefix or a domain as it is, a path made absolute. */
+function originOf(o: string): string {
+  return /^https?:\/\//i.test(o) || /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(o) ? o : path.resolve(o);
 }

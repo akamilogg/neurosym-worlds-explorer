@@ -54,7 +54,8 @@ export interface Finding {
   readonly assistance?: {
     readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string }[];
     readonly focus_changes: readonly unknown[];
-    readonly sources: readonly unknown[];
+    /** Sources: the origins the operator allowed, and what the researcher opened and looked for in them. */
+    readonly sources: { readonly origins: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[] };
   };
   readonly tested: {
     readonly places: readonly Facts[];
@@ -119,11 +120,18 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
     return { id: String(b.id), statement: String(b.statement ?? ''), status: String(b.status ?? ''), ...(typeof b.since === 'number' ? { since: b.since } : {}),
       evidence, ...(assisted ? { grounded: (['world', 'operator', 'sources'] as const).filter((o) => evidence.some((r) => origin(r) === o)) } : {}) };
   });
+  const requests: J[] = events.filter((e) => e.type === 'investigation').flatMap((e) => (Array.isArray(e.requests) ? e.requests : []));
   const assistance = assisted ? {
     messages: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).map((m: J) => ({ id: String(m.id), question: e.question, text: String(m.text ?? ''),
       ...(m.by ? { by: String(m.by) } : {}), ...(m.at ? { at: String(m.at) } : {}) }))),
     focus_changes: events.filter((e) => e.type === 'focus_changed'),
-    sources: events.filter((e) => e.type === 'source_added')
+    sources: {
+      origins: [...String(journal.config?.sources_allow ?? '').split(',').map((o) => o.trim()).filter(Boolean),
+        ...events.filter((e) => e.type === 'sources_allowed').map((e) => String(e.origin))],
+      /* What it read, as its investigation asked for it. */
+      opened: requests.filter((r) => typeof r.open === 'string').map((r) => String(r.open) + (r.from !== undefined || r.to !== undefined ? '#L' + (r.from ?? 1) + '-' + (r.to ?? '') : '')),
+      found: requests.filter((r) => typeof r.find === 'string').map((r) => String(r.find) + ' in ' + String(r.in ?? '') + (r.select ? ' (select: ' + String(r.select) + ')' : ''))
+    }
   } : undefined;
 
   const blindSets: J[] = acceptance?.validation?.blind_confirmation?.sets ?? [];
@@ -216,7 +224,7 @@ export function findingText(f: Finding): string {
     + (f.model?.fingerprint ? ' (model ' + f.model.fingerprint + ')' : ''));
   for (const c of f.claims) lines.push('  claim [' + c.status + '] ' + c.statement + (c.grounded ? '  (from: ' + (c.grounded.join(', ') || 'nothing cited') + ')' : ''));
   if (f.assistance) lines.push('  assisted: ' + f.assistance.messages.length + ' message(s) of the operator' + (f.assistance.focus_changes.length ? ', ' + f.assistance.focus_changes.length + ' change(s) of focus' : '')
-    + (f.assistance.sources.length ? ', ' + f.assistance.sources.length + ' source(s)' : ''));
+    + (f.assistance.sources.opened.length ? ', ' + f.assistance.sources.opened.length + ' read(s) of sources' : ''));
   const a = f.tested.at_acceptance;
   if (a) {
     const held = (ps: readonly Facts[]) => ps.map((p) => String(p.place) + (p.holds ? '' : ' (not)')).join(', ');

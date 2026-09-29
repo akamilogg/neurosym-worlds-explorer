@@ -1,6 +1,6 @@
 # SPEC · Dos investigadores: el de mundo desconocido y el asistido
 
-Estado (29/09/2026): **A1–A5 hechos**. El resto, propuesto.
+Estado (29/09/2026): **A1–A6 hechos**. El resto, propuesto.
 
 Parte de lo que ya existe tras SPEC-OBJETIVO (O7–O14):
 
@@ -52,9 +52,9 @@ investigador completo**, y los dos conviven.
 
 | | *unknown-world* (el actual) | *assisted* (nuevo) |
 |---|---|---|
-| Aprende de | lo que el mundo responde | el mundo, y además mensajes, foco y fuentes del operador |
-| Sesión, prompt, instrumentos | los de hoy, congelados | propios: `search`, `read`, `task`, `operator_messages` |
-| Control del operador | parar, reanudar, cancelar | lo mismo, más enviar mensajes, cambiar el foco y añadir fuentes |
+| Aprende de | lo que el mundo responde | el mundo, y además mensajes y foco del operador, y fuentes que lee por su cuenta donde el operador permite |
+| Sesión, prompt, instrumentos | los de hoy, congelados | propios: `list`, `open`, `find` (con `select`), `task`, `operator_messages` |
+| Control del operador | parar, reanudar, cancelar | lo mismo, más enviar mensajes, cambiar el foco y permitir orígenes de fuentes |
 | Journal | `researcher: "unknown-world"` | `researcher: "assisted"` y cada aportación como evento |
 | Finding | como hoy | añade `assistance`: qué ayuda hubo, y de dónde viene cada afirmación |
 | Mundos | todos (`Lab` y `GameLab`) | primero los `Lab` (leyes); la cuadrícula, después (§9) |
@@ -123,7 +123,7 @@ lab status <run>
 lab watch <run>              # los eventos en vivo, legibles
 lab send <run> "mira qué pasa en el paso 0"     # sólo asistido
 lab focus <run> <faceta>                         # sólo asistido (§6.2)
-lab source <run> <fichero|dir>                   # sólo asistido (§6.3)
+lab source <run> <dir|url|dominio>               # sólo asistido (§6.3): permite un origen
 lab stop <run>
 lab resume <run> [--max-tokens N]
 lab finding <run> [--view researcher]
@@ -170,27 +170,46 @@ Hay dos niveles distintos.
 
 ### 6.3 Fuentes externas
 
-- **Biblioteca por run:** `--sources <dir|fichero>` o la orden `source`. Contiene documentos, notas, especificaciones o
-  artículos.
-  - Al añadirse se trocea en pasajes y se identifica por su hash (`sources: [{ doc, hash, pasajes }]` en el journal).
-  - Una fuente remota (una URL) pasa por la grabación como un canal más (`source`), igual que el entorno externo.
-- **Instrumentos del asistido:**
-  - `{"search": "..."}` devuelve pasajes con su referencia (`src:<doc>#<n>`).
-  - `{"read": "src:<doc>#<n>"}` lee un pasaje y los de alrededor.
-  - La recuperación es local, por palabras clave (BM25 o similar); no hace falta un servicio de embeddings.
-  - El entorno sigue sin analizar nada por System 2: los instrumentos devuelven texto, no conclusiones.
-- **Evidencia con origen:** una creencia puede citar pasajes junto a puntos del mundo (`evidence: ["ep3@4", "src:manual#12"]`).
+Las fuentes las lee **el investigador, por su cuenta**. El operador sólo pone los límites; el arnés no carga, no trocea,
+no indexa ni vigila nada por él.
+
+- **Orígenes permitidos (lista blanca del operador):** `--sources-allow <a,b,...>` al arrancar, o la orden `source` durante
+  el run. Un origen es un directorio o fichero (ruta absoluta; en la línea de órdenes, relativa a la raíz), un prefijo de
+  URL o un dominio (con sus subdominios). Fuera de ellos no se lee nada.
+- **Instrumentos del asistido** (en su investigación, como cualquier otro, y sólo cuando hay algún origen):
+  - `{"list": "<directorio>"}`: los documentos de texto que contiene. Un origen web no se lista: sus documentos se nombran
+    por su URL.
+  - `{"open": "<documento>", "from": n, "to": n}`: esas líneas, numeradas (hasta 200), cuántas tiene y un hash de lo leído.
+    Se lee de nuevo cada vez: volver a abrir es como el investigador contrasta una fuente, por ejemplo cuando contradice al
+    mundo o a otra fuente. Si ha cambiado, lo juzga él.
+  - `{"find": "palabras", "in": "<documento|directorio>"}`: las líneas que contienen todas las palabras, como un grep.
+    Muestra 40 y dice cuántas hay.
+  - `"select": "lo que necesito"` en un `find`: de las líneas encontradas, **Jev** escoge las que hablan de ello. Es un
+    `find` inteligente que System 2 activa cuando quiere, típicamente cuando salen demasiadas líneas. Jev ve sólo la
+    necesidad y las líneas, nunca el mundo, y se le pregunta de qué hablan, no si son ciertas. Sin Juez (`--flat`) no está
+    disponible y se dice.
+  - Más adelante: búsqueda en la web por su cuenta, limitada a los dominios de la lista blanca.
+- **Sus notas:** lo que aprende de cada fuente lo guarda en su cuaderno, como el resto.
+- **Evidencia con origen:** una creencia cita lo leído junto a puntos del mundo
+  (`evidence: ["ep3@4", "src:<documento>#L12-30"]`).
 - **Las fuentes proponen, el mundo decide (P4).** El criterio no las lee.
+- **Referencias, no verdades.** Una fuente o una cita es una aproximación de lo que su autor pudo ver con sus instrumentos:
+  una referencia cuestionable, nunca una verdad absoluta. El investigador la trata como a sus propias creencias: la
+  contrasta con sus instrumentos, la vuelve a leer cuando hace falta y la **refuta** cuando no encaja con el mundo que
+  observa, y anota en su cuaderno qué tomó de cada fuente y qué refutó y por qué. Así conserva el escepticismo y la
+  autorreflexión que ya ha mostrado con sus propias hipótesis.
 
 ## 7. Journal, grabación y finding
 
 - **Journal:**
   - arriba: `researcher`, `researcher_requested`, `researcher_policy`;
-  - eventos nuevos: `operator_command`, `operator_command_refused`, `operator_message`, `focus_changed` y `source_added`
-    (este último con su hash);
-  - en el asistido, `search` y `read` quedan en la investigación como cualquier instrumento.
+  - eventos nuevos: `operator_command`, `operator_command_refused`, `operator_message`, `focus_changed` y
+    `sources_allowed` (un origen permitido durante el run, con su pregunta);
+  - en el asistido, `list`, `open` y `find` quedan en la investigación como cualquier instrumento;
+  - `source_select`: lo que Jev puntuó en un `select`. Es del operador; System 2 recibe sólo las líneas escogidas.
 - **Grabación:**
-  - Canales nuevos: `operator` (mensajes y cambios de foco, con el número de pregunta) y `source` (fuentes remotas).
+  - Canales nuevos: `operator` (mensajes, cambios de foco y orígenes, con el número de pregunta) y `source` (cada lectura,
+    local o web, con el host en la identidad). Una reanudación recibe lo que se leyó antes del corte y después lee en vivo.
   - `stop` no se graba, porque es control.
   - Una reanudación sin la grabación sigue siendo un error (§12 de SPEC-OBJETIVO).
 - **Finding:**
@@ -198,8 +217,8 @@ Hay dos niveles distintos.
   - En el asistido, además, `assistance`:
     - mensajes (cuántos y cuáles);
     - cambios de foco;
-    - fuentes (manifiesto y lecturas);
-    - por cada afirmación, `grounded: "world" | "sources" | "both"`, según su evidencia.
+    - fuentes: los orígenes permitidos, lo que abrió y lo que buscó;
+    - por cada afirmación, `grounded` (`world`, `operator`, `sources`), según su evidencia.
   - La vista del investigador **conserva `assistance`**: es procedencia, no información privada del operador.
 
 ## 8. La consola visual
@@ -217,7 +236,7 @@ reutiliza el visor de journals (`src/view/`).
 - **Run terminado:** la síntesis visual actual y los dos findings.
 - **Controles:**
   - lanzar un run (lab, investigador, argumentos, política), parar, reanudar;
-  - en un run asistido, además: caja de mensajes, selector de faceta y subida de fuentes.
+  - en un run asistido, además: caja de mensajes, selector de faceta y orígenes de fuentes permitidos.
   - En un run puro, los controles de colaboración aparecen **desactivados, con el motivo**.
 - **Claves:** las pone el entorno del proceso de la consola; nunca viajan por la página.
 
@@ -233,7 +252,7 @@ en O9–O14.
 | A3 | Consola visual | la misma secuencia desde la página, con runs de los dos investigadores a la vez. **Hecho**: `scripts/lab-console.ts` sobre `runtime/console.ts` (API JSON y una página, sólo en 127.0.0.1, y rechaza otro `Host`); lista de runs con la marca del investigador y su estado; detalle en vivo (eventos, modelo actual, última comprobación, creencias, coste, finding en las dos vistas, enlace a la síntesis visual); parar, reanudar y lanzar; el panel de colaboración aparece para todo run y, en el puro, desactivado con el motivo. Probado también a mano en el navegador. Con A4, runs de los dos investigadores a la vez, y la colaboración con el asistido (probado a mano) |
 | A4 | Investigador asistido, esqueleto y mensajes: `AssistedSession`, su prompt, `operator_messages`, canal `operator` en la grabación, `assistance` en el finding | un mensaje llega en la pregunta siguiente y queda en el journal; un run asistido cortado y reanudado recibe cada mensaje en el mismo punto; el puro sigue idéntico. **Hecho**, por composición y sin tocar la sesión compartida: `learn/assisted/session.ts` da a `LawSession` su propio prompt (el común más `ASSISTED_SECTION`) y un cliente de System 2 que añade `operator_messages: { new, earlier }` a la pregunta siguiente; una pregunta sin mensajes es, byte a byte, la del puro. Cada entrega queda como `operator_message` con su número de pregunta; al reanudar se reinyecta en la misma pregunta desde el journal reanudado, así que la grabación reconoce cada petición (el journal hace de canal `operator`: es la misma información). `focus` y `source` se rechazan con el motivo (A5, A6); la cuadrícula asistida da `LabError` (A7). En el finding, `assistance` y, por afirmación, `grounded` (`world`, `operator`, `sources`). Probado también desde la consola, con runs de los dos investigadores a la vez |
 | A5 | Foco: facetas en el contrato `Lab`, un mundo con dinámicas que sobran, `--focus`, cambio de faceta en vivo y `task` en el asistido | con la faceta, las dinámicas fuera de foco no cuentan en el criterio; un run acepta un modelo que sólo explica la faceta. **Hecho**: `Lab.facets` (id y ayuda), `interface({ focus })` y `focus()` en el anfitrión del objetivo. Mundo de prueba: `cells` nivel 4, dos capas en una fila (las celdas pares y las impares, cada una un anillo con su regla elemental); facetas `all`, `even` y `odd`; con faceta, la interfaz añade una línea que dice qué posiciones cuentan y el objetivo compara sólo esas (sin faceta, el prompt no cambia: hashes congelados intactos). `--focus` lo aceptan los dos investigadores al arrancar (define la tarea) y queda en el journal y en la pregunta del finding; una faceta que el laboratorio no tiene es `LabError`. `--task` sólo el asistido (`LabError` en el puro) y va con cada pregunta como `operator_task`. Un `focus` en vivo (CLI `lab focus <run> <faceta> [tarea]`, consola) se valida contra las facetas, llega como mensaje en la pregunta siguiente y se aplica entonces: el prompt dice lo que cuenta, el protocolo reinicia la etapa y queda `focus_changed`; al reanudar se aplica en la misma pregunta y la grabación reconoce cada petición. Journals puros idénticos a la línea base (0 diferencias en los cuatro mundos) |
-| A6 | Fuentes: biblioteca, `search` y `read`, citas `src:`, `grounded` en el finding, fuentes remotas por la grabación | una creencia cita una fuente; el finding separa lo comprobado en el mundo de lo que sólo viene de las fuentes; una fuente engañosa no hace sostenerse a un modelo falso |
+| A6 | Fuentes: orígenes permitidos por el operador, `list`, `open` y `find` (con `select` por Jev) del investigador, citas `src:`, `grounded` en el finding, lecturas por la grabación | una creencia cita una fuente; el finding separa lo comprobado en el mundo de lo que sólo viene de las fuentes; una fuente engañosa no hace sostenerse a un modelo falso. **Hecho** (§6.3), tras descartar un primer diseño en el que el arnés cargaba, troceaba, indexaba y vigilaba una biblioteca: ahora el arnés sólo hace cumplir la lista blanca (`Sources.permitted`: dentro de un directorio permitido, sin escapar por `..` ni enlaces; bajo un prefijo de URL; en un dominio o sus subdominios), graba cada lectura (canal `source`, también las locales, así que un run reanudado recibe lo que se leyó antes del corte aunque el fichero haya cambiado) y da la procedencia en el finding. `--sources-allow` y la orden `source` sólo en el asistido (`LabError` y rechazo registrado en el puro; un origen inexistente se rechaza). Los instrumentos entran en la sesión compartida por un gancho inerte (`extraRequest`, ausente en el puro) y los responde el asistido, nunca el mundo; con algún origen, el prompt añade `SOURCES_SECTION` y cada pregunta lleva `sources.origins`. Journals puros idénticos a la línea base (0 diferencias en los cuatro mundos) |
 | A7 (opcional) | La cuadrícula asistida (`GameLab`) | la cuadrícula acepta mensajes y fuentes con su bucle propio |
 
 **Orden:** A1–A3 dan valor a los dos investigadores desde ya (ver y controlar) y son la base para observar A4–A6. Después

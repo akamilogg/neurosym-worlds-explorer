@@ -59,6 +59,8 @@ export interface LawSessionHost<A> {
   lastCheck(): unknown;
   /** How an act is echoed back in the prompt's words (default: as parsed). */
   actAsWritten?(act: A): unknown;
+  /** Requests of instruments the researcher brings (`runRequest` gets them as `{ extra }`); none by default. */
+  extraRequest?(q: Record<string, unknown>): boolean;
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
   /** Asked before each consultation of System 2: a reason to stop now (cancelled, a budget spent), or null. */
@@ -141,7 +143,7 @@ export class LawSession<A> {
         h.log('proposal_failed', { round, error: String((error as Error)?.message || error) });
         continue;
       }
-      const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct });
+      const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct, ...(h.extraRequest ? { extraRequest: (q) => h.extraRequest!(q) } : {}) });
       const noteWarnings = [...this.notebook.applyNotes(round, turn.notes, (ref) => h.known(ref)), ...this.notebook.applyMethods(round, turn.methods)];
       if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }
@@ -153,12 +155,12 @@ export class LawSession<A> {
         const modelOf = (l: number | Law | null) => (l !== null && typeof l === 'object' ? ownLaw(l) : l);
         const asWritten = turn.requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
           : 'inspect' in r ? { inspect: r.inspect, model: modelOf(r.law) }
-          : 'act' in r ? { act: h.actAsWritten ? h.actAsWritten(r.act) : r.act } : r);
+          : 'act' in r ? { act: h.actAsWritten ? h.actAsWritten(r.act) : r.act } : 'extra' in r ? r.extra : r);
         investigation.push({ step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
         h.log('investigation', { round, requests: asWritten, results, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
         h.say('  investigates: ' + turn.requests.map((r, i) => {
           const res = results[i] as { error?: string };
-          const k = Object.keys(r)[0];
+          const k = Object.keys('extra' in r ? r.extra : r)[0];
           return k + (res?.error ? ' (' + res.error.slice(0, 60) + ')' : '');
         }).join('; '));
         refused = [];

@@ -144,7 +144,9 @@ export type LawRequest<A> =
   | { readonly act: A }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   | { readonly simulate: string; readonly law: number | Law | null; readonly rows: number }
-  | { readonly table: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: 'episodes' | 'checks' };
+  | { readonly table: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: 'episodes' | 'checks' }
+  /** A request of an instrument the researcher brings (the assisted one's sources), as it was written. */
+  | { readonly extra: Record<string, unknown> };
 
 export type LawTurn<A> =
   | { kind: 'investigate'; requests: LawRequest<A>[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
@@ -153,7 +155,9 @@ export type LawTurn<A> =
 /** An answer is either an investigation (requests, and maybe notes) or a proposal. */
 export function parseLawTurn<A>(content: string, context: { world: string; lang?: string; round?: number; maxRequests?: number;
   /** The world's act parameters, or why they cannot be read. */
-  parseAct: (raw: Record<string, unknown>) => A | string }): LawTurn<A> {
+  parseAct: (raw: Record<string, unknown>) => A | string;
+  /** Requests of instruments the researcher brings: taken as they are written (none by default). */
+  extraRequest?: (q: Record<string, unknown>) => boolean }): LawTurn<A> {
   const parseAct = context.parseAct;
   const data = parseJsonLoose(content);
   const o = obj(data);
@@ -203,7 +207,8 @@ export function parseLawTurn<A>(content: string, context: { world: string; lang?
         if (typeof code === 'string') { warnings.push('request #' + i + ': ' + code); continue; }
         const on = onOf(q, q.table);
         requests.push({ table: code, on: on === 'checks' || on === 'tests' ? 'checks' : 'episodes' });
-      } else warnings.push('request #' + i + ' ignored (' + clipJson(r) + '): use view, act, inspect, measure, simulate or table');
+      } else if (context.extraRequest?.(q)) requests.push({ extra: q });
+      else warnings.push('request #' + i + ' ignored (' + clipJson(r) + '): use view, act, inspect, measure, simulate or table');
     }
     if (o.investigate.length > max) warnings.push('only the first ' + max + ' requests were run');
     return { kind: 'investigate', requests, notes, methods, warnings };
