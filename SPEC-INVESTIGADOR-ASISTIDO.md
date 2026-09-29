@@ -276,7 +276,7 @@ va A4, porque los mensajes son lo más directo de la colaboración. Luego A5 y A
    igual que `--level`. El cambio de faceta en vivo, sólo en el asistido.
 2. **¿Un agente puede hacer de operador?** Por ejemplo, un coordinador que manda mensajes a los investigadores que lanzó.
    Propuesta: sí, en el asistido, identificado como autor de cada orden en el journal (`by`). La política decide qué agentes
-   pueden enviar qué órdenes.
+   pueden enviar qué órdenes. Desarrollado en `SPEC-ORQUESTADOR.md` (agente operador, orquestador y planificador).
 3. **Presupuesto de ayuda:** ¿límite de mensajes por ronda o por run? Propuesta: configurable, sin límite por defecto,
    siempre visible en el finding.
 4. **¿Pausa distinta de parar?** Propuesta: no. Parar y reanudar ya es una pausa, con procedencia completa (run derivado).
