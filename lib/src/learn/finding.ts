@@ -45,7 +45,15 @@ export interface Finding {
   readonly question: { readonly world: string; readonly answer_form?: readonly string[]; readonly verdict_form?: readonly string[] };
   readonly outcome: { readonly status: string; readonly round: number | null; readonly attempt: number | null };
   readonly model: { readonly round: number | null; readonly fingerprint: string | null; readonly law: unknown } | null;
-  readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[] }[];
+  readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[];
+    /** Assisted researcher: where its evidence comes from - the world (points of episodes), the operator's messages, sources. */
+    readonly grounded?: readonly ('world' | 'operator' | 'sources')[] }[];
+  /** Assisted researcher (SPEC-INVESTIGADOR-ASISTIDO §7): what help it had. It is provenance, so both views keep it. */
+  readonly assistance?: {
+    readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string }[];
+    readonly focus_changes: readonly unknown[];
+    readonly sources: readonly unknown[];
+  };
   readonly tested: {
     readonly places: readonly Facts[];
     readonly at_acceptance: {
@@ -99,11 +107,22 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
   const fingerprint: string | null = (wrapped ? final!.fingerprint : null) ?? proposals.find((p) => p.round === round)?.fingerprint ?? null;
 
   const beliefs: J[] = Array.isArray(end.notebook?.beliefs) ? end.notebook.beliefs : [];
+  const assisted = journal.researcher === 'assisted';
+  /* Where a piece of evidence comes from: a message of the operator, a source, or the world (a point or an episode). */
+  const origin = (ref: string): 'world' | 'operator' | 'sources' => (/^operator:/.test(ref) ? 'operator' : /^src:/.test(ref) ? 'sources' : 'world');
   const claims = beliefs.filter((b) => b.status !== 'dropped').map((b) => {
-    const last = Array.isArray(b.history) ? b.history[b.history.length - 1] : undefined;
+    /* The latest evidence it cited: a reflection may confirm a belief without citing anything again. */
+    const last = Array.isArray(b.history) ? [...b.history].reverse().find((h: J) => Array.isArray(h.evidence) && h.evidence.length) : undefined;
+    const evidence: string[] = Array.isArray(last?.evidence) ? last.evidence.map(String) : [];
     return { id: String(b.id), statement: String(b.statement ?? ''), status: String(b.status ?? ''), ...(typeof b.since === 'number' ? { since: b.since } : {}),
-      evidence: Array.isArray(last?.evidence) ? last.evidence.map(String) : [] };
+      evidence, ...(assisted ? { grounded: (['world', 'operator', 'sources'] as const).filter((o) => evidence.some((r) => origin(r) === o)) } : {}) };
   });
+  const assistance = assisted ? {
+    messages: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).map((m: J) => ({ id: String(m.id), question: e.question, text: String(m.text ?? ''),
+      ...(m.by ? { by: String(m.by) } : {}), ...(m.at ? { at: String(m.at) } : {}) }))),
+    focus_changes: events.filter((e) => e.type === 'focus_changed'),
+    sources: events.filter((e) => e.type === 'source_added')
+  } : undefined;
 
   const blindSets: J[] = acceptance?.validation?.blind_confirmation?.sets ?? [];
   const atAcceptance = acceptance ? {
@@ -144,6 +163,7 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
     outcome: { status, round: status === 'accepted' ? acceptedRound : round, attempt: summary.accepted?.attempt ?? acceptance?.attempt ?? null },
     model: law ? { round, fingerprint, law } : null,
     claims,
+    ...(assistance ? { assistance } : {}),
     tested: { places: places.map((p) => ({ ...p })), at_acceptance: atAcceptance, validations: summary.validations ?? [] },
     counterexamples,
     limitations: {
@@ -191,7 +211,9 @@ export function findingText(f: Finding): string {
   const lines: string[] = [];
   lines.push(f.question.world + ': ' + (f.outcome.status === 'accepted' ? 'accepted in round ' + f.outcome.round : f.outcome.status)
     + (f.model?.fingerprint ? ' (model ' + f.model.fingerprint + ')' : ''));
-  for (const c of f.claims) lines.push('  claim [' + c.status + '] ' + c.statement);
+  for (const c of f.claims) lines.push('  claim [' + c.status + '] ' + c.statement + (c.grounded ? '  (from: ' + (c.grounded.join(', ') || 'nothing cited') + ')' : ''));
+  if (f.assistance) lines.push('  assisted: ' + f.assistance.messages.length + ' message(s) of the operator' + (f.assistance.focus_changes.length ? ', ' + f.assistance.focus_changes.length + ' change(s) of focus' : '')
+    + (f.assistance.sources.length ? ', ' + f.assistance.sources.length + ' source(s)' : ''));
   const a = f.tested.at_acceptance;
   if (a) {
     const held = (ps: readonly Facts[]) => ps.map((p) => String(p.place) + (p.holds ? '' : ' (not)')).join(', ');

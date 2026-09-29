@@ -83,4 +83,5 @@ test('the command line refuses what it cannot do, and says why', async () => {
   assert.equal(await cli('list'), 0);
   assert.equal(lines[0], 'no runs yet');
   assert.equal(describeEvent({ t: 3, type: 'operator_command_refused', kind: 'message', reason: 'no' }), "[3s] the operator's message: refused - no");
+  assert.equal(describeEvent({ t: 4, type: 'operator_message', question: 3, messages: [{ text: 'look at step 0' }] }), '[4s] with question 3, System 2 is given the operator\'s message: "look at step 0"');
 });

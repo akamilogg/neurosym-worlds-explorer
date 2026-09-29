@@ -207,7 +207,7 @@ dialog label { display: block; margin: 8px 0 2px; font-size: 13px; color: var(--
     <label for="f-lab">Laboratorio</label><select id="f-lab"></select>
     <div class="muted" id="f-about"></div>
     <label for="f-researcher">Investigador</label>
-    <select id="f-researcher"><option value="unknown-world">mundo desconocido (aprende sólo del mundo)</option><option value="assisted" disabled>asistido (llega en la fase A4)</option></select>
+    <select id="f-researcher"><option value="unknown-world">mundo desconocido (aprende sólo del mundo)</option><option value="assisted">asistido (el operador puede escribirle)</option></select>
     <label for="f-args">Argumentos del experimento</label><input id="f-args" placeholder="--seed 1 --level 1">
     <div class="muted" id="f-options"></div>
     <label for="f-policy">Política del operador (opcional)</label><input id="f-policy" placeholder="force=unknown-world  o  allow=unknown-world,assisted">

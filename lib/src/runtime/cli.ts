@@ -80,6 +80,8 @@ export function describeEvent(e: Record<string, any>): string {
     case 'reflection': return at + r + 'reflects: ' + short(e.rationale);
     case 'halted': return at + r + 'stopped before asking System 2 again (' + e.reason + ')';
     case 'operator_command': return at + 'the operator\'s ' + e.kind + (e.by ? ' (' + e.by + ')' : '') + ': accepted';
+    case 'operator_message': return at + 'with question ' + e.question + ', System 2 is given the operator\'s message' + ((e.messages ?? []).length > 1 ? 's' : '') + ': '
+      + (e.messages ?? []).map((m: { text: string }) => '"' + short(m.text, 70) + '"').join(', ');
     case 'operator_command_refused': return at + 'the operator\'s ' + (e.kind ?? 'order') + ': refused - ' + e.reason;
     case 'diverged': return at + 'DIVERGED from the run it resumes (' + e.channel + ')';
     case 'end': return at + 'ended: ' + e.stoppedBy + (e.resume ? ' (resumable)' : '');

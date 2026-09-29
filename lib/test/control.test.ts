@@ -60,14 +60,16 @@ const ARGS = ['--seed', '1', '--level', '1', '--attempts', '6', '--flat', '--no-
 const options = (dir: string, fetch: FetchLike, more: object = {}) => ({ args: [...ARGS, '--out', path.join(dir, 'runs', 'run.json')], root: dir,
   llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch, ...more });
 
-test('the journal says which researcher ran, which was asked, and under which policy; assisted is not built yet', async () => {
+test('the journal says which researcher ran, which was asked, and under which policy; the grid has no assisted researcher yet', async () => {
   const dir = root();
   const r = await runLaboratory(cellsLab, options(dir, system2(), { policy: { allow: ['unknown-world'] } }));
   const j = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
   assert.deepEqual([j.researcher, j.researcher_requested, j.researcher_policy], ['unknown-world', 'unknown-world', { allow: ['unknown-world'] }]);
   assert.equal(r.researcherUsed, 'unknown-world');
-  await assert.rejects(runLaboratory(cellsLab, options(dir, system2(), { researcher: 'assisted' })), /not built yet/);
-  await assert.rejects(runLaboratory(cellsLab, options(dir, system2(), { policy: { force: 'assisted' } })), /not built yet/);
+  const forced = await runLaboratory(cellsLab, { ...options(dir, system2(), { policy: { force: 'assisted' } }), args: [...ARGS, '--out', path.join(dir, 'runs', 'forced.json')] });
+  assert.equal(forced.researcherUsed, 'assisted', 'the operator\'s policy decides');
+  assert.equal(JSON.parse(fs.readFileSync(forced.journal, 'utf8')).researcher_requested, 'unknown-world');
+  await assert.rejects(runLaboratory(LABS.grid, { ...options(dir, system2(), { researcher: 'assisted' }), args: ['--seed', '22', '--flat'] }), /phase A7/);
   await assert.rejects(runLaboratory(cellsLab, { ...options(dir, system2()), args: [...ARGS, '--policy', 'allow=assisted'] }), /does not allow/);
 });
 

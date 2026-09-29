@@ -20,6 +20,7 @@ import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, ty
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
+import { assistedSession, deliveredMessages, type OperatorMessage } from '../learn/assisted/session.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -290,7 +291,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   const p = given.indexOf('--policy');
   const policy: ResearcherPolicy | null = options.policy ?? (p >= 0 && given[p + 1] ? parsePolicy(given[p + 1]) : null);
   const researcher = chooseResearcher(askedText as Researcher, policy);
-  if (researcher === 'assisted') throw new LabError('the assisted researcher is not built yet (SPEC-INVESTIGADOR-ASISTIDO, phase A4): run the unknown-world researcher');
+  if (researcher === 'assisted' && isGameLab(lab)) throw new LabError('the assisted researcher of ' + lab.id + ' is not built yet (SPEC-INVESTIGADOR-ASISTIDO, phase A7): run the unknown-world researcher');
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
 
@@ -325,6 +326,8 @@ interface OpenRun {
   readonly commit: string | null;
   /** The environment outside, when the laboratory has one. */
   readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
+  /** The operator's messages accepted and not yet delivered (the assisted researcher takes them). */
+  readonly operator: { take(): OperatorMessage[] };
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
   halt(): string | null;
@@ -398,6 +401,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   let stoppedBy: string | null = null;
   let stopRequested = false;
   let consumed = 0;
+  const waiting: OperatorMessage[] = [];
   const lastRound = (): number | null => { for (let i = journal.events.length - 1; i >= 0; i--) if (typeof journal.events[i].round === 'number') return journal.events[i].round; return null; };
   function writeStatus(): void {
     try {
@@ -421,8 +425,14 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         state = 'stopping';
         log('operator_command', { ...who, accepted: true });
         say('the operator asks to stop: stopping before the next question to System 2');
+      } else if (researcher === 'assisted' && order.kind === 'message' && typeof (order as { text?: unknown }).text === 'string' && (order as { text: string }).text.trim()) {
+        /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
+        waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}), at: new Date().toISOString() });
+        log('operator_command', { ...who, accepted: true });
+      } else if (researcher === 'assisted' && (order.kind === 'focus' || order.kind === 'source')) {
+        log('operator_command_refused', { ...who, reason: 'the assisted researcher takes ' + order.kind + ' from phase ' + (order.kind === 'focus' ? 'A5' : 'A6') + ' on (SPEC-INVESTIGADOR-ASISTIDO): not built yet' });
       } else if (order.kind === 'message' || order.kind === 'focus' || order.kind === 'source') {
-        log('operator_command_refused', { ...who, reason: 'the ' + researcher + ' researcher learns only from what the world answers: it takes no ' + order.kind });
+        log('operator_command_refused', { ...who, reason: researcher === 'assisted' ? 'a message needs a text' : 'the ' + researcher + ' researcher learns only from what the world answers: it takes no ' + order.kind });
       } else log('operator_command_refused', { ...who, reason: 'unknown order ' + JSON.stringify(order.kind) });
     }
   }
@@ -489,7 +499,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       if (replay.pending() && stop.stoppedBy !== 'diverged') say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
       return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding, researcherFile, researcher: researcherView, researcherUsed: researcher };
   }
-  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged };
+  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged,
+    operator: { take: () => waiting.splice(0, waiting.length) } };
 }
 
 /** The world's options, kept on the configuration under their own names (see runLab). */
@@ -717,7 +728,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     return { table: req.table.source, on: req.on, ...(lab.residual ? { residuals_of: latest ? 'your latest model' : 'no model yet' } : {}), rows };
   };
 
-  const session: LawSession<unknown> = new LawSession<unknown>({
+  const sessionHost: import('../learn/law-session.ts').LawSessionHost<unknown> = {
     llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: lab.perceptDoc, steps: cfg.steps, investigative,
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
     parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
@@ -728,7 +739,12 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     episodes: episodeIndex,
     places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
     log, say, halt
-  });
+  };
+  /* The researcher that runs: the unknown-world one's session as it is, or the assisted one's (its own prompt, and the
+     operator's messages with its questions; resuming, delivered again at the same questions). */
+  const session: LawSession<unknown> = journal.researcher === 'assisted'
+    ? assistedSession(sessionHost, { take: () => run.operator.take(), scheduled: deliveredMessages(previous) })
+    : new LawSession<unknown>(sessionHost);
 
   /* --- Operator only ------------------------------------------------------------------------- */
   const operatorContext: LabOperatorContext<Spec, Case> = {
