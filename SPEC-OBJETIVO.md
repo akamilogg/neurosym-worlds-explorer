@@ -507,3 +507,21 @@ Todas las señales de acoplamiento se confirman:
 **Orden propuesto:** O12 antes que ampliar dominios, como recomienda la auditoría, y después O13 y O14, que son pequeñas.
 
 **O12, O13 y O14 hechos** (filas en §7). Lo que exige a un entorno externo real: que acepte una clave de idempotencia por petición (o un envoltorio que la implemente); el resto (grabación, reanudación, divergencia) lo pone el runner.
+
+## 12. Tercera auditoría externa (29/09/2026, sobre `d33799c`)
+
+**Valoración:** la abstracción de laboratorio va en la dirección adecuada. Lo que la auditoría destaca como avances:
+- la vista del investigador, con lista blanca de hechos observables;
+- la verdad opcional;
+- las dos vistas devueltas por el runner.
+
+El punto crítico que señala es que la reanudación conserve la correspondencia entre petición, experimento y evidencia.
+Dos fallos, los dos reproducidos y corregidos:
+
+| Punto | Estado |
+|---|---|
+| **P1.** El replay confundía peticiones distintas: la clave era sólo canal y cuerpo, así que un `PUT /different` recibía la respuesta de un `POST /first`. | Hecho. La identidad de una petición es su canal, su método, su ruta con sus parámetros y su cuerpo (`requestIdentity`, SHA-256). Quedan fuera el host (un servicio puede cambiar de dirección entre la parada y la reanudación) y los parámetros que llevan credenciales (`key`, `token`, `signature`…), que pueden rotar. La grabación sigue sin guardar URLs. Tests: otro método, otra ruta u otro parámetro dan divergencia sin preguntar a la red; otro puerto o una credencial rotada siguen siendo la misma petición. |
+| **P2.** Reanudar sin el fichero de grabación lo tomaba como un historial vacío y volvía a hacer todas las peticiones. | Hecho. Es un error explícito: `ReplayLog` lanza un error y el runner un `LabError` (salida 2) antes de hacer nada. Comprobado contra el servicio de `tank`: no recibe ninguna petición. |
+
+Consecuencia: las grabaciones hechas antes de este cambio usan la clave anterior, así que reanudarlas da divergencia, que
+es lo seguro.

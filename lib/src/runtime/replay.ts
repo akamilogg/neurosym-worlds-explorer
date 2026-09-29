@@ -24,9 +24,34 @@ import type { FetchLike } from '../core/net.ts';
  * the first time: a request without an answer first waits while the others are served, and
  * only a log that stops being consumed is a divergence.
  *
- * Only the answers are logged: never a request's headers (where the keys travel), never a
- * key. A request is known by the SHA-256 of its channel and body.
+ * A REQUEST is known by what makes it that request: its channel, its method, its path and
+ * parameters, and its body (the SHA-256 of them). A PUT is not the POST it follows, nor is
+ * /second the answer of /first. Two things are left out: the host (a service may move to
+ * another address between a stop and a resume and still be the same service), and the
+ * parameters that carry credentials (key, token, signature...), which may rotate.
+ *
+ * A resumed run needs the log of the run it resumes: without it, every request would go to
+ * the network again - costs and acts repeated - so a missing log is an error, never an
+ * empty history.
+ *
+ * Only the answers are logged: never a request's headers or its URL (where the keys travel),
+ * never a key.
  * ========================================================================== */
+
+/** URL parameters that carry credentials: they are not part of what a request is. */
+const CREDENTIAL = /^(api[-_]?key|key|token|access[-_]?token|auth|authorization|signature|sig|secret|password)$/i;
+
+/** What makes a request that request, for the log: channel, method, path and parameters (without the host and without
+    credentials), and body. */
+export function requestIdentity(channel: string, url: string, init: { method?: string; body?: string }): string {
+  let where = url;
+  try {
+    const u = new URL(url);
+    const params = [...u.searchParams.entries()].filter(([k]) => !CREDENTIAL.test(k)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    where = u.pathname + (params.length ? '?' + new URLSearchParams(params).toString() : '');
+  } catch { /* not an absolute URL: as it is */ }
+  return createHash('sha256').update([channel, (init.method ?? 'POST').toUpperCase() + ' ' + where, init.body ?? ''].join('\n')).digest('base64url');
+}
 
 interface Entry { readonly channel: string; readonly key: string; readonly status: number; readonly text: string }
 
@@ -52,9 +77,9 @@ export class ReplayDivergence extends Error {
   }
 }
 
-/** The answers of a log, in order; a line that does not parse (cut by a hard stop) is dropped. */
+/** The answers of a log, in order; a line that does not parse (cut by a hard stop) is dropped. A missing log is an error. */
 export function readReplayLog(file: string): Entry[] {
-  if (!fs.existsSync(file)) return [];
+  if (!fs.existsSync(file)) throw new Error('the log of the run it resumes is missing (' + file + '): without it every request would be made again');
   const out: Entry[] = [];
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue;
@@ -126,7 +151,7 @@ export class ReplayLog {
     return async (url, init) => {
       /* After a divergence nothing is answered, logged or asked: the run has ended. */
       if (this.diverged) throw new ReplayDivergence(this.diverged.channel, this.diverged.pending);
-      const key = createHash('sha256').update(channel + '\n' + (init.body ?? '')).digest('base64url');
+      const key = requestIdentity(channel, url, init);
       const take = () => {
         const e = this.queue.get(key)?.shift();
         if (!e) return null;

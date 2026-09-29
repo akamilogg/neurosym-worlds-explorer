@@ -196,6 +196,9 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (resumeFrom) {
     try { previous = JSON.parse(fs.readFileSync(resumeFrom, 'utf8')); } catch (e) { throw new LabError('--resume: cannot read ' + resumeFrom + ': ' + String((e as Error).message ?? e)); }
     if (previous!.experiment !== lab.id || !Array.isArray(previous!.argv)) throw new LabError('--resume: ' + resumeFrom + ' is not a resumable journal of ' + lab.id);
+    /* Without its log, a resumed run would ask everything again: costs and acts repeated. */
+    const log = resumeFrom.replace(/\.json$/, '') + '.replay.jsonl';
+    if (!fs.existsSync(log)) throw new LabError('--resume: the log of ' + resumeFrom + ' is missing (' + log + '): without it every request would be made again, so the run is not resumed');
   }
   /* A resumed run is a run of its own, derived from the one it resumes, which stays as it was (its provenance). */
   const o = given.indexOf('--out');

@@ -57,6 +57,13 @@ test('a configuration it cannot run is a LabError, not an exit', async () => {
   await assert.rejects(runLaboratory(cellsLab, { ...base(dir, ARGS), llm: {} }), LabError);
   await assert.rejects(runLaboratory(cellsLab, base(dir, ['--seed', '1'])), /Judge is needed/);
   await assert.rejects(runLaboratory(cellsLab, base(dir, ['--resume', path.join(dir, 'nothing.json')])), /cannot read/);
+  /* A journal whose log is gone: resuming it would make every request again (third external audit). */
+  const whole = await runLaboratory(cellsLab, base(dir, ARGS));
+  fs.renameSync(whole.journal.replace(/\.json$/, '.replay.jsonl'), whole.journal.replace(/\.json$/, '.replay.moved'));
+  let asked = 0;
+  await assert.rejects(runLaboratory(cellsLab, { args: ['--resume', whole.journal, '--out', path.join(dir, 'again.json')], root: dir,
+    llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: async (...a) => { asked++; return system2(...a); } }), (e) => e instanceof LabError && /log of .* is missing/.test(e.message));
+  assert.equal(asked, 0, 'nothing is asked again');
 });
 
 test('an aborted signal stops the run before its next question to System 2', async () => {

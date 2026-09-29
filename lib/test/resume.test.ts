@@ -134,3 +134,34 @@ test('a session the host halts asks System 2 nothing more, and says why', async 
   assert.equal(await session.consult('reflect', 't'), null);
   assert.equal(asked, 1);
 });
+
+/* After the third external audit: a request is known by its method, path and parameters too; a resume needs its log. */
+
+test('a request is its method, path, parameters and body: another request is not given the answer of the first', async () => {
+  const d = dir(), first = path.join(d, 'a.jsonl');
+  const at = (method: string, body = '{"x":1}') => ({ method, headers: {}, body, signal: new AbortController().signal });
+  await new ReplayLog(first).wrap('env', network().fetch)('http://service.test/first?place=p1', at('POST'));
+  for (const [url, method] of [['http://service.test/different?place=p1', 'PUT'], ['http://service.test/first?place=p1', 'PUT'],
+    ['http://service.test/second?place=p1', 'POST'], ['http://service.test/first?place=p2', 'POST']] as const) {
+    const net = network();
+    const resumed = new ReplayLog(path.join(d, 'b.jsonl'), { from: first, stallMs: 30 });
+    await assert.rejects(resumed.wrap('env', net.fetch)(url, at(method)), ReplayDivergence, method + ' ' + url);
+    assert.equal(net.calls(), 0, 'and the network is not asked');
+  }
+});
+
+test('the same request is still the same when the service moved or a credential in its URL rotated', async () => {
+  const d = dir(), first = path.join(d, 'a.jsonl');
+  const at = { method: 'POST', headers: {}, body: '{"x":1}', signal: new AbortController().signal };
+  const answer = await (await new ReplayLog(first).wrap('env', network().fetch)('http://127.0.0.1:18300/step?place=p1&key=OLD', at)).text();
+  const net = network();
+  const resumed = new ReplayLog(path.join(d, 'b.jsonl'), { from: first });
+  assert.equal(await (await resumed.wrap('env', net.fetch)('http://127.0.0.1:18400/step?key=NEW&place=p1', at)).text(), answer);
+  assert.equal(net.calls(), 0);
+  assert.doesNotMatch(fs.readFileSync(first, 'utf8'), /OLD|place=|step/, 'the log holds no URL');
+});
+
+test('a resume without the log of the run it resumes is an error, never an empty history', () => {
+  const d = dir();
+  assert.throws(() => new ReplayLog(path.join(d, 'b.jsonl'), { from: path.join(d, 'missing.jsonl') }), /missing/);
+});
