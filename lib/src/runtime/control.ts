@@ -40,7 +40,7 @@ export interface RunInfo {
 export type RunOrder =
   | { readonly kind: 'stop'; readonly by?: string }
   | { readonly kind: 'message'; readonly text: string; readonly by?: string }
-  | { readonly kind: 'focus'; readonly facet: string; readonly by?: string }
+  | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string };
 
 /** The files of a run, from its journal. */

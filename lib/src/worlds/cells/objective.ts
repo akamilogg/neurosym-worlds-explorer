@@ -38,18 +38,37 @@ export interface CellsResult {
   readonly came?: string;
 }
 
+/** A FACET of the task (SPEC-INVESTIGADOR-ASISTIDO §6.2): which cells of the row count. */
+export const CELLS_FACETS = [
+  { id: 'all', help: 'every cell counts (no focus)' },
+  { id: 'even', help: 'only the cells at even positions count (level 4: one of the two layers)' },
+  { id: 'odd', help: 'only the cells at odd positions count (level 4: the other layer)' }
+] as const;
+
+/** What System 2 is told a facet means: which positions of its answer count. None for all of them. */
+export function cellsFocusLine(focus: string | null | undefined): string | null {
+  return focus === 'even' ? 'WHAT COUNTS: only the symbols at even positions (0, 2, 4, ...) of your answer are checked; the others are not.'
+    : focus === 'odd' ? 'WHAT COUNTS: only the symbols at odd positions (1, 3, 5, ...) of your answer are checked; the others are not.' : null;
+}
+
+/** Whether a position counts under a facet. */
+export const counts = (focus: string | null | undefined, i: number): boolean => (focus === 'even' ? i % 2 === 0 : focus === 'odd' ? i % 2 === 1 : true);
+
 export interface CellsObjectiveHost<M, P extends Place> {
   casesIn(place: P, context: CaseContext): readonly CellsCase[] | Promise<readonly CellsCase[]>;
   /** The model's answer at a point, as it gives it. */
   answer(model: M, state: CellsPoint): Promise<unknown>;
   readonly regression?: boolean;
+  /** The facet in force (it may change during a run of the assisted researcher). */
+  readonly focus?: () => string | null;
 }
 
-/** Where an answer differs from the row that came, or null when it is not a row of that length. */
-export function differences(answer: unknown, next: string): number[] | null {
+/** Where an answer differs from the row that came - at the positions that count under a facet - or null when it is not a
+    row of that length. */
+export function differences(answer: unknown, next: string, focus?: string | null): number[] | null {
   if (typeof answer !== 'string' || answer.length !== next.length) return null;
   const out: number[] = [];
-  for (let i = 0; i < next.length; i++) if (answer[i] !== next[i]) out.push(i);
+  for (let i = 0; i < next.length; i++) if (counts(focus, i) && answer[i] !== next[i]) out.push(i);
   return out;
 }
 
@@ -68,7 +87,7 @@ export function cellsObjective<M, P extends Place>(host: CellsObjectiveHost<M, P
         const rs: CellsResult[] = [];
         for (const c of points) {
           const seen = { before: c.state.rows[c.state.rows.length - 1], came: c.next };
-          try { const answer = await host.answer(model, c.state); rs.push({ place: place.id, point: c.point, differsAt: differences(answer, c.next), ...seen, answer }); }
+          try { const answer = await host.answer(model, c.state); rs.push({ place: place.id, point: c.point, differsAt: differences(answer, c.next, host.focus?.()), ...seen, answer }); }
           catch (e) { rs.push({ place: place.id, point: c.point, differsAt: null, failed: String((e as Error)?.message ?? e), ...seen }); }
         }
         byPlace.push(rs);

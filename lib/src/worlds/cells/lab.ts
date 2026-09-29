@@ -1,6 +1,6 @@
 import { ruleGradingSystem, type Lab } from '../../learn/lab.ts';
 import { CELLS_PERCEPT_DOC, cellsPointWorld, describeCellsTruth, generateCells, perceiveCells, placeOf, readRow, runEpisode, type CellsPoint, type CellsSpec } from './world.ts';
-import { cellsObjective, differences, type CellsCase } from './objective.ts';
+import { CELLS_FACETS, cellsObjective, differences, type CellsCase } from './objective.ts';
 import { cellsInterface } from './interface.ts';
 
 /* cells@1 as a LABORATORY (SPEC-OBJETIVO O9): a ring of symbols whose next row follows a hidden local rule. System 2
@@ -13,7 +13,7 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
   id: 'cells@1',
   about: 'System 2 perceives rows of symbols and must write a model that answers the next row.',
   options: [
-    { name: 'level', default: '1', help: '1 the next symbol depends on a cell and its neighbours; 2 on a count within two cells; 3 also on the row before' },
+    { name: 'level', default: '1', help: '1 the next symbol depends on a cell and its neighbours; 2 on a count within two cells; 3 also on the row before; 4 two layers in one row (even and odd cells), for a focus on one' },
     { name: 'acts', default: '4', help: 'episodes System 2 may start itself per round' }
   ],
   generate: (seed, o) => generateCells(seed, Number(o.level)),
@@ -62,6 +62,7 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
       ? { state: { rows: [...state.rows, answer] }, shown: { simulated: answer, seen: rows[step] ?? null } } : 'the answer was not a string')
   },
 
+  facets: CELLS_FACETS,
   objective: (host) => cellsObjective(host),
   answerIssue: (a) => (typeof a === 'string' ? null : 'the answer must be a string (it was ' + JSON.stringify(a)?.slice(0, 60) + ')'),
   agrees: (a, c) => differences(a, c.next)?.length === 0,

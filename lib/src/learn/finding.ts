@@ -42,7 +42,9 @@ export interface Finding {
   /** Which researcher produced it (SPEC-INVESTIGADOR-ASISTIDO): the unknown-world one learns only from what the world
       answered; the assisted one may have been helped (what help, in `assistance`). */
   readonly researcher: string;
-  readonly question: { readonly world: string; readonly answer_form?: readonly string[]; readonly verdict_form?: readonly string[] };
+  readonly question: { readonly world: string; readonly answer_form?: readonly string[]; readonly verdict_form?: readonly string[];
+    /** The facet the task was about at the start, and what the operator wanted understood (assisted). */
+    readonly focus?: string; readonly task?: string };
   readonly outcome: { readonly status: string; readonly round: number | null; readonly attempt: number | null };
   readonly model: { readonly round: number | null; readonly fingerprint: string | null; readonly law: unknown } | null;
   readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[];
@@ -158,7 +160,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
     format: 'finding@1',
     view: 'operator',
     researcher: String(journal.researcher ?? 'unknown-world'),
-    question: { world: String(journal.experiment ?? ''), ...(journal.objective?.answer ? { answer_form: journal.objective.answer } : {}),
+    question: { world: String(journal.experiment ?? ''), ...(journal.config?.focus ? { focus: String(journal.config.focus) } : {}), ...(journal.config?.task ? { task: String(journal.config.task) } : {}),
+      ...(journal.objective?.answer ? { answer_form: journal.objective.answer } : {}),
       ...(journal.objective?.verdict ? { verdict_form: journal.objective.verdict } : {}) },
     outcome: { status, round: status === 'accepted' ? acceptedRound : round, attempt: summary.accepted?.attempt ?? acceptance?.attempt ?? null },
     model: law ? { round, fingerprint, law } : null,

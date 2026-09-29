@@ -79,6 +79,8 @@ export interface LabObjectiveHost<M, P extends Place, K> {
   answer(model: M, state: unknown): Promise<unknown>;
   /** The model's answer at a point, read as what is compared with what happened (`Lab.compare`). */
   compared(model: M, state: unknown): Promise<unknown>;
+  /** The facet in force (`Lab.facets`), or null: what of the answer counts. It may change during an assisted run. */
+  focus(): string | null;
   /** A stored episode of the learner's, by name. */
   episode(id: string): unknown;
   readonly regression?: boolean;
@@ -117,6 +119,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   readonly regressionByDefault?: boolean;
   /** An environment OUTSIDE the harness, reached over HTTP at this address: the runner gives the laboratory `ctx.effects`. */
   readonly external?: { url(options: LabOptions): string };
+  /** FACETS of the task (SPEC-INVESTIGADOR-ASISTIDO §6.2): what of the world the answer is about, when not all of it is the
+      goal. `--focus <id>` picks one at the start (it defines the task, like a level, for either researcher); the assisted
+      researcher may be given another during the run. The interface says what counts, the objective checks only that. */
+  readonly facets?: readonly { readonly id: string; readonly help: string }[];
 
   /* --- The world ------------------------------------------------------------------------ */
   generate(seed: number, options: LabOptions): S;
@@ -142,8 +148,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   world(): World<P, never>;
   perceive(point: P): unknown;
   readonly perceptDoc: string;
-  /** The interface to the common prompt: the objective's lines and the instruments' parameters. */
-  interface(options: { regression?: boolean }): WorldInterface;
+  /** The interface to the common prompt: the objective's lines and the instruments' parameters (and, with a facet, what
+      counts). */
+  interface(options: { regression?: boolean; focus?: string | null }): WorldInterface;
   /** How a model's answer is read as what is compared with what happened (default: as given). */
   compare?(answer: unknown, state: P): unknown;
 

@@ -27,13 +27,17 @@ export interface OperatorMessage {
   readonly text: string;
   readonly by?: string;
   readonly at: string;
+  /** A change of what counts (SPEC-INVESTIGADOR-ASISTIDO §6.2): applied when the message is delivered, so a resumed run
+      applies it at the same question. */
+  readonly focus?: { readonly facet: string; readonly task?: string };
 }
 
 /** What only the assisted researcher is told: that a person may write to it, and what that is worth. */
 export const ASSISTED_SECTION = [
   'THE OPERATOR. A person who runs this investigation may write to you. Their messages arrive in `operator_messages`: `new` since your last answer, and `earlier`.',
   'Read them as a colleague\'s suggestions: they may help you out of a dead end, and they may be wrong. They are not evidence about the environment: whether your model holds is decided only by the checks, from what the environment answers.',
-  'When a message leads you to a belief, test it with your instruments, and cite the message in that belief\'s evidence as "operator:<id>" next to the points of your episodes that support it.'
+  'When a message leads you to a belief, test it with your instruments, and cite the message in that belief\'s evidence as "operator:<id>" next to the points of your episodes that support it.',
+  'The operator may also state what they want to understand (`operator_task`) and change what of your answer counts: the interface says what counts now.'
 ].join('\n');
 
 /** The assisted researcher's system prompt: the common one (as the unknown-world researcher's), then its own section. */
@@ -44,6 +48,12 @@ export interface OperatorChannel {
   take(): OperatorMessage[];
   /** Resuming: the messages the run it resumes delivered, by the question they went with. */
   readonly scheduled?: ReadonlyMap<number, readonly OperatorMessage[]>;
+  /** The system prompt now (it changes with a focus); default: the one the session was given. */
+  system?(): string;
+  /** What the operator wants understood, if they said: sent with every question as `operator_task`. */
+  task?(): string | null;
+  /** Told of each message as it is delivered, with its question (a focus is applied then). */
+  onDeliver?(message: OperatorMessage, question: number): void;
 }
 
 /** The messages a journal delivered, by question: what a resumed run delivers again at the same questions. */
@@ -65,11 +75,13 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       const fresh = channel.scheduled?.has(question) ? [...channel.scheduled.get(question)!]
         : question <= lastScheduled ? [] : channel.take();
       if (fresh.length) log('operator_message', { question, messages: fresh });
-      const user = fresh.length || earlier.length
-        ? { ...(request.user as Record<string, unknown>), operator_messages: { new: fresh, earlier: [...earlier] } }
+      for (const m of fresh) channel.onDeliver?.(m, question);
+      const task = channel.task?.() ?? null;
+      const user = fresh.length || earlier.length || task
+        ? { ...(request.user as Record<string, unknown>), ...(task ? { operator_task: task } : {}), ...(fresh.length || earlier.length ? { operator_messages: { new: fresh, earlier: [...earlier] } } : {}) }
         : request.user;
       earlier.push(...fresh);
-      return llm.complete({ ...request, user });
+      return llm.complete({ ...request, ...(channel.system ? { system: channel.system() } : {}), user });
     }
   };
 }

@@ -20,7 +20,7 @@ import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, ty
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
-import { assistedSession, deliveredMessages, type OperatorMessage } from '../learn/assisted/session.ts';
+import { assistedSession, assistedSystem, deliveredMessages, type OperatorMessage } from '../learn/assisted/session.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -48,6 +48,8 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'validations', default: '3', help: 'how many times System 2 may validate' },
   { name: 'confirm-places', default: '2', help: 'places per blind confirmation set, two sets' },
   { name: 'tools', default: 'all', help: 'the instruments, a,b,... ("all" or "none")' },
+  { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
+  { name: 'task', default: '', help: 'what the operator wants understood, in words (the assisted researcher only)' },
   { name: 'out', default: '', help: 'the journal (default runs/<name>-<time>.json)' }
 ];
 const FLAGS: readonly { name: string; help: string }[] = [
@@ -282,15 +284,23 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ablation: !flag('no-ablation') && !flag('quick'),
     grade: !flag('no-grade'),
     reflection: !flag('no-reflection') && !flag('quick'),
-    flat: flag('flat')
+    flat: flag('flat'),
+    ...(arg('focus') ? { focus: arg('focus') } : {}),
+    ...(arg('task') ? { task: arg('task') } : {})
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
+  Object.defineProperty(worldOptions, '__focus', { value: arg('focus') || '', enumerable: false });
+  Object.defineProperty(worldOptions, '__task', { value: arg('task') || '', enumerable: false });
   /* The researcher: as the run it resumes had it, or as asked; then the operator's policy decides. */
   const askedText = previous?.researcher ?? (arg('researcher', '') || options.researcher || 'unknown-world');
   if (!(RESEARCHERS as readonly string[]).includes(askedText)) throw new LabError('--researcher: unknown ' + askedText + ' (researchers: ' + RESEARCHERS.join(', ') + ')');
   const p = given.indexOf('--policy');
   const policy: ResearcherPolicy | null = options.policy ?? (p >= 0 && given[p + 1] ? parsePolicy(given[p + 1]) : null);
   const researcher = chooseResearcher(askedText as Researcher, policy);
+  const focus = arg('focus') || null;
+  if (focus && (isGameLab(lab) || !lab.facets?.some((f) => f.id === focus)))
+    throw new LabError('--focus: ' + focus + ' is not a facet of ' + lab.id + (!isGameLab(lab) && lab.facets ? ' (facets: ' + lab.facets.map((f) => f.id).join(', ') + ')' : ' (it has none)'));
+  if (arg('task') && researcher !== 'assisted') throw new LabError('--task: a statement of what to understand is help: only the assisted researcher takes it');
   if (researcher === 'assisted' && isGameLab(lab)) throw new LabError('the assisted researcher of ' + lab.id + ' is not built yet (SPEC-INVESTIGADOR-ASISTIDO, phase A7): run the unknown-world researcher');
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
@@ -429,8 +439,19 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
         waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}), at: new Date().toISOString() });
         log('operator_command', { ...who, accepted: true });
-      } else if (researcher === 'assisted' && (order.kind === 'focus' || order.kind === 'source')) {
-        log('operator_command_refused', { ...who, reason: 'the assisted researcher takes ' + order.kind + ' from phase ' + (order.kind === 'focus' ? 'A5' : 'A6') + ' on (SPEC-INVESTIGADOR-ASISTIDO): not built yet' });
+      } else if (researcher === 'assisted' && order.kind === 'focus') {
+        const facet = String((order as { facet?: unknown }).facet ?? '');
+        const task = typeof (order as { task?: unknown }).task === 'string' ? (order as { task: string }).task : undefined;
+        const facets = isGameLab(lab) ? [] : lab.facets ?? [];
+        if (!facets.some((f) => f.id === facet)) log('operator_command_refused', { ...who, reason: 'no facet ' + JSON.stringify(facet) + ' in ' + lab.id + (facets.length ? ' (facets: ' + facets.map((f) => f.id).join(', ') + ')' : '') });
+        else {
+          /* Delivered with the next question, and applied then: what counts, and the prompt that says so. */
+          waiting.push({ id: String(order.id ?? 'focus-' + consumed), text: 'The operator changes what counts: facet "' + facet + '"' + (task ? '. What they want understood: ' + task : '') + '. The interface says what counts now.',
+            ...(order.by ? { by: order.by } : {}), at: new Date().toISOString(), focus: { facet, ...(task ? { task } : {}) } });
+          log('operator_command', { ...who, accepted: true });
+        }
+      } else if (researcher === 'assisted' && order.kind === 'source') {
+        log('operator_command_refused', { ...who, reason: 'the assisted researcher takes sources from phase A6 on (SPEC-INVESTIGADOR-ASISTIDO): not built yet' });
       } else if (order.kind === 'message' || order.kind === 'focus' || order.kind === 'source') {
         log('operator_command_refused', { ...who, reason: researcher === 'assisted' ? 'a message needs a text' : 'the ' + researcher + ' researcher learns only from what the world answers: it takes no ' + order.kind });
       } else log('operator_command_refused', { ...who, reason: 'unknown order ' + JSON.stringify(order.kind) });
@@ -518,7 +539,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   if (acts !== undefined) journal.config = { ...journal.config, acts };
   const tools: ReadonlySet<Tool> = new Set(cfg.tools as Tool[]);
   const investigative = cfg.tools.length > 0;
-  const SYSTEM_PROMPT = system2Prompt(lab.interface({ regression: cfg.regression }), tools);
+  /* The facet in force (SPEC-INVESTIGADOR-ASISTIDO §6.2): set at the start, changed by the operator in an assisted run. */
+  let focus: string | null = (worldOptions.__focus as string | undefined) || null;
+  let task: string | null = (worldOptions.__task as string | undefined) || null;
+  const promptFor = (f: string | null) => system2Prompt(lab.interface({ regression: cfg.regression, ...(f ? { focus: f } : {}) }), tools);
+  const SYSTEM_PROMPT = promptFor(focus);
 
   /* --- The world, as the operator knows it and as the learner perceives it ------------- */
   type Spec = unknown;
@@ -597,6 +622,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     },
     answer: (law, state) => answerOf(law, state),
     compared: async (law, state) => (await predictor.predict(law, state)).compared,
+    focus: () => focus,
     episode: (id) => episodes.get(id)?.data,
     regression: cfg.regression
   }, worldOptions);
@@ -743,7 +769,18 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The researcher that runs: the unknown-world one's session as it is, or the assisted one's (its own prompt, and the
      operator's messages with its questions; resuming, delivered again at the same questions). */
   const session: LawSession<unknown> = journal.researcher === 'assisted'
-    ? assistedSession(sessionHost, { take: () => run.operator.take(), scheduled: deliveredMessages(previous) })
+    ? assistedSession(sessionHost, {
+      take: () => run.operator.take(), scheduled: deliveredMessages(previous),
+      system: () => assistedSystem(promptFor(focus)), task: () => task,
+      /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
+      onDeliver: (m, question) => {
+        if (!m.focus) return;
+        focus = m.focus.facet === 'all' ? null : m.focus.facet;
+        if (m.focus.task) task = m.focus.task;
+        protocol.restart();
+        log('focus_changed', { question, facet: m.focus.facet, ...(m.focus.task ? { task: m.focus.task } : {}) });
+      }
+    })
     : new LawSession<unknown>(sessionHost);
 
   /* --- Operator only ------------------------------------------------------------------------- */

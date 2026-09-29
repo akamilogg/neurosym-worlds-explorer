@@ -1,15 +1,18 @@
 import { INVESTIGATION_TOOLS as INVESTIGATION, type WorldInterface } from '../../learn/prompt.ts';
 import { objectiveLines } from '../../learn/objective.ts';
-import { CELLS_ANSWER, cellsVerdict } from './objective.ts';
+import { CELLS_ANSWER, cellsFocusLine, cellsVerdict } from './objective.ts';
 
 /** cells@1's interface to the common prompt: its objective's lines, then the parameters of its instruments. Interface
     words only (SPEC-MUNDO-FISICO I5). */
-export function cellsInterface(options: { regression?: boolean } = {}): WorldInterface {
+export function cellsInterface(options: { regression?: boolean; focus?: string | null } = {}): WorldInterface {
+  /* A facet says which positions count; without one (every position), nothing is added. */
+  const focus = cellsFocusLine(options.focus);
   return {
     tools: ['view', 'inspect', 'act', 'measure', 'simulate', 'table'],
     features: ['check'],
     lines: [
       ...objectiveLines({ answer: CELLS_ANSWER, verdictForm: cellsVerdict(options) }),
+      ...(focus ? [focus] : []),
       [INVESTIGATION, 'Requests:'],
       [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   the rows of a stretch of one of your episodes (at most 60 per request)'],
       [['act'], '  {"act": {"row": "<string>", "place": "<laboratory>"}}   start an episode yourself in one of your laboratories (default: the first), from a row you write: as long as the rows seen there, with the symbols seen there - or {"act": {"rows": ["<string>", ...]}} from several rows (at most 4), oldest first, the last being the present. You get its rows (named "act<n>"). It may be refused, and you are not told why. At most `acts_left` this round.'],

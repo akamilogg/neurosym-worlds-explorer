@@ -14,6 +14,10 @@ import { mulberry32 } from '../grid/gen.ts';
  *   level 2   on how many cells show the second symbol within two cells either side
  *   level 3   on how many of the cell and its two neighbours show the second symbol, AND on the
  *             cell's own symbol in the row before (second order: the present row is not enough)
+ *   level 4   TWO LAYERS: the cells at even positions form a ring of their own, and so do the
+ *             cells at odd positions, each under an elementary rule of its own - two dynamics in
+ *             one row, for a task that may care about only one of them (a FACET, SPEC-
+ *             INVESTIGADOR-ASISTIDO §6.2)
  *
  * The FAMILY: the same rule and symbols; other ring lengths and other mixes of symbols at
  * the start. Nothing here is told to the learner: the hidden rule is the operator's.
@@ -40,6 +44,8 @@ export interface CellsSpec {
   readonly density: number;
   /** Rows after the first in an episode. */
   readonly steps: number;
+  /** Level 4: the elementary rules of the two interleaved rings - the cells at even positions, and at odd ones. */
+  readonly layers?: readonly [number, number];
 }
 
 /* Rules whose rows keep changing in ways worth modelling (neither dying out nor freezing at once). */
@@ -48,6 +54,16 @@ const GLYPHS = ['.', '#', 'o', 'x', '+', '-', '*', '=', '~', '^', ':', '%'];
 
 export function generateCells(seed: number, level = 1): CellsSpec {
   const rnd = mulberry32(seed * 7919 + level * 104729);
+  if (level === 4) {
+    /* Two lively elementary rules, different; a ring of even length, so that both layers are rings. */
+    const a = ELEMENTARY[Math.floor(rnd() * ELEMENTARY.length)];
+    let b = a;
+    while (b === a) b = ELEMENTARY[Math.floor(rnd() * ELEMENTARY.length)];
+    const g0 = Math.floor(rnd() * GLYPHS.length);
+    let g1 = Math.floor(rnd() * (GLYPHS.length - 1));
+    if (g1 >= g0) g1++;
+    return { id: 'cells@1:s' + seed + 'L4', seed, level, width: 2 * (8 + Math.floor(rnd() * 5)), radius: 1, rule: a, layers: [a, b], glyphs: [GLYPHS[g0], GLYPHS[g1]], density: 0.3 + rnd() * 0.4, steps: 24 };
+  }
   const radius: 1 | 2 = level === 2 ? 2 : 1;
   const order: 1 | 2 = level >= 3 ? 2 : 1;
   /* A rule whose rows keep changing (lively): one that empties or freezes the rows leaves every check trivial - "the
@@ -88,8 +104,18 @@ export function lively(rule: Pick<CellsSpec, 'radius' | 'rule' | 'order'>, steps
 }
 
 /** One step of the ring: every cell's next state from its neighbourhood (and, second order, its state in the row before). */
-export function stepCells(spec: Pick<CellsSpec, 'radius' | 'rule' | 'order'>, row: readonly number[], prev: readonly number[] = row): number[] {
+export function stepCells(spec: Pick<CellsSpec, 'radius' | 'rule' | 'order'> & { readonly layers?: CellsSpec['layers'] }, row: readonly number[], prev: readonly number[] = row): number[] {
   const n = row.length;
+  if (spec.layers) {
+    /* Two rings in one row: the cells at even positions, and at odd ones, each stepped under its own rule. */
+    const out = new Array<number>(n);
+    for (const parity of [0, 1] as const) {
+      const ring = row.filter((_, i) => i % 2 === parity);
+      const next = stepCells({ radius: 1, rule: spec.layers[parity] }, ring);
+      next.forEach((v, k) => { out[2 * k + parity] = v; });
+    }
+    return out;
+  }
   return row.map((_, i) => {
     if (spec.order === 2) {
       const sum = row[(i - 1 + n) % n] + row[i] + row[(i + 1) % n];
@@ -136,7 +162,9 @@ export function runEpisode(spec: CellsSpec, start: readonly (readonly number[])[
 export function placeOf(base: CellsSpec, index: number): CellsSpec {
   if (index === 0) return base;
   const rnd = mulberry32(base.seed * 92821 + base.level * 613 + index * 2654435761);
-  return { ...base, width: 9 + Math.floor(rnd() * 32), density: 0.2 + rnd() * 0.6 };
+  const width = 9 + Math.floor(rnd() * 32);
+  /* Two layers need a ring of even length. */
+  return { ...base, width: base.layers ? width + (width % 2) : width, density: 0.2 + rnd() * 0.6 };
 }
 
 /* --- What the learner perceives at a point ------------------------------------------ */
@@ -171,6 +199,13 @@ export function cellsPointWorld(): World<CellsPoint, never> {
 export function describeCellsTruth(spec: CellsSpec): { id: string; statement: string }[] {
   const [g0, g1] = spec.glyphs;
   const out = [{ id: 'ring', statement: 'The row wraps around: the first and the last cell are neighbours.' }];
+  const elementary = (rule: number) => Array.from({ length: 8 }, (_, k) => [(k >> 2) & 1, (k >> 1) & 1, k & 1].map((v) => (v ? g1 : g0)).join('') + ' -> ' + (((rule >> k) & 1) ? g1 : g0)).join('; ');
+  if (spec.layers) {
+    out.push({ id: 'layers', statement: 'The cells at even positions form a ring of their own, and so do the cells at odd positions: a cell\'s neighbours are the nearest cells of the same parity (two positions away), and the two rings do not affect each other.' });
+    out.push({ id: 'rule_even', statement: 'At even positions, the next symbol for each neighbourhood (left, itself, right, within that ring): ' + elementary(spec.layers[0]) + '.' });
+    out.push({ id: 'rule_odd', statement: 'At odd positions, the next symbol for each neighbourhood (left, itself, right, within that ring): ' + elementary(spec.layers[1]) + '.' });
+    return out;
+  }
   if (spec.order === 2) {
     const table = [0, 1].flatMap((p) => [0, 1, 2, 3].map((n) => n + ' "' + g1 + '" now, "' + (p ? g1 : g0) + '" before -> ' + (((spec.rule >> (n + 4 * p)) & 1) ? g1 : g0)));
     out.push({ id: 'locality', statement: 'A cell\'s next symbol depends only on how many of the three cells centred on it (left, itself, right) show "' + g1 + '" in the present row, and on the cell\'s own symbol in the row before.' });

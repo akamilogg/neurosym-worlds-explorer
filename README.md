@@ -250,6 +250,18 @@ checks, its beliefs, its cost and findings), stop, resume and start - and, for t
 node --experimental-strip-types scripts/lab-console.ts
 ```
 
+A laboratory may have FACETS: what of the world the answer is about, when not all of it is the goal. `cells` level 4 has
+two layers in one row (the even cells and the odd ones, each under a rule of its own); `--focus even` makes only the even
+cells count. A facet at the start defines the task, like a level, for either researcher. The assisted researcher
+(`--researcher assisted`) may also be told what the operator wants understood (`--task`), be sent messages, and be given
+another facet during the run; the unknown-world researcher refuses all of that and logs that it did:
+
+```bash
+node --experimental-strip-types scripts/lab.ts start cells --seed 1 --level 4 --researcher assisted --task "how the even cells change"
+node --experimental-strip-types scripts/lab.ts send last "look at the cells two positions apart"
+node --experimental-strip-types scripts/lab.ts focus last even "the even layer"
+```
+
 Another program (an agent that coordinates investigations, say) runs a laboratory as a call, with no environment variables,
 console, signals or `process.exit`:
 

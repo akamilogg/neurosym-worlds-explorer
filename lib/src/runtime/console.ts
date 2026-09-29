@@ -109,7 +109,7 @@ export function serveConsole(options: ConsoleOptions): Promise<{ url: string; cl
           const b = await body(req);
           const order: RunOrder | null = b.kind === 'stop' ? { kind: 'stop', by: 'console' }
             : b.kind === 'message' && b.text ? { kind: 'message', text: String(b.text), by: 'console' }
-            : b.kind === 'focus' && b.facet ? { kind: 'focus', facet: String(b.facet), by: 'console' }
+            : b.kind === 'focus' && b.facet ? { kind: 'focus', facet: String(b.facet), ...(b.task ? { task: String(b.task) } : {}), by: 'console' }
             : b.kind === 'source' && b.source ? { kind: 'source', source: String(b.source), by: 'console' } : null;
           if (!order) return send_(400, { error: 'an order is stop, message (text), focus (facet) or source (source)' });
           return send_(202, order.kind === 'stop' ? stop(run.journal, 'console') : send(run.journal, order));
