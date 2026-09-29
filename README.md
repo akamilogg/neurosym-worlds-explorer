@@ -232,6 +232,17 @@ node --experimental-strip-types scripts/tank-service.ts --port 18300
 node --experimental-strip-types scripts/run-lab.ts --lab tank --service http://127.0.0.1:18300
 ```
 
+Runs are also controlled from the command line, the same for every laboratory and researcher: start one in a process of
+its own, list them, follow one, stop it, resume it, read its finding (SPEC-INVESTIGADOR-ASISTIDO):
+
+```bash
+node --experimental-strip-types scripts/lab.ts start cells --seed 1 --level 3
+node --experimental-strip-types scripts/lab.ts list
+node --experimental-strip-types scripts/lab.ts watch last
+node --experimental-strip-types scripts/lab.ts stop last
+node --experimental-strip-types scripts/lab.ts finding last --view researcher
+```
+
 Another program (an agent that coordinates investigations, say) runs a laboratory as a call, with no environment variables,
 console, signals or `process.exit`:
 
