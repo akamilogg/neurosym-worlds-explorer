@@ -243,6 +243,13 @@ node --experimental-strip-types scripts/lab.ts stop last
 node --experimental-strip-types scripts/lab.ts finding last --view researcher
 ```
 
+The same, as a local page (`http://127.0.0.1:18400`): the runs, one followed live (its events, its current model, its
+checks, its beliefs, its cost and findings), stop, resume and start - and, for the assisted researcher, collaborate:
+
+```bash
+node --experimental-strip-types scripts/lab-console.ts
+```
+
 Another program (an agent that coordinates investigations, say) runs a laboratory as a call, with no environment variables,
 console, signals or `process.exit`:
 

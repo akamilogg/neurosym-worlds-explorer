@@ -1,6 +1,6 @@
 # SPEC · Dos investigadores: el de mundo desconocido y el asistido
 
-Estado (29/09/2026): **A1 y A2 hechos**. El resto, propuesto.
+Estado (29/09/2026): **A1, A2 y A3 hechos**. El resto, propuesto.
 
 Parte de lo que ya existe tras SPEC-OBJETIVO (O7–O14):
 
@@ -230,7 +230,7 @@ en O9–O14.
 |---|---|---|
 | A1 | API de control y registro de runs: estado y latido, buzón con `stop`, rechazo registrado de las órdenes de colaboración en el puro, `researcher` y política en `runLaboratory` y en el journal | journals puros idénticos salvo los campos nuevos; `stop` por buzón para un run en otro proceso; test de prompt puro byte a byte por mundo. **Hecho**: `runtime/control.ts` (`listRuns`, `runStatus`, `send`, `stop`, `orderOutcome`, `finding`, `watch`, `startRun`, `resumeRun`); estado y latido cada 2 s; `researcher`, `researcher_requested` y `researcher_policy` en el journal y `researcher` en el finding; `assisted` todavía da `LabError` (A4) |
 | A2 | CLI `lab` | un run lanzado, seguido, parado, reanudado y consultado sólo con la CLI, sin tocar ficheros a mano. **Hecho**: `scripts/lab.ts` sobre `runtime/cli.ts` (`labCli`, testeable); un run se nombra por su ruta, su nombre, un prefijo o `last`; `send`, `focus`, `source` y `stop` esperan el acuse del run y dicen si se aceptó o por qué se rechazó; `watch` sigue hasta el final o hasta que el latido se para |
-| A3 | Consola visual | la misma secuencia desde la página, con runs de los dos investigadores a la vez |
+| A3 | Consola visual | la misma secuencia desde la página, con runs de los dos investigadores a la vez. **Hecho**: `scripts/lab-console.ts` sobre `runtime/console.ts` (API JSON y una página, sólo en 127.0.0.1, y rechaza otro `Host`); lista de runs con la marca del investigador y su estado; detalle en vivo (eventos, modelo actual, última comprobación, creencias, coste, finding en las dos vistas, enlace a la síntesis visual); parar, reanudar y lanzar; el panel de colaboración aparece para todo run y, en el puro, desactivado con el motivo. Probado también a mano en el navegador. Los runs asistidos se verán igual cuando exista el investigador asistido (A4) |
 | A4 | Investigador asistido, esqueleto y mensajes: `AssistedSession`, su prompt, `operator_messages`, canal `operator` en la grabación, `assistance` en el finding | un mensaje llega en la pregunta siguiente y queda en el journal; un run asistido cortado y reanudado recibe cada mensaje en el mismo punto; el puro sigue idéntico |
 | A5 | Foco: facetas en el contrato `Lab`, un mundo con dinámicas que sobran, `--focus`, cambio de faceta en vivo y `task` en el asistido | con la faceta, las dinámicas fuera de foco no cuentan en el criterio; un run acepta un modelo que sólo explica la faceta |
 | A6 | Fuentes: biblioteca, `search` y `read`, citas `src:`, `grounded` en el finding, fuentes remotas por la grabación | una creencia cita una fuente; el finding separa lo comprobado en el mundo de lo que sólo viene de las fuentes; una fuente engañosa no hace sostenerse a un modelo falso |
