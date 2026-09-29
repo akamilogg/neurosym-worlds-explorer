@@ -19,6 +19,7 @@ import type { Place } from '../learn/objective.ts';
 import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
+import { runFiles } from './control.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -60,7 +61,8 @@ const FLAGS: readonly { name: string; help: string }[] = [
 const CONTROLS: readonly { name: string; value: string; help: string }[] = [
   { name: 'max-minutes', value: 'N', help: 'stop before asking System 2 again once N minutes have passed (this process)' },
   { name: 'max-tokens', value: 'N', help: 'stop before asking System 2 again once its answers have used N tokens (the whole run)' },
-  { name: 'resume', value: 'FILE', help: 'resume the run of that journal in a new one (<journal>.resumed-<time>.json, or --out): its answers are replayed, then it goes on live; the journal resumed is left as it is' }
+  { name: 'resume', value: 'FILE', help: 'resume the run of that journal in a new one (<journal>.resumed-<time>.json, or --out): its answers are replayed, then it goes on live; the journal resumed is left as it is' },
+  { name: 'policy', value: 'P', help: 'the operator\'s policy on researchers: force=<researcher>, or allow=<researcher>,<researcher>' }
 ];
 const CONTROL_NAMES = new Set(['out', ...CONTROLS.map((c) => c.name)]);
 
@@ -143,6 +145,39 @@ export interface LabRunOptions {
   readonly print?: (line: string) => void;
   /** Told the journal's file as soon as it is known. */
   readonly onJournal?: (file: string) => void;
+  /** Which researcher (SPEC-INVESTIGADOR-ASISTIDO §3.1): as asked by whoever starts the run (default unknown-world;
+      `--researcher` in the arguments says the same). */
+  readonly researcher?: Researcher;
+  /** The operator's policy: the researchers allowed, or the one forced (`--policy` in the arguments says the same). */
+  readonly policy?: ResearcherPolicy;
+}
+
+/** The two researchers (SPEC-INVESTIGADOR-ASISTIDO): the one that learns only from what the world answers, and the one the
+    operator may help. */
+export const RESEARCHERS = ['unknown-world', 'assisted'] as const;
+export type Researcher = typeof RESEARCHERS[number];
+export interface ResearcherPolicy { readonly allow?: readonly Researcher[]; readonly force?: Researcher }
+
+/** `force=assisted`, `allow=unknown-world,assisted`. */
+export function parsePolicy(text: string): ResearcherPolicy {
+  const out: { allow?: Researcher[]; force?: Researcher } = {};
+  for (const part of text.split(';').map((x) => x.trim()).filter(Boolean)) {
+    const [k, v] = part.split('=').map((x) => x.trim());
+    const names = (v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    const bad = names.filter((n) => !(RESEARCHERS as readonly string[]).includes(n));
+    if (bad.length || !names.length) throw new LabError('--policy: unknown researcher ' + (bad.join(', ') || '(none)') + ' (researchers: ' + RESEARCHERS.join(', ') + ')');
+    if (k === 'force' && names.length === 1) out.force = names[0] as Researcher;
+    else if (k === 'allow') out.allow = names as Researcher[];
+    else throw new LabError('--policy: use force=<researcher> or allow=<researcher>,<researcher>');
+  }
+  return out;
+}
+
+/** Who runs, from what was asked and the operator's policy; a researcher the policy does not allow is a LabError. */
+export function chooseResearcher(asked: Researcher, policy: ResearcherPolicy | null): Researcher {
+  const used = policy?.force ?? asked;
+  if (policy?.allow && !policy.allow.includes(used)) throw new LabError('the operator\'s policy does not allow the ' + used + ' researcher (allowed: ' + policy.allow.join(', ') + ')');
+  return used;
 }
 
 export interface LabResult {
@@ -155,6 +190,8 @@ export interface LabResult {
   /** The researcher's (without what only the operator knows): what another agent is given (SPEC-OBJETIVO O14). */
   readonly researcherFile: string;
   readonly researcher: Finding;
+  /** Which researcher ran it. */
+  readonly researcherUsed: Researcher;
 }
 
 /** The command line: --help, the endpoints from the environment, Ctrl+C as a cancel (twice: stop at once), exit codes. */
@@ -247,11 +284,18 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     flat: flag('flat')
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
+  /* The researcher: as the run it resumes had it, or as asked; then the operator's policy decides. */
+  const askedText = previous?.researcher ?? (arg('researcher', '') || options.researcher || 'unknown-world');
+  if (!(RESEARCHERS as readonly string[]).includes(askedText)) throw new LabError('--researcher: unknown ' + askedText + ' (researchers: ' + RESEARCHERS.join(', ') + ')');
+  const p = given.indexOf('--policy');
+  const policy: ResearcherPolicy | null = options.policy ?? (p >= 0 && given[p + 1] ? parsePolicy(given[p + 1]) : null);
+  const researcher = chooseResearcher(askedText as Researcher, policy);
+  if (researcher === 'assisted') throw new LabError('the assisted researcher is not built yet (SPEC-INVESTIGADOR-ASISTIDO, phase A4): run the unknown-world researcher');
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
 
   /* --- The run's common services: System 2 and the Judge (their answers logged), the journal, stopping ---------------- */
-  const run = openRun(lab, options, { argv, previous, resumeFrom: resumeFrom ?? null, cfg, arg, config: {} });
+  const run = openRun(lab, options, { argv, previous, resumeFrom: resumeFrom ?? null, cfg, arg, config: {}, researcher, asked: askedText as Researcher, policy });
   options.onJournal?.(run.outFile);
   /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
   const body = isGameLab(lab)
@@ -291,8 +335,9 @@ interface OpenRun {
 }
 
 function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string[]; previous: Record<string, any> | null; resumeFrom: string | null;
-  cfg: LabRunConfig & Record<string, unknown>; arg: (name: string, fallback?: string) => string; config: Record<string, unknown> }): OpenRun {
-  const { argv, previous, resumeFrom, cfg, arg } = o;
+  cfg: LabRunConfig & Record<string, unknown>; arg: (name: string, fallback?: string) => string; config: Record<string, unknown>;
+  researcher: Researcher; asked: Researcher; policy: ResearcherPolicy | null }): OpenRun {
+  const { argv, previous, resumeFrom, cfg, arg, researcher } = o;
   const network: FetchLike = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
   const maxMinutes = Number(arg('max-minutes', '0')) || null;
   const maxTokens = Number(arg('max-tokens', '0')) || null;
@@ -324,6 +369,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const commit = commitOf(options.root);
   const journal: Record<string, any> = {
     experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}),
+    /* Who ran it, what was asked, and under which policy of the operator (SPEC-INVESTIGADOR-ASISTIDO §3.1). */
+    researcher, researcher_requested: o.asked, researcher_policy: o.policy,
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
     argv: experimentArgs(argv),
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
@@ -338,7 +385,49 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     if (closed) return;
     journal.events.push({ t: Math.round((Date.now() - started.getTime()) / 1000), type, ...data });
     fs.writeFileSync(outFile, JSON.stringify(journal, null, 2));
+    writeStatus();
   };
+
+  /* --- The run as an object with a state, and its operator's inbox (SPEC-INVESTIGADOR-ASISTIDO §4.1) ---------------
+     <run>.status.json: its live state, rewritten with every event and a heartbeat. <run>.inbox.jsonl: orders of the
+     operator, one per line, read before each question to System 2 and with the heartbeat. `stop` is control and is obeyed
+     by any researcher; message, focus and source are help, and the unknown-world researcher refuses them - the refusal is
+     logged, so the journal says it was tried and that nothing reached System 2. */
+  const files = runFiles(outFile);
+  let state: 'running' | 'stopping' | 'ended' = 'running';
+  let stoppedBy: string | null = null;
+  let stopRequested = false;
+  let consumed = 0;
+  const lastRound = (): number | null => { for (let i = journal.events.length - 1; i >= 0; i--) if (typeof journal.events[i].round === 'number') return journal.events[i].round; return null; };
+  function writeStatus(): void {
+    try {
+      fs.writeFileSync(files.status, JSON.stringify({ run: path.basename(outFile, '.json'), journal: outFile, lab: lab.id, researcher, state, pid: process.pid,
+        started: started.toISOString(), heartbeat: new Date().toISOString(), round: lastRound(), events: journal.events.length,
+        cost: { llm_calls: llmUse.calls, llm_tokens: llmUse.tokens, jev_calls: judge.stats.calls }, ...(stoppedBy ? { stoppedBy } : {}) }, null, 2));
+    } catch { /* the state is a convenience: a run never stops for it */ }
+  }
+  function pollInbox(): void {
+    if (closed || !fs.existsSync(files.inbox)) return;
+    const lines = fs.readFileSync(files.inbox, 'utf8').split('\n');
+    const complete = lines.slice(0, -1);
+    for (const line of complete.slice(consumed)) {
+      consumed++;
+      if (!line.trim()) continue;
+      let order: { id?: string; kind?: string; by?: string } = {};
+      try { order = JSON.parse(line); } catch { log('operator_command_refused', { reason: 'not an order (not JSON)' }); continue; }
+      const who = { id: order.id ?? null, kind: order.kind ?? null, ...(order.by ? { by: order.by } : {}) };
+      if (order.kind === 'stop') {
+        stopRequested = true;
+        state = 'stopping';
+        log('operator_command', { ...who, accepted: true });
+        say('the operator asks to stop: stopping before the next question to System 2');
+      } else if (order.kind === 'message' || order.kind === 'focus' || order.kind === 'source') {
+        log('operator_command_refused', { ...who, reason: 'the ' + researcher + ' researcher learns only from what the world answers: it takes no ' + order.kind });
+      } else log('operator_command_refused', { ...who, reason: 'unknown order ' + JSON.stringify(order.kind) });
+    }
+  }
+  const heartbeat = setInterval(() => { pollInbox(); writeStatus(); }, 2000);
+  heartbeat.unref?.();
   const print = options.print ?? (() => {});
   const say = (text: string): void => { if (!closed) print('[' + Math.round((Date.now() - started.getTime()) / 1000) + 's] ' + text); };
   let settleDiverged: (r: LabResult) => void = () => {};
@@ -353,7 +442,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     settleDiverged(result);
   };
   /* Stopping: the caller's signal (Ctrl+C on the command line) and the budgets are asked before each question to System 2. */
-  const halt = (): string | null => options.signal?.aborted ? 'cancelled'
+  const halt = (): string | null => (pollInbox(), options.signal?.aborted || stopRequested) ? 'cancelled'
     : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
     : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
 
@@ -376,7 +465,11 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   }
   if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
   const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say, halt };
+  writeStatus();
   function finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): LabResult {
+      state = 'ended';
+      stoppedBy = stop.stoppedBy;
+      clearInterval(heartbeat);
       log('end', {
         stoppedBy: stop.stoppedBy, ...(stop.halted ? { halted: stop.halted, resume: 'the same command with --resume ' + outFile } : {}),
         /* OPERATOR ONLY (SPEC-OBJETIVO O11): answers replayed from the log and asked live; unused ones mean the resumed run diverged. */
@@ -388,13 +481,13 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       const findingFile = outFile.replace(/\.json$/, '') + '.finding.json';
       fs.writeFileSync(findingFile, JSON.stringify(finding, null, 2));
       /* OPERATOR ONLY above; the researcher's view is what another agent is given (SPEC-OBJETIVO O14). */
-      const researcher = findingView(finding, 'researcher');
+      const researcherView = findingView(finding, 'researcher');
       const researcherFile = outFile.replace(/\.json$/, '') + '.finding.researcher.json';
-      fs.writeFileSync(researcherFile, JSON.stringify(researcher, null, 2));
+      fs.writeFileSync(researcherFile, JSON.stringify(researcherView, null, 2));
       if (!closed) print(findingText(finding));
       say('finding ' + findingFile);
       if (replay.pending() && stop.stoppedBy !== 'diverged') say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
-      return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding, researcherFile, researcher };
+      return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding, researcherFile, researcher: researcherView, researcherUsed: researcher };
   }
   return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged };
 }

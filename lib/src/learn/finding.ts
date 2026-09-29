@@ -39,6 +39,9 @@ export interface Finding {
   readonly format: 'finding@1';
   /** Whose view: the operator's (every measure, for audit) or a researcher's (only what the world answered). */
   readonly view: FindingView;
+  /** Which researcher produced it (SPEC-INVESTIGADOR-ASISTIDO): the unknown-world one learns only from what the world
+      answered; the assisted one may have been helped (what help, in `assistance`). */
+  readonly researcher: string;
   readonly question: { readonly world: string; readonly answer_form?: readonly string[]; readonly verdict_form?: readonly string[] };
   readonly outcome: { readonly status: string; readonly round: number | null; readonly attempt: number | null };
   readonly model: { readonly round: number | null; readonly fingerprint: string | null; readonly law: unknown } | null;
@@ -135,6 +138,7 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
   return {
     format: 'finding@1',
     view: 'operator',
+    researcher: String(journal.researcher ?? 'unknown-world'),
     question: { world: String(journal.experiment ?? ''), ...(journal.objective?.answer ? { answer_form: journal.objective.answer } : {}),
       ...(journal.objective?.verdict ? { verdict_form: journal.objective.verdict } : {}) },
     outcome: { status, round: status === 'accepted' ? acceptedRound : round, attempt: summary.accepted?.attempt ?? acceptance?.attempt ?? null },

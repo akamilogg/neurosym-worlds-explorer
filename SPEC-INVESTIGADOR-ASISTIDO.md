@@ -1,6 +1,6 @@
 # SPEC · Dos investigadores: el de mundo desconocido y el asistido
 
-Estado: propuesta (29/09/2026). No hay nada implementado de lo que describe este documento.
+Estado (29/09/2026): **A1 hecho**. El resto, propuesto.
 
 Parte de lo que ya existe tras SPEC-OBJETIVO (O7–O14):
 
@@ -228,7 +228,7 @@ en O9–O14.
 
 | Fase | Contenido | Criterio de éxito |
 |---|---|---|
-| A1 | API de control y registro de runs: estado y latido, buzón con `stop`, rechazo registrado de las órdenes de colaboración en el puro, `researcher` y política en `runLaboratory` y en el journal | journals puros idénticos salvo los campos nuevos; `stop` por buzón para un run en otro proceso; test de prompt puro byte a byte por mundo |
+| A1 | API de control y registro de runs: estado y latido, buzón con `stop`, rechazo registrado de las órdenes de colaboración en el puro, `researcher` y política en `runLaboratory` y en el journal | journals puros idénticos salvo los campos nuevos; `stop` por buzón para un run en otro proceso; test de prompt puro byte a byte por mundo. **Hecho**: `runtime/control.ts` (`listRuns`, `runStatus`, `send`, `stop`, `orderOutcome`, `finding`, `watch`, `startRun`, `resumeRun`); estado y latido cada 2 s; `researcher`, `researcher_requested` y `researcher_policy` en el journal y `researcher` en el finding; `assisted` todavía da `LabError` (A4) |
 | A2 | CLI `lab` | un run lanzado, seguido, parado, reanudado y consultado sólo con la CLI, sin tocar ficheros a mano |
 | A3 | Consola visual | la misma secuencia desde la página, con runs de los dos investigadores a la vez |
 | A4 | Investigador asistido, esqueleto y mensajes: `AssistedSession`, su prompt, `operator_messages`, canal `operator` en la grabación, `assistance` en el finding | un mensaje llega en la pregunta siguiente y queda en el journal; un run asistido cortado y reanudado recibe cada mensaje en el mismo punto; el puro sigue idéntico |

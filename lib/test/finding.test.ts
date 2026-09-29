@@ -35,6 +35,7 @@ const journal = {
 test('a finding says what was asked, what came of it, and with which model', () => {
   const f = findingOf(journal, { journal: 'messages-s1.json' });
   assert.equal(f.format, 'finding@1');
+  assert.equal(f.researcher, 'unknown-world', 'a journal that names none is of the unknown-world researcher');
   assert.deepEqual(f.question, { world: 'messages@1', answer_form: ['YOUR ANSWER: a number'], verdict_form: ['A VERDICT: ...'] });
   assert.deepEqual(f.outcome, { status: 'accepted', round: 2, attempt: 2 });
   assert.deepEqual(f.model, { round: 2, fingerprint: 'f2', law });
