@@ -25,6 +25,7 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
     messages: ['862ec75da0073ef9', '2db815f4e4ef01a1', 'e7b3118baeb95c62'],
     orbit: ['b9fcdc914383feac', '0a1d03f828800311', 'fa67491c1a09af17'],
     tank: ['39c541ec15e04674', '31707f80df38a21e', '8a934b83bc5bb3a5'],
+    particles3d: ['9dc3775a8112ee0e', '35839eeb3ab04286', 'c82859a959caa037'],
     grid: ['23e7fb5bdaf9bc6e']
   };
   for (const [name, lab] of Object.entries(LABS)) {

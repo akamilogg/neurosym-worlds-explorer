@@ -16,5 +16,7 @@ lib/run-orbit.sh
 lib/run-orbit.ps1
 lib/run-cells.sh
 lib/run-cells.ps1
+lib/run-particles3d.sh
+lib/run-particles3d.ps1
 lib/run-messages.sh
 lib/run-messages.ps1
