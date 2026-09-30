@@ -73,6 +73,22 @@ investigador completo**, y los dos conviven.
 - **Journal:** guarda qué se pidió, qué se usó y con qué política (`researcher`, `researcher_requested`,
   `researcher_policy`).
 
+### 3.2 Traspasar un run al asistido
+
+El puro es la **referencia purista**: explora las capacidades de un System 2 con un método genérico y unas herramientas
+mínimas para actuar y observar. Rara vez será la forma práctica de usar los investigadores en una aplicación real (autor,
+30/09/2026). Cuando un run puro se atasca en un mínimo local, el operador puede **traspasarlo** al asistido para darle un
+empujón, como el antiguo `operator_directive` del harness de Fox & Hounds.
+
+- Sólo en una **continuación**: `--resume <journal> --attempts N --researcher assisted`. Sólo del puro al asistido, nunca
+  al revés, y nunca sin rondas nuevas.
+- Su historia se repite tal como la vivió el puro, **con el prompt del puro**, incluido su final (reflexión y
+  calificación).
+- Desde su primera ronda nueva es el asistido: su sección del operador, y los mensajes, el foco y las fuentes. Un
+  mensaje enviado mientras se repite la historia espera a esa ronda.
+- El journal lleva `assisted_after_attempts` y el evento `researcher_switched`, y el finding lo recoge en
+  `assistance.assisted_after_attempts`: lo conseguido después nunca se presenta como del puro (P5, P6).
+
 ## 4. La API de control común
 
 Es una capa sobre `runLaboratory` que sirve igual a los dos investigadores. Está en `lib/src/runtime/control.ts`, y la CLI y

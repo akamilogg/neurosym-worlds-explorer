@@ -84,6 +84,8 @@ export function describeEvent(e: Record<string, any>): string {
       + (e.messages ?? []).map((m: { text: string }) => '"' + short(m.text, 70) + '"').join(', ');
     case 'sources_allowed': return at + 'from question ' + e.question + ', it may read sources from ' + e.origin;
     case 'source_select': return at + 'the Judge picked lines for "' + e.need + '" among ' + e.lines + (e.error ? ' (failed: ' + e.error + ')' : '');
+    case 'researcher_switched': return at + 'after round ' + e.after_attempts + ', the run is handed to the assisted researcher: the operator may help';
+    case 'budget_extended': return at + 'more rounds: ' + e.after_attempts + ' → ' + e.to_attempts;
     case 'focus_changed': return at + 'from question ' + e.question + ', what counts is the facet ' + e.facet + (e.task ? ' (to understand: ' + e.task + ')' : '');
     case 'operator_command_refused': return at + 'the operator\'s ' + (e.kind ?? 'order') + ': refused - ' + e.reason;
     case 'diverged': return at + 'DIVERGED from the run it resumes (' + e.channel + ')';

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { LabError, runLaboratory } from '../src/runtime/lab-runner.ts';
 import { cellsLab } from '../src/worlds/cells/lab.ts';
+import { send } from '../src/runtime/control.ts';
 import type { FetchLike } from '../src/core/net.ts';
 
 /* A CONTINUATION: a run that used up its rounds is given more (--resume <journal> --attempts N). Its history is replayed as
@@ -62,4 +63,39 @@ test('only a run that used up its rounds is given more, and more than it had', a
   const cut = await runLaboratory(cellsLab, { args: [...ARGS, '--attempts', '2', '--max-tokens', '150', '--out', path.join(dir, 'cut.json')], root: dir, llm, fetch: system2() });
   assert.equal(cut.stoppedBy, 'token_budget');
   await assert.rejects(runLaboratory(cellsLab, { args: ['--resume', cut.journal, '--attempts', '4'], root: dir, llm, fetch: system2() }), (e) => e instanceof LabError && /token_budget/.test(e.message));
+});
+
+test('a continuation may hand the run to the assisted researcher: its history as the unknown-world researcher lived it, the operator\'s help from its new rounds on', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cont-'));
+  const first = await runLaboratory(cellsLab, { args: [...ARGS, '--attempts', '2', '--out', path.join(dir, 'first.json')], root: dir, llm, fetch: system2() });
+  /* A message waiting before the continued run even starts: it must not reach any replayed question. */
+  const out = path.join(dir, 'handed.json');
+  send(out, { kind: 'message', text: 'look at where each cell is', by: 'operator' });
+  const asked: Record<string, any>[] = [];
+  const seen: string[] = [];
+  const handed = await runLaboratory(cellsLab, { args: ['--resume', first.journal, '--attempts', '4', '--researcher', 'assisted', '--out', out], root: dir, llm,
+    fetch: async (url, init) => { const b = JSON.parse(String(init.body)); seen.push(b.messages[0].content); return system2(asked)(url, init); } });
+  assert.equal(handed.researcherUsed, 'assisted');
+  const events = eventsOf(handed.journal);
+  /* The operator's order is acknowledged when it is read (control, not something System 2 sees). */
+  const history = strip(events.filter((e) => e.type !== 'operator_command'));
+  assert.deepEqual(history.slice(0, strip(eventsOf(first.journal)).length), strip(eventsOf(first.journal)), 'its history, word for word');
+  const switched = events.find((e) => e.type === 'researcher_switched')!;
+  assert.deepEqual([switched.after_attempts, switched.round], [2, 3]);
+  const delivered = events.filter((e) => e.type === 'operator_message');
+  assert.deepEqual(delivered.map((e) => e.messages[0].text), ['look at where each cell is']);
+  assert.ok(events.indexOf(delivered[0]) > events.indexOf(switched), 'delivered with its first new question, never before');
+  assert.equal(asked.find((q) => !q.grade)?.round, 4, 'the first live question is round 4');
+  assert.ok(seen.filter((s) => !s.startsWith('You grade')).every((s) => s.includes('THE OPERATOR')), 'live: the assisted researcher\'s prompt');
+  const journal = JSON.parse(fs.readFileSync(handed.journal, 'utf8'));
+  assert.deepEqual([journal.researcher, journal.assisted_after_attempts], ['assisted', 2]);
+  assert.equal(handed.finding.assistance!.assisted_after_attempts, 2);
+  /* Cut and resumed, the handed run replays both parts. */
+  const cut = await runLaboratory(cellsLab, { args: ['--resume', first.journal, '--attempts', '4', '--researcher', 'assisted', '--max-tokens', '350', '--out', path.join(dir, 'cut.json')], root: dir, llm, fetch: system2() });
+  assert.equal(cut.stoppedBy, 'token_budget');
+  const again = await runLaboratory(cellsLab, { args: ['--resume', cut.journal, '--out', path.join(dir, 'again.json')], root: dir, llm, fetch: system2() });
+  assert.notEqual(again.stoppedBy, 'diverged');
+  assert.equal(JSON.parse(fs.readFileSync(again.journal, 'utf8')).assisted_after_attempts, 2);
+  /* Never without new rounds, never back. */
+  await assert.rejects(runLaboratory(cellsLab, { args: ['--resume', first.journal, '--researcher', 'assisted'], root: dir, llm, fetch: system2() }), (e) => e instanceof LabError && /only when the run is given more rounds/.test(e.message));
 });

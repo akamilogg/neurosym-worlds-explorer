@@ -54,6 +54,8 @@ export interface Finding {
   readonly assistance?: {
     readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string }[];
     readonly focus_changes: readonly unknown[];
+    /** Handed to the assisted researcher after these rounds of the unknown-world researcher's. */
+    readonly assisted_after_attempts?: number;
     /** Sources: the origins the operator allowed, and what the researcher opened and looked for in them. */
     readonly sources: { readonly origins: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[] };
   };
@@ -125,6 +127,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
     messages: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).map((m: J) => ({ id: String(m.id), question: e.question, text: String(m.text ?? ''),
       ...(m.by ? { by: String(m.by) } : {}), ...(m.at ? { at: String(m.at) } : {}) }))),
     focus_changes: events.filter((e) => e.type === 'focus_changed'),
+    /* A run handed to the assisted researcher: after how many rounds (before them, the unknown-world researcher). */
+    ...(typeof journal.assisted_after_attempts === 'number' ? { assisted_after_attempts: journal.assisted_after_attempts } : {}),
     sources: {
       origins: [...String(journal.config?.sources_allow ?? '').split(',').map((o) => o.trim()).filter(Boolean),
         ...events.filter((e) => e.type === 'sources_allowed').map((e) => String(e.origin))],

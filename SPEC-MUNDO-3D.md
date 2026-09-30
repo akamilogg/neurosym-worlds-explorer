@@ -359,3 +359,28 @@ cd lib
 node --experimental-strip-types scripts/particles3d-service.ts --port 18500 --legacy-global-fields
 .\run-particles3d.ps1 --resume ..\runs\particles3d-s1L1C-2026-09-30T09-50-07-850Z.json --attempts 16
 ```
+
+### 10.8 El empujón: el run del nivel 1 C, traspasado al asistido
+
+Tras 16 rondas, el run del nivel 1 C seguía en el mismo encuadre (series temporales). Había escrito dos veces, en sus
+reflexiones de las rondas 9 y 18, que debía probar una ley que dependa del estado, y no lo hizo. Se traspasa al asistido
+(SPEC-INVESTIGADOR-ASISTIDO §3.2) para medir qué estímulo externo le basta para salir del mínimo local. Los mensajes van
+en tres niveles, de menos a más información, y se sube sólo si no reacciona en unas tres rondas:
+
+1. **Espejo** (nada nuevo, le devuelve su propia idea): *"In both of your reflections (rounds 9 and 18) you proposed to
+   fit a state-dependent transition law to positions and smoothed velocities, and to test it on held-out launches. You
+   have not tried it yet. What stops you?"*
+2. **Método** (una pregunta que discrimina, sin la respuesta): *"Have you checked whether two of your moving columns
+   that pass through the same place, at different times or in different episodes, accelerate in the same way there?"*
+3. **Contenido** (una hipótesis concreta, sin fórmula; el último recurso, porque el operador conoce la verdad): *"The
+   acceleration of a moving column seems to depend on where it is, not on its recent history."*
+
+Se lanza con el servicio en el mundo en que empezó el run (`--legacy-global-fields`). En ese mundo una validación en la
+familia no cuenta; lo que se mide es si cambia de encuadre. Desde `lib/`:
+
+```
+node --experimental-strip-types scripts/particles3d-service.ts --port 18500 --legacy-global-fields
+.\run-particles3d.ps1 --resume ..\runs\particles3d-s1L1C-2026-09-30T09-50-07-850Z.continued-2026-09-30T10-30-15-441Z.json --attempts 27 --researcher assisted
+node --experimental-strip-types scripts/lab.ts send last "<mensaje>"
+node --experimental-strip-types scripts/lab.ts watch last
+```

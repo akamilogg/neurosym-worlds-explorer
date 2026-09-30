@@ -310,7 +310,17 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   Object.defineProperty(worldOptions, '__task', { value: arg('task') || '', enumerable: false });
   Object.defineProperty(worldOptions, '__sources_allow', { value: originsOf(arg('sources-allow'), options.root), enumerable: false });
   /* The researcher: as the run it resumes had it, or as asked; then the operator's policy decides. */
-  const askedText = previous?.researcher ?? (arg('researcher', '') || options.researcher || 'unknown-world');
+  /* A continuation may hand the run to the ASSISTED researcher (`--researcher assisted` with `--attempts`): its history stays
+     the unknown-world researcher's, word for word, ending included; from its new rounds on the operator may help. Never
+     the other way, and never without new rounds. */
+  const gr = given.indexOf('--researcher');
+  const askedNow = previous && gr >= 0 && given[gr + 1] ? given[gr + 1] : null;
+  if (askedNow && askedNow !== previous!.researcher) {
+    if (continuedFrom === null) throw new LabError('--researcher with --resume: the researcher changes only when the run is given more rounds (--attempts)');
+    if (askedNow !== 'assisted') throw new LabError('--researcher with --resume: a run can only be handed to the assisted researcher, never back');
+  }
+  const assistedAfter: number | null = previous?.assisted_after_attempts ?? (askedNow === 'assisted' && previous!.researcher !== 'assisted' ? continuedFrom : null);
+  const askedText = assistedAfter !== null ? 'assisted' : previous?.researcher ?? (arg('researcher', '') || options.researcher || 'unknown-world');
   if (!(RESEARCHERS as readonly string[]).includes(askedText)) throw new LabError('--researcher: unknown ' + askedText + ' (researchers: ' + RESEARCHERS.join(', ') + ')');
   const p = given.indexOf('--policy');
   const policy: ResearcherPolicy | null = options.policy ?? (p >= 0 && given[p + 1] ? parsePolicy(given[p + 1]) : null);
@@ -336,7 +346,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       return finished;
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
-      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings });
+      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]);
 }
@@ -569,10 +579,13 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * The loop of a laboratory whose model is a LAW (cells, messages, orbit).
  * ========================================================================== */
 
-async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[] }): Promise<LabResult> {
-  const { cfg, worldOptions, previous, resumeFrom, endings } = o;
+async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[]; assistedAfter: number | null }): Promise<LabResult> {
+  const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
+  /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
+  let helping = assistedAfter === null;
   const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
+  if (assistedAfter !== null) journal.assisted_after_attempts = assistedAfter;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
   if (acts !== undefined) journal.config = { ...journal.config, acts };
   const tools: ReadonlySet<Tool> = new Set(cfg.tools as Tool[]);
@@ -816,8 +829,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
      operator's messages with its questions; resuming, delivered again at the same questions). */
   const session: LawSession<unknown> = journal.researcher === 'assisted'
     ? assistedSession(sessionHost, {
-      take: () => run.operator.take(), scheduled: deliveredMessages(previous),
-      system: () => assistedSystem(promptFor(focus)), task: () => task,
+      /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
+         sent meanwhile waits for its first new round. */
+      take: () => (helping ? run.operator.take() : []), scheduled: deliveredMessages(previous),
+      system: () => (helping ? assistedSystem(promptFor(focus)) : promptFor(focus)), task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
         if (m.source) { sources.allow(m.source); log('sources_allowed', { question, origin: m.source }); }
@@ -895,6 +910,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const to = endings.find((e) => e > attempt - 1) ?? cfg.attempts;
       log('budget_extended', { after_attempts: attempt - 1, to_attempts: to, round: session.currentRound });
       say('more rounds: ' + (attempt - 1) + ' → ' + to);
+      if (assistedAfter === attempt - 1) {
+        helping = true;
+        log('researcher_switched', { to: 'assisted', after_attempts: attempt - 1, round: session.currentRound });
+        say('from here on, the assisted researcher: the operator may help');
+      }
     }
     const record = await session.consult('propose');
     if (!record) { if (session.fatal) break; continue; }
