@@ -298,3 +298,33 @@ va A4, porque los mensajes son lo más directo de la colaboración. Luego A5 y A
 4. **¿Pausa distinta de parar?** Propuesta: no. Parar y reanudar ya es una pausa, con procedencia completa (run derivado).
 5. **¿La consola lanza runs con claves?** Propuesta: sólo las del entorno del proceso de la consola. Si hacen falta varias
    cuentas, perfiles con nombre definidos fuera de la página.
+
+## 12. Idea futura: memoria de exploraciones (30/09/2026)
+
+Explorar mundos deja journals con **métodos y técnicas de exploración** que pueden transferirse de un mundo a otro:
+
+- los métodos que System 2 escribe en su cuaderno («replicate_launch», «compare_terminal_columns»...);
+- sus lecciones y reflexiones;
+- los experimentos que funcionaron y los que le hicieron perder rondas.
+
+Es un tipo de aprendizaje y de generalización: no del mundo, sino de **cómo investigar**. La idea es que un investigador
+pueda consultar apuntes de exploraciones pasadas, propias o de otros, en busca de inspiración o de experiencia.
+
+Cómo encajaría con lo que ya existe:
+
+- **Como una fuente más** del asistido (§6.3): un origen permitido por el operador, leído con `list`, `open` y `find`.
+  Los apuntes son referencias cuestionables, no verdades: lo que funcionó en un mundo puede no servir en otro.
+- **Sólo la vista del investigador** (O14): métodos, lecciones, reflexiones, creencias y el finding de esa vista. Nunca
+  `hidden_from_the_learner`, la verdad ni las medidas del operador, o la verdad de un mundo se filtraría a otro run del
+  mismo mundo.
+- **Procedencia:** lo que tome de un apunte lo cita (`exp:<run>#<método o ronda>`), y el finding lo separa como ahora
+  separa `world`, `operator` y `sources`.
+- **El puro no la tiene.** Su referencia es aprender sólo de lo que el mundo responde. Sería una condición declarada del
+  asistido: «con memoria de exploraciones».
+- **Preguntas que abre:**
+  - ¿La experiencia de un mundo acorta la investigación en otro, en coste y en rondas?
+  - ¿Transfiere el método o arrastra sesgos? Por ejemplo, traer el encuadre de series temporales a un mundo donde no
+    sirve.
+  - ¿Apuntes propios frente a los de otros investigadores o modelos?
+  - ¿Cómo se destila un journal largo en apuntes útiles, y quién lo hace: el propio investigador al terminar, o un agente
+    del orquestador (SPEC-ORQUESTADOR)?

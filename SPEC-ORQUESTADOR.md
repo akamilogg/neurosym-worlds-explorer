@@ -135,6 +135,44 @@ planificador puede proponer uno, pero lo aprueba el operador antes de empezar.
 - **Autónomo:** actúa solo hasta el criterio o el presupuesto; el operador puede pararlo o corregirlo en cualquier
   momento (Q9).
 
+### 5.5 Mínimos locales: informar y bifurcar (idea del autor, 30/09/2026)
+
+Lo visto en el mundo 3D (SPEC-MUNDO-3D §10.6–10.8) es un patrón:
+- el investigador se pone a optimizar su propia idea en un mínimo local;
+- escribe hipótesis alternativas (en su teoría, en sus reflexiones) y no las explora;
+- sigue puliendo la suya.
+
+Un empujón del operador lo sacó en una ronda. El planificador puede hacer algo más: **explorar la alternativa en
+paralelo, sin quitarle al investigador su línea**.
+
+- **Informar al planificador.** El investigador le hace llegar qué está haciendo y qué otras hipótesis ve posibles. La
+  fuente natural es su cuaderno: su nota de teoría con las rivales, su siguiente experimento y los planes que no ejecutó.
+  El planificador lo lee de la vista del investigador (Q2).
+  - Opcionalmente, el asistido podría declarar sus alternativas en un campo propio de cada respuesta.
+  - El puro no sabe que existe un planificador: sólo se lee su journal, y leer no le cambia nada.
+- **Detectar el atasco.** Son medidas del operador, sin analizar nada por el investigador:
+  - varias rondas de variantes del mismo tipo de modelo sin mejora en la comprobación;
+  - un siguiente experimento anotado y no ejecutado en las rondas siguientes;
+  - hipótesis rivales escritas y nunca contrastadas.
+- **Bifurcar.** El planificador lanza otro investigador **dirigido** a la hipótesis alternativa. Hay dos formas:
+  - **una rama** de la misma historia: una continuación del journal original traspasada al asistido
+    (SPEC-INVESTIGADOR-ASISTIDO §3.2), con un `task` o un mensaje que fija la alternativa. El journal original no cambia,
+    así que se pueden derivar varias ramas de la misma historia, cada una con su hipótesis;
+  - **un run nuevo** asistido con `--task` sobre la alternativa, sin la historia (y sin sus sesgos).
+
+  El investigador original sigue con su línea. Si es el puro, sigue siendo puro: la rama es otro run.
+- **Coordinar.** El planificador sigue las ramas a la vez:
+  - las compara por sus findings, en coste y en si se sostienen;
+  - puede pasar a una rama lo que otra ha establecido, como mensaje de colega y con procedencia;
+  - cierra las ramas que no avanzan.
+
+  Una rama es una apuesta: su resultado es una referencia para las demás, no una verdad.
+- **El humano aprueba.** Abrir una rama gasta presupuesto. Según el grado de autonomía (§5.4):
+  - consultivo: el planificador propone la rama (qué hipótesis, desde qué punto, con qué presupuesto) y el operador la
+    aprueba;
+  - con umbrales: la abre sola por debajo de un coste y pide aprobación por encima;
+  - en ambos casos el operador puede parar ramas o cambiar presupuestos.
+
 ## 6. Interfaces
 
 - **Biblioteca:** `runBatch(definición, opciones)` y `runProject(objetivo, opciones)`, como `runLaboratory`: sin variables
@@ -156,6 +194,7 @@ planificador puede proponer uno, pero lo aprueba el operador antes de empezar.
 | R2 | Orquestador: `batch@1`, `runBatch`, concurrencia, reparto de presupuesto, tabla por condición, reanudación | un lote de réplicas se lanza, se corta, se reanuda sin repetir runs y da la misma tabla |
 | R3 | Planificador: `project@1`, el bucle, hipótesis con predicción, síntesis, criterio computable, modo consultivo | un proyecto pequeño (por ejemplo, "un modelo aceptado para los niveles 1 a 3 de cells") llega al criterio o para por presupuesto, con un informe legible |
 | R4 | Modos con umbrales y autónomo; vista de proyecto en la consola | la misma secuencia desde la consola, aprobando lotes |
+| R3b | Mínimos locales (§5.5): detección del atasco, informe de alternativas, ramas desde una historia (continuación traspasada) o runs nuevos con `task`, coordinación y aprobación humana | en un run atascado como el del nivel 1 C, el planificador propone una rama sobre la hipótesis que el investigador dejó sin explorar; aprobada, la rama la explora mientras el original sigue su línea, y el informe compara las dos |
 | R5 | Experimentos | §8 |
 
 ## 8. Evidencia que la sostendría
