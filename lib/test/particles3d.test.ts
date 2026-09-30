@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
-import { fromPercept, generateScene, placeScene, toPercept, velocityFromPercept, type SceneSpec } from '../src/worlds/particles3d/scene.ts';
+import { describeSceneTruth, fromPercept, generateScene, placeScene, toPercept, velocityFromPercept, type SceneSpec } from '../src/worlds/particles3d/scene.ts';
 import { observedNoiseVariance, perceiveEpisode, perceiveP3, pointAt } from '../src/worlds/particles3d/world.ts';
 import { appendRow, p3Objective, readAnswer, type P3Case } from '../src/worlds/particles3d/objective.ts';
 import { parseP3Act } from '../src/worlds/particles3d/interface.ts';
@@ -36,6 +36,10 @@ test('scenes: by level and condition, from the seed; the family keeps the laws a
   assert.notDeepEqual(placeScene(four, 1).bodies, four.bodies, 'level 4: hidden properties drawn anew in each place');
   assert.deepEqual(placeScene(generateScene(2, 2, 'A'), 1).bodies, generateScene(2, 2, 'A').bodies);
   assert.equal(new Set([...a.markers.map((m) => m.name), ...a.bodies.map((x) => x.name)]).size, a.markers.length + a.bodies.length, 'every column its own name');
+  /* The truth holds only what the world lets a learner tell apart. */
+  assert.deepEqual(describeSceneTruth(a).map((t) => t.id), ['field1']);
+  assert.ok(describeSceneTruth(generateScene(1, 3, 'A')).some((t) => t.id === 'superposition'));
+  assert.ok(!JSON.stringify(describeSceneTruth(b)).includes('integrator'));
 });
 
 test('the frame: Blender\'s coordinates and the learner\'s, both ways; a velocity in the table\'s units', () => {

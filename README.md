@@ -236,9 +236,10 @@ A world in 3D, simulated by Blender (SPEC-MUNDO-3D): particles under force field
 that pull on each other and, at level 6, chaos. System 2 perceives only tables of positions and is never told the world is
 Blender; if it recognises the engine, that is its own discovery, and the operator measures how it uses it. Blender runs
 as a service in a process of its own. A viewer puts what happened and what the learner's law answers side by side in a
-.blend file:
+.blend file (from `lib/`):
 
 ```bash
+cd lib
 node --experimental-strip-types scripts/particles3d-service.ts --port 18500
 node --experimental-strip-types scripts/run-particles3d.ts --seed 1 --level 3 --condition B
 node --experimental-strip-types scripts/particles3d-view.ts runs/<journal>.json --episode ep1

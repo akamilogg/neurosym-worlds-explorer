@@ -241,15 +241,20 @@ const FIELD_WORDS: Record<FieldSpec['type'], string> = {
   TEXTURE: 'the gradient of a procedural texture, varying in space with no simple formula (Blender TEXTURE field)'
 };
 
-/** OPERATOR ONLY: the scene as statements the grader compares with the learner's words. */
+/** OPERATOR ONLY: the scene as statements the grader compares with the learner's words - only what the world lets a learner
+    tell apart: superposition where there is more than one field; not the engine's integrator (the scene, integrator
+    included, stays in the journal's hidden part). */
 export function describeSceneTruth(spec: SceneSpec): { id: string; statement: string }[] {
   const out = spec.fields.map((f, i) => ({ id: 'field' + (i + 1), statement: 'Marker ' + spec.markers[i].name + ' is the source of ' + FIELD_WORDS[f.type]
     + (f.strength !== undefined ? ', strength ' + f.strength : '') + (f.falloff ? ', fall-off ' + f.falloff.type.toLowerCase() + ' with power ' + f.falloff.power + (f.falloff.min ? ' (no effect closer than ' + f.falloff.min + ')' : '') : f.type === 'FORCE' || f.type === 'HARMONIC' || f.type === 'CHARGE' ? ', no fall-off with distance' : '')
     + (f.linear !== undefined ? ', linear ' + f.linear + ', quadratic ' + f.quadratic : '') + '.' }));
-  out.push({ id: 'superposition', statement: 'The effects of the fields add up; every particle feels every field.' });
+  if (spec.fields.length > 1) out.push({ id: 'superposition', statement: 'The effects of the fields add up; every particle feels every field.' });
   if (spec.level >= 4) out.push({ id: 'hidden_mass', statement: 'Each particle has a hidden mass (between 0.5 and 3) that divides the forces on it; it differs between places.' });
   if (spec.bodies.some((b) => b.field?.type === 'CHARGE')) out.push({ id: 'hidden_charge', statement: 'Each particle carries a hidden charge with a sign: like charges repel, unlike attract' + (spec.level >= 5 ? ', particle on particle' : ', in the charged field and, weakly, particle on particle (in Blender a charge is also a source)') + '.' });
   if (spec.bodies.some((b) => b.field?.type === 'LENNARDJ')) out.push({ id: 'lennard_jones', statement: 'Some particles carry a Lennard-Jones field: repulsive very close, attractive a little further.' });
-  out.push({ id: 'integration', statement: 'Positions are advanced by Blender\'s ' + spec.engine.integrator.toLowerCase() + ' integrator' + (spec.engine.subframes ? ' with ' + spec.engine.subframes + ' subframes' : '') + (spec.engine.damping ? ', velocity damping ' + spec.engine.damping + ' per step' : '') + (spec.engine.drag ? ', air drag ' + spec.engine.drag : '') + '.' });
+  /* The engine's integrator is not graded (the tables at this noise do not reveal it); damping and air drag change the
+     motion, and are. */
+  if (spec.engine.damping || spec.engine.drag) out.push({ id: 'engine_drag', statement: 'Every particle also loses speed on its own, whatever the fields do'
+    + (spec.engine.damping ? ' (velocity damping ' + spec.engine.damping + ' per step)' : '') + (spec.engine.drag ? ' (air drag ' + spec.engine.drag + ')' : '') + '.' });
   return out;
 }

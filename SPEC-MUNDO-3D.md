@@ -2,9 +2,10 @@
 
 Estado (30/09/2026): **B0–B5 hechos** (§7, §10); falta B6, los experimentos con LLM real.
 
-Se lanza con dos procesos, el servicio de Blender y el laboratorio; el visor es aparte:
+Se lanza con dos procesos, el servicio de Blender y el laboratorio; el visor es aparte. Desde `lib/`:
 
 ```
+cd lib
 node --experimental-strip-types scripts/particles3d-service.ts --port 18500
 node --experimental-strip-types scripts/run-particles3d.ts --seed 1 --level 1 --condition A
 node --experimental-strip-types scripts/particles3d-view.ts runs/<journal>.json --episode ep1 --from 4

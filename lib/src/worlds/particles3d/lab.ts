@@ -79,7 +79,7 @@ const GRADER = 'You grade how well a learner recovered the dynamics of a 3D envi
   + 'For each TRUE statement, decide from the learner\'s own law and words whether it stated it: "exact" (the same claim; numbers within about 10 % once the table\'s axes, scale and time unit are allowed for), '
   + '"partial" (the right idea but incomplete, or numbers further off), "wrong" (it contradicts it), or "absent". Read its law as code: what its observations, rules and output compute is what it claims. '
   + 'The table\'s axes may be turned, scaled and shifted from the engine\'s, and its time unit is not the engine\'s: judge the form of a law, not the engine\'s own numbers. '
-  + 'Integrating the motion within a row is kinematics, not a force. Judge what it holds, not what it dropped. Quote the learner briefly as evidence. '
+  + 'Integrating the motion within a row is kinematics, not a force; the numerical scheme the learner integrates with (Euler, Runge-Kutta...) is its own method, never a claim about the engine. Judge what it holds, not what it dropped. Quote the learner briefly as evidence. '
   + GRADING_STRUCTURE + ' '
   + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims no true statement supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
 
