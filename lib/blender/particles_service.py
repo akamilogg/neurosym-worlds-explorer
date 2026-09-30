@@ -18,6 +18,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
 PORT = int(argv[argv.index('--port') + 1]) if '--port' in argv else 18500
+# Before 30/09/2026 the TEXTURE and TURBULENCE fields were read in Blender's global coordinates (they did not move with
+# their objects). Only to continue a run made then, in the world it began in.
+LEGACY_GLOBAL_FIELDS = '--legacy-global-fields' in argv
 MAX_FRAMES = 400
 MAX_PARTICLES = 24
 FIELDS = {'FORCE', 'HARMONIC', 'VORTEX', 'MAGNET', 'CHARGE', 'LENNARDJ', 'DRAG', 'TURBULENCE', 'TEXTURE', 'WIND'}
@@ -83,12 +86,15 @@ def add_field(i, f, scene):
         fd.size = num(f, 'size', 1.0, 0.01, 1e3)
         fd.noise = num(f, 'noise', 0.0, 0.0, 10.0)
         fd.seed = int(num(f, 'seed', 1, 1, 128))
-        fd.use_global_coords = True
+        # The noise moves with its object (the family moves the objects): anchored to what the learner sees, its marker.
+        fd.use_global_coords = LEGACY_GLOBAL_FIELDS
     if kind == 'TEXTURE':
         tex = bpy.data.textures.new('T%d' % i, type=f.get('texture', 'CLOUDS') if f.get('texture', 'CLOUDS') in TEXTURES else 'CLOUDS')
         tex.noise_scale = num(f, 'scale', 1.0, 0.01, 1e3)
         fd.texture = tex
         fd.texture_mode = 'GRADIENT'
+        # The texture moves with its object, like every other field (Blender's default reads it in global coordinates).
+        fd.use_object_coords = not LEGACY_GLOBAL_FIELDS
         fd.texture_nabla = num(f, 'nabla', 0.025, 0.0001, 1.0)
         fd.use_2d_force = False
 
@@ -202,5 +208,5 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-print('particles3d service: Blender %s on http://127.0.0.1:%d' % (bpy.app.version_string, PORT), flush=True)
+print('particles3d service: Blender %s on http://127.0.0.1:%d%s' % (bpy.app.version_string, PORT, ' (legacy global fields)' if LEGACY_GLOBAL_FIELDS else ''), flush=True)
 HTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

@@ -242,10 +242,24 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     const log = resumeFrom.replace(/\.json$/, '') + '.replay.jsonl';
     if (!fs.existsSync(log)) throw new LabError('--resume: the log of ' + resumeFrom + ' is missing (' + log + '): without it every request would be made again, so the run is not resumed');
   }
+  /* A CONTINUATION: `--resume <journal> --attempts N` gives more rounds to a run that used up its own. The run is replayed as
+     it was - its ending too (the reflection and the grading it ended with are part of its history) - and then goes on. */
+  const ga = given.indexOf('--attempts');
+  const moreRounds = previous && ga >= 0 && given[ga + 1] ? Number(given[ga + 1]) : null;
+  const continuedFrom = previous && moreRounds !== null ? Number(previous.config?.attempts) : null;
+  if (previous && moreRounds !== null) {
+    const end = [...(previous.events as Record<string, any>[])].reverse().find((e) => e.type === 'end');
+    if (isGameLab(lab)) throw new LabError('--attempts with --resume: ' + lab.id + ' has a loop of its own; it cannot be given more rounds yet');
+    if (!end || end.stoppedBy !== 'budget') throw new LabError('--attempts with --resume: only a run that ended by using up its rounds can be given more (this one: ' + (end ? end.stoppedBy : 'did not end') + '); resume it without --attempts');
+    if (!(moreRounds > continuedFrom!)) throw new LabError('--attempts with --resume: give it more than the ' + continuedFrom + ' rounds it had');
+  }
   /* A resumed run is a run of its own, derived from the one it resumes, which stays as it was (its provenance). */
   const o = given.indexOf('--out');
-  const derived = previous ? (o >= 0 && given[o + 1] ? given[o + 1] : resumeFrom!.replace(/\.json$/, '') + '.resumed-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json') : null;
-  const argv: readonly string[] = previous ? [...(previous.argv as string[]), ...budgetArgs(given), '--out', derived!] : given;
+  const derived = previous ? (o >= 0 && given[o + 1] ? given[o + 1] : resumeFrom!.replace(/\.json$/, '') + (continuedFrom !== null ? '.continued-' : '.resumed-') + new Date().toISOString().replace(/[:.]/g, '-') + '.json') : null;
+  const kept = previous ? (previous.argv as string[]).filter((a, i, all) => !(continuedFrom !== null && (a === '--attempts' || all[i - 1] === '--attempts'))) : [];
+  const argv: readonly string[] = previous ? [...kept, ...(continuedFrom !== null ? ['--attempts', String(moreRounds)] : []), ...budgetArgs(given), '--out', derived!] : given;
+  /* The rounds after which the run's history had an ending (a continuation replays each where it was). */
+  const endings: number[] = [...((previous?.continuations as number[] | undefined) ?? []), ...(continuedFrom !== null ? [continuedFrom] : [])];
   const defaults: Record<string, string> = { ...Object.fromEntries(COMMON.map((o) => [o.name, o.default])), ...(lab.defaults ?? {}) };
   /* An option under its name or one of its aliases (an earlier runner's). */
   const aliasesOf = (name: string): string[] => [name, ...Object.entries(lab.aliases ?? {}).filter(([, to]) => to === name).map(([from]) => from),
@@ -322,7 +336,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       return finished;
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
-      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null });
+      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]);
 }
@@ -555,8 +569,8 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * The loop of a laboratory whose model is a LAW (cells, messages, orbit).
  * ========================================================================== */
 
-async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null }): Promise<LabResult> {
-  const { cfg, worldOptions, previous, resumeFrom } = o;
+async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[] }): Promise<LabResult> {
+  const { cfg, worldOptions, previous, resumeFrom, endings } = o;
   const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
@@ -870,7 +884,18 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   await explore();
   let accepted: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
+  if (endings.length) journal.continuations = [...endings];
   for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
+    /* Where the run's history had an ending (it used up its rounds and was given more): that ending, as it was. */
+    if (endings.includes(attempt - 1)) {
+      if (cfg.reflection) { say('the ending of the run it continues (round ' + (attempt - 1) + '): its reflection'); await session.consult('reflect', reflectionTask(investigative)); }
+      if (session.fatal || session.halted) break;
+      if (cfg.grade) await gradeRecovery(session.latest()?.law ?? null);
+      /* The rounds it was given then: up to the next ending of its history, or to now. */
+      const to = endings.find((e) => e > attempt - 1) ?? cfg.attempts;
+      log('budget_extended', { after_attempts: attempt - 1, to_attempts: to, round: session.currentRound });
+      say('more rounds: ' + (attempt - 1) + ' → ' + to);
+    }
     const record = await session.consult('propose');
     if (!record) { if (session.fatal) break; continue; }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });

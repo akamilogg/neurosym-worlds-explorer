@@ -321,3 +321,41 @@ de Blender.
   comprobaciones por horizontes.
 - **Prompt:** el del investigador puro para este mundo queda congelado en `control.test.ts`, y se comprueba que System 2
   nunca lee la palabra «Blender».
+
+### 10.6 Tras los primeros runs reales (30/09/2026)
+
+- **Nivel 1 A, aceptado en la ronda 5.** Recuperó la ley exacta: repulsión de magnitud constante 4,26 desde el
+  marcador (la verdad era 4,259). La verdad calificada ya no incluye lo que el mundo no deja distinguir: ni la
+  superposición con un solo campo ni el integrador del motor.
+- **Nivel 1 B, aceptado en la ronda 2 con una ley aproximada.** La verdad era r^−1,24; su ley, 1/r, suavizada cerca del
+  marcador. El criterio no lo distinguió porque todas las comprobaciones empiezan a distancias parecidas. Queda propuesta
+  una banda de distancias (lejos y cerca), como la extrapolación de orbit; pendiente de decidir.
+- **Nivel 1 C, sin aceptar tras 8 rondas.** Trató el movimiento como series temporales y nunca como una aceleración que
+  depende de la posición. La hipótesis correcta estaba en su nota de teoría desde la ronda 1 y la retomó como siguiente
+  experimento en su reflexión final.
+- **Error del mundo corregido.** Blender evalúa por defecto los campos `TEXTURE` y `TURBULENCE` en coordenadas globales:
+  no se movían con su objeto, mientras que la familia mueve los objetos y el origen de la tabla. Ningún campo de esos
+  quedaba anclado a nada visible fuera del laboratorio. Ahora se mueven con su objeto, y lo fija un test con Blender real.
+  - `--legacy-global-fields` arranca el servicio con el comportamiento anterior, **sólo** para continuar un run hecho
+    antes del cambio en el mundo en que empezó.
+  - En ese mundo la familia no es justa para esos campos: su validación no cuenta.
+
+### 10.7 Dar más rondas a un run (una continuación)
+
+`--resume <journal> --attempts N` da más rondas a un run que terminó por agotar las suyas. Es común a todos los
+laboratorios de ley.
+
+- El run nuevo repite desde el log su historia tal como fue, **incluido su final**: la reflexión y la calificación con
+  que terminó forman parte de ella, y lo que la reflexión anotó queda en su cuaderno.
+- Después sigue con más rondas y termina con otra reflexión.
+- El journal lleva `continuations` (tras qué rondas hubo un final) y un evento `budget_extended`. Una continuación se
+  puede continuar otra vez.
+- Sólo se permite a un run que terminó por agotar sus rondas, y con más rondas de las que tenía.
+
+Para continuar el run del nivel 1 C, hecho antes de la corrección, con el servicio en su mundo original:
+
+```
+cd lib
+node --experimental-strip-types scripts/particles3d-service.ts --port 18500 --legacy-global-fields
+.\run-particles3d.ps1 --resume ..\runs\particles3d-s1L1C-2026-09-30T09-50-07-850Z.json --attempts 16
+```

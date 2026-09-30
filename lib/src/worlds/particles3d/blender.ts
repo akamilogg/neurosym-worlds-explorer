@@ -27,10 +27,10 @@ export function findBlender(env: NodeJS.ProcessEnv = process.env): string | null
 export interface BlenderService { readonly url: string; readonly version: string; readonly process: ChildProcess; stop(): void }
 
 /** Starts the service on a port and waits until it answers (at most `timeoutMs`). */
-export async function startBlenderService(options: { port: number; blender?: string; timeoutMs?: number; quiet?: boolean }): Promise<BlenderService> {
+export async function startBlenderService(options: { port: number; blender?: string; timeoutMs?: number; quiet?: boolean; legacyGlobalFields?: boolean }): Promise<BlenderService> {
   const blender = options.blender ?? findBlender();
   if (!blender) throw new Error('Blender was not found: set BLENDER to its executable');
-  const child = spawn(blender, ['-b', '--factory-startup', '--python', SERVICE_SCRIPT, '--', '--port', String(options.port)],
+  const child = spawn(blender, ['-b', '--factory-startup', '--python', SERVICE_SCRIPT, '--', '--port', String(options.port), ...(options.legacyGlobalFields ? ['--legacy-global-fields'] : [])],
     { stdio: options.quiet ? 'ignore' : ['ignore', 'inherit', 'inherit'], windowsHide: true });
   const url = 'http://127.0.0.1:' + options.port;
   const stop = () => { if (child.exitCode === null) child.kill(); };

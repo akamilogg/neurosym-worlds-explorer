@@ -199,3 +199,17 @@ test('with Blender: its answers are the world; a run goes from exploration to ch
     assert.notEqual(r.stoppedBy, 'accepted', 'the last step repeated does not explain Blender\'s fields');
   } finally { service.stop(); }
 });
+
+test('with Blender: every field moves with its object (the family moves them): a scene moved as a whole moves as a whole', { skip: !blender && 'Blender is not installed' }, async () => {
+  const service = await startBlenderService({ port: 18600 + Math.floor(Math.random() * 9), quiet: true });
+  try {
+    const post = async (b: unknown) => (await (await fetch(service.url + '/simulate', { method: 'POST', body: JSON.stringify(b) })).json()) as { rows: number[][][] };
+    for (const field of [{ type: 'TEXTURE', strength: 6, texture: 'MARBLE', scale: 1.4 }, { type: 'TURBULENCE', strength: 4, size: 1.5, seed: 7 }, { type: 'FORCE', strength: -5 }]) {
+      const run = (dx: number) => post({ scene: { engine: { integrator: 'MIDPOINT', subframes: 1, timestep: 0.05 }, fields: [{ ...field, location: [0.3 + dx, 0.2, 0.1] }], particles: [{ location: [1 + dx, 0.5, 0.2], velocity: [0, 0, 0] }] }, frames: 40 });
+      const [a, b] = [await run(0), await run(1.7)];
+      const moved = Math.max(...a.rows.map((r) => Math.hypot(r[0][0] - 1, r[0][1] - 0.5, r[0][2] - 0.2)));
+      const gap = Math.max(...a.rows.map((r, f) => Math.hypot(r[0][0] + 1.7 - b.rows[f][0][0], r[0][1] - b.rows[f][0][1], r[0][2] - b.rows[f][0][2])));
+      assert.ok(moved > 0.5 && gap < 1e-3 * moved, field.type + ': moved ' + moved + ', apart ' + gap);
+    }
+  } finally { service.stop(); }
+});

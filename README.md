@@ -245,6 +245,9 @@ node --experimental-strip-types scripts/run-particles3d.ts --seed 1 --level 3 --
 node --experimental-strip-types scripts/particles3d-view.ts runs/<journal>.json --episode ep1
 ```
 
+A run that used up its rounds can be given more: `--resume <journal> --attempts N` replays its history as it was,
+including the reflection and the grading it ended with, and then goes on (SPEC-MUNDO-3D §10.7).
+
 Runs are also controlled from the command line, the same for every laboratory and researcher: start one in a process of
 its own, list them, follow one, stop it, resume it, read its finding (SPEC-INVESTIGADOR-ASISTIDO):
 
