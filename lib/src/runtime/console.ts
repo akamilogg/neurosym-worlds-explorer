@@ -6,6 +6,8 @@ import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, 
 import { describeEvent } from './cli.ts';
 import { LABS } from '../worlds/labs.ts';
 import { isGameLab } from '../learn/lab.ts';
+import { listProjects, projectStatus, projectText, sendProject } from '../orchestra/project.ts';
+import { readProjectFile, startProject } from '../orchestra/launch.ts';
 
 /* ============================================================================
  * The CONSOLE (SPEC-INVESTIGADOR-ASISTIDO §8, A3): a local page over the control API, the
@@ -32,9 +34,28 @@ export interface ConsoleOptions {
 type Json = Record<string, any>;
 const readJson = (file: string): Json | null => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
-/** A run by its name, among the runs of the folder: never a path from outside it. */
+/** A run by its name, among the runs of the folder - or, for a batch's run, by its path under runs/ (projects/<p>/batches/i1/<run>):
+    never a path from outside it. */
 function runByName(root: string, name: string): RunInfo | null {
-  return listRuns(path.join(root, 'runs')).find((r) => r.run === name) ?? null;
+  const top = listRuns(path.join(root, 'runs')).find((r) => r.run === name);
+  if (top) return top;
+  if (!/^[\w.-]+(\/[\w.-]+)+$/.test(name) || name.split('/').includes('..')) return null;
+  const file = path.join(root, 'runs', ...name.split('/')) + '.json';
+  return fs.existsSync(file) ? runStatus(file) : null;
+}
+
+/** A run's name for the page: its path under runs/, without .json. */
+const nameOf = (root: string, journal: string): string => path.relative(path.join(root, 'runs'), journal).split(path.sep).join('/').replace(/\.json$/, '');
+
+/** What the page shows of a project: its record and state, its batches (tables, and their runs by name), its report. */
+export function projectView(root: string, id: string): Json | null {
+  const s = projectStatus(root, id);
+  if (!s.record) return null;
+  const batches = s.record.iterations.map((it) => {
+    const b = it.batch ? readJson(it.batch) : null;
+    return { n: it.n, table: b?.table ?? [], runs: (b?.runs ?? []).map((r: Json) => ({ id: r.id, condition: r.condition, status: r.status, run: r.journal ? nameOf(root, r.journal) : null })) };
+  });
+  return { record: s.record, status: s.status, alive: s.alive, batches, report: projectText(s.record) };
 }
 
 /** What the page shows of a run: its state, its events from `since` in a line each, and what it holds now. */
@@ -122,6 +143,38 @@ export function serveConsole(options: ConsoleOptions): Promise<{ url: string; cl
           return send_(201, { run: path.basename(r.journal, '.json'), pid: r.pid });
         }
       }
+      /* Projects of the planner (SPEC-ORQUESTADOR R4): list, view, start, and the operator's decisions. */
+      if (parts[0] === 'api' && parts[1] === 'projects' && parts.length === 2) {
+        if (req.method === 'GET') return send_(200, listProjects(root).map((id) => { const s = projectStatus(root, id);
+          return { id, state: s.record?.ended ? 'ended' : s.alive ? String(s.status?.state ?? 'running') : 'interrupted', waiting_for: s.status?.waiting_for ?? null,
+            iterations: s.record?.iterations.length ?? 0, spent: s.record ? s.record.spent.runs + s.record.spent.planner : 0, budget: s.record?.budget.tokens ?? null }; }));
+        if (req.method === 'POST') {
+          const b = await body(req);
+          const tmp = path.join(root, 'runs', 'projects', '.goal-' + Date.now() + '.json');
+          fs.mkdirSync(path.dirname(tmp), { recursive: true });
+          fs.writeFileSync(tmp, JSON.stringify(b.goal ?? {}));
+          try { const goal = readProjectFile(tmp); const r = startProject(root, goal, goal.id, options.env); return send_(201, { id: goal.id, pid: r.pid }); }
+          finally { fs.rmSync(tmp, { force: true }); }
+        }
+      }
+      if (parts[0] === 'api' && parts[1] === 'projects' && parts[2]) {
+        if (!listProjects(root).includes(parts[2])) return send_(404, { error: 'no project named ' + parts[2] });
+        if (req.method === 'GET' && parts.length === 3) return send_(200, projectView(root, parts[2]));
+        if (req.method === 'POST' && parts[3] === 'orders') {
+          const b = await body(req);
+          if (b.kind === 'reject' && !b.note) return send_(400, { error: 'a rejection says what to change (note)' });
+          if (!['approve', 'reject', 'stop'].includes(b.kind)) return send_(400, { error: 'an order to a project is approve, reject (note) or stop' });
+          sendProject(root, parts[2], b.kind === 'stop' ? { kind: 'stop', by: 'console' } : b.kind === 'approve' ? { kind: 'approve', ...(b.note ? { note: String(b.note) } : {}), by: 'console' } : { kind: 'reject', note: String(b.note), by: 'console' });
+          return send_(202, { sent: b.kind });
+        }
+        if (req.method === 'POST' && parts[3] === 'resume') {
+          const s = projectStatus(root, parts[2]);
+          if (s.alive) return send_(409, { error: 'the project is still going' });
+          if (s.record?.ended) return send_(409, { error: 'the project ended: ' + s.record.ended.why });
+          const r = startProject(root, null, parts[2], options.env);
+          return send_(201, { id: parts[2], pid: r.pid });
+        }
+      }
       if (req.method === 'GET' && parts[0] === 'view' && parts[1]) {
         const run = runByName(root, parts[1]);
         if (!run || !options.synthesis) return send_(404, 'no synthesis', 'text/plain');
@@ -198,7 +251,7 @@ dialog label { display: block; margin: 8px 0 2px; font-size: 13px; color: var(--
   <button class="primary" id="new">Nuevo run</button>
 </header>
 <main>
-  <section class="panel" aria-label="Runs"><h2>Runs</h2><ul class="runs" id="runs"></ul></section>
+  <section class="panel" aria-label="Runs"><h2>Proyectos</h2><ul class="runs" id="projects"></ul><h2 style="margin-top:14px">Runs</h2><ul class="runs" id="runs"></ul></section>
   <section class="panel" id="detail" aria-live="polite"><div class="empty">Elige un run.</div></section>
 </main>
 <dialog id="start">
@@ -238,7 +291,7 @@ async function refreshRuns() {
 
 function tile(k, v) { return el('div', { class: 'tile' }, el('div', { class: 'k' }, k), el('div', { class: 'v' }, v)); }
 
-async function select(run) { selected = run; since = 0; timeline = null; await refreshRuns(); await refreshDetail(true); }
+async function select(run) { selected = run; project = null; since = 0; timeline = null; await refreshRuns(); await refreshDetail(true); }
 
 async function order(kind, extra, feedback) {
   feedback.className = 'feedback'; feedback.textContent = 'enviando…';
@@ -338,8 +391,51 @@ $('start-form').onsubmit = async (e) => {
     setTimeout(() => select(r.run), 1500);
   } catch (err) { $('f-feedback').className = 'feedback bad'; $('f-feedback').textContent = err.message; }
 };
-refreshRuns();
-setInterval(() => { refreshRuns(); refreshDetail(); }, 1500);
+/* --- Projects of the planner (SPEC-ORQUESTADOR R4) --- */
+const PSTATE = { running: 'en curso', waiting: 'esperando tu aprobación', ended: 'terminado', interrupted: 'interrumpido' };
+let project = null;
+async function refreshProjects() {
+  const ps = await api('/api/projects');
+  $('projects').replaceChildren(...(ps.length ? ps.map((p) => el('li', { class: 'run' + (p.id === project ? ' sel' : ''), tabindex: 0, onclick: () => selectProject(p.id), onkeydown: (e) => { if (e.key === 'Enter') selectProject(p.id); } },
+    el('div', { class: 'row' }, el('strong', {}, p.id), el('span', { class: 'pill s-' + (p.state === 'waiting' ? 'stopping' : p.state) }, el('span', { class: 'dot' }), PSTATE[p.state] || p.state)),
+    el('div', { class: 'row muted' }, 'iteraciones ' + p.iterations + ' · ' + p.spent + ' de ' + p.budget + ' tokens')))
+    : [el('li', { class: 'muted' }, 'Sin proyectos. Se lanzan con lab project start <goal.json>.')]));
+}
+async function selectProject(id) { project = id; selected = null; timeline = null; await refreshProjects(); await refreshProject(); }
+async function projectOrder(kind, note, fb) {
+  fb.className = 'feedback'; fb.textContent = 'enviando…';
+  try { await api('/api/projects/' + encodeURIComponent(project) + '/orders', { method: 'POST', body: JSON.stringify({ kind, note }) }); fb.className = 'feedback ok'; fb.textContent = 'enviado'; setTimeout(refreshProject, 800); }
+  catch (e) { fb.className = 'feedback bad'; fb.textContent = e.message; }
+}
+async function refreshProject() {
+  if (!project) return;
+  const v = await api('/api/projects/' + encodeURIComponent(project));
+  const r = v.record, s = v.status || {}, fb = el('div', { class: 'feedback' });
+  const note = el('textarea', { placeholder: 'Nota para el planificador (obligatoria al rechazar): qué cambiar…' });
+  const waiting = !r.ended && s.waiting_for;
+  const it = r.iterations[r.iterations.length - 1];
+  $('detail').replaceChildren(...[
+    el('div', { class: 'row' }, el('h2', {}, 'Proyecto ' + r.id), el('span', { class: 'pill' }, r.autonomy)),
+    el('p', {}, r.goal.question),
+    el('div', { class: 'muted' }, 'Criterio (' + (r.criterion ? r.criterion.by + (r.criterion.approved ? ', aprobado' : ', sin aprobar') : '-') + '): ', el('code', {}, r.criterion ? r.criterion.source : '-')),
+    el('div', { class: 'tiles' }, tile('estado', r.ended ? 'terminado' : waiting ? 'esperando' : v.alive ? 'en curso' : 'interrumpido'), tile('iteraciones', r.iterations.length),
+      tile('gastado', (r.spent.runs + r.spent.planner) + ' / ' + r.budget.tokens), tile('planificador', r.spent.planner)),
+    waiting ? el('div', { class: 'collab' }, el('h3', {}, 'Espera tu aprobación: ' + s.waiting_for),
+      el('pre', { class: 'code' }, r.criterion && !r.criterion.approved ? r.criterion.source : JSON.stringify(it && it.plan, null, 2)),
+      note, el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: () => projectOrder('approve', note.value, fb) }, 'Aprobar'),
+        el('button', { onclick: () => projectOrder('reject', note.value, fb) }, 'Rechazar con nota'))) : null,
+    el('div', { class: 'actions' }, el('button', { disabled: !!r.ended, onclick: () => projectOrder('stop', '', fb) }, 'Parar proyecto'),
+      el('button', { disabled: v.alive || !!r.ended, onclick: async () => { try { await api('/api/projects/' + encodeURIComponent(project) + '/resume', { method: 'POST', body: '{}' }); fb.className = 'feedback ok'; fb.textContent = 'reanudado'; } catch (e) { fb.className = 'feedback bad'; fb.textContent = e.message; } } }, 'Reanudar')), fb,
+    el('h3', {}, 'Iteraciones'),
+    ...v.batches.map((b) => el('div', { class: 'collab' }, el('strong', {}, 'Iteración ' + b.n),
+      ...((r.iterations.find((x) => x.n === b.n) || {}).hypotheses || []).map((h) => el('div', { class: 'muted' }, 'hipótesis ' + h.id + ': ' + h.statement)),
+      b.table.length ? el('table', {}, el('tr', {}, el('th', {}, 'condición'), el('th', {}, 'aceptados'), el('th', {}, 'ronda (mediana)'), el('th', {}, 'tokens hasta aceptar')),
+        ...b.table.map((c) => el('tr', {}, el('td', {}, c.condition), el('td', {}, c.accepted + '/' + c.runs), el('td', {}, c.acceptance_round.median ?? '–'), el('td', {}, c.tokens_to_acceptance.median ?? '–')))) : null,
+      el('div', { class: 'row' }, ...b.runs.map((x) => x.run ? el('button', { onclick: () => { project = null; select(x.run); } }, x.id + ' · ' + x.status) : el('span', { class: 'muted' }, x.id))))),
+    el('h3', {}, 'Informe'), el('pre', { class: 'code' }, v.report)].filter(Boolean));
+}
+refreshRuns(); refreshProjects();
+setInterval(() => { refreshRuns(); refreshProjects(); if (project) refreshProject(); else refreshDetail(); }, 1500);
 </script>
 </body>
 </html>

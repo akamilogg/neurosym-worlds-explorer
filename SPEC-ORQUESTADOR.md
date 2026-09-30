@@ -1,6 +1,7 @@
 # SPEC · Agentes operadores, orquestador y planificador de proyectos
 
-Estado (29/09/2026): **propuesto, sin empezar**. Es un spec futuro.
+Estado (30/09/2026): **R1–R4 y R3b implementados** (§10), probados con modelos sustitutos. Falta R5: los experimentos con
+LLM real.
 
 Parte de lo que ya existe tras SPEC-OBJETIVO (O7–O14) y SPEC-INVESTIGADOR-ASISTIDO (A1–A6):
 
@@ -220,3 +221,114 @@ paralelo, sin quitarle al investigador su línea**.
 5. **Límites de las APIs:** la concurrencia de runs a la vez (LLM y Jev) y los reintentos cuando un proveedor limita.
 6. **¿Varios planificadores?** Por ejemplo, uno que propone y otro que critica el plan antes de gastar presupuesto.
    Propuesta: después de R3, si el modo consultivo muestra que hace falta.
+
+## 10. Lo implementado (30/09/2026)
+
+Todo está en `lib/src/orchestra/` (exportado como `neurosym/orchestra`) y sólo usa la API de control, `runLaboratory` y los
+findings (Q1).
+
+### 10.1 R1 · El agente operador (`agent-operator.ts`, `view.ts`)
+
+- **Lo que ve un agente** (`researcherEvents`, `runDigest`): una lista blanca, campo a campo, de lo que el investigador
+  vivió:
+  - sus propuestas, investigaciones, creencias, notas, lecciones, planes y reflexiones;
+  - lo que el mundo le dijo: si su modelo se sostuvo en cada lugar y si fue aceptado.
+
+  Nunca `hidden_from_the_learner`, las medidas del operador (ablaciones, líneas base, trazas, la calificación) ni la
+  descripción del mundo. Un test comprueba que la verdad no aparece.
+- **El agente** (`runAgentOperator`): tras cada ronda que el run completa, decide `wait`, `message` o `stop`, con su
+  motivo.
+  - Su prompt le pide el empujón mínimo: primero devolverle al investigador sus propias ideas sin probar, y sólo después
+    una pregunta que distinga sus rivales. Nunca hechos del entorno.
+  - Sus órdenes van firmadas como `agent:<id>`.
+  - Sus decisiones quedan en `<run>.agent-<id>.json` (`agent@1`).
+- **La política del run:** `--agents <id>=<órdenes>;...` y `--help-budget N` son opciones de control; una reanudación las
+  toma de nuevo.
+  - Sin `--agents`, ningún agente puede ordenar el run; una persona, siempre.
+  - Lo que se sale de la política se rechaza y queda registrado.
+  - El presupuesto de ayuda cuenta la de todos, personas y agentes.
+- **En el finding:** cada mensaje lleva su autor (`person` o `agent`), y el finding recoge el presupuesto de ayuda.
+
+### 10.2 R2 · El orquestador (`batch.ts`)
+
+- **El lote** `batch@1` declara sus runs: laboratorio, argumentos, investigador y condición. Opcionalmente, un agente que
+  lo sigue, o una rama (`fork`).
+- **La ejecución** respeta la concurrencia y reparte el presupuesto en tokens por run.
+- **La tabla** va por condición y sale **sólo** de los findings de los investigadores:
+  - aceptación y ronda (mediana y cuartiles);
+  - coste hasta aceptar y coste total;
+  - ayuda recibida.
+
+  La **auditoría** (la calificación contra la verdad) va aparte y marcada.
+- **Reanudable:** un run que terminó no se repite; uno cortado (o cancelado por el propio lote) se reanuda como run
+  derivado. Un test comprueba que el lote cortado y reanudado da la misma tabla.
+- **Salida:** `runs/batches/<id>/batch.json` y `batch.txt`.
+
+### 10.3 R3 y R3b · El planificador (`project.ts`)
+
+- **El proyecto** `project@1` guarda:
+  - la pregunta y el criterio (código sobre los resúmenes de los runs);
+  - la autonomía y el presupuesto;
+  - por iteración: hipótesis con su predicción, plan, aprobación, lote, síntesis y resultado del criterio;
+  - las conclusiones, con su respaldo y su historia, marcadas «replicada» o «se apoya en N runs»;
+  - las preguntas abiertas y los eventos.
+- **El criterio** lo da el operador o lo propone el planificador. En el segundo caso el operador lo aprueba antes de
+  cualquier run. Se evalúa en un sandbox; lo decide el código, no el planificador (Q3).
+- **Lo que ve el planificador** (Q2): los runs como sus investigadores los vivieron, y los laboratorios sólo por nombre,
+  opciones y valores por defecto. Nada de lo que son: su texto de ayuda revela estructura y se colaría en los mensajes.
+- **Un plan que no se puede ejecutar** (laboratorio inexistente, ids repetidos, presupuesto por encima de lo que queda,
+  una rama de un run no ramificable) se rechaza con el motivo y se le pide otro.
+- **Mínimos locales (R3b):** por cada run que no llegó, el estado muestra las señales del operador:
+  - rondas, y rondas en las que el modelo no se sostuvo en ningún lugar;
+  - modelos distintos;
+  - las ideas que su investigador escribió y no probó;
+  - si es ramificable.
+
+  Una rama (`fork`) es una continuación del journal traspasada al asistido, con un primer mensaje de `agent:planner`
+  (las ramas se autorizan solas en `--agents`). El run original queda intacto.
+- **Presupuesto:** los tokens de los runs y los del propio planificador cuentan juntos (Q8).
+- **Reanudable:** las llamadas del planificador pasan por su log de grabación (`planner.replay.<n>.jsonl`), las
+  decisiones del operador ya dadas se aplican en el mismo orden y los lotes no repiten runs.
+
+### 10.4 R4 · Autonomía, CLI y consola
+
+- **Autonomía:**
+  - consultiva: se aprueba cada plan;
+  - con umbral: sin aprobación por debajo de `threshold` tokens;
+  - autónoma.
+
+  Rechazar exige una nota, que el planificador lee en su siguiente plan.
+- **CLI:**
+  - `lab agent <run> [--id coach]`;
+  - `lab batch <batch.json>`;
+  - `lab project start <goal.json> | list | status <id> | approve <id> [nota] | reject <id> <nota> | stop <id> | resume <id>`.
+
+  El proyecto corre en un proceso propio (`scripts/run-project.ts`) con latido.
+- **Consola:** una sección de proyectos con:
+  - el estado y la autonomía;
+  - el criterio y el presupuesto;
+  - el plan que espera aprobación, con aprobar, rechazar con nota, parar y reanudar;
+  - las iteraciones, con sus hipótesis y su tabla;
+  - el informe.
+
+  Los runs de un lote se abren en su vista de run.
+- **Claves:** sólo del entorno (`LLM_*`, `PLANNER_LLM_*`, `AGENT_LLM_*`, `JEV_*`). La plantilla `lib/lab.example.ps1` las
+  pone y lanza la CLI.
+- **Ejemplos:** `lib/examples/batch.example.json` y `lib/examples/project.example.json`.
+
+### 10.5 Pruebas
+
+`test/orchestra-agent.test.ts`, `test/orchestra-batch.test.ts` y `test/orchestra-project.test.ts`, con modelos
+sustitutos (System 2, agente y planificador) sobre `cells` y sobre `particles3d` con un Blender sustituto. Cubren:
+
+- lo que ve un agente;
+- la política y el presupuesto de ayuda;
+- un agente que desatasca un run;
+- un lote comparado, cortado y reanudado;
+- un proyecto consultivo con rechazo y nota;
+- el modo con umbral, parado y reanudado;
+- una rama de un run atascado;
+- la consola y la CLI de proyectos.
+
+Los journals puros no cambian (0 diferencias con el LLM falso).
+

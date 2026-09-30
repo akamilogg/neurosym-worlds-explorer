@@ -52,7 +52,11 @@ export interface Finding {
     readonly grounded?: readonly ('world' | 'operator' | 'sources')[] }[];
   /** Assisted researcher (SPEC-INVESTIGADOR-ASISTIDO §7): what help it had. It is provenance, so both views keep it. */
   readonly assistance?: {
-    readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string }[];
+    readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string;
+      /** Whether a person or an agent (SPEC-ORQUESTADOR R1) wrote it. */
+      readonly author?: 'person' | 'agent' }[];
+    /** The run's help budget, if it had one. */
+    readonly help_budget?: number;
     readonly focus_changes: readonly unknown[];
     /** Handed to the assisted researcher after these rounds of the unknown-world researcher's. */
     readonly assisted_after_attempts?: number;
@@ -125,7 +129,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
   const requests: J[] = events.filter((e) => e.type === 'investigation').flatMap((e) => (Array.isArray(e.requests) ? e.requests : []));
   const assistance = assisted ? {
     messages: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).map((m: J) => ({ id: String(m.id), question: e.question, text: String(m.text ?? ''),
-      ...(m.by ? { by: String(m.by) } : {}), ...(m.at ? { at: String(m.at) } : {}) }))),
+      ...(m.by ? { by: String(m.by) } : {}), ...(m.at ? { at: String(m.at) } : {}), author: String(m.by ?? '').startsWith('agent:') ? 'agent' as const : 'person' as const }))),
+    ...(typeof journal.help_budget === 'number' ? { help_budget: journal.help_budget } : {}),
     focus_changes: events.filter((e) => e.type === 'focus_changed'),
     /* A run handed to the assisted researcher: after how many rounds (before them, the unknown-world researcher). */
     ...(typeof journal.assisted_after_attempts === 'number' ? { assisted_after_attempts: journal.assisted_after_attempts } : {}),

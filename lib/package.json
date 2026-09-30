@@ -12,6 +12,7 @@
     "./messages": "./src/worlds/messages/index.ts",
     "./tank": "./src/worlds/tank/index.ts",
     "./particles3d": "./src/worlds/particles3d/index.ts",
+    "./orchestra": "./src/orchestra/index.ts",
     "./lab": "./src/lab.ts",
     "./node": "./src/runtime/node-vm.ts",
     "./browser": "./src/browser.ts"

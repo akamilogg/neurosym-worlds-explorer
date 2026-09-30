@@ -1,0 +1,8 @@
+{
+  "id": "cells-levels",
+  "question": "Does the unknown-world researcher learn every level of cells (1 to 3), and is it replicable?",
+  "criterion": "(runs) => { const pure = runs.filter((r) => r.lab === 'cells' && r.researcher === 'unknown-world'); const ok = [1, 2, 3].every((l) => pure.filter((r) => r.level === l && r.accepted).length >= 2); return { met: ok, why: ok ? 'every level accepted in at least two runs' : 'some level has fewer than two accepted runs' }; }",
+  "budget": { "tokens": 3000000, "iterations": 6 },
+  "autonomy": "consultive",
+  "max_runs": 6
+}

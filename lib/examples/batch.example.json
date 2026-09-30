@@ -1,0 +1,13 @@
+{
+  "format": "batch@1",
+  "id": "cells-l3-tools",
+  "concurrency": 2,
+  "budget": { "tokens_per_run": 400000 },
+  "runs": [
+    { "id": "s1-tools", "lab": "cells", "condition": "instruments", "args": ["--seed", "1", "--level", "3"] },
+    { "id": "s2-tools", "lab": "cells", "condition": "instruments", "args": ["--seed", "2", "--level", "3"] },
+    { "id": "s1-none", "lab": "cells", "condition": "no instruments", "args": ["--seed", "1", "--level", "3", "--tools", "none"] },
+    { "id": "s2-none", "lab": "cells", "condition": "no instruments", "args": ["--seed", "2", "--level", "3", "--tools", "none"] },
+    { "id": "s1-coached", "lab": "cells", "condition": "assisted, with an agent", "researcher": "assisted", "args": ["--seed", "1", "--level", "3"], "agent": { "id": "coach", "max_orders": 4 } }
+  ]
+}

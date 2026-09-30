@@ -67,7 +67,9 @@ const CONTROLS: readonly { name: string; value: string; help: string }[] = [
   { name: 'max-minutes', value: 'N', help: 'stop before asking System 2 again once N minutes have passed (this process)' },
   { name: 'max-tokens', value: 'N', help: 'stop before asking System 2 again once its answers have used N tokens (the whole run)' },
   { name: 'resume', value: 'FILE', help: 'resume the run of that journal in a new one (<journal>.resumed-<time>.json, or --out): its answers are replayed, then it goes on live; the journal resumed is left as it is' },
-  { name: 'policy', value: 'P', help: 'the operator\'s policy on researchers: force=<researcher>, or allow=<researcher>,<researcher>' }
+  { name: 'policy', value: 'P', help: 'the operator\'s policy on researchers: force=<researcher>, or allow=<researcher>,<researcher>' },
+  { name: 'agents', value: 'LIST', help: 'the agents that may order this run, and what (SPEC-ORQUESTADOR R1): <id>=<kind>,<kind>;<id>=... (kinds: message, focus, source, stop); without it, no agent may' },
+  { name: 'help-budget', value: 'N', help: 'at most N help orders (message, focus, source) accepted in the run, from anyone' }
 ];
 const CONTROL_NAMES = new Set(['out', ...CONTROLS.map((c) => c.name)]);
 
@@ -84,7 +86,7 @@ export function experimentArgs(argv: readonly string[]): string[] {
 /** The run's budgets given now (a resumed run takes these, and the journal it resumes as --out). */
 export function budgetArgs(argv: readonly string[]): string[] {
   const out: string[] = [];
-  for (let i = 0; i < argv.length; i++) if (argv[i] === '--max-minutes' || argv[i] === '--max-tokens') out.push(argv[i], argv[++i] ?? '');
+  for (let i = 0; i < argv.length; i++) if (['--max-minutes', '--max-tokens', '--agents', '--help-budget'].includes(argv[i])) out.push(argv[i], argv[++i] ?? '');
   return out;
 }
 
@@ -325,6 +327,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   const p = given.indexOf('--policy');
   const policy: ResearcherPolicy | null = options.policy ?? (p >= 0 && given[p + 1] ? parsePolicy(given[p + 1]) : null);
   const researcher = chooseResearcher(askedText as Researcher, policy);
+  parseAgentPolicy(arg('agents', ''));
   const focus = arg('focus') || null;
   if (focus && (isGameLab(lab) || !lab.facets?.some((f) => f.id === focus)))
     throw new LabError('--focus: ' + focus + ' is not a facet of ' + lab.id + (!isGameLab(lab) && lab.facets ? ' (facets: ' + lab.facets.map((f) => f.id).join(', ') + ')' : ' (it has none)'));
@@ -446,6 +449,15 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
      by any researcher; message, focus and source are help, and the unknown-world researcher refuses them - the refusal is
      logged, so the journal says it was tried and that nothing reached System 2. */
   const files = runFiles(outFile);
+  /* Who may help and how much (SPEC-ORQUESTADOR R1): the agents allowed and their orders, and the run's help budget. A
+     person's orders are never refused for being a person's; an agent's are, outside its policy. */
+  const agentPolicy = parseAgentPolicy(arg('agents', ''));
+  const helpBudget = Number(arg('help-budget', '')) > 0 ? Number(arg('help-budget', '')) : null;
+  if (agentPolicy.size) journal.agents = Object.fromEntries([...agentPolicy].map(([id, kinds]) => [id, [...kinds]]));
+  if (helpBudget !== null) journal.help_budget = helpBudget;
+  const HELP = new Set(['message', 'focus', 'source']);
+  /* The help already accepted in the history it resumes counts too. */
+  let helpUsed = ((previous?.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'operator_command' && e.accepted && HELP.has(e.kind)).length;
   let state: 'running' | 'stopping' | 'ended' = 'running';
   let stoppedBy: string | null = null;
   let stopRequested = false;
@@ -469,6 +481,16 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       let order: { id?: string; kind?: string; by?: string } = {};
       try { order = JSON.parse(line); } catch { log('operator_command_refused', { reason: 'not an order (not JSON)' }); continue; }
       const who = { id: order.id ?? null, kind: order.kind ?? null, ...(order.by ? { by: order.by } : {}) };
+      const agent = typeof order.by === 'string' && order.by.startsWith('agent:') ? order.by.slice(6) : null;
+      if (agent !== null && !agentPolicy.get(agent)?.has(String(order.kind))) {
+        log('operator_command_refused', { ...who, reason: 'agent ' + agent + ' may not send ' + order.kind + ' to this run'
+          + (agentPolicy.size ? ' (agents: ' + [...agentPolicy].map(([id, k]) => id + '=' + [...k].join(',')).join('; ') + ')' : ' (no agent may: --agents)') });
+        continue;
+      }
+      if (researcher === 'assisted' && HELP.has(String(order.kind)) && helpBudget !== null && helpUsed >= helpBudget) {
+        log('operator_command_refused', { ...who, reason: 'the help budget of this run is spent (' + helpBudget + ')' });
+        continue;
+      }
       if (order.kind === 'stop') {
         stopRequested = true;
         state = 'stopping';
@@ -477,7 +499,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       } else if (researcher === 'assisted' && order.kind === 'message' && typeof (order as { text?: unknown }).text === 'string' && (order as { text: string }).text.trim()) {
         /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
         waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}), at: new Date().toISOString() });
-        log('operator_command', { ...who, accepted: true });
+        log('operator_command', { ...who, accepted: true }); helpUsed++;
       } else if (researcher === 'assisted' && order.kind === 'focus') {
         const facet = String((order as { facet?: unknown }).facet ?? '');
         const task = typeof (order as { task?: unknown }).task === 'string' ? (order as { task: string }).task : undefined;
@@ -487,7 +509,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
           /* Delivered with the next question, and applied then: what counts, and the prompt that says so. */
           waiting.push({ id: String(order.id ?? 'focus-' + consumed), text: 'The operator changes what counts: facet "' + facet + '"' + (task ? '. What they want understood: ' + task : '') + '. The interface says what counts now.',
             ...(order.by ? { by: order.by } : {}), at: new Date().toISOString(), focus: { facet, ...(task ? { task } : {}) } });
-          log('operator_command', { ...who, accepted: true });
+          log('operator_command', { ...who, accepted: true }); helpUsed++;
         }
       } else if (researcher === 'assisted' && order.kind === 'source') {
         const where = String((order as { source?: unknown }).source ?? '');
@@ -497,7 +519,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
           /* Delivered with the next question, and allowed from then on (sources_allowed). */
           waiting.push({ id: String(order.id ?? 'source-' + consumed), text: 'The operator allows you to read sources from ' + where + '.',
             ...(order.by ? { by: order.by } : {}), at: new Date().toISOString(), source: where });
-          log('operator_command', { ...who, accepted: true });
+          log('operator_command', { ...who, accepted: true }); helpUsed++;
         }
       } else if (order.kind === 'message' || order.kind === 'focus' || order.kind === 'source') {
         log('operator_command_refused', { ...who, reason: researcher === 'assisted' ? 'a message needs a text' : 'the ' + researcher + ' researcher learns only from what the world answers: it takes no ' + order.kind });
@@ -954,4 +976,17 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   });
   say('done: ' + (session.halted && !accepted ? 'stopped (' + session.halted + '); resume with --resume ' + outFile + '; ' : '') + (accepted ? 'accepted in round ' + accepted.round : satisfied ? 'stopped by --quick in round ' + satisfied.round : 'not accepted') + '; journal ' + outFile);
   return result;
+}
+
+/** An agents' policy: `<id>=<kind>,<kind>;<id>=...`, as the agents and the orders each may send. */
+export function parseAgentPolicy(text: string): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const part of text.split(';').map((p) => p.trim()).filter(Boolean)) {
+    const [id, kinds] = part.split('=');
+    if (!id || !kinds) throw new LabError('--agents: "' + part + '" is not <id>=<kind>,<kind>');
+    const set = new Set(kinds.split(',').map((k) => k.trim()).filter(Boolean));
+    for (const k of set) if (!['message', 'focus', 'source', 'stop'].includes(k)) throw new LabError('--agents: unknown order ' + k + ' (message, focus, source, stop)');
+    out.set(id.trim().replace(/^agent:/, ''), set);
+  }
+  return out;
 }

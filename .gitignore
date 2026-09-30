@@ -18,5 +18,7 @@ lib/run-cells.sh
 lib/run-cells.ps1
 lib/run-particles3d.sh
 lib/run-particles3d.ps1
+lib/lab.ps1
+lib/lab.sh
 lib/run-messages.sh
 lib/run-messages.ps1

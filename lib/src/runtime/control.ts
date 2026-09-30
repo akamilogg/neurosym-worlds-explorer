@@ -145,7 +145,7 @@ export function resumeRun(journal: string, options: { args?: readonly string[]; 
 }
 
 /** The laboratories' names on the command line, by the id their journals carry. */
-const LAB_IDS: Readonly<Record<string, string>> = { cells: 'cells@1', messages: 'messages@1', orbit: 'orbit@1', grid: 'unknown-world@1', tank: 'tank@1' };
+const LAB_IDS: Readonly<Record<string, string>> = { cells: 'cells@1', messages: 'messages@1', orbit: 'orbit@1', grid: 'unknown-world@1', tank: 'tank@1', particles3d: 'particles3d@1' };
 
 function launch(journal: string, args: readonly string[], env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
   fs.mkdirSync(path.dirname(journal), { recursive: true });

@@ -248,6 +248,19 @@ node --experimental-strip-types scripts/particles3d-view.ts runs/<journal>.json 
 A run that used up its rounds can be given more: `--resume <journal> --attempts N` replays its history as it was,
 including the reflection and the grading it ended with, and then goes on (SPEC-MUNDO-3D §10.7).
 
+The orchestra (SPEC-ORQUESTADOR): an **agent operator** that follows an assisted run and helps it out of a dead end, the
+way a person would; **batches** of runs compared by condition from what their researchers found; and a **project
+planner** that pursues a question in a loop - hypotheses with predictions, a batch, a synthesis - until a computable
+criterion is met or its budget is spent, with the operator approving its plans (or not, as its autonomy says). None of
+them sees more than the researchers they help. From `lib/`, with the keys in `lab.ps1` (a copy of `lab.example.ps1`):
+
+```bash
+.\lab.ps1 batch examples\batch.example.json
+.\lab.ps1 project start examples\project.example.json
+.\lab.ps1 project status cells-levels
+.\lab.ps1 project approve cells-levels
+```
+
 Runs are also controlled from the command line, the same for every laboratory and researcher: start one in a process of
 its own, list them, follow one, stop it, resume it, read its finding (SPEC-INVESTIGADOR-ASISTIDO):
 

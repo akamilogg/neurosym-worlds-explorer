@@ -46,6 +46,14 @@ export const CLI_USAGE = [
   'lab resume <run> [--max-tokens N] [--max-minutes N]       resume it as a run derived from it',
   'lab finding <run> [--view researcher]                     its finding (the operator\'s view by default)',
   '',
+  'The orchestra (SPEC-ORQUESTADOR):',
+  'lab agent <run> [--id coach] [--max-orders N]             an agent operator follows the run (it needs --agents coach=message on the run)',
+  'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
+  'lab project start <goal.json>                             a project of the planner, in a process of its own',
+  'lab project list | status <id>                            the projects; one\'s state and report',
+  'lab project approve <id> [note] | reject <id> <note>      decide what it waits for (a criterion, a plan)',
+  'lab project stop <id> | resume <id>                       stop it; resume it (its decisions are taken up where they were)',
+  '',
   '<run>: a journal\'s path, its name in runs/, a prefix of it, or `last`. Keys come from the environment only.'
 ].join('\n');
 
@@ -208,6 +216,77 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         out('(' + view + ' view, ' + f.researcher + ' researcher)');
         out(findingText(f));
         return 0;
+      }
+      case 'agent': {
+        const journal = resolveRun(ctx.root, args.shift());
+        const id = take(args, 'id') ?? 'coach', max = take(args, 'max-orders');
+        const env = ctx.env ?? process.env;
+        const { chatFromEnv } = await import('../orchestra/launch.ts');
+        const { runAgentOperator } = await import('../orchestra/agent-operator.ts');
+        out('agent:' + id + ' follows ' + path.basename(journal, '.json') + ' (the run must allow it: --agents ' + id + '=message)');
+        const r = await runAgentOperator({ id, journal, llm: chatFromEnv(env, 'AGENT_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
+        out('the run ended; the agent\'s decisions: ' + r.file);
+        return 0;
+      }
+      case 'batch': {
+        const file = args[0];
+        if (!file) { out('lab batch <batch.json>'); return 2; }
+        const env = ctx.env ?? process.env;
+        const { runBatch, batchText } = await import('../orchestra/batch.ts');
+        const { chatFromEnv, labEndpointsFromEnv } = await import('../orchestra/launch.ts');
+        const def = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const report = await runBatch(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'AGENT_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
+        out(batchText(report));
+        out('report: ' + path.join(report.dir, 'batch.json'));
+        return 0;
+      }
+      case 'project': {
+        const sub = args.shift();
+        const { listProjects, projectStatus, projectText, sendProject } = await import('../orchestra/project.ts');
+        const { readProjectFile, startProject } = await import('../orchestra/launch.ts');
+        if (sub === 'start') {
+          if (!args[0]) { out('lab project start <goal.json>'); return 2; }
+          const goal = readProjectFile(args[0]);
+          const r = startProject(ctx.root, goal, goal.id, ctx.env);
+          out('project ' + goal.id + ' started (pid ' + r.pid + '): ' + r.dir);
+          out('follow it: lab project status ' + goal.id);
+          return 0;
+        }
+        if (sub === 'list') {
+          const ids = listProjects(ctx.root);
+          if (!ids.length) out('no projects yet');
+          for (const id of ids) { const s = projectStatus(ctx.root, id); out(id + ': ' + (s.record?.ended ? 'ended (' + s.record.ended.why + ')' : String(s.status?.state ?? '?') + (s.alive ? '' : ' (not running)')) + (s.status?.waiting_for ? ' - waiting for ' + s.status.waiting_for : '')); }
+          return 0;
+        }
+        const id = args.shift();
+        if (!id) { out('lab project ' + (sub ?? '<command>') + ' <id>'); return 2; }
+        if (sub === 'status') {
+          const s = projectStatus(ctx.root, id);
+          if (!s.record) { out('no project ' + id); return 1; }
+          out(id + ': ' + (s.record.ended ? 'ended' : String(s.status?.state ?? '?') + (s.alive ? '' : ' (not running: lab project resume ' + id + ')')) + (s.status?.waiting_for ? ' - WAITING for you to approve ' + s.status.waiting_for : ''));
+          const it = s.record.iterations.at(-1);
+          if (s.status?.waiting_for && it?.plan) out('the plan: ' + JSON.stringify(it.plan, null, 2));
+          if (s.status?.waiting_for && s.record.criterion && !s.record.criterion.approved) out('the criterion: ' + s.record.criterion.source);
+          out(projectText(s.record));
+          return 0;
+        }
+        if (sub === 'approve' || sub === 'reject' || sub === 'stop') {
+          const note = args.join(' ');
+          if (sub === 'reject' && !note) { out('lab project reject <id> <note: what to change>'); return 2; }
+          sendProject(ctx.root, id, sub === 'stop' ? { kind: 'stop', by: 'operator' } : sub === 'approve' ? { kind: 'approve', ...(note ? { note } : {}), by: 'operator' } : { kind: 'reject', note, by: 'operator' });
+          out(sub + ' sent to project ' + id);
+          return 0;
+        }
+        if (sub === 'resume') {
+          const s = projectStatus(ctx.root, id);
+          if (s.alive) { out('project ' + id + ' is still going'); return 1; }
+          if (s.record?.ended) { out('project ' + id + ' ended: ' + s.record.ended.why); return 1; }
+          const r = startProject(ctx.root, null, id, ctx.env);
+          out('project ' + id + ' resumed (pid ' + r.pid + ')');
+          return 0;
+        }
+        out('lab project start|list|status|approve|reject|stop|resume');
+        return 2;
       }
       case undefined: case 'help': case '--help': case '-h':
         out(CLI_USAGE);
