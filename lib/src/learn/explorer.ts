@@ -173,6 +173,13 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
   const warnings: string[] = [];
   const notes = o ? parseNotes(o.notes, warnings, context.archive === true) : [];
   const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
+  /* A request of the researcher's own instrument written alone, outside "investigate" (a small model does): it is plainly
+     a request, never a proposal, so it is run as one - and said so. Only where the researcher has such an instrument. */
+  if (o && !Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output && context.extraRequest?.(o)) {
+    const { notes: _n, methods: _m, ...request } = o;
+    return { kind: 'investigate', requests: [{ extra: request }], notes, methods,
+      warnings: [...warnings, 'a request goes inside "investigate": [ ... ] - this one was run as if it were'] };
+  }
   if (o && Array.isArray(o.investigate) && !o.observations && !o.rules) {
     const requests: ExplorerRequest[] = [];
     for (const [i, r] of o.investigate.slice(0, context.maxRequests ?? 8).entries()) {

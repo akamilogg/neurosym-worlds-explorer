@@ -81,6 +81,12 @@ test('a memory request and an archive are understood only where the researcher h
   assert.deepEqual((withMemory as { requests: unknown[] }).requests, [{ extra: { memory: 'list', of: 'notes' } }]);
   assert.deepEqual(withMemory.notes, [{ do: 'archive', id: 'n1' }]);
   assert.ok(!explorerSystem().includes('YOUR MEMORY'));
+  /* Written alone, outside "investigate" (as Qwen did): run as a request, and said so; for the pure researcher, a proposal. */
+  const bare = JSON.stringify({ memory: 'open', items: ['note:n1'] });
+  const ran = parseExplorerTurn(bare, { ...ctx, extraRequest: JournalMemory.accepts, archive: true }) as { kind: string; requests: unknown[]; warnings: string[] };
+  assert.deepEqual([ran.kind, ran.requests], ['investigate', [{ extra: { memory: 'open', items: ['note:n1'] } }]]);
+  assert.match(ran.warnings[0], /inside "investigate"/);
+  assert.equal(parseExplorerTurn(bare, ctx).kind, 'proposal');
 });
 
 /* --- A whole assisted grid run with a selective memory, System 2 standing in: in its first round it recalls from memory

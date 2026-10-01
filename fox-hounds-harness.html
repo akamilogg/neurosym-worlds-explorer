@@ -3870,6 +3870,16 @@ var Neurosym = (() => {
     const warnings = [];
     const notes = o ? parseNotes(o.notes, warnings, context.archive === true) : [];
     const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
+    if (o && !Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output && context.extraRequest?.(o)) {
+      const { notes: _n, methods: _m, ...request } = o;
+      return {
+        kind: "investigate",
+        requests: [{ extra: request }],
+        notes,
+        methods,
+        warnings: [...warnings, 'a request goes inside "investigate": [ ... ] - this one was run as if it were']
+      };
+    }
     if (o && Array.isArray(o.investigate) && !o.observations && !o.rules) {
       const requests = [];
       for (const [i, r] of o.investigate.slice(0, context.maxRequests ?? 8).entries()) {
