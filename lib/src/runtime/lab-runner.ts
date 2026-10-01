@@ -133,7 +133,16 @@ export class LabError extends Error {
 }
 
 /** Where a model is served: an OpenAI-compatible chat URL (System 2) or the Judge's URL, and the key and model to use. */
-export interface LabConnection { readonly url?: string; readonly key?: string; readonly model?: string }
+export interface LabConnection {
+  readonly url?: string; readonly key?: string; readonly model?: string;
+  /** System 2 only, for models that need it (a slow local one, a reasoning one): how long to wait for an answer (default
+      180 s), whether to ask for JSON mode (default yes; some servers mishandle it with reasoning models), and max_tokens
+      (default: the endpoint's). Unset, the request is the same as ever. */
+  readonly timeoutMs?: number; readonly jsonMode?: boolean; readonly maxTokens?: number;
+  /** Its temperature (default 0.4), and fields the endpoint takes besides the standard ones (e.g. vLLM's
+      chat_template_kwargs: {"reasoning_effort": "medium"}). Both are recorded in the journal's config. */
+  readonly temperature?: number; readonly extraBody?: Readonly<Record<string, unknown>>;
+}
 
 export interface LabRunOptions {
   /** The experiment's arguments, as on the command line (e.g. ['--seed', '1', '--level', '3']); the run controls too. */
@@ -217,7 +226,7 @@ export async function runLab(lab: AnyLab, given: readonly string[], context: { r
   try {
     const result = await runLaboratory(lab, {
       args: given, root: context.root, signal: controller.signal, print: (line) => console.log(line), onJournal: (file) => { journal = file; },
-      llm: { url: env.LLM_URL, key: env.LLM_KEY, model: env.LLM_MODEL },
+      llm: { url: env.LLM_URL, key: env.LLM_KEY, model: env.LLM_MODEL, ...llmTuning(env) },
       judge: { url: env.JEV_URL || JEV_DEFAULT_URL, key: env.JEV_KEY, model: env.JEV_MODEL }
     });
     if (result.stoppedBy === 'diverged') process.exitCode = 3;
@@ -418,7 +427,9 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
     : { url: options.judge?.url || JEV_DEFAULT_URL, apiKey: options.judge?.key, model: options.judge?.model, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev', network) });
   const llmUse = { calls: 0, tokens: 0 };
-  const llm = openAiChatClient({ url: options.llm.url!, apiKey: options.llm.key, model: options.llm.model!, jsonMode: true, temperature: 0.4, timeoutMs: 180000, retries: 1, fetch: replay.wrap('llm', network),
+  const llm = openAiChatClient({ url: options.llm.url!, apiKey: options.llm.key, model: options.llm.model!, jsonMode: options.llm.jsonMode ?? true, temperature: options.llm.temperature ?? 0.4,
+    timeoutMs: options.llm.timeoutMs ?? 180000, retries: 1, ...(options.llm.maxTokens ? { maxTokens: options.llm.maxTokens } : {}),
+    ...(options.llm.extraBody ? { extraBody: options.llm.extraBody } : {}), fetch: replay.wrap('llm', network),
     onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
 
   const commit = commitOf(options.root);
@@ -429,7 +440,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
     argv: experimentArgs(argv),
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
-    config: { ...cfg, ...o.config, llm_model: options.llm.model, jev_model: cfg.flat ? null : options.judge?.model ?? null },
+    config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmTuningRecord(options.llm), jev_model: cfg.flat ? null : options.judge?.model ?? null },
     /* Filled by the laboratory: what the learner is never told. */
     hidden_from_the_learner: {},
     events: [] as unknown[]
@@ -989,4 +1000,30 @@ export function parseAgentPolicy(text: string): Map<string, Set<string>> {
     out.set(id.trim().replace(/^agent:/, ''), set);
   }
   return out;
+}
+
+/** System 2's tuning from the environment, for models that need it: LLM_TIMEOUT_MS, LLM_JSON_MODE (0 or false: off),
+    LLM_MAX_TOKENS, LLM_TEMPERATURE, LLM_EXTRA_BODY (a JSON object added to the request's body, e.g.
+    {"chat_template_kwargs": {"reasoning_effort": "medium"}, "top_p": 0.95, "top_k": 20}). None set: nothing changes. */
+export function llmTuning(env: NodeJS.ProcessEnv): Pick<LabConnection, 'timeoutMs' | 'jsonMode' | 'maxTokens' | 'temperature' | 'extraBody'> {
+  const n = (v: string | undefined) => (v && Number(v) > 0 ? Number(v) : undefined);
+  const timeoutMs = n(env.LLM_TIMEOUT_MS), maxTokens = n(env.LLM_MAX_TOKENS);
+  const json = env.LLM_JSON_MODE;
+  const t = env.LLM_TEMPERATURE;
+  const temperature = t !== undefined && t !== '' && Number.isFinite(Number(t)) && Number(t) >= 0 ? Number(t) : undefined;
+  if (t !== undefined && t !== '' && temperature === undefined) throw new LabError('LLM_TEMPERATURE must be a number from 0');
+  let extraBody: Record<string, unknown> | undefined;
+  if (env.LLM_EXTRA_BODY) {
+    try { extraBody = JSON.parse(env.LLM_EXTRA_BODY); } catch (e) { throw new LabError('LLM_EXTRA_BODY is not JSON: ' + String((e as Error).message ?? e)); }
+    if (!extraBody || typeof extraBody !== 'object' || Array.isArray(extraBody)) throw new LabError('LLM_EXTRA_BODY must be a JSON object');
+  }
+  return { ...(timeoutMs ? { timeoutMs } : {}), ...(maxTokens ? { maxTokens } : {}), ...(json !== undefined && json !== '' ? { jsonMode: !/^(0|false|no|off)$/i.test(json) } : {}),
+    ...(temperature !== undefined ? { temperature } : {}), ...(extraBody ? { extraBody } : {}) };
+}
+
+/** What the journal keeps of System 2's tuning (the model's behaviour depends on it): only what was set. */
+function llmTuningRecord(c: LabConnection): Record<string, unknown> {
+  const t = { ...(c.temperature !== undefined ? { temperature: c.temperature } : {}), ...(c.extraBody ? { extra_body: c.extraBody } : {}),
+    ...(c.jsonMode !== undefined ? { json_mode: c.jsonMode } : {}), ...(c.maxTokens ? { max_tokens: c.maxTokens } : {}), ...(c.timeoutMs ? { timeout_ms: c.timeoutMs } : {}) };
+  return Object.keys(t).length ? { llm_tuning: t } : {};
 }

@@ -1,0 +1,13 @@
+{
+  "format": "batch@1",
+  "id": "p3d-l1c-agent",
+  "concurrency": 2,
+  "budget": { "tokens_per_run": 1500000 },
+  "runs": [
+    { "id": "pure-s1", "lab": "particles3d", "condition": "unknown-world", "args": ["--seed", "1", "--level", "1", "--condition", "C", "--attempts", "12"] },
+    { "id": "pure-s2", "lab": "particles3d", "condition": "unknown-world", "args": ["--seed", "2", "--level", "1", "--condition", "C", "--attempts", "12"] },
+    { "id": "coached-s1", "lab": "particles3d", "condition": "assisted + agent coach", "researcher": "assisted", "args": ["--seed", "1", "--level", "1", "--condition", "C", "--attempts", "12"], "agent": { "id": "coach", "max_orders": 4 } },
+    { "id": "coached-s2", "lab": "particles3d", "condition": "assisted + agent coach", "researcher": "assisted", "args": ["--seed", "2", "--level", "1", "--condition", "C", "--attempts", "12"], "agent": { "id": "coach", "max_orders": 4 } },
+    { "id": "assisted-s1", "lab": "particles3d", "condition": "assisted, no help", "researcher": "assisted", "args": ["--seed", "1", "--level", "1", "--condition", "C", "--attempts", "12"] }
+  ]
+}

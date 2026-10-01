@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { JEV_DEFAULT_URL } from '../core/jev.ts';
 import { openAiChatClient, type ChatClient } from '../learn/system2.ts';
 import { ReplayLog } from '../runtime/replay.ts';
-import { LabError, type LabRunOptions } from '../runtime/lab-runner.ts';
+import { LabError, llmTuning, type LabRunOptions } from '../runtime/lab-runner.ts';
 import { projectFiles, type Autonomy, type ProjectGoal } from './project.ts';
 
 /* ============================================================================
@@ -39,7 +39,7 @@ export function endpointsFromEnv(env: NodeJS.ProcessEnv, role: 'LLM' | 'PLANNER_
 
 /** The researchers' System 2 and the Judge, as runLaboratory takes them. */
 export function labEndpointsFromEnv(env: NodeJS.ProcessEnv): { llm: LabRunOptions['llm']; judge: LabRunOptions['judge'] } {
-  return { llm: { url: env.LLM_URL, key: env.LLM_KEY, model: env.LLM_MODEL }, judge: { url: env.JEV_URL || JEV_DEFAULT_URL, key: env.JEV_KEY, model: env.JEV_MODEL } };
+  return { llm: { url: env.LLM_URL, key: env.LLM_KEY, model: env.LLM_MODEL, ...llmTuning(env) }, judge: { url: env.JEV_URL || JEV_DEFAULT_URL, key: env.JEV_KEY, model: env.JEV_MODEL } };
 }
 
 /** An agent's or the planner's client, through a replay log when one is given. */

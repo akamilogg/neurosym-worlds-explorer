@@ -1362,6 +1362,15 @@ var Neurosym = (() => {
       return JSON.parse(text);
     } catch {
     }
+    const answer = text.replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, "").replace(/<(think|thinking|reasoning)>[\s\S]*$/i, "").replace(/```(?:json)?/gi, "");
+    if (answer !== text) {
+      if (!answer.trim()) return null;
+      try {
+        return JSON.parse(answer.trim());
+      } catch {
+      }
+      text = answer;
+    }
     for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
       const end = balancedEnd(text, start);
       if (end < 0) continue;
@@ -2850,6 +2859,10 @@ var Neurosym = (() => {
       ]
     };
     if (options.jsonMode) body.response_format = { type: "json_object" };
+    if (options.maxTokens) body.max_tokens = options.maxTokens;
+    if (options.extraBody) {
+      for (const [k, v] of Object.entries(options.extraBody)) if (k !== "model" && k !== "messages") body[k] = v;
+    }
     return body;
   }
   function openAiChatClient(options) {

@@ -55,3 +55,48 @@ test('a network-level failure is retried only when the host asks (a browser CORS
   assert.deepEqual(r.data, { fine: true });
   assert.equal(r.attempts, 2);
 });
+
+test('a reasoning model\'s answer: its thinking is not its answer, even when it drafts JSON there', async () => {
+  const { parseJsonLoose } = await import('../src/core/net.ts');
+  assert.deepEqual(parseJsonLoose('<think>maybe {"investigate": []}</think>\n{"rationale": "final"}'), { rationale: 'final' });
+  assert.deepEqual(parseJsonLoose('<thinking>x</thinking>```json\n{"a": 1}\n```'), { a: 1 });
+  assert.equal(parseJsonLoose('<think>cut short {"a": 1}'), null, 'an answer cut while thinking is no answer');
+  assert.deepEqual(parseJsonLoose('x^{-2} then {"b": 2}'), { b: 2 }, 'unchanged without thinking');
+});
+
+test('System 2\'s tuning from the environment: nothing set, nothing changes', async () => {
+  const { llmTuning } = await import('../src/runtime/lab-runner.ts');
+  const { chatRequestBody } = await import('../src/learn/system2.ts');
+  assert.deepEqual(llmTuning({}), {});
+  assert.deepEqual(llmTuning({ LLM_TIMEOUT_MS: '600000', LLM_JSON_MODE: 'off', LLM_MAX_TOKENS: '16000' }), { timeoutMs: 600000, maxTokens: 16000, jsonMode: false });
+  assert.equal('max_tokens' in chatRequestBody({ model: 'm', jsonMode: true }, 's', {}), false);
+  assert.equal(chatRequestBody({ model: 'm', maxTokens: 9000 }, 's', {}).max_tokens, 9000);
+  const tuned = llmTuning({ LLM_TEMPERATURE: '1', LLM_EXTRA_BODY: '{"chat_template_kwargs": {"reasoning_effort": "medium"}, "top_p": 0.95, "model": "not this"}' });
+  assert.deepEqual([tuned.temperature, tuned.extraBody], [1, { chat_template_kwargs: { reasoning_effort: 'medium' }, top_p: 0.95, model: 'not this' }]);
+  const body = chatRequestBody({ model: 'm', temperature: tuned.temperature, extraBody: tuned.extraBody }, 's', {});
+  assert.deepEqual([body.model, body.temperature, body.top_p, body.chat_template_kwargs], ['m', 1, 0.95, { reasoning_effort: 'medium' }], 'added, never the model nor the messages');
+  assert.equal(llmTuning({ LLM_TEMPERATURE: '0' }).temperature, 0);
+  assert.throws(() => llmTuning({ LLM_EXTRA_BODY: '{not json' }), /not JSON/);
+  assert.throws(() => llmTuning({ LLM_EXTRA_BODY: '[1]' }), /JSON object/);
+});
+
+test('System 2\'s tuning is recorded in the journal; without it, the journal is as ever', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const { runLaboratory } = await import('../src/runtime/lab-runner.ts');
+  const { cellsLab } = await import('../src/worlds/cells/lab.ts');
+  const bodies: Record<string, unknown>[] = [];
+  const fetch = async (_u: string, init: { body?: string }) => {
+    bodies.push(JSON.parse(String(init.body)));
+    const content = { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false, beliefs: [], lessons: ['l'] };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 10 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tuning-'));
+  const args = ['--seed', '1', '--attempts', '1', '--flat', '--no-grade', '--no-reflection', '--tools', 'none'];
+  const plain = await runLaboratory(cellsLab, { args: [...args, '--out', path.join(dir, 'a.json')], root: dir, llm: { url: 'http://x.test/chat', model: 'm' }, fetch: fetch as never });
+  assert.equal(JSON.parse(fs.readFileSync(plain.journal, 'utf8')).config.llm_tuning, undefined);
+  const tuned = await runLaboratory(cellsLab, { args: [...args, '--out', path.join(dir, 'b.json')], root: dir, fetch: fetch as never,
+    llm: { url: 'http://x.test/chat', model: 'm', temperature: 1, extraBody: { chat_template_kwargs: { reasoning_effort: 'medium' } } } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(tuned.journal, 'utf8')).config.llm_tuning, { temperature: 1, extra_body: { chat_template_kwargs: { reasoning_effort: 'medium' } } });
+  assert.deepEqual((bodies.at(-1) as { chat_template_kwargs: unknown }).chat_template_kwargs, { reasoning_effort: 'medium' });
+});

@@ -32,6 +32,11 @@ export interface ChatClientOptions {
   readonly temperature?: number;
   /** Ask for response_format json_object. */
   readonly jsonMode?: boolean;
+  /** max_tokens of an answer (unset: the endpoint's default). */
+  readonly maxTokens?: number;
+  /** Fields the endpoint takes besides the standard ones (e.g. vLLM's chat_template_kwargs, top_p, top_k): added to the
+      body; they never replace the model or the messages. */
+  readonly extraBody?: Readonly<Record<string, unknown>>;
   readonly timeoutMs?: number;
   readonly retries?: number;
   readonly fetch?: FetchLike;
@@ -44,7 +49,7 @@ export interface ChatClientOptions {
 const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 /** The request body exactly as the harness sends it. */
-export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temperature' | 'jsonMode'>, system: string, user: unknown): Record<string, unknown> {
+export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temperature' | 'jsonMode' | 'maxTokens' | 'extraBody'>, system: string, user: unknown): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: options.model,
     temperature: clamp(options.temperature ?? 0.3, 0, 2),
@@ -54,6 +59,8 @@ export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temp
     ]
   };
   if (options.jsonMode) body.response_format = { type: 'json_object' };
+  if (options.maxTokens) body.max_tokens = options.maxTokens;
+  if (options.extraBody) for (const [k, v] of Object.entries(options.extraBody)) if (k !== 'model' && k !== 'messages') body[k] = v;
   return body;
 }
 

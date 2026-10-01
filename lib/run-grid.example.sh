@@ -14,6 +14,12 @@ export JEV_KEY="PUT-YOUR-JEV-KEY"
 export LLM_URL="PUT-YOUR-OPENAI-COMPATIBLE-URL/chat/completions"
 export LLM_KEY="PUT-YOUR-LLM-KEY"
 export LLM_MODEL="PUT-YOUR-MODEL"   # e.g. the model you used in the last harness run
+# Optional, for models that need it (a slow local one, a reasoning one); unset, nothing changes:
+# export LLM_TIMEOUT_MS=600000      # how long to wait for an answer (default 180000)
+# export LLM_JSON_MODE=off          # do not ask for response_format json_object
+# export LLM_MAX_TOKENS=16000       # max_tokens of an answer (default: the endpoint's)
+# export LLM_TEMPERATURE=1.0        # default 0.4; a reasoning model may recommend its own (Qwen3.8: 1.0)
+# export LLM_EXTRA_BODY='{"chat_template_kwargs": {"reasoning_effort": "medium"}, "top_p": 0.95, "top_k": 20}'
 
 # ------------------------------------------------------------------------------------
 for v in JEV_KEY LLM_KEY LLM_MODEL; do

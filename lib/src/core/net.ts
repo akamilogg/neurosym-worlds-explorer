@@ -60,6 +60,14 @@ function readRetryAfter(headers?: { get(name: string): string | null }): number 
 export function parseJsonLoose(text: string): unknown {
   if (typeof text !== 'string' || !text.trim()) return null;
   try { return JSON.parse(text); } catch { /* fall through */ }
+  /* A reasoning model's thinking (<think>...</think>, <thinking>...</thinking>) is not its answer, even when it drafts JSON
+     there: it is left out; an unclosed one (the answer was cut) leaves nothing. A code fence around the answer too. */
+  const answer = text.replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, '').replace(/<(think|thinking|reasoning)>[\s\S]*$/i, '').replace(/```(?:json)?/gi, '');
+  if (answer !== text) {
+    if (!answer.trim()) return null;
+    try { return JSON.parse(answer.trim()); } catch { /* fall through */ }
+    text = answer;
+  }
   /* The first balanced {...} that parses: prose before the object may hold braces of its own (e.g. LaTeX "x^{-2}"). */
   for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
     const end = balancedEnd(text, start);

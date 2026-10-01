@@ -22,3 +22,10 @@ lib/lab.ps1
 lib/lab.sh
 lib/run-messages.sh
 lib/run-messages.ps1
+
+# Any launcher in lib/ may hold keys: only the templates (and eval-runs.ps1, which holds none) are versioned.
+lib/*.ps1
+lib/*.sh
+!lib/*.example.ps1
+!lib/*.example.sh
+!lib/eval-runs.ps1

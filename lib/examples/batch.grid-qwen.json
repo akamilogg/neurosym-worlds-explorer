@@ -1,0 +1,11 @@
+{
+  "format": "batch@1",
+  "id": "grid-qwen",
+  "concurrency": 3,
+  "budget": { "tokens_per_run": 1500000 },
+  "runs": [
+    { "id": "s22-b", "lab": "grid", "condition": "seed 22", "args": ["--seed", "22", "--family", "3", "--max-minutes", "360"] },
+    { "id": "s22-c", "lab": "grid", "condition": "seed 22", "args": ["--seed", "22", "--family", "3", "--max-minutes", "360"] },
+    { "id": "s26-a", "lab": "grid", "condition": "seed 26", "args": ["--seed", "26", "--family", "3", "--max-minutes", "360"] }
+  ]
+}

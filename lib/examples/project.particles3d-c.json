@@ -1,0 +1,8 @@
+{
+  "id": "p3d-l1c-branches",
+  "question": "In the laboratory particles3d with --level 1 --condition C, does the unknown-world researcher learn the dynamics? When a run gets stuck (it used up its rounds without its model holding), does a branch that continues its history, handed to the assisted researcher and pointed at an idea the researcher itself wrote but never tested, get it out? Use seeds 1 and 2, --attempts 10; branches with at most 8 more rounds.",
+  "criterion": "(runs) => { const accepted = runs.filter((r) => r.lab === 'particles3d' && r.accepted); return { met: accepted.length >= 2, why: accepted.length + ' particles3d run(s) accepted: ' + accepted.map((r) => r.id + ' (' + r.researcher + ')').join(', ') }; }",
+  "budget": { "tokens": 8000000, "iterations": 4 },
+  "autonomy": "consultive",
+  "max_runs": 4
+}
