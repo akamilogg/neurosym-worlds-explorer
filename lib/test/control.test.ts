@@ -19,14 +19,15 @@ import type { FetchLike } from '../src/core/net.ts';
 
 test('the unknown-world researcher is frozen: what System 2 is told in every world, byte for byte', () => {
   const h = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 16);
-  /* The system prompt without and with the paired regression, and the percept, per world (the grid: its explorer's). */
+  /* The system prompt without and with the paired regression, and the percept, per world (the grid: its explorer's).
+     Changed on purpose on 2026-10-01: the method's balance between the theory and small steps (prompt.ts, PRACTICE). */
   const FROZEN: Record<string, readonly string[]> = {
-    cells: ['784da62b276314c5', 'd4e4158be39284b2', '050b7ce0a173f715'],
-    messages: ['862ec75da0073ef9', '2db815f4e4ef01a1', 'e7b3118baeb95c62'],
-    orbit: ['b9fcdc914383feac', '0a1d03f828800311', 'fa67491c1a09af17'],
-    tank: ['39c541ec15e04674', '31707f80df38a21e', '8a934b83bc5bb3a5'],
-    particles3d: ['9dc3775a8112ee0e', '35839eeb3ab04286', 'c82859a959caa037'],
-    grid: ['23e7fb5bdaf9bc6e']
+    cells: ['8f7ce16cb2dfbc4b', 'f2ae392d0d8e8fe6', '050b7ce0a173f715'],
+    messages: ['54ac811825821ab9', '3f9efbe0dfa861eb', 'e7b3118baeb95c62'],
+    orbit: ['6e1a22dc7ff4548b', 'd475bff87625f1e4', 'fa67491c1a09af17'],
+    tank: ['6e57bc3fbf532dc4', 'fe4a3b6b563a77ad', '8a934b83bc5bb3a5'],
+    particles3d: ['3b79065030207bd4', '235b91ac9cd1e464', 'c82859a959caa037'],
+    grid: ['0d055c8218868a9a']
   };
   for (const [name, lab] of Object.entries(LABS)) {
     if (isGameLab(lab)) { assert.deepEqual([h(explorerSystem())], FROZEN[name], name); continue; }

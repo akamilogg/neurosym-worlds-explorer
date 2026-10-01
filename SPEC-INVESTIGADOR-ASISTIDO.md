@@ -29,6 +29,15 @@ investigador completo**, y los dos conviven.
 - **P1. El investigador de mundo desconocido queda congelado.**
   - Su prompt, su sesión, sus instrumentos y lo que recibe System 2 no cambian con nada de este documento.
   - Un test lo fija byte a byte, por mundo.
+  - Congelado frente a este documento, no para siempre. Un cambio del método común se hace a propósito, para los dos
+    investigadores a la vez, y renueva los hashes. Los runs anteriores siguen siendo de su versión, que el journal
+    identifica por el commit.
+  - Cambios deliberados:
+    - 01/10/2026: en PRACTICE, el equilibrio entre la teoría (visión estratégica, hipótesis generales) y pasos pequeños
+      (pocas afirmaciones por ronda, el modelo como experimento, proponer sin miedo a equivocarse, no repetir lo que ya
+      se tiene).
+      - Motivo: Qwen3.8-27B sin razonamiento se pasaba del presupuesto de investigación, repetía peticiones y no
+        proponía.
 - **P2. Dos implementaciones completas, no un interruptor dentro de una.**
   - El asistido tiene su propio paquete (`lib/src/learn/assisted/`): su sesión, su prompt y sus instrumentos.
   - Un cambio en el asistido no puede alterar lo que ve el puro.
