@@ -398,9 +398,24 @@ g32@8). Mitigaciones:
   - episodios de las dos últimas rondas;
   - una línea por modelo y el último entero;
   - la última reflexión.
-- De la investigación de la ronda viajan enteros los dos últimos pasos; los anteriores sólo por su nombre.
+- La investigación de la ronda en curso viaja entera, como en el puro. Una primera versión la recortaba (sólo los dos
+  últimos pasos enteros). En el run con Qwen eso le ocultó lo que acababa de ver: volvió a pedir las mismas partidas sin
+  pasos y abrió su memoria para recuperarlas, y la ronda 1 acabó sin propuesta. Las investigaciones de rondas
+  anteriores, que el puro tampoco arrastra, sí quedan en la memoria.
 - Notas: `{"do": "archive", "id"}` deja de mostrar una nota cada ronda; volver a escribirla la recupera.
-- Una respuesta con sólo peticiones de memoria no gasta `steps_left` (hasta 4 por ronda).
+- Una respuesta con sólo peticiones de memoria no gasta `steps_left`; `memory_answers_left` dice cuántas le quedan en la
+  ronda (4).
+  - Sin pasos, una respuesta que mezcla memoria y mundo responde sólo la memoria y se lo avisa, en vez de rechazarla
+    entera.
+  - Una petición de memoria escrita fuera de `investigate` se ejecuta como tal, con aviso.
+  - Las dos medidas evitan que tres rechazos en una ronda terminen el run.
+- Insistir sin pasos: el asistido de la cuadrícula puede pedir investigar con `steps_left: 0` hasta 3 veces por ronda
+  sin que cuente como rechazo.
+  - Cada vez se le recuerda que proponga, y queda en el journal (`investigation_refused`, con lo que pidió).
+  - El puro, igual que siempre: esas respuestas siguen siendo rechazos y no se registran.
+  - Motivo: Qwen se pasa del presupuesto a menudo (9 veces en 10 rondas del run sin memoria). En el run
+    `grid-s22-2026-10-01T14-53-39-218Z` lo hizo tres veces seguidas en la ronda 2, que acabó sin propuesta, y el run
+    terminó tras un solo intento.
 - Investigador asistido de la cuadrícula (A7, parcial): acepta mensajes del operador (`operatorClient`) y la memoria.
   - Tarea, foco y fuentes siguen sin construir para la cuadrícula.
   - Se lanza con `--researcher assisted --memory selective`, que sólo existe para el asistido y, de momento, sólo para la

@@ -596,6 +596,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   }
 
   const REFLECTION_TASK = reflectionTask(investigative);
+  /** How many times a round the assisted researcher may ask to investigate with no steps left before it is a refusal. */
+  const OVERREACH = 3;
 
   /* Set when the LLM service refuses the account itself (no credit, bad key): nothing further can be asked of System 2. */
   let llmFatal: string | null = null;
@@ -608,9 +610,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const round = currentRound;
     let refused: string[] = [];
     const investigation: unknown[] = [];
-    let steps = 0, refusals = 0, free = 0;
+    let steps = 0, refusals = 0, free = 0, overreach = 0;
     const plays = { left: cfg.plays };
-    while (refusals < 3 && steps - free <= cfg.steps + 3) {
+    while (refusals < 3 && steps - free - overreach <= cfg.steps + 3) {
       const stop = s.halt();
       if (stop) {
         halted = stop;
@@ -622,7 +624,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       const payload = explorerPayload({
         round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
         formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-        ...(investigative ? { investigation: memory ? JournalMemory.investigationView(round, investigation as Record<string, unknown>[]) : investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
+        ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
+        ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free } : {}),
         refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
         places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView
       });
@@ -651,19 +654,36 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         log('methods', { round, methods: turn.methods });
       }
       if (turn.kind === 'investigate') {
-        /* An answer of only memory requests asks nothing of the world: it is free, a few times a round. */
-        const onlyMemory = memory !== null && turn.requests.length > 0 && turn.requests.every((r) => 'extra' in r) && free < FREE_MEMORY_ANSWERS;
+        /* An answer of only memory requests asks nothing of the world: it is free, a few times a round. With no steps left,
+           the memory requests of an answer are still answered (and the others not, said so) rather than all refused. */
+        let requests = turn.requests;
+        const warnings = [...turn.warnings];
+        const recalls = requests.filter((r) => 'extra' in r);
+        let onlyMemory = memory !== null && requests.length > 0 && recalls.length === requests.length && free < FREE_MEMORY_ANSWERS;
+        if (!onlyMemory && memory !== null && stepsLeft <= 0 && recalls.length && free < FREE_MEMORY_ANSWERS) {
+          requests = recalls; onlyMemory = true;
+          warnings.push('no investigation steps left this round: only your memory requests were answered');
+        }
         if (onlyMemory) free++;
-        else if (stepsLeft <= 0) { refused = [investigative ? 'no investigation steps left this round: answer with your proposal now' : 'there is no investigating in this experiment: answer with your proposal']; refusals++; continue; }
+        else if (stepsLeft <= 0) {
+          refused = [investigative ? 'no investigation steps left this round: answer with your proposal now' : 'there is no investigating in this experiment: answer with your proposal'];
+          /* The assisted researcher may insist on investigating with no steps left a few times (a small model does) before
+             it counts as a refusal - a round that ends without a proposal ends the run. Logged, so the journal says so. */
+          if (assisted && investigative && overreach < OVERREACH) {
+            overreach++;
+            log('investigation_refused', { round, reason: 'no investigation steps left', reminders_left: OVERREACH - overreach, requests: requests.map((r) => ('extra' in r ? r.extra : r)) });
+          } else refusals++;
+          continue;
+        }
         const results: unknown[] = [];
-        for (const r of turn.requests) results.push(await runRequest(r, from, plays));
+        for (const r of requests) results.push(await runRequest(r, from, plays));
         /* A draft travels back as it wrote it, never as the host's formula object. */
-        const asWritten = turn.requests.map((r) => 'replay' in r && r.formula !== null && typeof r.formula === 'object' ? { replay: r.replay, model: ownFormula(r.formula) } : 'extra' in r ? r.extra : r);
-        const entry = { step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) };
+        const asWritten = requests.map((r) => 'replay' in r && r.formula !== null && typeof r.formula === 'object' ? { replay: r.replay, model: ownFormula(r.formula) } : 'extra' in r ? r.extra : r);
+        const entry = { step: investigation.length + 1, requests: asWritten, results, ...(warnings.length || noteWarnings.length ? { warnings: [...warnings, ...noteWarnings] } : {}) };
         investigation.push(entry);
         memory?.recordInvestigation(round, entry.step, entry);
-        log('investigation', { round, requests: turn.requests.map((r) => ('extra' in r ? r.extra : r)), warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
-        say('  investigates: ' + turn.requests.map((r, i) => 'extra' in r ? 'memory ' + String(r.extra.memory) + (r.extra.of ? ' of ' + String(r.extra.of) : '') + (r.extra.words ? ' "' + String(r.extra.words) + '"' : '') + (r.extra.select ? ' (select)' : '')
+        log('investigation', { round, requests: requests.map((r) => ('extra' in r ? r.extra : r)), warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
+        say('  investigates: ' + requests.map((r, i) => 'extra' in r ? 'memory ' + String(r.extra.memory) + (r.extra.of ? ' of ' + String(r.extra.of) : '') + (r.extra.words ? ' "' + String(r.extra.words) + '"' : '') + (r.extra.select ? ' (select)' : '')
           : 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
           : 'act' in r ? 'act ' + r.act + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { accepted?: boolean }).accepted ? ' accepted' : ' refused')
           : 'replay' in r ? 'replay from ' + r.replay + ' -> ' + ((results[i] as { score?: number; error?: string }).score ?? (results[i] as { error?: string }).error)

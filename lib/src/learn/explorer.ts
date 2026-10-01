@@ -89,6 +89,8 @@ export interface ExplorerBrief {
   readonly stepsLeft?: number;
   /** Episodes it may still replay itself this round (the `replay` request). */
   readonly replaysLeft?: number;
+  /** Answers of only memory requests it may still give this round (the assisted researcher with a selective memory). */
+  readonly memoryAnswersLeft?: number;
   /** Why the previous answer was refused. */
   readonly refused?: readonly string[];
   readonly directive?: string | null;
@@ -123,6 +125,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.replaysLeft !== undefined ? { replays_left: brief.replaysLeft } : {}),
+    ...(brief.memoryAnswersLeft !== undefined ? { memory_answers_left: brief.memoryAnswersLeft } : {}),
     ...(brief.places && brief.places.length ? { places: brief.places } : {}),
     ...(brief.validationsLeft !== undefined ? { validations_left: brief.validationsLeft } : {}),
     ...(brief.lastCheck ? { last_check: brief.lastCheck } : {}),

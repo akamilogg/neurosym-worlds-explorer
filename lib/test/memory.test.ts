@@ -63,13 +63,6 @@ test('list, open and find read its own record; select asks the Judge, and the jo
   assert.match(noJudge.note, /no Judge/);
 });
 
-test('the round\'s investigation: the last two answers whole, earlier ones by name', () => {
-  const steps = [1, 2, 3].map((step) => ({ step, requests: [{ view: 'g1' }], results: [{ pictures: 'x'.repeat(50) }] }));
-  const view = JournalMemory.investigationView(4, steps) as Record<string, unknown>[];
-  assert.deepEqual(view[0], { step: 1, requests: [{ view: 'g1' }], results_in_memory: 'investigation:r4.1' });
-  assert.deepEqual(view.slice(1), steps.slice(1));
-});
-
 test('a memory request and an archive are understood only where the researcher has a memory', () => {
   const ctx = { world: 'w', senses: {}, round: 1 };
   const answer = JSON.stringify({ investigate: [{ memory: 'list', of: 'notes' }], notes: [{ do: 'archive', id: 'n1' }] });
@@ -139,4 +132,51 @@ test('a selective memory is the assisted researcher\'s, and the grid\'s only for
   await assert.rejects(runLaboratory(gridLab, { args: [...GRID, '--researcher', 'assisted', '--memory', 'total', '--out', path.join(dir, 'b.json')], root: dir, llm, fetch: system2([]) }), /only memory is "selective"/);
   const { cellsLab } = await import('../src/worlds/cells/lab.ts');
   await assert.rejects(runLaboratory(cellsLab, { args: ['--seed', '1', '--flat', '--researcher', 'assisted', '--memory', 'selective', '--out', path.join(dir, 'c.json')], root: dir, llm, fetch: system2([]) }), /grid only/);
+});
+
+test('with no steps left, the memory requests of an answer are still answered (the rest not, and said so), and it then proposes', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-'));
+  const asked: Record<string, any>[] = [];
+  const fetch: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const user = JSON.parse(b.messages[b.messages.length - 1].content as string);
+    asked.push(user);
+    const done = (user.investigation ?? []).length;
+    const content = user.round === 1 && done === 0 ? { investigate: [{ view: 'g1', from: 0, to: 2 }] }
+      : user.round === 1 && done === 1 ? { investigate: [{ memory: 'list', of: 'episodes' }, { view: 'g2', from: 0, to: 2 }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: user.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const r = await runLaboratory(gridLab, { args: [...GRID, '--steps', '1', '--attempts', '1', '--researcher', 'assisted', '--memory', 'selective', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch });
+  assert.notEqual(r.stoppedBy, 'no_first_proposal');
+  assert.deepEqual([asked[1].steps_left, asked[1].memory_answers_left], [0, FREE_MEMORY_ANSWERS]);
+  const step2 = asked[2].investigation[1];
+  assert.deepEqual(step2.requests, [{ memory: 'list', of: 'episodes' }], 'only the memory request was run');
+  assert.match(step2.warnings.join(' '), /only your memory requests were answered/);
+  assert.equal(asked[2].memory_answers_left, FREE_MEMORY_ANSWERS - 1);
+  assert.equal(asked[2].investigation[0].results.length, 1, 'this round\'s investigation travels whole');
+});
+
+test('the assisted researcher may insist on investigating with no steps left a few times (logged) before it is a refusal', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-'));
+  /* It investigates once (its only step), insists 4 more times, then proposes. */
+  const stubborn = (): FetchLike => {
+    let round1 = 0;
+    return async (_url, init) => {
+      const b = JSON.parse(String(init.body));
+      const user = JSON.parse(b.messages[b.messages.length - 1].content as string);
+      const content = user.round === 1 && ++round1 <= 5 ? { investigate: [{ view: 'g1', from: 0, to: 2 }] }
+        : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: user.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] };
+      const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+      return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+    };
+  };
+  const args = [...GRID, '--steps', '1', '--attempts', '1'];
+  const helped = await runLaboratory(gridLab, { args: [...args, '--researcher', 'assisted', '--out', path.join(dir, 'a.json')], root: dir, llm, fetch: stubborn() });
+  assert.notEqual(helped.stoppedBy, 'no_first_proposal');
+  const events = JSON.parse(fs.readFileSync(helped.journal, 'utf8')).events.filter((e: { type: string }) => e.type === 'investigation_refused');
+  assert.deepEqual(events.map((e: { reminders_left: number }) => e.reminders_left), [2, 1, 0]);
+  const pure = await runLaboratory(gridLab, { args: [...args, '--out', path.join(dir, 'p.json')], root: dir, llm, fetch: stubborn() });
+  assert.equal(pure.stoppedBy, 'no_first_proposal', 'the unknown-world researcher as it was');
 });

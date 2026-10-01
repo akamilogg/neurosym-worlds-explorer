@@ -5,9 +5,10 @@ import type { LineSelector, SelectionRecord } from './sources.ts';
  * SELECTIVE MEMORY for the assisted researcher (SPEC-INVESTIGADOR-ASISTIDO §13): an instrument like
  * `view` or `act`, but over ITS OWN record instead of the world.
  *
- * Without it, the whole notebook travels with every question, and so does every result of the
- * round's investigation: a small model drags it all and loses the thread. With it, what travels
- * by default is abridged by a fixed, declared rule (`brief`), and the rest is there to ask for:
+ * Without it, the whole notebook travels with every question: a small model drags it all and loses
+ * the thread. With it, the notebook travels abridged by a fixed, declared rule (`brief`); the
+ * round's own investigation travels whole, as always (hiding what it has just seen made it ask
+ * again); and the rest is there to ask for:
  *
  *   {"memory": "list", "of": "<kind>"}             the index of a kind (ids, rounds, the first words)
  *   {"memory": "open", "items": ["<id>", ...]}     items whole
@@ -28,9 +29,9 @@ interface Item { readonly id: string; readonly kind: MemoryKind; readonly round:
 
 /** What the researcher is told once it has a selective memory (appended to its system prompt). */
 export const MEMORY_SECTION = [
-  'YOUR MEMORY. Your notebook reaches you ABRIDGED, by a fixed rule: your beliefs with their latest stance only; your notes written or updated in the last two rounds whole, older ones by their first words; your methods whole; the episodes of the last two rounds; one line per model, and your latest model whole; your latest reflection. Of this round\'s investigation, the results of your last two answers travel whole, earlier ones by name. Everything else is kept, whole, in your memory: `memory` says how many items of each kind it holds.',
+  'YOUR MEMORY. Your notebook reaches you ABRIDGED, by a fixed rule: your beliefs with their latest stance only; your notes written or updated in the last two rounds whole, older ones by their first words; your methods whole; the episodes of the last two rounds; one line per model, and your latest model whole; your latest reflection. This round\'s investigation travels whole, as always. Everything else (your earlier rounds\' investigations too) is kept, whole, in your memory: `memory` says how many items of each kind it holds.',
   'Three more investigation requests read it (they ask nothing of the environment); like any request, they go inside "investigate": {"investigate": [{"memory": "list", "of": "notes"}, ...]}. {"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks"} answers the index of that kind (ids, rounds, first words); {"memory": "open", "items": ["<id>", ...]} answers items whole (at most 8); {"memory": "find", "words": "...", "of": "<kind>" (optional)} answers the items that hold all the words. When a find answers too many items, add "select": "what you need": the Judge then picks, of the items found, those that speak to it (by what they are about, not by whether they agree with you - an item that contradicts you speaks to it too).',
-  'Item ids: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it answered), "check:r<round>" (the verdicts you were given). An answer whose requests are ALL memory requests does not count against `steps_left` (up to 4 such answers a round).',
+  'Item ids: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it answered), "check:r<round>" (the verdicts you were given). An answer whose requests are ALL memory requests does not count against `steps_left`: `memory_answers_left` says how many such answers you still have this round. With no steps left, only the memory requests of an answer are answered; then propose.',
   'A note you no longer need to see every round can be archived: {"do": "archive", "id": "<id>"} in "notes". It stays in your memory; writing it again brings it back.',
   'What you recall is your own record, not new evidence: what the environment answers decides.'
 ].join('\n');
@@ -129,11 +130,6 @@ export class JournalMemory {
       ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {}),
       memory: this.counts()
     };
-  }
-
-  /** This round's investigation as it travels: the last `whole` steps with their results, earlier ones by name. */
-  static investigationView(round: number, steps: readonly Record<string, unknown>[], whole = 2): unknown[] {
-    return steps.map((s, i) => (i >= steps.length - whole ? s : { step: s.step, requests: s.requests, results_in_memory: 'investigation:r' + round + '.' + s.step }));
   }
 
   /** One of these requests, answered. */
