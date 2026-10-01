@@ -328,3 +328,58 @@ Cómo encajaría con lo que ya existe:
   - ¿Apuntes propios frente a los de otros investigadores o modelos?
   - ¿Cómo se destila un journal largo en apuntes útiles, y quién lo hace: el propio investigador al terminar, o un agente
     del orquestador (SPEC-ORQUESTADOR)?
+
+## 13. Idea futura: memoria selectiva sobre el propio journal (01/10/2026)
+
+**De dónde sale.** En el run de Qwen3.8-27B sin razonamiento (`grid-s22-2026-10-01T11-13-04-850Z`), el investigador
+experimenta en las rondas 1–5 (`act`, `replay`, contraejemplos) y a partir de la 6 sólo relee partidas (`view` = 56 de
+81 peticiones). Los datos del contexto:
+
+- el contexto de una llamada va de 4,4k a 45,7k tokens; el de inicio de ronda crece de unos 8k a 22k;
+- dentro de una ronda crece con lo que devuelve cada investigación (partidas enteras vistas);
+- el cuaderno al final ocupa unos 57k caracteres (creencias 20k, notas 14k, rondas 14k, partidas 9k) y viaja entero
+  en cada llamada.
+
+Un modelo pequeño arrastra todo y pierde el hilo; uno grande (Sol) lo aguanta mejor.
+
+**La idea.** Una herramienta como `view` o `act`, pero que opera sobre **su propio journal** en vez de sobre el mundo:
+el investigador decide qué recuperar de lo que ya sabe, en lugar de recibirlo todo. Mismas primitivas que las fuentes
+(§6.3), aplicadas a otro origen:
+
+- `list`: el índice. Ids y títulos de creencias, notas, métodos, partidas y rondas, con su estado y ronda. Los títulos
+  los escribe el propio investigador; el entorno no resume nada.
+- `open`: un elemento entero (una creencia con su historia, una nota, el resultado de una prueba, una partida).
+- `find`: filtro literal por texto, id, partida o posición (`g66@6`).
+- `select` (opcional, a discreción de System 2): Jev ordena los resultados de un `find` frente a la hipótesis que el
+  investigador escribe, igual que en las fuentes.
+
+**Lo que la hace útil: la contrapartida.** Sólo ahorra contexto si el contexto por defecto adelgaza: índice +
+creencias activas + la última ronda, y lo demás a petición. Lo que entra por defecto debe ser una regla mecánica y
+declarada (nada elegido por el entorno). Además, el investigador puede archivar sus notas: dejan de viajar en cada
+llamada pero siguen recuperables. Así sigue siendo System 2 quien gestiona su cuaderno.
+
+**Cómo encaja con los principios:**
+
+- Fuentes propias. Sólo su journal en la vista del investigador, nunca `hidden_from_the_learner` ni medidas del
+  operador.
+- Sin investigación precocinada. Son primitivas de lectura. `select` con Jev es un instrumento que System 2 activa,
+  como en `find` de las fuentes.
+- El puro no la tiene (prompt congelado). Sería una condición declarada del asistido: «con memoria selectiva».
+- Es el mismo instrumento que la memoria de exploraciones (§12), con otro origen: `self` frente a journals de otros
+  runs. Conviene diseñarlos juntos.
+
+**Riesgo principal: sesgo de confirmación.** Filtrar por relevancia frente a la hipótesis en curso tiende a traer lo
+que la apoya y a dejar fuera los contraejemplos, justo lo que en este run le hizo cambiar de idea (g33@7 frente a
+g32@8). Mitigaciones:
+
+- `select` devuelve también lo que contradice la hipótesis, en un apartado aparte;
+- `find` literal está siempre disponible;
+- el journal registra qué se pidió, qué se devolvió y qué se descartó, para que el operador lo audite.
+
+**Cómo se evaluaría.** Qwen sin razonamiento, grid seed 22, con y sin la herramienta, varias réplicas. Se medirían:
+
+- tokens de contexto por llamada;
+- uso de herramientas por ronda (¿vuelve a experimentar en las rondas tardías?);
+- creencias que se sostienen frente a las que se reescriben;
+- victorias por intento y reglas recuperadas;
+- con y sin `select`, para aislar a Jev.
