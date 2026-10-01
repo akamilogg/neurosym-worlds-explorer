@@ -38,6 +38,15 @@ investigador completo**, y los dos conviven.
       se tiene).
       - Motivo: Qwen3.8-27B sin razonamiento se pasaba del presupuesto de investigación, repetía peticiones y no
         proponía.
+    - 01/10/2026: en EVIDENCE, comprometerse con hipótesis antes de creerlas del todo.
+      - Una creencia es una apuesta de trabajo, y una refutada también es conocimiento.
+      - Se puede llegar a la respuesta por descarte; fallar pronto y aprender es mejor que esperar a la hipótesis
+        correcta entera.
+      - Lo que el entorno respondió directamente es un hecho: se anota como creencia, y la duda se reserva para lo que
+        se infiere de los hechos.
+      - Motivo: Luna (run `grid-s22-2026-10-01T16-06-05-482Z`) hizo un barrido de cinco `act` y no anotó qué
+        direcciones se aceptaban («they do not establish the movement rule»). Además mantuvo como mera pista que el
+        borde derecho pierde, que es la regla verdadera.
 - **P2. Dos implementaciones completas, no un interruptor dentro de una.**
   - El asistido tiene su propio paquete (`lib/src/learn/assisted/`): su sesión, su prompt y sus instrumentos.
   - Un cambio en el asistido no puede alterar lo que ve el puro.
