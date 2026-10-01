@@ -42,14 +42,15 @@ export interface NotebookBelief {
 }
 
 export interface NoteOp {
-  readonly do: 'write' | 'forget';
+  /** `archive` (the assisted researcher's selective memory): kept, but no longer shown every round. */
+  readonly do: 'write' | 'forget' | 'archive';
   readonly id: string;
   readonly text?: string;
   /** Its own games ("g5") or positions of them ("g5@4", "try3"). */
   readonly positions?: readonly string[];
 }
 
-export interface Note { readonly id: string; text: string; positions: string[]; readonly written: number; updated: number }
+export interface Note { readonly id: string; text: string; positions: string[]; readonly written: number; updated: number; archived?: boolean }
 export interface Method { readonly id: string; text: string; readonly written: number; updated: number }
 
 export interface GameRecord {
@@ -146,11 +147,16 @@ export class Notebook {
         if (!this.notes.delete(op.id)) warnings.push('note "' + op.id + '" does not exist');
         continue;
       }
+      if (op.do === 'archive') {
+        const n = this.notes.get(op.id);
+        if (!n) warnings.push('note "' + op.id + '" does not exist'); else n.archived = true;
+        continue;
+      }
       const text = (op.text ?? '').trim();
       if (!text) { warnings.push('note "' + op.id + '" has no text'); continue; }
       const positions = (op.positions ?? []).filter((p) => { const ok = known(p); if (!ok) warnings.push('note "' + op.id + '": no point "' + p + '"'); return ok; });
       const old = this.notes.get(op.id);
-      if (old) { old.text = clip(text, 1200); old.positions = positions; old.updated = round; }
+      if (old) { old.text = clip(text, 1200); old.positions = positions; old.updated = round; if (old.archived) delete old.archived; }
       else this.notes.set(op.id, { id: op.id, text: clip(text, 1200), positions, written: round, updated: round });
     }
     return warnings;

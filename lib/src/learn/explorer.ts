@@ -141,19 +141,22 @@ export type ExplorerRequest =
   | { readonly act: string; readonly from: readonly [number, number]; readonly to: readonly [number, number] }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   /** `formula`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its best formula. */
-  | { readonly replay: string; readonly formula: number | Formula | null };
+  | { readonly replay: string; readonly formula: number | Formula | null }
+  /** A request of an instrument the researcher brings (the assisted one's memory), as it was written. */
+  | { readonly extra: Record<string, unknown> };
 
 export type ExplorerTurn =
   | { kind: 'investigate'; requests: ExplorerRequest[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
   | { kind: 'proposal'; parse: ExplorerParse; notes: NoteOp[]; methods: NoteOp[] };
 
-export function parseNotes(raw: unknown, warnings: string[]): NoteOp[] {
+/** `archive`: the assisted researcher with a selective memory may archive a note (without it, only write and forget). */
+export function parseNotes(raw: unknown, warnings: string[], archive = false): NoteOp[] {
   const out: NoteOp[] = [];
   (Array.isArray(raw) ? raw : []).forEach((n, i) => {
     const o = n && typeof n === 'object' ? n as Record<string, unknown> : null;
     /* Without "do", a note with an id and a text is a write: the intent is plain, and dropping it loses the record. */
     const act = o && o.do === undefined && typeof o.text === 'string' ? 'write' : o?.do;
-    if (!o || (act !== 'write' && act !== 'forget') || typeof o.id !== 'string') { warnings.push('note #' + i + ' ignored: needs "id" (and "do": write | forget)'); return; }
+    if (!o || (act !== 'write' && act !== 'forget' && !(archive && act === 'archive')) || typeof o.id !== 'string') { warnings.push('note #' + i + ' ignored: needs "id" (and "do": write | forget' + (archive ? ' | archive' : '') + ')'); return; }
     out.push({ do: act, id: o.id, ...(typeof o.text === 'string' ? { text: o.text } : {}),
       /* "points" in the prompt's words; "positions", the earlier name, is still accepted. */
       ...(Array.isArray(o.points ?? o.positions) ? { positions: ((o.points ?? o.positions) as unknown[]).map(String) } : {}) });
@@ -162,17 +165,21 @@ export function parseNotes(raw: unknown, warnings: string[]): NoteOp[] {
 }
 
 /** An answer is either an investigation (requests, and maybe notes) or a proposal. */
-export function parseExplorerTurn(content: string, context: Parameters<typeof parseExplorerProposal>[1] & { maxRequests?: number }): ExplorerTurn {
+export function parseExplorerTurn(content: string, context: Parameters<typeof parseExplorerProposal>[1] & { maxRequests?: number;
+  /** The researcher's own instruments (the assisted one's memory): a request they accept is passed on as written. */
+  extraRequest?: (q: Record<string, unknown>) => boolean; archive?: boolean }): ExplorerTurn {
   const data = parseJsonLoose(content);
   const o = data && typeof data === 'object' && !Array.isArray(data) ? data as Record<string, unknown> : null;
   const warnings: string[] = [];
-  const notes = o ? parseNotes(o.notes, warnings) : [];
+  const notes = o ? parseNotes(o.notes, warnings, context.archive === true) : [];
   const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
   if (o && Array.isArray(o.investigate) && !o.observations && !o.rules) {
     const requests: ExplorerRequest[] = [];
     for (const [i, r] of o.investigate.slice(0, context.maxRequests ?? 8).entries()) {
       const q = r && typeof r === 'object' ? r as Record<string, unknown> : {};
-      if (typeof q.view === 'string') {
+      if (context.extraRequest?.(q)) {
+        requests.push({ extra: q });
+      } else if (typeof q.view === 'string') {
         const from = Number.isInteger(q.from) ? q.from as number : 0;
         const to = Number.isInteger(q.to) ? q.to as number : from + 29;
         requests.push({ view: q.view, from, to: Math.min(to, from + 29) });

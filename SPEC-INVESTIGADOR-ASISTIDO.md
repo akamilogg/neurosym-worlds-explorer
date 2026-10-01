@@ -269,7 +269,7 @@ en O9–O14.
 | A4 | Investigador asistido, esqueleto y mensajes: `AssistedSession`, su prompt, `operator_messages`, canal `operator` en la grabación, `assistance` en el finding | un mensaje llega en la pregunta siguiente y queda en el journal; un run asistido cortado y reanudado recibe cada mensaje en el mismo punto; el puro sigue idéntico. **Hecho**, por composición y sin tocar la sesión compartida: `learn/assisted/session.ts` da a `LawSession` su propio prompt (el común más `ASSISTED_SECTION`) y un cliente de System 2 que añade `operator_messages: { new, earlier }` a la pregunta siguiente; una pregunta sin mensajes es, byte a byte, la del puro. Cada entrega queda como `operator_message` con su número de pregunta; al reanudar se reinyecta en la misma pregunta desde el journal reanudado, así que la grabación reconoce cada petición (el journal hace de canal `operator`: es la misma información). `focus` y `source` se rechazan con el motivo (A5, A6); la cuadrícula asistida da `LabError` (A7). En el finding, `assistance` y, por afirmación, `grounded` (`world`, `operator`, `sources`). Probado también desde la consola, con runs de los dos investigadores a la vez |
 | A5 | Foco: facetas en el contrato `Lab`, un mundo con dinámicas que sobran, `--focus`, cambio de faceta en vivo y `task` en el asistido | con la faceta, las dinámicas fuera de foco no cuentan en el criterio; un run acepta un modelo que sólo explica la faceta. **Hecho**: `Lab.facets` (id y ayuda), `interface({ focus })` y `focus()` en el anfitrión del objetivo. Mundo de prueba: `cells` nivel 4, dos capas en una fila (las celdas pares y las impares, cada una un anillo con su regla elemental); facetas `all`, `even` y `odd`; con faceta, la interfaz añade una línea que dice qué posiciones cuentan y el objetivo compara sólo esas (sin faceta, el prompt no cambia: hashes congelados intactos). `--focus` lo aceptan los dos investigadores al arrancar (define la tarea) y queda en el journal y en la pregunta del finding; una faceta que el laboratorio no tiene es `LabError`. `--task` sólo el asistido (`LabError` en el puro) y va con cada pregunta como `operator_task`. Un `focus` en vivo (CLI `lab focus <run> <faceta> [tarea]`, consola) se valida contra las facetas, llega como mensaje en la pregunta siguiente y se aplica entonces: el prompt dice lo que cuenta, el protocolo reinicia la etapa y queda `focus_changed`; al reanudar se aplica en la misma pregunta y la grabación reconoce cada petición. Journals puros idénticos a la línea base (0 diferencias en los cuatro mundos) |
 | A6 | Fuentes: orígenes permitidos por el operador, `list`, `open` y `find` (con `select` por Jev) del investigador, citas `src:`, `grounded` en el finding, lecturas por la grabación | una creencia cita una fuente; el finding separa lo comprobado en el mundo de lo que sólo viene de las fuentes; una fuente engañosa no hace sostenerse a un modelo falso. **Hecho** (§6.3), tras descartar un primer diseño en el que el arnés cargaba, troceaba, indexaba y vigilaba una biblioteca: ahora el arnés sólo hace cumplir la lista blanca (`Sources.permitted`: dentro de un directorio permitido, sin escapar por `..` ni enlaces; bajo un prefijo de URL; en un dominio o sus subdominios), graba cada lectura (canal `source`, también las locales, así que un run reanudado recibe lo que se leyó antes del corte aunque el fichero haya cambiado) y da la procedencia en el finding. `--sources-allow` y la orden `source` sólo en el asistido (`LabError` y rechazo registrado en el puro; un origen inexistente se rechaza). Los instrumentos entran en la sesión compartida por un gancho inerte (`extraRequest`, ausente en el puro) y los responde el asistido, nunca el mundo; con algún origen, el prompt añade `SOURCES_SECTION` y cada pregunta lleva `sources.origins`. Journals puros idénticos a la línea base (0 diferencias en los cuatro mundos) |
-| A7 (opcional) | La cuadrícula asistida (`GameLab`) | la cuadrícula acepta mensajes y fuentes con su bucle propio |
+| A7 (opcional) | La cuadrícula asistida (`GameLab`) | la cuadrícula acepta mensajes y fuentes con su bucle propio. **Parcial**: mensajes y memoria selectiva (§13.1); tarea, foco y fuentes, no |
 
 **Orden:** A1–A3 dan valor a los dos investigadores desde ya (ver y controlar) y son la base para observar A4–A6. Después
 va A4, porque los mensajes son lo más directo de la colaboración. Luego A5 y A6.
@@ -383,3 +383,27 @@ g32@8). Mitigaciones:
 - creencias que se sostienen frente a las que se reescriben;
 - victorias por intento y reglas recuperadas;
 - con y sin `select`, para aislar a Jev.
+
+### 13.1 Implementación (01/10/2026, sólo la cuadrícula)
+
+- `lib/src/learn/assisted/memory.ts`: `JournalMemory` sobre el cuaderno, más lo que el investigador pidió y recibió en
+  cada paso (`investigation:r<n>.<k>`) y los veredictos de cada prueba (`check:r<n>`).
+  - Peticiones `{"memory": "list" | "open" | "find", ...}`; `select` con Jev (`judgeSelector`, el mismo de las fuentes).
+  - Jev puntúa de qué trata cada elemento, no si da la razón: un contraejemplo sobre el mismo tema también sale.
+  - Cada selección queda en el journal (`memory_select`: lo que vio, lo que puntuó y lo que se quedó), para auditarla.
+- Regla fija de lo que viaja por defecto (`brief`), declarada en `MEMORY_SECTION`:
+  - creencias con su última postura;
+  - notas de las dos últimas rondas enteras, las anteriores por sus primeras palabras, las archivadas no;
+  - métodos enteros;
+  - episodios de las dos últimas rondas;
+  - una línea por modelo y el último entero;
+  - la última reflexión.
+- De la investigación de la ronda viajan enteros los dos últimos pasos; los anteriores sólo por su nombre.
+- Notas: `{"do": "archive", "id"}` deja de mostrar una nota cada ronda; volver a escribirla la recupera.
+- Una respuesta con sólo peticiones de memoria no gasta `steps_left` (hasta 4 por ronda).
+- Investigador asistido de la cuadrícula (A7, parcial): acepta mensajes del operador (`operatorClient`) y la memoria.
+  - Tarea, foco y fuentes siguen sin construir para la cuadrícula.
+  - Se lanza con `--researcher assisted --memory selective`, que sólo existe para el asistido y, de momento, sólo para la
+    cuadrícula.
+- El puro no cambia: hashes congelados y prueba de equivalencia sin diferencias.
+- El finding lo recoge en `assistance.memory`: qué listó, qué abrió, qué buscó y cuántas selecciones hizo Jev.

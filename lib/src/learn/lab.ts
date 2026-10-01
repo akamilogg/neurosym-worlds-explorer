@@ -279,6 +279,9 @@ export interface LabServices {
   say(text: string): void;
   /** Asked before each question to System 2: a reason to stop now (cancelled, a budget spent), or null. */
   halt(): string | null;
+  /** The assisted researcher (SPEC-INVESTIGADOR-ASISTIDO), absent for the unknown-world one: `llm` then carries the operator's
+      messages; `memory`, whether it has a selective memory (§13), and the Judge as the selector of its `find`. */
+  readonly assisted?: { readonly memory: boolean; readonly selector?: import('./assisted/sources.ts').LineSelector };
 }
 
 /** What a loop of its own ends with: why, and what the journal's end keeps besides the common. `final` is the model the

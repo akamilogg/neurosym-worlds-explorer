@@ -20,7 +20,7 @@ import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, ty
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
-import { assistedSession, assistedSystem, deliveredMessages, type OperatorMessage } from '../learn/assisted/session.ts';
+import { assistedSession, assistedSystem, deliveredMessages, operatorClient, type OperatorMessage } from '../learn/assisted/session.ts';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
@@ -52,6 +52,7 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
   { name: 'task', default: '', help: 'what the operator wants understood, in words (the assisted researcher only)' },
   { name: 'sources-allow', default: '', help: 'origins the assisted researcher may read sources from: directories, URL prefixes or domains, a,b,...' },
+  { name: 'memory', default: '', help: '"selective": the assisted researcher\'s notebook travels abridged by a fixed rule, and it recalls the rest itself (list/open/find over its own record; the grid only, for now)' },
   { name: 'out', default: '', help: 'the journal (default runs/<name>-<time>.json)' }
 ];
 const FLAGS: readonly { name: string; help: string }[] = [
@@ -314,7 +315,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     flat: flag('flat'),
     ...(arg('focus') ? { focus: arg('focus') } : {}),
     ...(arg('task') ? { task: arg('task') } : {}),
-    ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {})
+    ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {}),
+    ...(arg('memory') ? { memory: arg('memory') } : {})
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
   Object.defineProperty(worldOptions, '__focus', { value: arg('focus') || '', enumerable: false });
@@ -343,7 +345,13 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (arg('task') && researcher !== 'assisted') throw new LabError('--task: a statement of what to understand is help: only the assisted researcher takes it');
   if (arg('sources-allow') && researcher !== 'assisted') throw new LabError('--sources-allow: sources are help: only the assisted researcher reads them');
   for (const o of originsOf(arg('sources-allow'), options.root)) { const problem = originProblem(o); if (problem) throw new LabError('--sources-allow: ' + problem); }
-  if (researcher === 'assisted' && isGameLab(lab)) throw new LabError('the assisted researcher of ' + lab.id + ' is not built yet (SPEC-INVESTIGADOR-ASISTIDO, phase A7): run the unknown-world researcher');
+  /* The assisted researcher of a laboratory with a loop of its own (the grid) takes the operator's messages and may have a
+     selective memory; focus, a task and sources are not built for it yet (A7). */
+  if (researcher === 'assisted' && isGameLab(lab) && (arg('task') || arg('sources-allow') || arg('focus')))
+    throw new LabError('the assisted researcher of ' + lab.id + ' takes messages and a selective memory; a task, a focus and sources are not built for it yet (SPEC-INVESTIGADOR-ASISTIDO, A7)');
+  if (arg('memory') && arg('memory') !== 'selective') throw new LabError('--memory: the only memory is "selective"');
+  if (arg('memory') && researcher !== 'assisted') throw new LabError('--memory: a selective memory changes what the researcher is given: only the assisted researcher has one');
+  if (arg('memory') && !isGameLab(lab)) throw new LabError('--memory: the selective memory is built for the grid only, for now (SPEC-INVESTIGADOR-ASISTIDO §13)');
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
 
@@ -351,8 +359,14 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   const run = openRun(lab, options, { argv, previous, resumeFrom: resumeFrom ?? null, cfg, arg, config: {}, researcher, asked: askedText as Researcher, policy });
   options.onJournal?.(run.outFile);
   /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
+  /* The assisted researcher of a laboratory with a loop of its own: the operator's messages with its questions (resuming,
+     delivered again at the same questions), and its selective memory, with the Judge to select for it (none in --flat). */
+  const services = isGameLab(lab) && researcher === 'assisted'
+    ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => run.operator.take(), scheduled: deliveredMessages(previous) }, run.log),
+      assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }) } }
+    : run.services;
   const body = isGameLab(lab)
-    ? lab.run(run.services).then((result) => {
+    ? lab.run(services).then((result) => {
       const finished = run.finish({ stoppedBy: result.stoppedBy, halted: result.halted ?? null }, result.end);
       run.say('done: ' + result.stoppedBy + (result.halted ? '; resume with --resume ' + run.outFile : '') + '; journal ' + run.outFile);
       return finished;

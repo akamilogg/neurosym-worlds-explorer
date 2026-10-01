@@ -62,6 +62,8 @@ export interface Finding {
     readonly assisted_after_attempts?: number;
     /** Sources: the origins the operator allowed, and what the researcher opened and looked for in them. */
     readonly sources: { readonly origins: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[] };
+    /** Its selective memory (§13): what it recalled of its own record - lists, items opened, finds (with what the Judge kept). */
+    readonly memory?: { readonly mode: string; readonly listed: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[]; readonly selections: number };
   };
   readonly tested: {
     readonly places: readonly Facts[];
@@ -140,7 +142,14 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
       /* What it read, as its investigation asked for it. */
       opened: requests.filter((r) => typeof r.open === 'string').map((r) => String(r.open) + (r.from !== undefined || r.to !== undefined ? '#L' + (r.from ?? 1) + '-' + (r.to ?? '') : '')),
       found: requests.filter((r) => typeof r.find === 'string').map((r) => String(r.find) + ' in ' + String(r.in ?? '') + (r.select ? ' (select: ' + String(r.select) + ')' : ''))
-    }
+    },
+    ...(journal.config?.memory ? { memory: {
+      mode: String(journal.config.memory),
+      listed: requests.filter((r) => r.memory === 'list').map((r) => String(r.of ?? '(counts)')),
+      opened: requests.filter((r) => r.memory === 'open').flatMap((r) => (Array.isArray(r.items) ? r.items : [r.item]).map(String)),
+      found: requests.filter((r) => r.memory === 'find').map((r) => String(r.words ?? '') + (r.of ? ' of ' + String(r.of) : '') + (r.select ? ' (select: ' + String(r.select) + ')' : '')),
+      selections: events.filter((e) => e.type === 'memory_select').length
+    } } : {})
   } : undefined;
 
   const blindSets: J[] = acceptance?.validation?.blind_confirmation?.sets ?? [];
@@ -233,7 +242,8 @@ export function findingText(f: Finding): string {
     + (f.model?.fingerprint ? ' (model ' + f.model.fingerprint + ')' : ''));
   for (const c of f.claims) lines.push('  claim [' + c.status + '] ' + c.statement + (c.grounded ? '  (from: ' + (c.grounded.join(', ') || 'nothing cited') + ')' : ''));
   if (f.assistance) lines.push('  assisted: ' + f.assistance.messages.length + ' message(s) of the operator' + (f.assistance.focus_changes.length ? ', ' + f.assistance.focus_changes.length + ' change(s) of focus' : '')
-    + (f.assistance.sources.opened.length ? ', ' + f.assistance.sources.opened.length + ' read(s) of sources' : ''));
+    + (f.assistance.sources.opened.length ? ', ' + f.assistance.sources.opened.length + ' read(s) of sources' : '')
+    + (f.assistance.memory ? ', memory ' + f.assistance.memory.mode + ' (' + (f.assistance.memory.listed.length + f.assistance.memory.opened.length + f.assistance.memory.found.length) + ' recall(s))' : ''));
   const a = f.tested.at_acceptance;
   if (a) {
     const held = (ps: readonly Facts[]) => ps.map((p) => String(p.place) + (p.holds ? '' : ' (not)')).join(', ');

@@ -3542,6 +3542,12 @@ var Neurosym = (() => {
           if (!this.notes.delete(op.id)) warnings.push('note "' + op.id + '" does not exist');
           continue;
         }
+        if (op.do === "archive") {
+          const n = this.notes.get(op.id);
+          if (!n) warnings.push('note "' + op.id + '" does not exist');
+          else n.archived = true;
+          continue;
+        }
         const text = (op.text ?? "").trim();
         if (!text) {
           warnings.push('note "' + op.id + '" has no text');
@@ -3557,6 +3563,7 @@ var Neurosym = (() => {
           old.text = clip(text, 1200);
           old.positions = positions;
           old.updated = round2;
+          if (old.archived) delete old.archived;
         } else this.notes.set(op.id, { id: op.id, text: clip(text, 1200), positions, written: round2, updated: round2 });
       }
       return warnings;
@@ -3838,13 +3845,13 @@ var Neurosym = (() => {
       ...brief.task ? { task: brief.task } : {}
     };
   }
-  function parseNotes(raw, warnings) {
+  function parseNotes(raw, warnings, archive = false) {
     const out = [];
     (Array.isArray(raw) ? raw : []).forEach((n, i) => {
       const o = n && typeof n === "object" ? n : null;
       const act = o && o.do === void 0 && typeof o.text === "string" ? "write" : o?.do;
-      if (!o || act !== "write" && act !== "forget" || typeof o.id !== "string") {
-        warnings.push("note #" + i + ' ignored: needs "id" (and "do": write | forget)');
+      if (!o || act !== "write" && act !== "forget" && !(archive && act === "archive") || typeof o.id !== "string") {
+        warnings.push("note #" + i + ' ignored: needs "id" (and "do": write | forget' + (archive ? " | archive" : "") + ")");
         return;
       }
       out.push({
@@ -3861,13 +3868,15 @@ var Neurosym = (() => {
     const data = parseJsonLoose(content);
     const o = data && typeof data === "object" && !Array.isArray(data) ? data : null;
     const warnings = [];
-    const notes = o ? parseNotes(o.notes, warnings) : [];
+    const notes = o ? parseNotes(o.notes, warnings, context.archive === true) : [];
     const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
     if (o && Array.isArray(o.investigate) && !o.observations && !o.rules) {
       const requests = [];
       for (const [i, r] of o.investigate.slice(0, context.maxRequests ?? 8).entries()) {
         const q = r && typeof r === "object" ? r : {};
-        if (typeof q.view === "string") {
+        if (context.extraRequest?.(q)) {
+          requests.push({ extra: q });
+        } else if (typeof q.view === "string") {
           const from = Number.isInteger(q.from) ? q.from : 0;
           const to = Number.isInteger(q.to) ? q.to : from + 29;
           requests.push({ view: q.view, from, to: Math.min(to, from + 29) });
