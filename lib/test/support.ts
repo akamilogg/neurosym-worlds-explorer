@@ -114,8 +114,15 @@ export function userOf(body: { messages: { role: string; content: string }[] }):
   for (const text of users) {
     let part: Record<string, unknown>;
     try { part = JSON.parse(text); } catch { return users[users.length - 1]; }
-    if ('investigation_step' in part) ((merged.investigation ??= []) as unknown[]).push(part.investigation_step);
-    else Object.assign(merged, part);
+    /* A step goes back into `investigation`; what else a part carries (the counters after it) is the latest. */
+    const { investigation_step: step, operator_messages: said, ...rest } = part as Record<string, any>;
+    if (step !== undefined) ((merged.investigation ??= []) as unknown[]).push(step);
+    /* The operator's messages, where they arrived in the round: all of them, the new and the earlier. */
+    if (said) {
+      const all = (merged.operator_messages ??= { new: [], earlier: [] }) as { new: unknown[]; earlier: unknown[] };
+      all.new.push(...(said.new ?? [])); all.earlier.push(...(said.earlier ?? []));
+    }
+    Object.assign(merged, rest);
   }
   return JSON.stringify(merged, null, 2);
 }

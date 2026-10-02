@@ -38,9 +38,10 @@ import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type Actio
 import { ceilingOf, tightness } from './informed.ts';
 import { variantStarts } from './variants.ts';
 import { reflectionTask, toolOf } from '../../learn/prompt.ts';
-import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerParts, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
+import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
 import { Notebook, type GameRecord } from '../../learn/notebook.ts';
 import { OVERREACH, assistedSystem } from '../../learn/assisted/session.ts';
+import { RoundConversation } from '../../learn/system2.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory, MEMORY_SECTION } from '../../learn/assisted/memory.ts';
 import { recordTurn, surprises, type TurnRecord } from '../../learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../../learn/ablation.ts';
@@ -620,6 +621,13 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     let refused: string[] = [];
     const investigation: unknown[] = [];
     let steps = 0, refusals = 0, free = 0, overreach = 0;
+    /* The round's conversation only grows (see RoundConversation): what changes from one answer to the next goes in the
+       part added for that answer. */
+    const talk = new RoundConversation();
+    const counters = (): Record<string, unknown> => ({ ...(investigative ? { steps_left: Math.max(0, cfg.steps - (steps - free)) } : {}),
+      ...(tools.has('replay') ? { replays_left: plays.left } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
+    let told: string[] = refused;
+    let written: Record<string, unknown> = {};
     const plays = { left: cfg.plays };
     while (refusals < 3 && steps - free - overreach <= cfg.steps + 3) {
       const stop = s.halt();
@@ -630,14 +638,13 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         return null;
       }
       const stepsLeft = investigative ? Math.max(0, cfg.steps - (steps - free)) : 0;
-      const payload = explorerParts({
-        round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
-        formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
-        ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
-        ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}),
-        refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
-        places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView
-      });
+      /* A refusal of its previous answer is a part of its own (with any notes that answer wrote). */
+      if (refused !== told && refused.length) { talk.add({ your_previous_answer_was_refused: refused, ...written, ...counters() }); written = {}; }
+      told = refused;
+      talk.open(() => ({ ...explorerPayload({ round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
+        formula: from, formulaRound: from ? roundOf.get(from) ?? null : null, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
+        places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView }), ...counters() }));
+      const payload = talk.question();
       say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;
       let content = '';
@@ -657,6 +664,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       }
       const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory ? { extraRequest: JournalMemory.accepts, archive: true } : {}) });
       const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => games.has(ref.trim()) || resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
+      /* What it wrote in its notebook comes back in the next part of the conversation (the notebook shown is the round's). */
+      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}) };
       if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) {
         say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', '));
@@ -694,6 +703,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         const asWritten = requests.map((r) => 'replay' in r && r.formula !== null && typeof r.formula === 'object' ? { replay: r.replay, model: ownFormula(r.formula) } : 'extra' in r ? r.extra : r);
         const entry = { step: investigation.length + 1, requests: asWritten, results, ...(warnings.length || noteWarnings.length ? { warnings: [...warnings, ...noteWarnings] } : {}) };
         investigation.push(entry);
+        talk.add({ investigation_step: entry, ...written, ...counters() });
+        written = {};
         memory?.recordInvestigation(round, entry.step, entry);
         /* What it was answered too, as in a world of laws: what an agent reviewing its work reads (SPEC-ORQUESTADOR §3.3). */
         log('investigation', { round, requests: requests.map((r) => ('extra' in r ? r.extra : r)), results, warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
@@ -835,7 +846,13 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     }
     /* It builds on its latest model; which of its models to build on is its own decision (no "best model" handed to it). */
     const next = await propose(candidate);
-    if (!next) { if (!llmFatal && !halted) { say('attempt ' + attempt + ': System 2 gave no usable proposal'); stoppedBy = 'no_hypothesis'; } break; }
+    if (!next) {
+      if (llmFatal || halted) break;
+      /* The assisted researcher keeps its latest model when a round ends without a proposal (it did not change it): the next
+         round checks it again. The unknown-world researcher's run ends there, as it always has. */
+      if (assisted) { log('kept_model', { round: currentRound, attempt }); say('attempt ' + attempt + ': no usable proposal; the assisted researcher keeps its model'); continue; }
+      say('attempt ' + attempt + ': System 2 gave no usable proposal'); stoppedBy = 'no_hypothesis'; break;
+    }
     candidate = next;
   }
   const result = { accepted: accepted ? { formula: accepted.formula } : null, best, stoppedBy };

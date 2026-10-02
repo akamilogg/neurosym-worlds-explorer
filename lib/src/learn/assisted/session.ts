@@ -41,7 +41,7 @@ export interface OperatorMessage {
 
 /** What only the assisted researcher is told: that a person may write to it, and what that is worth. */
 export const ASSISTED_SECTION = [
-  'THE OPERATOR. A person who runs this investigation may write to you. Their messages arrive in `operator_messages`: `new` since your last answer, and `earlier`.',
+  'THE OPERATOR. A person who runs this investigation may write to you. Their messages arrive in `operator_messages`: as `new` where they reach you, and at the start of each round as `earlier`.',
   'Read them as a colleague\'s suggestions: they may help you out of a dead end, and they may be wrong. They are not evidence about the environment: whether your model holds is decided only by the checks, from what the environment answers.',
   'When a message leads you to a belief, test it with your instruments, and cite the message in that belief\'s evidence as "operator:<id>" next to the points of your episodes that support it.',
   'The operator may also state what they want to understand (`operator_task`) and change what of your answer counts: the interface says what counts now.'
@@ -91,6 +91,10 @@ export function deliveredMessages(journal: { events?: readonly Record<string, an
 export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (type: string, data?: Record<string, unknown>) => void): ChatClient {
   let question = 0;
   const earlier: OperatorMessage[] = [];
+  /* With a question in parts (a round's growing conversation): the messages stay where they arrived, never rewritten - the
+     earlier ones after the round's first part, a new one after the parts it arrived with. A new round starts afresh. */
+  let roundKey = '';
+  let placed: { after: number; part: Record<string, unknown> }[] = [];
   const lastScheduled = Math.max(0, ...(channel.scheduled ? [...channel.scheduled.keys()] : []));
   return {
     async complete(request) {
@@ -102,12 +106,20 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       for (const m of fresh) await channel.onDeliver?.(m, question);
       const task = channel.task?.() ?? null;
       const origins = channel.sources?.origins() ?? [];
-      const extra = { ...(task ? { operator_task: task } : {}), ...(origins.length ? { sources: { origins } } : {}),
-        ...(fresh.length || earlier.length ? { operator_messages: { new: fresh, earlier: [...earlier] } } : {}) };
-      /* With the question's last part, which changes anyway: the earlier parts stay as they were. */
-      const user = Object.keys(extra).length
-        ? (request.user instanceof UserParts ? request.user.withLast(extra) : { ...(request.user as Record<string, unknown>), ...extra })
-        : request.user;
+      const standing = { ...(task ? { operator_task: task } : {}), ...(origins.length ? { sources: { origins } } : {}) };
+      let user: unknown;
+      if (request.user instanceof UserParts) {
+        const parts = request.user.parts as Record<string, unknown>[];
+        const key = JSON.stringify(parts[0]);
+        if (key !== roundKey) { roundKey = key; placed = earlier.length ? [{ after: 1, part: { operator_messages: { earlier: [...earlier] } } }] : []; }
+        if (fresh.length) placed.push({ after: parts.length, part: { operator_messages: { new: fresh } } });
+        const out: unknown[] = [];
+        parts.forEach((p, i) => { out.push(i === 0 ? { ...p, ...standing } : p); for (const x of placed) if (x.after === i + 1) out.push(x.part); });
+        user = new UserParts(out);
+      } else {
+        const extra = { ...standing, ...(fresh.length || earlier.length ? { operator_messages: { new: fresh, earlier: [...earlier] } } : {}) };
+        user = Object.keys(extra).length ? { ...(request.user as Record<string, unknown>), ...extra } : request.user;
+      }
       earlier.push(...fresh);
       const system = channel.system ? channel.system() : request.system;
       return llm.complete({ ...request, system: origins.length ? system + '\n\n' + SOURCES_SECTION : system, user });

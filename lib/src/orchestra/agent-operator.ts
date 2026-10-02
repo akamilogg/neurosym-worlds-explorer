@@ -229,7 +229,8 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       const context = { you_are: 'agent:' + o.id, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}),
         ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
         run: brief, memory: reader.counts(), your_decisions: decisions.slice(-6), orders_left: ordersLeft };
-      const answer = await o.llm.complete({ system, user: new UserParts([context, ...read.map((r) => ({ investigation_step: r })), { steps_left: stepsLeft }]) });
+      /* Its conversation only grows: the first part with the steps it starts with, then each reading with the steps left. */
+      const answer = await o.llm.complete({ system, user: new UserParts([{ ...context, steps_left: limit }, ...read.map((r, k) => ({ investigation_step: r, steps_left: Math.max(0, limit - k - 1) }))]) });
       addUsage(usage, answer.raw);
       const parsed = (parseJsonLoose(answer.content) ?? {}) as { investigate?: unknown[]; decision?: string; text?: string; why?: string; evidence?: unknown[] };
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {

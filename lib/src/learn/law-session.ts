@@ -2,7 +2,8 @@ import { hashString, stableStringify } from '../core/hash.ts';
 import type { ApiError } from '../core/net.ts';
 import type { Law } from '../core/predict.ts';
 import { parseReflection } from './explorer.ts';
-import { lawExplorerParts, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
+import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
+import { RoundConversation } from './system2.ts';
 import { Notebook } from './notebook.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory } from './assisted/memory.ts';
 import type { ChatClient } from './system2.ts';
@@ -126,6 +127,11 @@ export class LawSession<A> {
     const memory = this.memory;
     /* The verdicts it was given on its latest model, kept in its memory by that model's round. */
     if (memory && b) memory.recordCheck(b.round, h.lastCheck());
+    const talk = new RoundConversation();
+    const counters = (): Record<string, unknown> => ({ ...(h.investigative ? { steps_left: Math.max(0, h.steps - (steps - free)) } : {}),
+      ...(h.acts !== undefined ? { acts_left: budget.acts } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
+    let told: string[] = refused;
+    let written: Record<string, unknown> = {};
     while (refusals < 3 && steps - free - overreach <= h.steps + 3) {
       const halt = h.halt?.() ?? null;
       if (halt) {
@@ -135,12 +141,11 @@ export class LawSession<A> {
         return null;
       }
       const stepsLeft = h.investigative ? Math.max(0, h.steps - (steps - free)) : 0;
-      const payload = lawExplorerParts({
-        round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
-        setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(),
-        ...(h.investigative ? { investigation, stepsLeft } : {}), ...(h.acts !== undefined ? { actsLeft: budget.acts } : {}),
-        refused, task: mode === 'reflect' ? reflectionTask : null, ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {})
-      });
+      if (refused !== told && refused.length) { talk.add({ your_previous_answer_was_refused: refused, ...written, ...counters() }); written = {}; }
+      told = refused;
+      talk.open(() => ({ ...lawExplorerPayload({ round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
+        setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(), task: mode === 'reflect' ? reflectionTask : null }), ...counters() }));
+      const payload = talk.question();
       h.say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;
       let content = '';
@@ -160,6 +165,7 @@ export class LawSession<A> {
       }
       const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct, ...(h.extraRequest ? { extraRequest: (q) => h.extraRequest!(q) } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...this.notebook.applyNotes(round, turn.notes, (ref) => h.known(ref)), ...this.notebook.applyMethods(round, turn.methods)];
+      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}) };
       if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }
       if (turn.kind === 'investigate') {
@@ -196,6 +202,8 @@ export class LawSession<A> {
           : 'act' in r ? { act: h.actAsWritten ? h.actAsWritten(r.act) : r.act } : 'extra' in r ? r.extra : r);
         const entry = { step: investigation.length + 1, requests: asWritten, results, ...(warnings.length || noteWarnings.length ? { warnings: [...warnings, ...noteWarnings] } : {}) };
         investigation.push(entry);
+        talk.add({ investigation_step: entry, ...written, ...counters() });
+        written = {};
         memory?.recordInvestigation(round, entry.step, entry);
         h.log('investigation', { round, requests: asWritten, results, warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
         h.say('  investigates: ' + requests.map((r, i) => {

@@ -29,10 +29,9 @@ function checkGrowth(bodies: { messages: { role: string; content: string }[] }[]
     const a = bodies[i - 1].messages, b = bodies[i].messages;
     if (a[0].content !== b[0].content || !a[1] || !b[1] || JSON.parse(a[1].content).round !== JSON.parse(b[1].content).round) continue;
     sameRound++;
-    /* Everything but the last message of the earlier request is repeated, word for word; then come new steps and a new last. */
-    for (let k = 0; k < a.length - 1; k++) assert.equal(b[k].content, a[k].content, 'message ' + k + ' of request ' + (i + 1) + ' is the earlier one\'s');
-    assert.ok(b.length > a.length, 'the round grows by messages');
-    assert.ok(JSON.parse(b[b.length - 2].content).investigation_step, 'the new step is a message of its own');
+    /* The earlier request, whole, is the beginning of this one: nothing rewritten, something added at the end. */
+    assert.ok(b.length > a.length, 'request ' + (i + 1) + ' adds to the earlier one');
+    for (let k = 0; k < a.length; k++) assert.equal(b[k].content, a[k].content, 'message ' + k + ' of request ' + (i + 1) + ' is the earlier one\'s');
   }
   return sameRound;
 }
@@ -47,8 +46,9 @@ test('the grid: within a round, each request repeats the earlier messages and ad
     fetch: recorder(bodies, (u) => ((u.investigation ?? []).length < 3 && u.round <= 2 ? { investigate: [{ view: 'g1', from: 0, to: 2 }] }
       : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: u.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] })) });
   assert.ok(checkGrowth(bodies) >= 4);
-  const last = JSON.parse(bodies[1].messages.at(-1).content);
-  assert.ok('steps_left' in last && !('notebook' in last), 'what changes goes last; the context goes first');
+  const second = bodies[1].messages;
+  assert.ok(JSON.parse(second[1].content).notebook && JSON.parse(second.at(-1).content).investigation_step, 'the context first, each step added after it');
+  assert.equal(JSON.parse(second.at(-1).content).steps_left, 2, 'the newest part says what is left');
 });
 
 test('a world of laws: the same', async () => {
@@ -59,4 +59,20 @@ test('a world of laws: the same', async () => {
     fetch: recorder(bodies, (u) => ((u.investigation ?? []).length < 2 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }
       : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false, beliefs: [{ id: 'b', stance: u.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] })) });
   assert.ok(checkGrowth(bodies) >= 2);
+});
+
+test('a round that ends without a proposal: the assisted researcher keeps its model and the run goes on; the unknown-world one stops', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parts-'));
+  /* It proposes in round 1, then in round 2 only ever asks to investigate (no steps left); from round 3 it proposes again. */
+  const answer = (u: any) => (u.round === 2 ? { investigate: [{ view: 'g1', from: 0, to: 2 }] }
+    : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: u.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] });
+  const args = ['--seed', '22', '--attempts', '3', '--explore', '1', '--variants', '1', '--family', '1', '--family-variants', '1', '--confirm-places', '1', '--levels', '2', '--depth', '1',
+    '--steps', '1', '--flat', '--no-grade', '--no-reflection', '--no-ablation'];
+  const helped = await runLaboratory(gridLab, { args: [...args, '--researcher', 'assisted', '--out', path.join(dir, 'a.json')], root: dir, llm: { url: 'http://x.test/chat', model: 'm' }, fetch: recorder([], answer) });
+  const events = JSON.parse(fs.readFileSync(helped.journal, 'utf8')).events as { type: string; round?: number }[];
+  assert.ok(events.some((e) => e.type === 'kept_model'), 'kept its model');
+  assert.ok(events.filter((e) => e.type === 'check').length >= 3, 'and the run went on');
+  assert.notEqual(helped.stoppedBy, 'no_hypothesis');
+  const pure = await runLaboratory(gridLab, { args: [...args, '--out', path.join(dir, 'p.json')], root: dir, llm: { url: 'http://x.test/chat', model: 'm' }, fetch: recorder([], answer) });
+  assert.equal(pure.stoppedBy, 'no_hypothesis', 'the unknown-world researcher as it always was');
 });

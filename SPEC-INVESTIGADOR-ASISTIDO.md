@@ -61,6 +61,20 @@ investigador completo**, y los dos conviven.
         propia» (no «message»: el mundo `messages` prohíbe la palabra).
       - Hashes renovados. Los journals con el System 2 simulado no cambian.
       - Un run anterior a este cambio no puede reanudarse con este código: sus peticiones ya no coinciden con su grabación.
+      - Corrección el mismo día: **la conversación de una ronda solo crece**. El primer diseño ponía al final un mensaje
+        con lo que cambia (contadores), distinto en cada llamada. El proveedor reaprovecha la **petición anterior entera**
+        cuando la nueva la extiende, no un corte intermedio, así que nada se cacheaba más allá del sistema. Ahora:
+        - la primera parte de la ronda lleva el contexto y los contadores iniciales y no cambia;
+        - cada paso, rechazo o mensaje del operador se **añade** como parte nueva, con los contadores de ese momento;
+        - el cuaderno se muestra como estaba al empezar la ronda, y lo que el investigador escribe durante ella vuelve en
+          la parte siguiente (`your_notes`, `your_methods`);
+        - los mensajes del operador llegan una vez, donde llegan (`operator_messages.new`), y al empezar cada ronda se
+          repiten los anteriores (`earlier`);
+        - las lecturas del senior siguen la misma regla;
+        - `test/parts.test.ts` comprueba que cada petición de una ronda contiene la anterior entera como prefijo.
+      - Además, en el asistido de la cuadrícula, una ronda que acaba sin propuesta **conserva su modelo** y el run sigue
+        (`kept_model`), en vez de terminar. En los mundos de leyes ya era así. El puro de la cuadrícula termina, como
+        siempre.
 - **P2. Dos implementaciones completas, no un interruptor dentro de una.**
   - El asistido tiene su propio paquete (`lib/src/learn/assisted/`): su sesión, su prompt y sus instrumentos.
   - Un cambio en el asistido no puede alterar lo que ve el puro.

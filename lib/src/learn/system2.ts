@@ -27,11 +27,18 @@ export interface ChatAnswer {
 export class UserParts {
   readonly parts: readonly unknown[];
   constructor(parts: readonly unknown[]) { this.parts = parts; }
-  /** The same parts, the last one with these fields added (the assisted researcher's messages go with the question). */
-  withLast(extra: Record<string, unknown>): UserParts {
-    const last = this.parts[this.parts.length - 1];
-    return new UserParts([...this.parts.slice(0, -1), { ...(last && typeof last === 'object' ? last as Record<string, unknown> : {}), ...extra }]);
-  }
+}
+
+/** A round's conversation with System 2, which only ever grows: its first part (the round's context and the counters it
+    starts with) never changes, and every later part (an investigation step, a refusal, a message) is added after the
+    others, never rewritten. Each question is then the previous one with something added at its end - what a provider's
+    cache reuses. */
+export class RoundConversation {
+  private readonly parts: Record<string, unknown>[] = [];
+  /** The round's first part, built the first time only. */
+  open(first: () => Record<string, unknown>): void { if (!this.parts.length) this.parts.push(first()); }
+  add(part: Record<string, unknown>): void { this.parts.push(part); }
+  question(): UserParts { return new UserParts([...this.parts]); }
 }
 
 export interface ChatClient {

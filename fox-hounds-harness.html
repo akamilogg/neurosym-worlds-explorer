@@ -619,6 +619,7 @@ var Neurosym = (() => {
     PLAY_PV_ALPHA_BETA: () => PLAY_PV_ALPHA_BETA,
     PREFILTER_TOLERANCE: () => PREFILTER_TOLERANCE,
     REVISION_MIN_DELTA: () => REVISION_MIN_DELTA,
+    RoundConversation: () => RoundConversation,
     STANCES: () => STANCES,
     TRIGGER_CLASSES: () => TRIGGER_CLASSES,
     TT_EXACT: () => TT_EXACT,
@@ -657,7 +658,6 @@ var Neurosym = (() => {
     diffFormulas: () => diffFormulas,
     evaluationConfidence: () => evaluationConfidence,
     evaluatorHooks: () => evaluatorHooks,
-    explorerParts: () => explorerParts,
     explorerPayload: () => explorerPayload,
     explorerSystem: () => explorerSystem,
     fetchJson: () => fetchJson,
@@ -2850,15 +2850,25 @@ var Neurosym = (() => {
   }
 
   // src/learn/system2.ts
-  var UserParts = class _UserParts {
+  var UserParts = class {
     constructor(parts) {
       __publicField(this, "parts");
       this.parts = parts;
     }
-    /** The same parts, the last one with these fields added (the assisted researcher's messages go with the question). */
-    withLast(extra) {
-      const last = this.parts[this.parts.length - 1];
-      return new _UserParts([...this.parts.slice(0, -1), { ...last && typeof last === "object" ? last : {}, ...extra }]);
+  };
+  var RoundConversation = class {
+    constructor() {
+      __publicField(this, "parts", []);
+    }
+    /** The round's first part, built the first time only. */
+    open(first) {
+      if (!this.parts.length) this.parts.push(first());
+    }
+    add(part) {
+      this.parts.push(part);
+    }
+    question() {
+      return new UserParts([...this.parts]);
     }
   };
   var clock4 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -3703,7 +3713,7 @@ var Neurosym = (() => {
     (_t) => 'YOUR NOTEBOOK (the `notebook` field) is yours: your beliefs and their history, the notes you chose to write, your methods, the index of episodes, every model you tried with what came of it, and your own lessons and planned next experiment. Nothing is added to it for you except the facts of what you did and what came of it. Write in it what you want to remember: a note can cite episodes as "<episode>" and points of them as "<episode>@<step>".',
     (t) => 'Every round, take a stance on EVERY belief you still hold: "keep", "revise" (give the new statement), "confirm" (the evidence settled it) or "drop" (the evidence refuted it); add new ones with "new". Cite the evidence: episodes, points, rounds.',
     "",
-    [INVESTIGATION_TOOLS, 'INVESTIGATE before proposing. Instead of a proposal you may answer {"investigate": [ ...requests ], "notes": [ ...optional ]}; each answer comes back with its results as a part of its own (`investigation_step`), after the part with the round\'s context and before a last part with what changes from one answer to the next - there, `steps_left` says how many more such answers you have this round. What each instrument does is below; its exact parameters are in the interface.'],
+    [INVESTIGATION_TOOLS, 'INVESTIGATE before proposing. Instead of a proposal you may answer {"investigate": [ ...requests ], "notes": [ ...optional ]}; each answer comes back with its results as a part of its own (`investigation_step`), added after the round\'s context and the earlier parts, which never change; the newest part says how many more such answers you have this round (`steps_left`). Your notebook is shown as it was when the round began: what you write in it during the round comes back in the newest part (`your_notes`, `your_methods`). What each instrument does is below; its exact parameters are in the interface.'],
     [["view"], "  view      what was perceived over a stretch of one of your episodes."],
     [["inspect"], "  inspect   what a model did at a point, part by part: what each observation measured, what each rule answered, and what the model produced from them."],
     [["act"], "  act       INTERVENE in the environment: do something yourself and see what it does. It only answers whether it accepted what you did and what followed; it never says why. It is how you TEST an idea directly: two acts that differ in one thing isolate the effect of that thing. `acts_left` says how many you have this round."],
@@ -3864,11 +3874,6 @@ var Neurosym = (() => {
       ...brief.directive ? { operator_directive: brief.directive } : {},
       ...brief.task ? { task: brief.task } : {}
     };
-  }
-  function explorerParts(brief) {
-    const { investigation, steps_left, replays_left, memory_answers_left, memory, your_previous_answer_was_refused, operator_directive, task, ...context } = explorerPayload(brief);
-    const last = Object.fromEntries(Object.entries({ steps_left, replays_left, memory_answers_left, memory, your_previous_answer_was_refused, operator_directive, task }).filter(([, v]) => v !== void 0));
-    return new UserParts([context, ...(investigation ?? []).map((step) => ({ investigation_step: step })), ...Object.keys(last).length ? [last] : []]);
   }
   function parseNotes(raw, warnings, archive = false) {
     const out = [];
