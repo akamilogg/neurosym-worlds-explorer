@@ -111,6 +111,15 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
   (`--agents senior=message`) y de su presupuesto de ayuda (`--help-budget`).
 - **Modelo.** `AGENT_LLM_URL` y `AGENT_LLM_MODEL` (por defecto el de los investigadores). La idea es un modelo más
   capaz que el del junior.
+- **Su prompt: un investigador con otra capacidad, no otro método.** Se compone de tres partes:
+  1. su papel;
+  2. el **brief del junior palabra por palabra** (`juniorBrief`): el prompt común (persona, método, instrumentos,
+     protocolo) y la interfaz del mundo, reconstruidos a partir del journal (mundo, instrumentos, regresión, foco). Se
+     omite solo la forma de la propuesta, porque esa respuesta es del junior;
+  3. sus instrucciones de revisor.
+  
+  Cualquier cambio del método común le llega igual que al junior. La comparación junior-senior mide la diferencia de
+  modelo, no de instrucciones.
 
 **Uso:**
 - `lab agent <run> --role senior [--patience N]`, sobre un run asistido lanzado con `--agents senior=message`;

@@ -3,7 +3,7 @@ import { parseJsonLoose } from '../core/net.ts';
 import type { ChatClient } from '../learn/system2.ts';
 import { orderOutcome, runStatus, send } from '../runtime/control.ts';
 import { researcherEvents, runDigest } from './view.ts';
-import { journalReader, stuckSignals, type StuckSignals } from './reader.ts';
+import { journalReader, juniorBrief, stuckSignals, type StuckSignals } from './reader.ts';
 
 /* ============================================================================
  * The AGENT OPERATOR (SPEC-ORQUESTADOR §3, R1): an agent that follows an assisted run and does
@@ -23,16 +23,27 @@ export const AGENT_OPERATOR_SYSTEM = [
   'Answer ONE JSON object: {"decision": "wait" | "message" | "stop", "text": "<the message, for message>", "why": "<your reason, for the record>"}'
 ].join('\n');
 
-/** The SENIOR (SPEC-ORQUESTADOR §3.3): a more capable model that reviews a junior's record when it is stuck and proposes a
-    hypothesis the junior's own data suggest. */
-export const SENIOR_SYSTEM = [
-  'You are a SENIOR RESEARCHER reviewing the work of a junior researcher. The junior is an AI investigating an environment nobody has described to it: it writes models, the environment checks them and says whether they hold in each place, and it experiments, takes notes and reflects.',
+/** The SENIOR (SPEC-ORQUESTADOR §3.3): a researcher with a more capable model that reviews a junior's record when it is
+    stuck and proposes a hypothesis the junior's own data suggest. Its prompt is the junior's own brief (the common
+    prompt and the world's interface, `juniorBrief`) between its role and its instructions as a reviewer: the same
+    method, another capability. */
+export const SENIOR_HEAD = [
+  'You are a SENIOR RESEARCH SCIENTIST reviewing the work of a junior researcher: an AI that investigates an environment nobody has described to it. Below, word for word, is the brief the junior works under - its persona, its method, its instruments and this environment\'s interface. That method is yours as well: apply it, with all your capability, to the junior\'s record.',
+  'The difference between you is what each can do. The junior acts on the environment and proposes models. You act on nothing: you read the junior\'s record and advise it. Where the brief says "you", read "the junior"; where it describes how to answer, that is the junior\'s answer, not yours - yours is described after the brief.'
+].join('\n');
+
+export const SENIOR_ROLE = [
+  'YOUR ROLE AS SENIOR.',
   'You see exactly what the junior saw and did - its notes, beliefs, methods and models, every request it made with what the environment answered, the verdicts of its checks, its episodes and their scores - never more. You know nothing about the environment beyond that record, and you cannot know the right answer.',
   'You are called because the junior shows signs of being stuck (`signals`). Review its record as a demanding senior would. Read its notes and the answers it got, and look for what it has not interpreted: a regularity in the answers it did not connect; a fact it recorded and did not build on; a clue it dismissed or held as "only an association"; an alternative it wrote down and never tested; a reading that its own data contradict.',
   'Your instruments read the junior\'s record only (they ask nothing of the environment): {"investigate": [{"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks"}, {"memory": "open", "items": ["<id>", ...]}, {"memory": "find", "words": "...", "of": "<kind>" (optional)}]}. Ids: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it was answered), "check:r<round>". `steps_left` says how many such answers you have; `memory` how many items of each kind there are.',
   'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); and ONE experiment with its instruments that would test it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. Your message is a colleague\'s suggestion, and it may be wrong. If you found nothing worth its attention, wait.',
   'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"}'
 ].join('\n');
+
+/** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), its instructions. */
+export const seniorSystem = (brief: string | null): string =>
+  brief ? SENIOR_HEAD + '\n\n=== THE JUNIOR\'S BRIEF ===\n\n' + brief + '\n\n=== END OF THE JUNIOR\'S BRIEF ===\n\n' + SENIOR_ROLE : SENIOR_HEAD + '\n\n' + SENIOR_ROLE;
 
 export type AgentRole = 'coach' | 'senior';
 
@@ -140,6 +151,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const lastMessage = [...decisions].reverse().find((x) => x.decision === 'message');
   if (!signals.signs.length || (lastMessage && rounds - lastMessage.rounds < (o.cooldown ?? 2))) return null;
   const reader = journalReader(journal);
+  const system = seniorSystem(juniorBrief(journal));
   const read: { step: number; requests: Record<string, unknown>[]; results: unknown[] }[] = [];
   const at = () => new Date().toISOString();
   const limit = o.readSteps ?? 4;
@@ -147,7 +159,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   try {
     for (let turn = 0; turn <= limit + 1; turn++) {
       const stepsLeft = Math.max(0, limit - read.length);
-      const answer = await o.llm.complete({ system: SENIOR_SYSTEM, user: { you_are: 'agent:' + o.id, signals: signals.signs, run: digest, memory: reader.counts(),
+      const answer = await o.llm.complete({ system, user: { you_are: 'agent:' + o.id, signals: signals.signs, run: digest, memory: reader.counts(),
         ...(read.length ? { investigation: read } : {}), steps_left: stepsLeft, your_decisions: decisions.slice(-6), orders_left: ordersLeft } });
       const parsed = (parseJsonLoose(answer.content) ?? {}) as { investigate?: unknown[]; decision?: string; text?: string; why?: string; evidence?: unknown[] };
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {

@@ -6,7 +6,11 @@ import path from 'node:path';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { cellsLab } from '../src/worlds/cells/lab.ts';
 import { journalReader, stuckSignals } from '../src/orchestra/reader.ts';
-import { runAgentOperator, SENIOR_SYSTEM } from '../src/orchestra/agent-operator.ts';
+import { runAgentOperator, SENIOR_HEAD, SENIOR_ROLE } from '../src/orchestra/agent-operator.ts';
+import { juniorBrief } from '../src/orchestra/reader.ts';
+import { system2Prompt } from '../src/learn/prompt.ts';
+import { explorerSystem } from '../src/learn/explorer.ts';
+import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
 
@@ -91,7 +95,13 @@ test('a senior is called only when the junior is stuck, reads its record, propos
   const r = await run;
   controller.abort();
   const { decisions, file } = await agent;
-  assert.ok(seen.length >= 2 && seen.every((s) => s.system === SENIOR_SYSTEM));
+  assert.ok(seen.length >= 2);
+  /* Its prompt: its role, then the junior's brief word for word (without the shape of a proposal), then its instructions. */
+  const brief = juniorBrief(JSON.parse(fs.readFileSync(out, 'utf8')))!;
+  for (const s of seen) {
+    assert.ok(s.system.startsWith(SENIOR_HEAD) && s.system.endsWith(SENIOR_ROLE));
+    assert.ok(s.system.includes(brief));
+  }
   assert.match(seen[0].user.signals.join(' '), /held in no place/, 'called for a sign of being stuck');
   assert.ok(seen[1].user.investigation[0].results[0].items.some((i: { id: string }) => i.id === 'belief:same'), 'it read the record');
   const message = decisions.find((d) => d.decision === 'message')!;
@@ -105,4 +115,16 @@ test('a senior is called only when the junior is stuck, reads its record, propos
   const journal = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
   const inputs = JSON.stringify(seen.map((s) => s.user));
   for (const t of journal.hidden_from_the_learner.truth as { statement: string }[]) assert.ok(!inputs.includes(t.statement), 'never the truth');
+});
+
+test('the junior\'s brief is its prompt word for word, its world\'s interface included, without the shape of a proposal', () => {
+  const grid = juniorBrief({ experiment: 'unknown-world@1', config: { tools: ['view', 'act', 'table'] } })!;
+  const full = explorerSystem(new Set(['view', 'act', 'table']) as never);
+  assert.ok(full.startsWith(grid), 'the same text');
+  assert.match(grid, /THIS ENVIRONMENT'S INTERFACE/);
+  assert.match(grid, /"act": "<point>"/, 'what an act is');
+  assert.doesNotMatch(grid, /When you propose, answer with ONE JSON object/);
+  const cells = juniorBrief({ experiment: 'cells@1', config: { tools: ['view'], regression: true } });
+  if (cells) assert.ok(system2Prompt(cellsInterface({ regression: true }), new Set(['view'])).startsWith(cells));
+  assert.equal(juniorBrief({ experiment: 'nowhere@1' }), null);
 });

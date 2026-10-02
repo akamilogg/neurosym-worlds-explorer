@@ -1,6 +1,9 @@
 import { Notebook, type BeliefStance, type NoteOp } from '../learn/notebook.ts';
 import { JournalMemory, type EpisodeEntry, type ModelEntry } from '../learn/assisted/memory.ts';
-import { ownFormula } from '../learn/explorer.ts';
+import { explorerSystem, ownFormula } from '../learn/explorer.ts';
+import { system2Prompt, type Tool } from '../learn/prompt.ts';
+import { isGameLab } from '../learn/lab.ts';
+import { LABS } from '../worlds/labs.ts';
 import type { Formula } from '../core/types.ts';
 
 /* ============================================================================
@@ -101,4 +104,21 @@ export function stuckSignals(journal: J, patience = 3): StuckSignals {
     ...(insisted >= 2 ? ['it asked to investigate ' + insisted + ' times with no steps left in its latest round'] : [])
   ];
   return { holding_nowhere_in_a_row: nowhere, repeated_requests: repeated, insisted_without_steps: insisted, distinct_models_lately: distinct, signs };
+}
+
+/** Where the researcher's prompt stops describing its work and starts describing the shape of its own answer. */
+const ANSWER_SHAPE = 'When you propose, answer with ONE JSON object and nothing else:';
+
+/** The brief the junior works under, word for word: the common prompt (persona, method, instruments, protocol) and its
+    world's interface, as its run built them - without the shape of a proposal, which is the junior's to answer, not a
+    reviewer's. Null when the journal's world is not known here. */
+export function juniorBrief(journal: J): string | null {
+  const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
+  if (!lab) return null;
+  const config = (journal?.config ?? {}) as J;
+  const tools = new Set((Array.isArray(config.tools) ? config.tools : []) as Tool[]);
+  const prompt = isGameLab(lab) ? explorerSystem(tools as never)
+    : system2Prompt(lab.interface({ regression: config.regression !== false, ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) }), tools);
+  const at = prompt.indexOf(ANSWER_SHAPE);
+  return (at >= 0 ? prompt.slice(0, at) : prompt).trimEnd();
 }
