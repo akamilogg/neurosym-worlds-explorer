@@ -128,6 +128,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
         (d as { order?: string }).order = id;
         orders++;
         say('agent:' + o.id + ' after ' + rounds + ' rounds: ' + d.decision + (d.text ? ' - ' + d.text.slice(0, 120) : ''));
+      } else if (d) {
+        /* A wait or an error is said too: an agent that cannot reach its model must not look like one that is waiting. */
+        say('agent:' + o.id + ' after ' + rounds + ' rounds: ' + d.decision + (d.why ? ' - ' + d.why.slice(0, 160) : '') + (d.signals?.length ? ' [signals: ' + d.signals.join('; ') + ']' : ''));
       }
       if (d) record.decisions.push(d);
       save();

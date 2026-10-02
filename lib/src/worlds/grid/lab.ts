@@ -677,7 +677,11 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
           if (assisted && investigative && overreach < OVERREACH) {
             overreach++;
             log('investigation_refused', { round, reason: 'no investigation steps left', reminders_left: OVERREACH - overreach, requests: requests.map((r) => ('extra' in r ? r.extra : r)) });
-          } else refusals++;
+            say('  refused: no investigation steps left (reminder ' + overreach + ' of ' + OVERREACH + ')');
+          } else {
+            refusals++;
+            say('  refused: ' + refused[0] + ' (refusal ' + refusals + ' of 3)');
+          }
           continue;
         }
         const results: unknown[] = [];

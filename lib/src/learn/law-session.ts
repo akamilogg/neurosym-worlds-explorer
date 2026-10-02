@@ -181,7 +181,10 @@ export class LawSession<A> {
             overreach++;
             h.log('investigation_refused', { round, reason: 'no investigation steps left', reminders_left: (h.overreach ?? 0) - overreach, requests: requests.map((r) => ('extra' in r ? r.extra : r)) });
             h.say('  refused: no investigation steps left (reminder ' + overreach + ' of ' + h.overreach + ')');
-          } else refusals++;
+          } else {
+            refusals++;
+            h.say('  refused: ' + refused[0] + ' (refusal ' + refusals + ' of 3)');
+          }
           continue;
         }
         const results: unknown[] = [];

@@ -128,3 +128,18 @@ test('the junior\'s brief is its prompt word for word, its world\'s interface in
   if (cells) assert.ok(system2Prompt(cellsInterface({ regression: true }), new Set(['view'])).startsWith(cells));
   assert.equal(juniorBrief({ experiment: 'nowhere@1' }), null);
 });
+
+test('an agent that cannot reach its model says so on its console, with the signs it was called for', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-'));
+  const out = path.join(dir, 'run.json');
+  const lines: string[] = [];
+  const controller = new AbortController();
+  const refused: ChatClient = { complete: async () => { throw new Error('HTTP 401 Unauthorized'); } };
+  const run = runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--tools', 'none', '--researcher', 'assisted', '--attempts', '4', '--agents', 'senior=message', '--out', out],
+    root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: stuck });
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', patience: 2, journal: out, llm: refused, pollMs: 15, signal: controller.signal, say: (l) => lines.push(l) });
+  await run;
+  controller.abort();
+  await agent;
+  assert.ok(lines.some((l) => /error - HTTP 401 Unauthorized \[signals: .*held in no place/.test(l)), lines.join('\n'));
+});
