@@ -84,8 +84,22 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
   - peticiones repetidas en la última ronda;
   - insistir en investigar sin pasos.
   
+  - **una ronda de solo mirar:** `looking` respuestas de investigación (3 por defecto) sin ningún experimento (`act`,
+    `replay`, `table`, `measure`, `simulate`), solo `view`, `inspect` o lecturas. Es la señal de un junior que duda o
+    investiga de más y no llega a formular una hipótesis que pruebe. La ronda 1, sin modelo todavía, no cuenta.
+
   Son recuentos mecánicos de hechos del registro, no un diagnóstico: deciden cuándo merece la pena llamarlo, que es lo
   caro. El diagnóstico es suyo. Tras un mensaje deja `cooldown` rondas al junior (2 por defecto).
+- **También dentro de la ronda (02/10/2026).** Al principio solo se le llamaba al acabar una ronda.
+  - En el run `grid-s22-2026-10-02T10-10-45-109Z`, Qwen pasó la ronda 3 mirando 12 tableros, insistió sin pasos hasta
+    agotar los recordatorios y la ronda acabó sin propuesta. En la cuadrícula eso termina el run, así que el senior no
+    llegó a actuar.
+  - Ahora, cuando una señal es de la ronda en curso (solo mirar, o insistir sin pasos dos veces), se le llama en ese
+    momento, una vez por ronda (`during_round`).
+  - Su mensaje llega con la siguiente pregunta al junior, dentro de la misma ronda, antes de que se agoten los
+    recordatorios.
+  - Su papel le dice que entonces le ayude a comprometerse: señalar la hipótesis que mejor sostiene el registro y pedirle
+    que proponga ya un modelo que la pruebe («un modelo que falla también enseña»).
 - **Qué ve.** Exactamente lo que vio el junior (Q2), reconstruido desde su journal (`reader.ts`, `journalReader`):
   - creencias, notas y métodos;
   - sus modelos;

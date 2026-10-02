@@ -37,6 +37,7 @@ export const SENIOR_ROLE = [
   'You see exactly what the junior saw and did - its notes, beliefs, methods and models, every request it made with what the environment answered, the verdicts of its checks, its episodes and their scores - never more. You know nothing about the environment beyond that record, and you cannot know the right answer.',
   'You are called because the junior shows signs of being stuck (`signals`). Review its record as a demanding senior would. Read its notes and the answers it got, and look for what it has not interpreted: a regularity in the answers it did not connect; a fact it recorded and did not build on; a clue it dismissed or held as "only an association"; an alternative it wrote down and never tested; a reading that its own data contradict.',
   'Your instruments read the junior\'s record only (they ask nothing of the environment): {"investigate": [{"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks"}, {"memory": "open", "items": ["<id>", ...]}, {"memory": "find", "words": "...", "of": "<kind>" (optional)}]}. Ids: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it was answered), "check:r<round>". `steps_left` says how many such answers you have; `memory` how many items of each kind there are.',
+  'You may be called at the end of one of its rounds, or during a round (`during_round`), when it keeps looking without testing anything or keeps asking to investigate with no steps left: your message then reaches it within that round, before it answers again. Then help it commit: point to the hypothesis its own record supports best and tell it to propose a model that tests it now - a model that fails also teaches.',
   'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); and ONE experiment with its instruments that would test it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. Your message is a colleague\'s suggestion, and it may be wrong. If you found nothing worth its attention, wait.',
   'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"}'
 ].join('\n');
@@ -60,6 +61,8 @@ export interface AgentDecision {
   readonly signals?: readonly string[];
   readonly read?: readonly unknown[];
   readonly evidence?: readonly string[];
+  /** The round in course when the senior was called during it (not at its end). */
+  readonly during_round?: number;
 }
 
 export interface AgentOperatorOptions {
@@ -77,8 +80,10 @@ export interface AgentOperatorOptions {
       being stuck; it reads the junior's record and proposes a hypothesis its data suggest. */
   readonly role?: AgentRole;
   /** The senior: checks in a row holding nowhere before it is a sign (default 3); answers reading the record (default 4);
-      rounds to leave the junior after a message before it may be called again (default 2). */
+      rounds to leave the junior after a message before it may be called again (default 2); answers of a round only looking
+      (no experiment) before it is a sign (default 3). */
   readonly patience?: number;
+  readonly looking?: number;
   readonly readSteps?: number;
   readonly cooldown?: number;
 }
@@ -102,6 +107,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   save();
   const say = o.say ?? (() => {});
   let seenRounds = -1, orders = 0;
+  /* The senior is also called during a round, once per round, when a sign is about the round in course. */
+  const calledInRound = new Set<number>();
   const maxOrders = o.maxOrders ?? 6;
   while (!o.signal?.aborted) {
     const status = fs.existsSync(o.journal) ? runStatus(o.journal) : null;
@@ -110,11 +117,16 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     /* Rounds it has completed: checked, or reflected on. */
     const rounds = journal ? researcherEvents(journal).filter((e) => e.type === 'check' || e.type === 'reflection').length : 0;
     const over = status?.state === 'ended' || status?.state === 'interrupted';
-    /* A round completed since it last decided (and the run still going): decide. */
-    if (digest && rounds > seenRounds && rounds > 0 && !over && orders < maxOrders) {
-      seenRounds = rounds;
+    /* The senior, during a round: a sign about the round in course (it only looks, or insists with no steps left). */
+    const now = role === 'senior' && journal ? stuckSignals(journal, o.patience ?? 3, o.looking ?? 3) : null;
+    const duringRound = Boolean(now?.in_round && !calledInRound.has(now.current_round));
+    /* A round completed since it last decided, or (the senior) a sign within the round (and the run still going): decide. */
+    if (digest && ((rounds > seenRounds && rounds > 0) || duringRound) && !over && orders < maxOrders) {
+      if (duringRound) calledInRound.add(now!.current_round);
+      const completed = rounds > seenRounds;
+      seenRounds = Math.max(seenRounds, rounds);
       let d: AgentDecision | null;
-      if (role === 'senior') d = await seniorDecides(o, journal, digest, rounds, record.decisions, maxOrders - orders);
+      if (role === 'senior') d = await seniorDecides(o, journal, digest, rounds, record.decisions, maxOrders - orders, !completed && duringRound ? now!.current_round : null);
       else try {
         const answer = await o.llm.complete({ system: AGENT_OPERATOR_SYSTEM, user: { you_are: 'agent:' + o.id, run: digest, your_decisions: record.decisions.slice(-8), orders_left: maxOrders - orders } });
         const parsed = (parseJsonLoose(answer.content) ?? {}) as { decision?: string; text?: string; why?: string };
@@ -149,8 +161,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
 
 /** The senior's turn: nothing unless the run shows signs of being stuck (and it has left the junior time since its last
     message); then it reads the junior's record and decides. Null: it was not called (nothing is recorded). */
-async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, digest: unknown, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number): Promise<AgentDecision | null> {
-  const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3);
+async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, digest: unknown, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
+  duringRound: number | null = null): Promise<AgentDecision | null> {
+  const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   const lastMessage = [...decisions].reverse().find((x) => x.decision === 'message');
   if (!signals.signs.length || (lastMessage && rounds - lastMessage.rounds < (o.cooldown ?? 2))) return null;
   const reader = journalReader(journal);
@@ -162,7 +175,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   try {
     for (let turn = 0; turn <= limit + 1; turn++) {
       const stepsLeft = Math.max(0, limit - read.length);
-      const answer = await o.llm.complete({ system, user: { you_are: 'agent:' + o.id, signals: signals.signs, run: digest, memory: reader.counts(),
+      const answer = await o.llm.complete({ system, user: { you_are: 'agent:' + o.id, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}), run: digest, memory: reader.counts(),
         ...(read.length ? { investigation: read } : {}), steps_left: stepsLeft, your_decisions: decisions.slice(-6), orders_left: ordersLeft } });
       const parsed = (parseJsonLoose(answer.content) ?? {}) as { investigate?: unknown[]; decision?: string; text?: string; why?: string; evidence?: unknown[] };
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {
@@ -173,7 +186,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
         continue;
       }
       const decision = parsed.decision === 'message' && parsed.text?.trim() ? 'message' : 'wait';
-      return { at: at(), rounds, decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}), why: String(parsed.why ?? ''), signals: signals.signs,
+      return { at: at(), rounds, ...(duringRound !== null ? { during_round: duringRound } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}), why: String(parsed.why ?? ''), signals: signals.signs,
         read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}) };
     }
     return { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked() };

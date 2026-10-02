@@ -83,11 +83,22 @@ export interface StuckSignals {
   readonly insisted_without_steps: number;
   /** Distinct models among its latest proposals (few: variants of one idea). */
   readonly distinct_models_lately: number;
+  /** Investigation answers of its latest round that only looked (view, inspect, reading its memory or sources), when it ran
+      no experiment at all in that round (act, replay, table, measure, simulate): it doubts, or investigates too much, and
+      does not get to a hypothesis it tests. 0 when it experimented. */
+  readonly only_looking: number;
+  /** The round in course (the latest it acted in), and whether a sign is about it: then it can still be helped in it. */
+  readonly current_round: number;
+  readonly in_round: boolean;
   /** The signs, in words: empty when there is none. */
   readonly signs: readonly string[];
 }
 
-export function stuckSignals(journal: J, patience = 3): StuckSignals {
+/** Instruments that put an idea to the test (the rest only look at what was recorded or read). */
+const EXPERIMENTS = new Set(['act', 'replay', 'table', 'measure', 'simulate', 'launch', 'play', 'try']);
+
+/** `patience`: checks in a row holding nowhere before it is a sign; `looking`: answers of a round only looking. */
+export function stuckSignals(journal: J, patience = 3, looking = 3): StuckSignals {
   const events = (Array.isArray(journal?.events) ? journal.events : []) as J[];
   const checks = events.filter((e) => e.type === 'check');
   let nowhere = 0;
@@ -96,14 +107,20 @@ export function stuckSignals(journal: J, patience = 3): StuckSignals {
   const asked = events.filter((e) => e.type === 'investigation' && e.round === last).flatMap((e) => (e.requests ?? []).map((q: unknown) => JSON.stringify(q)));
   const repeated = asked.length - new Set(asked).size;
   const insisted = events.filter((e) => e.type === 'investigation_refused' && e.round === last).length;
+  const answers = events.filter((e) => e.type === 'investigation' && e.round === last);
+  const experimented = answers.some((e) => (e.requests ?? []).some((q: J) => EXPERIMENTS.has(Object.keys(q ?? {})[0] ?? '')));
+  /* Round 1 is for looking: there is no model yet. From the next one, a round of only looking is a sign. */
+  const onlyLooking = experimented || last <= 1 ? 0 : answers.length;
   const recent = events.filter((e) => e.type === 'proposal').slice(-patience);
   const distinct = new Set(recent.map((e) => e.fingerprint ?? JSON.stringify(e.formula?.observations ? Object.keys(e.formula.observations) : e.law))).size;
   const signs = [
     ...(nowhere >= patience ? [nowhere + ' checks in a row where its model held in no place'] : []),
     ...(repeated >= 2 ? [repeated + ' requests repeated in its latest round'] : []),
-    ...(insisted >= 2 ? ['it asked to investigate ' + insisted + ' times with no steps left in its latest round'] : [])
+    ...(insisted >= 2 ? ['it asked to investigate ' + insisted + ' times with no steps left in its latest round'] : []),
+    ...(onlyLooking >= looking ? ['it spent ' + onlyLooking + ' investigation answers of its latest round only looking, with no experiment (no act, replay, table or measure)'] : [])
   ];
-  return { holding_nowhere_in_a_row: nowhere, repeated_requests: repeated, insisted_without_steps: insisted, distinct_models_lately: distinct, signs };
+  return { holding_nowhere_in_a_row: nowhere, repeated_requests: repeated, insisted_without_steps: insisted, distinct_models_lately: distinct,
+    only_looking: onlyLooking, current_round: last, in_round: insisted >= 2 || onlyLooking >= looking, signs };
 }
 
 /** Where the researcher's prompt stops describing its work and starts describing the shape of its own answer. */

@@ -143,3 +143,53 @@ test('an agent that cannot reach its model says so on its console, with the sign
   await agent;
   assert.ok(lines.some((l) => /error - HTTP 401 Unauthorized \[signals: .*held in no place/.test(l)), lines.join('\n'));
 });
+
+test('a round of only looking is a sign (from the second round on); a round with an experiment is not', () => {
+  const look = (round: number) => ({ type: 'investigation', round, requests: [{ view: 'g1' }, { inspect: 'g1@2' }] });
+  const s = stuckSignals({ events: [{ type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false }] }, look(2), look(2), look(2)] });
+  assert.equal(s.only_looking, 3);
+  assert.equal(s.current_round, 2);
+  assert.ok(s.in_round && s.signs.some((x) => /only looking/.test(x)));
+  assert.equal(stuckSignals({ events: [look(1), look(1), look(1)] }).only_looking, 0, 'round 1 is for looking');
+  assert.equal(stuckSignals({ events: [look(2), look(2), { type: 'investigation', round: 2, requests: [{ table: { source: 's' }, on: 'episodes' }] }] }).only_looking, 0);
+});
+
+test('the senior is called during a round in which the junior only looks, and its message reaches it in that same round', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-'));
+  const out = path.join(dir, 'run.json');
+  /* The junior: proposes in round 1; in round 2 only looks, then insists with no steps left - until a message comes. */
+  const looking: FetchLike = async (_url, init) => {
+    await sleep(40);
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
+    const told = Boolean(user.operator_messages?.new?.length || user.operator_messages?.earlier?.length);
+    const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'same', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : user.round >= 2 && !told ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false,
+        beliefs: [{ id: 'same', stance: user.round === 1 ? 'new' : 'keep', statement: 'the row repeats', evidence: [] }], lessons: ['l'], next_experiment: 'n' };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const seen: any[] = [];
+  const advisor: ChatClient = { complete: async (r) => {
+    seen.push(r.user);
+    return { content: JSON.stringify({ decision: 'message', text: 'You have looked enough: propose the model your notes support and test it.', evidence: ['investigation:r2.1'], why: 'only looking' }), latencyMs: 0, raw: null };
+  } };
+  const controller = new AbortController();
+  const run = runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--tools', 'view', '--researcher', 'assisted', '--attempts', '3', '--agents', 'senior=message', '--out', out],
+    root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: looking });
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm: advisor, pollMs: 10, maxOrders: 1, signal: controller.signal });
+  const r = await run;
+  controller.abort();
+  const { decisions } = await agent;
+  const message = decisions.find((d) => d.decision === 'message')!;
+  assert.equal(message.during_round, 2, 'called during round 2');
+  assert.equal(seen[0].during_round, 2);
+  assert.match(seen[0].signals.join(' '), /only looking/);
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  const delivered = events.findIndex((e) => e.type === 'operator_message');
+  const proposed2 = events.findIndex((e) => e.type === 'proposal' && e.round === 2);
+  assert.ok(delivered >= 0 && proposed2 > delivered, 'received within round 2, and then it proposed');
+});
