@@ -49,6 +49,7 @@ export const CLI_USAGE = [
   'The orchestra (SPEC-ORQUESTADOR):',
   'lab agent <run> [--id coach] [--max-orders N]             an agent operator follows the run (it needs --agents coach=message on the run)',
   '          [--role senior] [--patience N]                   a senior: when the run is stuck, it reviews the junior record and proposes a hypothesis',
+  'lab grade <run>                                           grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*)',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
   'lab project list | status <id>                            the projects; one\'s state and report',
@@ -216,6 +217,18 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const f = finding(journal, view);
         out('(' + view + ' view, ' + f.researcher + ' researcher)');
         out(findingText(f));
+        return 0;
+      }
+      case 'grade': {
+        const journal = resolveRun(ctx.root, args[0]);
+        const env = ctx.env ?? process.env;
+        const { chatFromEnv, endpointsFromEnv } = await import('../orchestra/launch.ts');
+        const { regrade } = await import('./regrade.ts');
+        const model = endpointsFromEnv(env, 'GRADER_LLM').model ?? '';
+        const r = await regrade(journal, chatFromEnv(env, 'GRADER_LLM'), model);
+        if (r.score === null) { out('the grading failed: ' + String(r.event.error)); return 1; }
+        out('rule recovery ' + r.score + ' (graded by ' + model + '): ' + (r.event.grades as { id: string; grade: string }[]).map((g) => g.id + ':' + g.grade).join(' '));
+        out('appended to ' + path.basename(journal) + '; findings written again');
         return 0;
       }
       case 'agent': {

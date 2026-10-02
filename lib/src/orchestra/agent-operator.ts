@@ -123,7 +123,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     /* A round completed since it last decided, or (the senior) a sign within the round (and the run still going): decide. */
     if (digest && ((rounds > seenRounds && rounds > 0) || duringRound) && !over && orders < maxOrders) {
       if (duringRound) calledInRound.add(now!.current_round);
-      const completed = rounds > seenRounds;
+      /* A round completed (not the run's start, before any round): otherwise it is called during the round in course. */
+      const completed = rounds > seenRounds && rounds > 0;
       seenRounds = Math.max(seenRounds, rounds);
       let d: AgentDecision | null;
       if (role === 'senior') d = await seniorDecides(o, journal, digest, rounds, record.decisions, maxOrders - orders, !completed && duringRound ? now!.current_round : null);

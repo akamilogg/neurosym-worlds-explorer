@@ -64,6 +64,15 @@ import type { GameLab, LabRunEnd, LabServices } from '../../learn/lab.ts';
     connections. It changes nothing of what is computed. */
 const yieldNow = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+/** The operator's grader of the grid: how well the learner's own words state each hidden rule (also used to grade a
+    finished journal again, runtime/regrade.ts). */
+export const GRID_GRADING_SYSTEM = 'You grade how well a learner recovered the hidden rules of a game it could only watch as an ASCII picture. '
+    + 'For each TRUE rule, decide from the learner\'s own words whether it stated that rule: "exact" (stated correctly and completely, in any wording or coordinates equivalent to the picture), '
+    + '"partial" (the right idea but incomplete, too broad or too narrow), "wrong" (it states something that contradicts the rule), or "absent" (it says nothing about it). '
+    + 'Judge what the learner holds, not what it dropped, unless it holds nothing on that rule. Quote the learner briefly as evidence. '
+    + GRADING_STRUCTURE + ' '
+    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [learner claims about the rules that no true rule supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
+
 export const gridLab: GameLab = {
   kind: 'game',
   id: 'unknown-world@1',
@@ -130,12 +139,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const truth = describeGridTruth(spec, sense);
     const brief = notebook.brief();
     const learned = { beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: notebook.reflections };
-    const system = 'You grade how well a learner recovered the hidden rules of a game it could only watch as an ASCII picture. '
-      + 'For each TRUE rule, decide from the learner\'s own words whether it stated that rule: "exact" (stated correctly and completely, in any wording or coordinates equivalent to the picture), '
-      + '"partial" (the right idea but incomplete, too broad or too narrow), "wrong" (it states something that contradicts the rule), or "absent" (it says nothing about it). '
-      + 'Judge what the learner holds, not what it dropped, unless it holds nothing on that rule. Quote the learner briefly as evidence. '
-      + GRADING_STRUCTURE + ' '
-      + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [learner claims about the rules that no true rule supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
+    const system = GRID_GRADING_SYSTEM;
     const user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: sense.glyphA, other: sense.glyphB }, learner: learned });
     try {
       const content = (await llm.complete({ system, user })).content;

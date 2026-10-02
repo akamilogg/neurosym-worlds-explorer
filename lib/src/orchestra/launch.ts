@@ -15,6 +15,7 @@ import { projectFiles, type Autonomy, type ProjectGoal } from './project.ts';
  *   LLM_URL, LLM_MODEL, LLM_KEY                    the researchers' System 2
  *   PLANNER_LLM_URL, PLANNER_LLM_MODEL, _KEY       the planner (default: the researchers')
  *   AGENT_LLM_URL, AGENT_LLM_MODEL, AGENT_LLM_KEY  the agent operators (default: the researchers')
+ *   GRADER_LLM_URL, GRADER_LLM_MODEL, _KEY         `lab grade`: a finished run graded again (default: the researchers')
  *   JEV_URL, JEV_KEY, JEV_MODEL                    the Judge
  *
  * A project's planner goes through a replay log of its own (planner.replay.<n>.jsonl next to the
@@ -32,7 +33,7 @@ export interface ProjectFile {
 }
 
 /** The endpoints of a role from the environment (a role's own, else the researchers'). */
-export function endpointsFromEnv(env: NodeJS.ProcessEnv, role: 'LLM' | 'PLANNER_LLM' | 'AGENT_LLM'): { url?: string; model?: string; key?: string } {
+export function endpointsFromEnv(env: NodeJS.ProcessEnv, role: 'LLM' | 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM'): { url?: string; model?: string; key?: string } {
   const pick = (k: string) => env[role + '_' + k] || env['LLM_' + k];
   return { url: pick('URL'), model: pick('MODEL'), key: pick('KEY') };
 }
@@ -43,9 +44,9 @@ export function labEndpointsFromEnv(env: NodeJS.ProcessEnv): { llm: LabRunOption
 }
 
 /** An agent's or the planner's client, through a replay log when one is given. */
-export function chatFromEnv(env: NodeJS.ProcessEnv, role: 'PLANNER_LLM' | 'AGENT_LLM', replay?: { file: string; from?: string; channel: string }): ChatClient {
+export function chatFromEnv(env: NodeJS.ProcessEnv, role: 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM', replay?: { file: string; from?: string; channel: string }): ChatClient {
   const e = endpointsFromEnv(env, role);
-  if (!e.url || !e.model) throw new LabError('the ' + (role === 'PLANNER_LLM' ? 'planner' : 'agent') + ' needs an LLM: ' + role + '_URL and ' + role + '_MODEL (or LLM_URL and LLM_MODEL)');
+  if (!e.url || !e.model) throw new LabError('the ' + (role === 'PLANNER_LLM' ? 'planner' : role === 'GRADER_LLM' ? 'grader' : 'agent') + ' needs an LLM: ' + role + '_URL and ' + role + '_MODEL (or LLM_URL and LLM_MODEL)');
   const log = replay ? new ReplayLog(replay.file, replay.from ? { from: replay.from } : {}) : null;
   return openAiChatClient({ url: e.url, apiKey: e.key, model: e.model, jsonMode: true, temperature: 0.3, timeoutMs: 180000, retries: 1, ...(log ? { fetch: log.wrap(replay!.channel) } : {}) });
 }
