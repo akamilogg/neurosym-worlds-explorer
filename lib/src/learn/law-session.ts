@@ -4,6 +4,7 @@ import type { Law } from '../core/predict.ts';
 import { parseReflection } from './explorer.ts';
 import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
 import { Notebook } from './notebook.ts';
+import { FREE_MEMORY_ANSWERS, JournalMemory } from './assisted/memory.ts';
 import type { ChatClient } from './system2.ts';
 
 /* ============================================================================
@@ -61,6 +62,13 @@ export interface LawSessionHost<A> {
   actAsWritten?(act: A): unknown;
   /** Requests of instruments the researcher brings (`runRequest` gets them as `{ extra }`); none by default. */
   extraRequest?(q: Record<string, unknown>): boolean;
+  /** The researcher's selective memory over its own record (the assisted one, SPEC-INVESTIGADOR-ASISTIDO §13), built over
+      the session: its notebook travels abridged, it recalls the rest itself, and answers of only memory requests are free.
+      None by default. */
+  memory?(session: LawSession<A>): JournalMemory;
+  /** How many times a round it may ask to investigate with no steps left before it counts as a refusal (logged); 0 by
+      default. */
+  readonly overreach?: number;
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
   /** Asked before each consultation of System 2: a reason to stop now (cancelled, a budget spent), or null. */
@@ -80,8 +88,10 @@ export class LawSession<A> {
   /** Set when the host stopped the session (`halt`): nothing further is asked. */
   halted: string | null = null;
   private unaddressed: string[] = [];
+  /** Its selective memory, when the host gives it one. */
+  readonly memory: JournalMemory | null;
 
-  constructor(host: LawSessionHost<A>) { this.host = host; }
+  constructor(host: LawSessionHost<A>) { this.host = host; this.memory = host.memory?.(this) ?? null; }
 
   latest(): LawRecord | null { return this.laws[this.laws.length - 1] ?? null; }
   lawOfRound(round: number): Law | null { return this.laws.find((l) => l.round === round)?.law ?? null; }
@@ -90,8 +100,10 @@ export class LawSession<A> {
 
   /** Its notebook as it reads it: its own entries, the episodes, every model it tried with what came of it. */
   notebookBrief(): Record<string, unknown> {
-    const { episodes: _g, models: _r, ...own } = this.notebook.brief(this.unaddressed) as Record<string, unknown>;
     const last = this.latest();
+    /* With a selective memory, abridged by its fixed rule (its episodes and models included). */
+    if (this.memory) return { ...this.memory.brief(this.currentRound, this.unaddressed), ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {}) };
+    const { episodes: _g, models: _r, ...own } = this.notebook.brief(this.unaddressed) as Record<string, unknown>;
     return {
       ...own,
       episodes: this.host.episodes(),
@@ -109,9 +121,12 @@ export class LawSession<A> {
     const b = this.latest();
     let refused: string[] = [];
     const investigation: unknown[] = [];
-    let steps = 0, refusals = 0;
+    let steps = 0, refusals = 0, free = 0, overreach = 0;
     const budget = { acts: h.acts ?? 0 };
-    while (refusals < 3 && steps <= h.steps + 3) {
+    const memory = this.memory;
+    /* The verdicts it was given on its latest model, kept in its memory by that model's round. */
+    if (memory && b) memory.recordCheck(b.round, h.lastCheck());
+    while (refusals < 3 && steps - free - overreach <= h.steps + 3) {
       const halt = h.halt?.() ?? null;
       if (halt) {
         this.halted = halt;
@@ -119,12 +134,12 @@ export class LawSession<A> {
         h.say('stopping before asking System 2 again: ' + halt);
         return null;
       }
-      const stepsLeft = h.investigative ? Math.max(0, h.steps - steps) : 0;
+      const stepsLeft = h.investigative ? Math.max(0, h.steps - (steps - free)) : 0;
       const payload = lawExplorerPayload({
         round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
         setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(),
         ...(h.investigative ? { investigation, stepsLeft } : {}), ...(h.acts !== undefined ? { actsLeft: budget.acts } : {}),
-        refused, task: mode === 'reflect' ? reflectionTask : null
+        refused, task: mode === 'reflect' ? reflectionTask : null, ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free } : {})
       });
       h.say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;
@@ -143,22 +158,44 @@ export class LawSession<A> {
         h.log('proposal_failed', { round, error: String((error as Error)?.message || error) });
         continue;
       }
-      const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct, ...(h.extraRequest ? { extraRequest: (q) => h.extraRequest!(q) } : {}) });
+      const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct, ...(h.extraRequest ? { extraRequest: (q) => h.extraRequest!(q) } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...this.notebook.applyNotes(round, turn.notes, (ref) => h.known(ref)), ...this.notebook.applyMethods(round, turn.methods)];
       if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }
       if (turn.kind === 'investigate') {
-        if (stepsLeft <= 0) { refused = [h.investigative ? 'no investigation steps left this round: answer with your proposal now' : 'there is no investigating in this experiment: answer with your proposal']; refusals++; continue; }
+        /* With a memory: an answer of only memory requests asks nothing of the world and is free, a few times a round; with
+           no steps left, the memory requests of an answer are still answered (the rest not, said so). */
+        let requests = turn.requests;
+        const warnings = [...turn.warnings];
+        const recalls = memory ? requests.filter((r) => 'extra' in r && JournalMemory.accepts(r.extra)) : [];
+        let onlyMemory = memory !== null && requests.length > 0 && recalls.length === requests.length && free < FREE_MEMORY_ANSWERS;
+        if (!onlyMemory && memory !== null && stepsLeft <= 0 && recalls.length && free < FREE_MEMORY_ANSWERS) {
+          requests = recalls; onlyMemory = true;
+          warnings.push('no investigation steps left this round: only your memory requests were answered');
+        }
+        if (onlyMemory) free++;
+        else if (stepsLeft <= 0) {
+          refused = [h.investigative ? 'no investigation steps left this round: answer with your proposal now' : 'there is no investigating in this experiment: answer with your proposal'];
+          /* A researcher allowed to may insist a few times before it is a refusal (a round without a proposal ends the run). */
+          if (h.investigative && overreach < (h.overreach ?? 0)) {
+            overreach++;
+            h.log('investigation_refused', { round, reason: 'no investigation steps left', reminders_left: (h.overreach ?? 0) - overreach, requests: requests.map((r) => ('extra' in r ? r.extra : r)) });
+            h.say('  refused: no investigation steps left (reminder ' + overreach + ' of ' + h.overreach + ')');
+          } else refusals++;
+          continue;
+        }
         const results: unknown[] = [];
-        for (const r of turn.requests) results.push(await h.runRequest(r, budget, round));
+        for (const r of requests) results.push(await h.runRequest(r, budget, round));
         /* Echoed in the prompt's words, and a draft as it wrote it, never as the host's objects. */
         const modelOf = (l: number | Law | null) => (l !== null && typeof l === 'object' ? ownLaw(l) : l);
-        const asWritten = turn.requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
+        const asWritten = requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
           : 'inspect' in r ? { inspect: r.inspect, model: modelOf(r.law) }
           : 'act' in r ? { act: h.actAsWritten ? h.actAsWritten(r.act) : r.act } : 'extra' in r ? r.extra : r);
-        investigation.push({ step: investigation.length + 1, requests: asWritten, results, ...(turn.warnings.length || noteWarnings.length ? { warnings: [...turn.warnings, ...noteWarnings] } : {}) });
-        h.log('investigation', { round, requests: asWritten, results, warnings: [...turn.warnings, ...noteWarnings], notes: turn.notes });
-        h.say('  investigates: ' + turn.requests.map((r, i) => {
+        const entry = { step: investigation.length + 1, requests: asWritten, results, ...(warnings.length || noteWarnings.length ? { warnings: [...warnings, ...noteWarnings] } : {}) };
+        investigation.push(entry);
+        memory?.recordInvestigation(round, entry.step, entry);
+        h.log('investigation', { round, requests: asWritten, results, warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
+        h.say('  investigates: ' + requests.map((r, i) => {
           const res = results[i] as { error?: string };
           const k = Object.keys('extra' in r ? r.extra : r)[0];
           return k + (res?.error ? ' (' + res.error.slice(0, 60) + ')' : '');

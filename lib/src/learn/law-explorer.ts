@@ -37,6 +37,8 @@ export interface LawExplorerBrief {
   readonly stepsLeft?: number;
   /** Acts left this round, when the world offers `act`. */
   readonly actsLeft?: number;
+  /** Answers of only memory requests it may still give this round (the assisted researcher with a selective memory). */
+  readonly memoryAnswersLeft?: number;
   /** The places it knows: its laboratories, and those where it was validated. */
   readonly setups?: readonly unknown[];
   readonly validationsLeft?: number;
@@ -68,6 +70,7 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
     ...(brief.investigation && brief.investigation.length ? { investigation: brief.investigation } : {}),
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.actsLeft !== undefined ? { acts_left: brief.actsLeft } : {}),
+    ...(brief.memoryAnswersLeft !== undefined ? { memory_answers_left: brief.memoryAnswersLeft } : {}),
     ...(brief.setups && brief.setups.length ? { places: brief.setups } : {}),
     ...(brief.validationsLeft !== undefined ? { validations_left: brief.validationsLeft } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),
@@ -157,14 +160,22 @@ export function parseLawTurn<A>(content: string, context: { world: string; lang?
   /** The world's act parameters, or why they cannot be read. */
   parseAct: (raw: Record<string, unknown>) => A | string;
   /** Requests of instruments the researcher brings: taken as they are written (none by default). */
-  extraRequest?: (q: Record<string, unknown>) => boolean }): LawTurn<A> {
+  extraRequest?: (q: Record<string, unknown>) => boolean;
+  /** `archive` among the note operations (the assisted researcher with a selective memory). */
+  archive?: boolean }): LawTurn<A> {
   const parseAct = context.parseAct;
   const data = parseJsonLoose(content);
   const o = obj(data);
   const warnings: string[] = [];
-  const notes = o ? parseNotes(o.notes, warnings) : [];
+  const notes = o ? parseNotes(o.notes, warnings, context.archive === true) : [];
   const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
   const max = context.maxRequests ?? 8;
+  /* A request of the researcher's own instrument written alone, outside "investigate": plainly a request, run as one. */
+  if (o && !Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output && context.extraRequest?.(o)) {
+    const { notes: _n, methods: _m, ...request } = o;
+    return { kind: 'investigate', requests: [{ extra: request }], notes, methods,
+      warnings: [...warnings, 'a request goes inside "investigate": [ ... ] - this one was run as if it were'] };
+  }
   if (o && Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output) {
     const requests: LawRequest<A>[] = [];
     const lawOf = (raw: unknown, i: number, kind: string): number | Law | null | undefined => {

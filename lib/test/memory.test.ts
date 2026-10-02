@@ -126,12 +126,46 @@ test('an assisted grid run with a selective memory: its prompt, the abridged not
   assert.ok(FREE_MEMORY_ANSWERS >= 1);
 });
 
-test('a selective memory is the assisted researcher\'s, and the grid\'s only for now', async () => {
+test("a selective memory is the assisted researcher's", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-'));
   await assert.rejects(runLaboratory(gridLab, { args: [...GRID, '--memory', 'selective', '--out', path.join(dir, 'a.json')], root: dir, llm, fetch: system2([]) }), /only the assisted researcher/);
   await assert.rejects(runLaboratory(gridLab, { args: [...GRID, '--researcher', 'assisted', '--memory', 'total', '--out', path.join(dir, 'b.json')], root: dir, llm, fetch: system2([]) }), /only memory is "selective"/);
+});
+
+/* --- The same memory in a world whose model is a law (cells): its episodes and models come from the run, not the notebook. */
+test("in a world of laws: the abridged notebook with the run's episodes and models, free recalls, a bare request, the finding", async () => {
   const { cellsLab } = await import('../src/worlds/cells/lab.ts');
-  await assert.rejects(runLaboratory(cellsLab, { args: ['--seed', '1', '--flat', '--researcher', 'assisted', '--memory', 'selective', '--out', path.join(dir, 'c.json')], root: dir, llm, fetch: system2([]) }), /grid only/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-'));
+  const asked: Record<string, any>[] = [];
+  const fetch: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const user = JSON.parse(raw);
+    asked.push({ system: sys, user });
+    const done = (user.investigation ?? []).length;
+    const content = /"task"/.test(raw) ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'confirm', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : user.round === 2 && done === 0 ? { investigate: [{ memory: 'list', of: 'models' }] }
+      : user.round === 2 && done === 1 ? { memory: 'open', items: ['model:r1', 'episode:ep1'] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false,
+        beliefs: [{ id: 'b', stance: user.round === 1 ? 'new' : 'keep', statement: 's', evidence: ['ep1@2'] }], lessons: ['l'] };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--attempts', '2', '--flat', '--no-grade', '--researcher', 'assisted', '--memory', 'selective',
+    '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
+  assert.ok(asked[0].system.endsWith(MEMORY_SECTION));
+  const second = asked.filter((a) => a.user.round === 2);
+  assert.equal(second[0].user.notebook.models.length, 1);
+  assert.ok(second[0].user.notebook.models[0].model, 'the latest model whole');
+  assert.ok(second[0].user.notebook.memory.episodes > 0, "the run's episodes are in its memory");
+  assert.equal(second[1].user.steps_left, second[0].user.steps_left, 'a memory answer is free');
+  assert.equal(second[1].user.memory_answers_left, FREE_MEMORY_ANSWERS - 1);
+  const opened = second[2].user.investigation[1];
+  assert.match(opened.warnings.join(' '), /inside "investigate"/);
+  assert.ok(opened.results[0].items[0].item.model, 'model:r1 opened whole');
+  assert.equal(opened.results[0].items[1].id, 'episode:ep1');
+  assert.deepEqual(r.finding.assistance?.memory?.listed, ['models']);
+  assert.deepEqual(r.finding.assistance?.memory?.opened, ['model:r1', 'episode:ep1']);
 });
 
 test('with no steps left, the memory requests of an answer are still answered (the rest not, and said so), and it then proposes', async () => {

@@ -402,7 +402,7 @@ g32@8). Mitigaciones:
 - victorias por intento y reglas recuperadas;
 - con y sin `select`, para aislar a Jev.
 
-### 13.1 Implementación (01/10/2026, sólo la cuadrícula)
+### 13.1 Implementación (01/10/2026; en todos los mundos desde el 02/10/2026)
 
 - `lib/src/learn/assisted/memory.ts`: `JournalMemory` sobre el cuaderno, más lo que el investigador pidió y recibió en
   cada paso (`investigation:r<n>.<k>`) y los veredictos de cada prueba (`check:r<n>`).
@@ -436,7 +436,16 @@ g32@8). Mitigaciones:
     terminó tras un solo intento.
 - Investigador asistido de la cuadrícula (A7, parcial): acepta mensajes del operador (`operatorClient`) y la memoria.
   - Tarea, foco y fuentes siguen sin construir para la cuadrícula.
-  - Se lanza con `--researcher assisted --memory selective`, que sólo existe para el asistido y, de momento, sólo para la
-    cuadrícula.
+  - Se lanza con `--researcher assisted --memory selective`, que sólo existe para el asistido.
 - El puro no cambia: hashes congelados y prueba de equivalencia sin diferencias.
 - El finding lo recoge en `assistance.memory`: qué listó, qué abrió, qué buscó y cuántas selecciones hizo Jev.
+- En todos los mundos (02/10/2026): la memoria no depende del mundo, porque trabaja sobre el cuaderno, común a todos.
+  - En los mundos de leyes (cells, messages, orbit, tank, particles3d) la sesión es `LawSession`. Toma la memoria por un
+    gancho inerte (`memory`), igual que la tolerancia a insistir sin pasos (`overreach`).
+  - Los episodios y los modelos de esos mundos los guarda el run, no el cuaderno. La memoria los toma de ahí: el índice
+    de episodios del run y las leyes propuestas.
+  - La regla del cuaderno abreviado, las respuestas gratis, las peticiones sueltas y el registro de pruebas e
+    investigaciones son los mismos que en la cuadrícula.
+  - Con fuentes y memoria a la vez, cada petición va a su instrumento.
+  - Un run traspasado al asistido (continuación) no admite `--memory`: su historia debe repetirse tal cual.
+  - El puro no cambia: hashes y equivalencia sin diferencias.

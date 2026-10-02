@@ -40,7 +40,7 @@ import { variantStarts } from './variants.ts';
 import { reflectionTask, toolOf } from '../../learn/prompt.ts';
 import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
 import { Notebook, type GameRecord } from '../../learn/notebook.ts';
-import { assistedSystem } from '../../learn/assisted/session.ts';
+import { OVERREACH, assistedSystem } from '../../learn/assisted/session.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory, MEMORY_SECTION } from '../../learn/assisted/memory.ts';
 import { recordTurn, surprises, type TurnRecord } from '../../learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../../learn/ablation.ts';
@@ -58,6 +58,11 @@ import type { Planner } from '../../core/truth.ts';
 import type { Formula, MeasureDecl } from '../../core/types.ts';
 
 import type { GameLab, LabRunEnd, LabServices } from '../../learn/lab.ts';
+
+/** Lets the process breathe between steps of a long computation: a check on several places can run for many minutes, and
+    without it nothing else runs meanwhile - the run's heartbeat, its inbox (a stop), what it prints, the network's idle
+    connections. It changes nothing of what is computed. */
+const yieldNow = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 export const gridLab: GameLab = {
   kind: 'game',
@@ -362,6 +367,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       samplesByEpisode.push(mine);
       const ep = await playEpisode(pw, async (s, actor) => {
         if (actor === 'B') return opponent(s);
+        await yieldNow();
         const r = await searchBestMove<GridState, GridMove>(using, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
         const chosen = r.best.bestMove ?? pw.actions(s)[0];
         if (record) turns.set(s.ply, await recordTurn(using, pw, s, chosen, { formula, depth: cfg.depth, maximizer: 'A', turn: s.ply }));
@@ -481,6 +487,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const turns = new Map<number, TurnRecord<GridState>>();
     const ep = await playEpisode(pw, async (s, actor) => {
       if (actor === 'B') return opponent(s);
+      await yieldNow();
       const r = await searchBestMove<GridState, GridMove>(place.evaluator, s, { formula, depth: cfg.depth, profile: PLAY_PV_ALPHA_BETA });
       const chosen = r.best.bestMove ?? pw.actions(s)[0];
       const turn = s.ply - start.ply;
@@ -596,8 +603,6 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   }
 
   const REFLECTION_TASK = reflectionTask(investigative);
-  /** How many times a round the assisted researcher may ask to investigate with no steps left before it is a refusal. */
-  const OVERREACH = 3;
 
   /* Set when the LLM service refuses the account itself (no credit, bad key): nothing further can be asked of System 2. */
   let llmFatal: string | null = null;

@@ -48,7 +48,16 @@ export interface MemoryOptions {
   /** The selector of `find` (the Judge); none in a run without one. */
   readonly selector?: LineSelector;
   readonly onSelect?: (record: SelectionRecord & { readonly items: readonly string[]; readonly kept?: readonly string[] }) => void;
+  /** Where its episodes and its models are kept when the notebook does not keep them (a world whose model is a law keeps
+      them itself): each as the researcher is shown it. Default: the notebook's. */
+  readonly episodes?: () => readonly EpisodeEntry[];
+  readonly models?: () => readonly ModelEntry[];
 }
+
+/** An episode as the researcher's index shows it. */
+export type EpisodeEntry = Readonly<Record<string, unknown>> & { readonly episode: string; readonly round: number };
+/** A model it proposed, whole, as it is shown it; `brief` keeps the latest whole and the others by these fields. */
+export type ModelEntry = Readonly<Record<string, unknown>> & { readonly round: number; readonly fingerprint: string; readonly model: unknown };
 
 export class JournalMemory {
   private readonly notebook: Notebook;
@@ -82,9 +91,13 @@ export class JournalMemory {
       ...[...nb.notes.values()].map((n) => ({ id: 'note:' + n.id, kind: 'notes' as const, round: n.updated, head: (n.archived ? '[archived] ' : '') + clip(n.text, 140),
         body: { id: n.id, text: n.text, points: n.positions, written_round: n.written, updated_round: n.updated, ...(n.archived ? { archived: true } : {}) } })),
       ...[...nb.methods.values()].map((m) => ({ id: 'method:' + m.id, kind: 'methods' as const, round: m.updated, head: clip(m.text, 140), body: m })),
-      ...nb.games.map((g) => ({ id: 'episode:' + g.id, kind: 'episodes' as const, round: g.round, head: 'score ' + score(g.result) + ', ' + g.turns + ' steps, ' + g.how,
-        body: { episode: g.id, round: g.round, chosen_by: g.how, score: score(g.result), steps: g.turns } })),
-      ...nb.rounds.map((r) => ({ id: 'model:r' + r.round, kind: 'models' as const, round: r.round,
+      ...(this.options.episodes ? this.options.episodes().map((e) => ({ id: 'episode:' + e.episode, kind: 'episodes' as const, round: e.round,
+        head: clip(JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => k !== 'episode' && k !== 'round'))), 140), body: e }))
+        : nb.games.map((g) => ({ id: 'episode:' + g.id, kind: 'episodes' as const, round: g.round, head: 'score ' + score(g.result) + ', ' + g.turns + ' steps, ' + g.how,
+        body: { episode: g.id, round: g.round, chosen_by: g.how, score: score(g.result), steps: g.turns } }))),
+      ...(this.options.models ? this.options.models().map((m) => ({ id: 'model:r' + m.round, kind: 'models' as const, round: m.round,
+        head: clip(JSON.stringify(Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'model'))), 140), body: m })) : []),
+      ...(this.options.models ? [] : nb.rounds).map((r) => ({ id: 'model:r' + r.round, kind: 'models' as const, round: r.round,
         head: r.fingerprint + (r.games.length ? ', scored 1 in ' + r.games.reduce((a, g) => a + g.wins, 0) + ' of ' + r.games.reduce((a, g) => a + g.of, 0) : '') + ': ' + Object.keys(r.formula.observations).join(', '),
         body: { round: r.round, fingerprint: r.fingerprint, model: r.formula, ...(r.changes ? { changes: r.changes } : {}), episodes: r.games.map((g) => ({ scores: g.results.map(score), scored_1: g.wins, of: g.of })),
           lessons: r.lessons, next_experiment: r.next_experiment } })),
@@ -122,8 +135,10 @@ export class JournalMemory {
         : { id: n.id, first_words: clip(n.text, 160), updated_round: n.updated }),
       ...(nb.notes.size > notes.length ? { notes_archived: nb.notes.size - notes.length } : {}),
       methods: [...nb.methods.values()].map((m) => ({ id: m.id, text: m.text, written_round: m.written, updated_round: m.updated })),
-      episodes: nb.games.filter((g) => recent(g.round)).map((g) => ({ episode: g.id, round: g.round, chosen_by: g.how, score: score(g.result), steps: g.turns })),
-      models: nb.rounds.map((r) => r === last
+      episodes: this.options.episodes ? this.options.episodes().filter((e) => recent(e.round))
+        : nb.games.filter((g) => recent(g.round)).map((g) => ({ episode: g.id, round: g.round, chosen_by: g.how, score: score(g.result), steps: g.turns })),
+      models: this.options.models ? this.options.models().map((m, i, all) => (i === all.length - 1 ? m : Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'model'))))
+        : nb.rounds.map((r) => r === last
         ? { round: r.round, fingerprint: r.fingerprint, model: r.formula, ...(r.changes ? { changes: r.changes } : {}), episodes: r.games.map((g) => ({ scores: g.results.map(score), scored_1: g.wins, of: g.of })) }
         : { round: r.round, fingerprint: r.fingerprint, scored_1: r.games.reduce((a, g) => a + g.wins, 0), of: r.games.reduce((a, g) => a + g.of, 0) }),
       ...(reflection ? { latest_reflection: reflection } : {}),

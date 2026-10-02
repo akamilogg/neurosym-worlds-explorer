@@ -1,6 +1,8 @@
 import type { ChatClient } from '../system2.ts';
 import { LawSession, type LawSessionHost } from '../law-session.ts';
-import { Sources } from './sources.ts';
+import { Sources, type LineSelector } from './sources.ts';
+import { JournalMemory } from './memory.ts';
+import { ownLaw } from '../law-explorer.ts';
 
 /* ============================================================================
  * The ASSISTED researcher (SPEC-INVESTIGADOR-ASISTIDO §6, A4): the one the operator may help.
@@ -70,7 +72,13 @@ export interface OperatorChannel {
   onDeliver?(message: OperatorMessage, question: number): void | Promise<void>;
   /** The sources it may read: once an origin is allowed, the prompt says how, and each question lists the origins. */
   readonly sources?: Sources;
+  /** Its selective memory (SPEC-INVESTIGADOR-ASISTIDO §13): the Judge as the selector of its `find` (none in --flat), and
+      where what the Judge picked is told. The prompt's MEMORY_SECTION is the host's to add. */
+  readonly memory?: { readonly selector?: LineSelector; onSelect?(record: Record<string, unknown>): void };
 }
+
+/** How many times a round the assisted researcher may ask to investigate with no steps left before it is a refusal. */
+export const OVERREACH = 3;
 
 /** The messages a journal delivered, by question: what a resumed run delivers again at the same questions. */
 export function deliveredMessages(journal: { events?: readonly Record<string, any>[] } | null): Map<number, OperatorMessage[]> {
@@ -108,12 +116,26 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
 /** The assisted researcher's session: the shared session with its own prompt and its own client (nothing of it changes). */
 export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorChannel): LawSession<A> {
   const sources = channel.sources;
-  return new LawSession<A>({
+  const memory = channel.memory;
+  const reads = (q: Record<string, unknown>): boolean => sources !== undefined && sources.origins().length > 0 && Sources.accepts(q);
+  const recalls = (q: Record<string, unknown>): boolean => memory !== undefined && JournalMemory.accepts(q);
+  const session: LawSession<A> = new LawSession<A>({
     ...host, system: assistedSystem(host.system), llm: operatorClient(host.llm, channel, (t, d) => host.log(t, d)),
-    /* Its own instruments, once an origin is allowed: `list`, `open`, `find` - answered here, never by the world. */
-    ...(sources ? {
-      extraRequest: (q: Record<string, unknown>) => sources.origins().length > 0 && Sources.accepts(q),
-      runRequest: (r, budget, round) => ('extra' in r ? sources.run(r.extra) : host.runRequest(r, budget, round))
+    /* It may insist on investigating with no steps left a few times before it is a refusal (logged). */
+    overreach: OVERREACH,
+    /* Its own instruments - the sources once an origin is allowed (`list`, `open`, `find`) and its memory (`memory`) -
+       answered here, never by the world. */
+    ...(sources || memory ? {
+      extraRequest: (q: Record<string, unknown>) => recalls(q) || reads(q),
+      runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session.memory!.run(r.extra) : sources!.run(r.extra)) : host.runRequest(r, budget, round))
+    } : {}),
+    /* Its episodes and models are kept by the host and the session, not in the notebook. */
+    ...(memory ? {
+      memory: (s: LawSession<A>) => new JournalMemory(s.notebook, { ...(memory.selector ? { selector: memory.selector } : {}),
+        onSelect: (record) => memory.onSelect?.({ round: s.currentRound, ...record }),
+        episodes: () => host.episodes() as never,
+        models: () => s.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })) })
     } : {})
   });
+  return session;
 }

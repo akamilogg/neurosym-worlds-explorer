@@ -21,6 +21,7 @@ import { findingOf, findingText, findingView, type Finding } from '../learn/find
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
 import { assistedSession, assistedSystem, deliveredMessages, operatorClient, type OperatorMessage } from '../learn/assisted/session.ts';
+import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
@@ -52,7 +53,7 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
   { name: 'task', default: '', help: 'what the operator wants understood, in words (the assisted researcher only)' },
   { name: 'sources-allow', default: '', help: 'origins the assisted researcher may read sources from: directories, URL prefixes or domains, a,b,...' },
-  { name: 'memory', default: '', help: '"selective": the assisted researcher\'s notebook travels abridged by a fixed rule, and it recalls the rest itself (list/open/find over its own record; the grid only, for now)' },
+  { name: 'memory', default: '', help: '"selective": the assisted researcher\'s notebook travels abridged by a fixed rule, and it recalls the rest itself (list/open/find over its own record, in every world)' },
   { name: 'out', default: '', help: 'the journal (default runs/<name>-<time>.json)' }
 ];
 const FLAGS: readonly { name: string; help: string }[] = [
@@ -351,7 +352,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     throw new LabError('the assisted researcher of ' + lab.id + ' takes messages and a selective memory; a task, a focus and sources are not built for it yet (SPEC-INVESTIGADOR-ASISTIDO, A7)');
   if (arg('memory') && arg('memory') !== 'selective') throw new LabError('--memory: the only memory is "selective"');
   if (arg('memory') && researcher !== 'assisted') throw new LabError('--memory: a selective memory changes what the researcher is given: only the assisted researcher has one');
-  if (arg('memory') && !isGameLab(lab)) throw new LabError('--memory: the selective memory is built for the grid only, for now (SPEC-INVESTIGADOR-ASISTIDO §13)');
+  /* A run handed over keeps the unknown-world researcher's history word for word: its notebook would travel otherwise. */
+  if (arg('memory') && assistedAfter !== null) throw new LabError('--memory: a run handed to the assisted researcher keeps its history as it was; give the memory to a run that starts assisted');
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
 
@@ -874,12 +876,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
 
   /* The researcher that runs: the unknown-world one's session as it is, or the assisted one's (its own prompt, and the
      operator's messages with its questions; resuming, delivered again at the same questions). */
+  const withMemory = cfg.memory === 'selective';
   const session: LawSession<unknown> = journal.researcher === 'assisted'
     ? assistedSession(sessionHost, {
       /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
          sent meanwhile waits for its first new round. */
       take: () => (helping ? run.operator.take() : []), scheduled: deliveredMessages(previous),
-      system: () => (helping ? assistedSystem(promptFor(focus)) : promptFor(focus)), task: () => (helping ? task : null),
+      system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') : promptFor(focus)), task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
         if (m.source) { sources.allow(m.source); log('sources_allowed', { question, origin: m.source }); }
@@ -889,7 +892,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         protocol.restart();
         log('focus_changed', { question, facet: m.focus.facet, ...(m.focus.task ? { task: m.focus.task } : {}) });
       },
-      sources
+      sources,
+      /* Its selective memory (§13), with the Judge to select for it (none in --flat); what it picked is the operator's. */
+      ...(withMemory ? { memory: { ...(cfg.flat ? {} : { selector: judgeSelector(judge) }), onSelect: (record: Record<string, unknown>) => log('memory_select', record) } } : {})
     })
     : new LawSession<unknown>(sessionHost);
 
