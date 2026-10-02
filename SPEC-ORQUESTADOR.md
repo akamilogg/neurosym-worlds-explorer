@@ -128,6 +128,16 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
   - Motivo: run `grid-s22-2026-10-02T12-00-16-111Z`. Tras un buen primer ciclo sobre una regla (las `&` no pasan a
     columnas mayores, confirmado con un `act` y adoptado), los seguimientos encadenaron cinco mensajes de ajuste
     táctico de la heurística. El presupuesto se gastó sin volver a las reglas, y el encierro de `=` ni se mencionó.
+- **Coste (02/10/2026).** Con precios de proveedor (Sol 2 $/M de entrada y 10 $/M de salida; Luna 0,10 $ y 0,50 $),
+  el senior costaba ~0,4–0,7 $ por run frente a ~0,1 $ del junior Luna. No era por trabajo, sino por contexto repetido:
+  18 llamadas, cada una con el sistema (~6k tokens), el resumen del run (3–5k) y lo leído acumulado. Lo encarecían
+  sobre todo los seguimientos, con 2–4 llamadas cada uno, porque tenía que abrir el experimento del junior.
+  - El seguimiento lleva el experimento del junior tal como lo guarda su registro (`follow_up.its_record`: lo que pidió y
+    lo que se le respondió). Por regla general se decide en una llamada.
+  - El resumen del run en cada llamada es de las 3 últimas rondas (`digestRounds`); lo demás está para leerlo.
+  - Cada decisión registra su coste en el journal del agente (`usage`: llamadas, tokens de entrada, cuántos cacheados,
+    salida y `cost` del proveedor), y el registro lleva el total.
+  - Proyección sobre el run `grid-s22-2026-10-02T12-39-45-095Z`: de 18 a 9 llamadas, y de ~0,41 $ a ~0,14 $.
 - **Después de la reflexión final no escribe.** Ya no hay más preguntas al junior, así que el mensaje nunca le llegaría y
   gastaría una ayuda del presupuesto. Pasó en el run de Luna `grid-s22-2026-10-02T10-57-10-816Z`. El agente sigue
   atento: en una continuación decide en la prueba siguiente.

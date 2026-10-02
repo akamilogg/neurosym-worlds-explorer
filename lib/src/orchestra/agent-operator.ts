@@ -40,7 +40,7 @@ export const SENIOR_ROLE = [
   'You are called because the junior shows signs of being stuck (`signals`). Review its record as a demanding senior would. Read its notes and the answers it got, and look for what it has not interpreted: a regularity in the answers it did not connect; a fact it recorded and did not build on; a clue it dismissed or held as "only an association"; an alternative it wrote down and never tested; a reading that its own data contradict.',
   'Your instruments read the junior\'s record only (they ask nothing of the environment): {"investigate": [{"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks"}, {"memory": "open", "items": ["<id>", ...]}, {"memory": "find", "words": "...", "of": "<kind>" (optional)}]}. Ids: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it was answered), "check:r<round>". `steps_left` says how many such answers you have; `memory` how many items of each kind there are.',
   'You may be called at the end of one of its rounds, or during a round (`during_round`), when it keeps looking without testing anything or keeps asking to investigate with no steps left: your message then reaches it within that round, before it answers again. Then help it commit: point to the hypothesis its own record supports best and tell it to propose a model that tests it now - a model that fails also teaches.',
-  'You may also be called to FOLLOW UP (`follow_up`): after your last message the junior ran an experiment (`follow_up.experiment` names it in its record; open it). Read what it was answered. If the junior\'s own results confirm the hypothesis, with no counterexample in its record, tell it plainly: its data confirm it (cite them); adopt it as a working rule in its beliefs, and propose now a model built on it. If they refute it, say so, so that it drops it. If they are inconclusive, wait. A follow-up that would only propose another small adjustment of the junior\'s model is rarely worth a message: look instead for what the record still says about the environment.',
+  'You may also be called to FOLLOW UP (`follow_up`): after your last message the junior ran an experiment; `follow_up` holds your message and that experiment as its record keeps it - what it asked and what it was answered. Read it there; open more of the record only if you need it. If the junior\'s own results confirm the hypothesis, with no counterexample in its record, tell it plainly: its data confirm it (cite them); adopt it as a working rule in its beliefs, and propose now a model built on it. If they refute it, say so, so that it drops it. If they are inconclusive, wait. A follow-up that would only propose another small adjustment of the junior\'s model is rarely worth a message: look instead for what the record still says about the environment.',
   'When a rule is confirmed by the junior\'s record, you may tell it how its model can use the rule, in the form the environment asks for - for example, which points the rule makes worth the least or the most - but never write the model\'s code: the junior builds it.',
   'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); and ONE experiment with its instruments that would test it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. Your message is a colleague\'s suggestion, and it may be wrong. If you found nothing worth its attention, wait.',
   'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"}'
@@ -69,6 +69,21 @@ export interface AgentDecision {
   readonly during_round?: number;
   /** A follow-up of its message: the junior's experiment it read (an item of the junior's record). */
   readonly follow_up?: string;
+  /** What the decision cost: its calls to the model, their tokens (in, of them cached, out) and the provider's cost when it
+      reports one (OpenRouter: `usage.cost`). */
+  readonly usage?: Usage;
+}
+
+export interface Usage { calls: number; tokens_in: number; cached_in: number; tokens_out: number; cost: number }
+
+/** Adds an answer's usage, as an OpenAI-compatible endpoint reports it, to a decision's. */
+function addUsage(u: Usage, raw: unknown): void {
+  const r = (raw ?? {}) as { usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number; prompt_tokens_details?: { cached_tokens?: number } } };
+  u.calls++;
+  u.tokens_in += r.usage?.prompt_tokens ?? 0;
+  u.cached_in += r.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+  u.tokens_out += r.usage?.completion_tokens ?? 0;
+  u.cost = Math.round((u.cost + (r.usage?.cost ?? 0)) * 1e6) / 1e6;
 }
 
 export interface AgentOperatorOptions {
@@ -92,6 +107,8 @@ export interface AgentOperatorOptions {
   readonly looking?: number;
   readonly readSteps?: number;
   readonly cooldown?: number;
+  /** The senior: rounds of the run given in full in each call (default 3); the rest of the record is there to read. */
+  readonly digestRounds?: number;
 }
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
@@ -162,6 +179,12 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
         say('agent:' + o.id + ' after ' + rounds + ' rounds: ' + d.decision + (d.why ? ' - ' + d.why.slice(0, 160) : '') + (d.signals?.length ? ' [signals: ' + d.signals.join('; ') + ']' : ''));
       }
       if (d) record.decisions.push(d);
+      /* What it has cost so far, added up from its decisions (what its model's endpoint reported). */
+      if (d?.usage) {
+        const t = ((record as { usage?: Usage }).usage ??= { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 });
+        t.calls += d.usage.calls; t.tokens_in += d.usage.tokens_in; t.cached_in += d.usage.cached_in; t.tokens_out += d.usage.tokens_out;
+        t.cost = Math.round((t.cost + d.usage.cost) * 1e6) / 1e6;
+      }
       save();
     }
     /* What the run made of its orders. */
@@ -178,7 +201,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
 
 /** The senior's turn: nothing unless the run shows signs of being stuck (and it has left the junior time since its last
     message); then it reads the junior's record and decides. Null: it was not called (nothing is recorded). */
-async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, digest: unknown, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
+async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, _digest: unknown, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
   duringRound: number | null = null, followUp: ReturnType<typeof followUpDue> = null): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
@@ -186,6 +209,11 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   if (!followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const reader = journalReader(journal);
   const system = seniorSystem(juniorBrief(journal));
+  const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
+  /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
+  const experiment = followUp ? ((await reader.run({ memory: 'open', items: [followUp.experiment] })) as { items?: { item?: unknown }[] }).items?.[0]?.item ?? null : null;
+  /* The run in its latest rounds only: the rest of the record is there to read. */
+  const brief = runDigest(journal, { rounds: o.digestRounds ?? 3 });
   const read: { step: number; requests: Record<string, unknown>[]; results: unknown[] }[] = [];
   const at = () => new Date().toISOString();
   const limit = o.readSteps ?? 4;
@@ -194,8 +222,9 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     for (let turn = 0; turn <= limit + 1; turn++) {
       const stepsLeft = Math.max(0, limit - read.length);
       const answer = await o.llm.complete({ system, user: { you_are: 'agent:' + o.id, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}),
-        ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round } } : {}), run: digest, memory: reader.counts(),
+        ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}), run: brief, memory: reader.counts(),
         ...(read.length ? { investigation: read } : {}), steps_left: stepsLeft, your_decisions: decisions.slice(-6), orders_left: ordersLeft } });
+      addUsage(usage, answer.raw);
       const parsed = (parseJsonLoose(answer.content) ?? {}) as { investigate?: unknown[]; decision?: string; text?: string; why?: string; evidence?: unknown[] };
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {
         const requests = parsed.investigate.filter((q): q is Record<string, unknown> => Boolean(q) && typeof q === 'object' && typeof (q as Record<string, unknown>).memory === 'string').slice(0, 8);
@@ -206,11 +235,11 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       }
       const decision = parsed.decision === 'message' && parsed.text?.trim() ? 'message' : 'wait';
       return { at: at(), rounds, ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}), why: String(parsed.why ?? ''), signals: signals.signs,
-        read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}) };
+        read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), usage };
     }
-    return { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked() };
+    return { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked(), usage };
   } catch (e) {
-    return { at: at(), rounds, decision: 'error', why: String((e as Error)?.message ?? e), signals: signals.signs };
+    return { at: at(), rounds, decision: 'error', why: String((e as Error)?.message ?? e), signals: signals.signs, usage };
   }
 }
 

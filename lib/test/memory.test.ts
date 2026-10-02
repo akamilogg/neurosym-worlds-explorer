@@ -36,7 +36,8 @@ test('the notebook travels abridged by its fixed rule; the rest is in memory, wh
   assert.equal(notes.scratch, undefined, 'an archived note does not travel');
   assert.equal(brief.notes_archived, 1);
   assert.deepEqual(brief.episodes.map((e: { episode: string }) => e.episode), ['g8'], 'the episodes of the last two rounds');
-  assert.equal(brief.memory.notes, 3);
+  assert.equal(brief.memory, undefined, 'its counts travel after the investigation, not in the notebook');
+  assert.equal(memory.counts().notes, 3);
 });
 
 test('list, open and find read its own record; select asks the Judge, and the journal is told what it kept', async () => {
@@ -110,7 +111,7 @@ test('an assisted grid run with a selective memory: its prompt, the abridged not
   assert.equal(r.researcherUsed, 'assisted');
   assert.ok(asked[0].system.endsWith(MEMORY_SECTION), 'its prompt says what its memory is');
   assert.match(asked[0].system, /THE OPERATOR/);
-  assert.ok(asked[0].user.notebook.memory, 'the notebook says what its memory holds');
+  assert.ok(asked[0].user.memory && !asked[0].user.notebook.memory, 'what its memory holds, after the investigation');
   assert.equal(asked[1].user.steps_left, asked[0].user.steps_left, 'an answer of only memory requests is free');
   assert.equal(asked[2].user.steps_left, asked[0].user.steps_left - 1, 'one that asks the world is not');
   assert.equal(asked[1].user.investigation[0].results[0].of, 'episodes');
@@ -157,7 +158,7 @@ test("in a world of laws: the abridged notebook with the run's episodes and mode
   const second = asked.filter((a) => a.user.round === 2);
   assert.equal(second[0].user.notebook.models.length, 1);
   assert.ok(second[0].user.notebook.models[0].model, 'the latest model whole');
-  assert.ok(second[0].user.notebook.memory.episodes > 0, "the run's episodes are in its memory");
+  assert.ok(second[0].user.memory.episodes > 0, "the run's episodes are in its memory");
   assert.equal(second[1].user.steps_left, second[0].user.steps_left, 'a memory answer is free');
   assert.equal(second[1].user.memory_answers_left, FREE_MEMORY_ANSWERS - 1);
   const opened = second[2].user.investigation[1];

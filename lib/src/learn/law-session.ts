@@ -139,7 +139,7 @@ export class LawSession<A> {
         round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
         setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(),
         ...(h.investigative ? { investigation, stepsLeft } : {}), ...(h.acts !== undefined ? { actsLeft: budget.acts } : {}),
-        refused, task: mode === 'reflect' ? reflectionTask : null, ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free } : {})
+        refused, task: mode === 'reflect' ? reflectionTask : null, ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {})
       });
       h.say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;

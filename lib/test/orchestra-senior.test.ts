@@ -296,6 +296,10 @@ test('the senior follows up its message within the round: the junior ran the exp
   assert.equal(follow!.decision, 'message');
   const call = seen.find((u) => u.follow_up)!;
   assert.match(call.follow_up.your_message, /Test it with a table/);
+  assert.ok(call.follow_up.its_record.requests.some((q: Record<string, unknown>) => 'table' in q), 'the experiment comes with the follow-up: no reading needed');
+  assert.ok(call.follow_up.its_record.results, 'and what it was answered');
+  assert.ok(call.run.latest_rounds.length <= 3, 'the run in its latest rounds only');
+  assert.equal(follow!.usage!.calls, 1, 'decided in one call');
   const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
   const confirmed = events.findIndex((e) => e.type === 'operator_message' && e.messages.some((m: { text: string }) => /confirms it/.test(m.text)));
   const proposed2 = events.findIndex((e) => e.type === 'proposal' && e.round === 2);

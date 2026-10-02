@@ -142,8 +142,7 @@ export class JournalMemory {
         ? { round: r.round, fingerprint: r.fingerprint, model: r.formula, ...(r.changes ? { changes: r.changes } : {}), episodes: r.games.map((g) => ({ scores: g.results.map(score), scored_1: g.wins, of: g.of })) }
         : { round: r.round, fingerprint: r.fingerprint, scored_1: r.games.reduce((a, g) => a + g.wins, 0), of: r.games.reduce((a, g) => a + g.of, 0) }),
       ...(reflection ? { latest_reflection: reflection } : {}),
-      ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {}),
-      memory: this.counts()
+      ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.next_experiment } : {})
     };
   }
 

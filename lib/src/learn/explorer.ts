@@ -91,6 +91,9 @@ export interface ExplorerBrief {
   readonly replaysLeft?: number;
   /** Answers of only memory requests it may still give this round (the assisted researcher with a selective memory). */
   readonly memoryAnswersLeft?: number;
+  /** How many items of each kind its memory holds. After the round's investigation, not in the notebook: it changes with
+      every step, and what changes goes last (a provider's cache reuses a prompt's unchanged beginning). */
+  readonly memory?: Readonly<Record<string, number>>;
   /** Why the previous answer was refused. */
   readonly refused?: readonly string[];
   readonly directive?: string | null;
@@ -126,6 +129,7 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.replaysLeft !== undefined ? { replays_left: brief.replaysLeft } : {}),
     ...(brief.memoryAnswersLeft !== undefined ? { memory_answers_left: brief.memoryAnswersLeft } : {}),
+    ...(brief.memory ? { memory: brief.memory } : {}),
     ...(brief.places && brief.places.length ? { places: brief.places } : {}),
     ...(brief.validationsLeft !== undefined ? { validations_left: brief.validationsLeft } : {}),
     ...(brief.lastCheck ? { last_check: brief.lastCheck } : {}),

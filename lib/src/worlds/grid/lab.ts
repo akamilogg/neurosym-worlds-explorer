@@ -634,7 +634,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
         formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
         ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),
-        ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free } : {}),
+        ...(memory ? { memoryAnswersLeft: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}),
         refused, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
         places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView
       });

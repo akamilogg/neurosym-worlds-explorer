@@ -39,6 +39,8 @@ export interface LawExplorerBrief {
   readonly actsLeft?: number;
   /** Answers of only memory requests it may still give this round (the assisted researcher with a selective memory). */
   readonly memoryAnswersLeft?: number;
+  /** How many items of each kind its memory holds: after the investigation, since it changes with every step. */
+  readonly memory?: Readonly<Record<string, number>>;
   /** The places it knows: its laboratories, and those where it was validated. */
   readonly setups?: readonly unknown[];
   readonly validationsLeft?: number;
@@ -71,6 +73,7 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
     ...(brief.stepsLeft !== undefined ? { steps_left: brief.stepsLeft } : {}),
     ...(brief.actsLeft !== undefined ? { acts_left: brief.actsLeft } : {}),
     ...(brief.memoryAnswersLeft !== undefined ? { memory_answers_left: brief.memoryAnswersLeft } : {}),
+    ...(brief.memory ? { memory: brief.memory } : {}),
     ...(brief.setups && brief.setups.length ? { places: brief.setups } : {}),
     ...(brief.validationsLeft !== undefined ? { validations_left: brief.validationsLeft } : {}),
     ...(brief.refused && brief.refused.length ? { your_previous_answer_was_refused: brief.refused } : {}),

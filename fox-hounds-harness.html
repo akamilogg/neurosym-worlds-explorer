@@ -3843,6 +3843,7 @@ var Neurosym = (() => {
       ...brief.stepsLeft !== void 0 ? { steps_left: brief.stepsLeft } : {},
       ...brief.replaysLeft !== void 0 ? { replays_left: brief.replaysLeft } : {},
       ...brief.memoryAnswersLeft !== void 0 ? { memory_answers_left: brief.memoryAnswersLeft } : {},
+      ...brief.memory ? { memory: brief.memory } : {},
       ...brief.places && brief.places.length ? { places: brief.places } : {},
       ...brief.validationsLeft !== void 0 ? { validations_left: brief.validationsLeft } : {},
       ...brief.lastCheck ? { last_check: brief.lastCheck } : {},

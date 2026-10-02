@@ -449,3 +449,12 @@ g32@8). Mitigaciones:
   - Con fuentes y memoria a la vez, cada petición va a su instrumento.
   - Un run traspasado al asistido (continuación) no admite `--memory`: su historia debe repetirse tal cual.
   - El puro no cambia: hashes y equivalencia sin diferencias.
+- **Caché del proveedor (02/10/2026).** El contador de la memoria (`memory: {notes: N, investigations: N, …}`) iba al
+  final del cuaderno, delante de la investigación de la ronda, y cambiaba en cada paso. Así rompía el prefijo común
+  justo antes de lo que más crece.
+  - Ahora viaja detrás de la investigación, junto a `memory_answers_left`.
+  - Dentro de una ronda, el prefijo común vuelve a llegar hasta el último paso, como en el puro.
+  - Lo que sigue rompiéndolo es del investigador (las notas que escribe a mitad de ronda) o del contrato congelado (la
+    ronda va primero), y no se toca.
+  - Medido en los runs: el proveedor solo reaprovecha el prompt de sistema (4.807 tokens en todas las llamadas). Si
+    también reaprovecha prefijos del mensaje de usuario, se averigua con `scripts/cache-probe.ts`.
