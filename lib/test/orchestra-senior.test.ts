@@ -13,7 +13,7 @@ import { explorerSystem } from '../src/learn/explorer.ts';
 import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
-import { userOf } from './support.ts';
+import { payloadOf, userOf } from './support.ts';
 
 
 /* SPEC-ORQUESTADOR §3.3: the senior - it reads the junior's record (exactly what the junior saw) when the junior is stuck,
@@ -78,8 +78,8 @@ const stuck: FetchLike = async (_url, init) => {
 
 function senior(seen: { system: string; user: any }[]): ChatClient {
   return { complete: async (r) => {
-    seen.push({ system: r.system, user: r.user });
-    const content = !(r.user as { investigation?: unknown }).investigation ? { investigate: [{ memory: 'find', words: 'repeats', of: 'beliefs' }, { memory: 'list', of: 'checks' }] }
+    seen.push({ system: r.system, user: payloadOf(r.user) });
+    const content = !payloadOf(r.user).investigation ? { investigate: [{ memory: 'find', words: 'repeats', of: 'beliefs' }, { memory: 'list', of: 'checks' }] }
       : { decision: 'message', text: 'Hypothesis: the row depends on its neighbours (belief:same never changed while no place held). Test it: measure each cell against its neighbours one step earlier.',
         evidence: ['belief:same', 'check:r1'], why: 'the same model every round, holding nowhere' };
     return { content: JSON.stringify(content), latencyMs: 0, raw: null };
@@ -176,7 +176,7 @@ test('the senior is called during a round in which the junior only looks, and it
   };
   const seen: any[] = [];
   const advisor: ChatClient = { complete: async (r) => {
-    seen.push(r.user);
+    seen.push(payloadOf(r.user));
     return { content: JSON.stringify({ decision: 'message', text: 'You have looked enough: propose the model your notes support and test it.', evidence: ['investigation:r2.1'], why: 'only looking' }), latencyMs: 0, raw: null };
   } };
   const controller = new AbortController();
@@ -278,7 +278,7 @@ test('the senior follows up its message within the round: the junior ran the exp
   };
   const seen: any[] = [];
   const advisor: ChatClient = { complete: async (r) => {
-    const user = r.user as Record<string, any>;
+    const user = payloadOf(r.user);
     seen.push(user);
     const content = user.follow_up
       ? { decision: 'message', text: 'Your table confirms it: adopt it as a working rule and propose now a model built on it.', evidence: [user.follow_up.experiment], why: 'confirmed' }
@@ -306,4 +306,36 @@ test('the senior follows up its message within the round: the junior ran the exp
   const confirmed = events.findIndex((e) => e.type === 'operator_message' && e.messages.some((m: { text: string }) => /confirms it/.test(m.text)));
   const proposed2 = events.findIndex((e) => e.type === 'proposal' && e.round === 2);
   assert.ok(confirmed >= 0 && proposed2 > confirmed, 'it heard back within round 2, then proposed');
+});
+
+test('the senior\'s reading grows by messages (its context unchanged within a decision), and large items come clipped unless asked whole', async () => {
+  const { UserParts } = await import('../src/learn/system2.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-'));
+  const out = path.join(dir, 'run.json');
+  const check = (round: number) => ({ type: 'check', round, laboratories: [{ place: 'lab1', holds: false }] });
+  const big = 'x'.repeat(9000);
+  fs.writeFileSync(out, JSON.stringify({ experiment: 'cells@1', researcher: 'assisted', events: [check(1), check(2),
+    { type: 'investigation', round: 3, requests: [{ view: 'ep1' }], results: [{ pictures: big }] }, check(3)] }));
+  fs.writeFileSync(out.replace(/\.json$/, '.status.json'), JSON.stringify({ state: 'running', heartbeat: new Date().toISOString(), pid: process.pid }));
+  const calls: InstanceType<typeof UserParts>[] = [];
+  const llm: ChatClient = { complete: async (r) => {
+    calls.push(r.user as InstanceType<typeof UserParts>);
+    const content = calls.length === 1 ? { investigate: [{ memory: 'open', items: ['investigation:r3.1'] }] }
+      : calls.length === 2 ? { investigate: [{ memory: 'open', items: ['investigation:r3.1'], whole: true }] }
+      : { decision: 'wait', why: 'read' };
+    return { content: JSON.stringify(content), latencyMs: 0, raw: null };
+  } };
+  const controller = new AbortController();
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm, pollMs: 10, signal: controller.signal });
+  await sleep(150);
+  controller.abort();
+  await agent;
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every((u) => u instanceof UserParts));
+  assert.deepEqual(calls[1].parts[0], calls[0].parts[0], 'its context, unchanged');
+  assert.deepEqual(calls[2].parts.slice(0, 2), calls[1].parts.slice(0, 2), 'the earlier messages repeated');
+  const clipped = (calls[1].parts[1] as any).investigation_step.results[0].items[0];
+  assert.ok(clipped.clipped && clipped.clipped.size > 9000 && clipped.clipped.beginning.length === 4000);
+  const whole = (calls[2].parts[2] as any).investigation_step.results[0].items[0];
+  assert.equal(whole.item.results[0].pictures, big, 'asked whole: entire');
 });

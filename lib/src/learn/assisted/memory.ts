@@ -52,6 +52,9 @@ export interface MemoryOptions {
       them itself): each as the researcher is shown it. Default: the notebook's. */
   readonly episodes?: () => readonly EpisodeEntry[];
   readonly models?: () => readonly ModelEntry[];
+  /** Items larger than this many characters are opened clipped (their beginning, and how large they are), unless the
+      request asks for them `"whole": true`. None by default: the researcher's own memory opens items whole. */
+  readonly openLimit?: number;
 }
 
 /** An episode as the researcher's index shows it. */
@@ -162,7 +165,15 @@ export class JournalMemory {
       const ids = (Array.isArray(q.items) ? q.items : typeof q.item === 'string' ? [q.item] : []).map(String).slice(0, 8);
       if (!ids.length) return { memory: 'open', error: '"items": the ids to open' };
       const all = this.items();
-      return { memory: 'open', items: ids.map((id) => { const it = all.find((i) => i.id === id); return it ? { id, round: it.round, item: it.body } : { id, error: 'no such item' }; }) };
+      const limit = q.whole === true ? undefined : this.options.openLimit;
+      return { memory: 'open', items: ids.map((id) => {
+        const it = all.find((i) => i.id === id);
+        if (!it) return { id, error: 'no such item' };
+        const text = limit ? JSON.stringify(it.body) : '';
+        return limit && text.length > limit
+          ? { id, round: it.round, clipped: { size: text.length, beginning: text.slice(0, limit) }, note: 'clipped: open it with "whole": true to read it entire' }
+          : { id, round: it.round, item: it.body };
+      }) };
     }
     if (what === 'find') {
       const words = typeof q.words === 'string' ? q.words : typeof q.find === 'string' ? q.find : '';

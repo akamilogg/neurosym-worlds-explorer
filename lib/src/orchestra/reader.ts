@@ -22,11 +22,11 @@ const score = (winner: unknown): number => (winner === 'A' ? 1 : winner === 'B' 
 const scoreOfResult = (r: unknown): number => (r === 'won' ? 1 : r === 'lost' ? -1 : 0);
 
 /** The junior's record from its journal, read with the instruments of a selective memory. */
-export function journalReader(journal: J): JournalMemory {
+export function journalReader(journal: J, options: { openLimit?: number } = {}): JournalMemory {
   const notebook = new Notebook();
   const episodes: EpisodeEntry[] = [];
   const models: ModelEntry[] = [];
-  const memory = new JournalMemory(notebook, { episodes: () => episodes, models: () => models });
+  const memory = new JournalMemory(notebook, { episodes: () => episodes, models: () => models, ...(options.openLimit ? { openLimit: options.openLimit } : {}) });
   const steps = new Map<number, number>();
   for (const e of (Array.isArray(journal?.events) ? journal.events : []) as J[]) {
     const round = typeof e.round === 'number' ? e.round : 0;

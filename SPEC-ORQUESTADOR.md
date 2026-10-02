@@ -138,6 +138,16 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
   - Cada decisión registra su coste en el journal del agente (`usage`: llamadas, tokens de entrada, cuántos cacheados,
     salida y `cost` del proveedor), y el registro lleva el total.
   - Proyección sobre el run `grid-s22-2026-10-02T12-39-45-095Z`: de 18 a 9 llamadas, y de ~0,41 $ a ~0,14 $.
+  - Medido después (run de Qwen `grid-s22-2026-10-02T16-06-47-102Z`): 0,67 $ en 14 llamadas.
+    - Los seguimientos de una llamada costaron 1–3 céntimos.
+    - Lo caro fueron las decisiones con lectura: 3–4 llamadas de ~20k tokens.
+    - Solo se cacheaba su sistema, porque lo leído crecía dentro de un único mensaje, y abría partidas enteras.
+  - Por eso la pregunta del senior también va en varios mensajes, como la del junior:
+    1. su contexto (señales, resumen, seguimiento, decisiones), sin cambios durante la decisión;
+    2. un mensaje por cada paso de lectura (`investigation_step`);
+    3. al final, `steps_left`.
+  - Los elementos del registro de más de `openLimit` caracteres (4000) se le abren recortados: el principio y el tamaño.
+    Con `"whole": true` los lee enteros. La memoria del propio junior sigue abriéndolos siempre enteros.
 - **Después de la reflexión final no escribe.** Ya no hay más preguntas al junior, así que el mensaje nunca le llegaría y
   gastaría una ayuda del presupuesto. Pasó en el run de Luna `grid-s22-2026-10-02T10-57-10-816Z`. El agente sigue
   atento: en una continuación decide en la prueba siguiente.
