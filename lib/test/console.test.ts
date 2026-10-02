@@ -8,13 +8,15 @@ import { serveConsole, CONSOLE_PAGE } from '../src/runtime/console.ts';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { cellsLab } from '../src/worlds/cells/lab.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-INVESTIGADOR-ASISTIDO A3: the console - a local page over the control API. */
 
 const draft = { observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]' };
 const answer = (body: string): string => {
   const b = JSON.parse(body);
-  const sys = b.messages[0].content as string, user = b.messages[b.messages.length - 1].content as string;
+  const sys = b.messages[0].content as string, user = userOf(b);
   const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
     : /"task"/.test(user) ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'confirm', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
     : !JSON.parse(user).investigation && JSON.parse(user).round % 2 === 1 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }

@@ -103,3 +103,25 @@ export function sampleStates(games: number, seed = 20260921): FoxState[] {
 export function readJson(relative: string): any {
   return JSON.parse(fs.readFileSync(path.join(ROOT, relative), 'utf8'));
 }
+
+/** A request's question as one payload, as a test reads it: its user messages merged - the round's context, each
+    `investigation_step` back into `investigation`, then the last message's fields - as the JSON text it was before the
+    question was sent in several messages. */
+export function userOf(body: { messages: { role: string; content: string }[] }): string {
+  const users = body.messages.filter((m) => m.role === 'user').map((m) => m.content);
+  if (users.length === 1) return users[0];
+  const merged: Record<string, unknown> = {};
+  for (const text of users) {
+    let part: Record<string, unknown>;
+    try { part = JSON.parse(text); } catch { return users[users.length - 1]; }
+    if ('investigation_step' in part) ((merged.investigation ??= []) as unknown[]).push(part.investigation_step);
+    else Object.assign(merged, part);
+  }
+  return JSON.stringify(merged, null, 2);
+}
+
+/** A question as the client got it (one payload, or the parts of `UserParts`), as one payload: see `userOf`. */
+export function payloadOf(user: unknown): Record<string, any> {
+  const parts = user && typeof user === 'object' && Array.isArray((user as { parts?: unknown }).parts) ? (user as { parts: unknown[] }).parts : [user];
+  return JSON.parse(userOf({ messages: parts.map((p) => ({ role: 'user', content: JSON.stringify(p) })) }));
+}

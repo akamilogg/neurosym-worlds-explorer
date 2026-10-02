@@ -10,6 +10,8 @@ import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import { cellsFocusLine, differences } from '../src/worlds/cells/objective.ts';
 import { generateCells, stepCells } from '../src/worlds/cells/world.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-INVESTIGADOR-ASISTIDO A5: a FACET of the task - what of the answer counts - at the start (either researcher) and,
    for the assisted researcher, changed by the operator during the run. Cells level 4: two layers in one row. */
@@ -52,7 +54,7 @@ const EVEN = oneLayer(generateCells(SEED, 4), 0);
 function system2(asked: { system: string; user: Record<string, any> }[] = [], hook: (n: number) => void = () => {}, from = 0): FetchLike {
   return async (_url, init) => {
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     if (!sys.startsWith('You grade')) { asked.push({ system: sys, user }); hook(asked.length); }
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }

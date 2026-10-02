@@ -6,6 +6,8 @@ import path from 'node:path';
 import { LabError, runLaboratory } from '../src/runtime/lab-runner.ts';
 import { cellsLab } from '../src/worlds/cells/lab.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-OBJETIVO O13: a laboratory run as a library call - no environment, no console, no signals, no process.exit. The
    network is injected, so a whole run happens here, with System 2 answered by a stand-in. */
@@ -14,7 +16,7 @@ const draft = { observations: {}, rules: {}, weights: {}, output: '(p) => p.rows
 /** System 2 stand-in: investigates in odd rounds, then proposes the same row again; reflects; grades. Stateless. */
 const system2: FetchLike = async (_url, init) => {
   const b = JSON.parse(String(init.body));
-  const sys = b.messages[0].content as string, user = b.messages[b.messages.length - 1].content as string;
+  const sys = b.messages[0].content as string, user = userOf(b);
   const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
     : /"task"/.test(user) ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'confirm', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
     : !JSON.parse(user).investigation && JSON.parse(user).round % 2 === 1 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }

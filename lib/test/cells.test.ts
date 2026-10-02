@@ -6,6 +6,7 @@ import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import { LawSession, lawFingerprint } from '../src/learn/law-session.ts';
 import { system2Prompt } from '../src/learn/prompt.ts';
 import type { Place } from '../src/learn/objective.ts';
+import { payloadOf } from './support.ts';
 
 /* cells@1: the third world (SPEC-OBJETIVO O5), connected with only its world, senses, actions and objective. */
 
@@ -72,7 +73,7 @@ test('a session: an investigation step, then a proposal; a draft travels back as
   const seen: Record<string, unknown>[] = [];
   const events: string[] = [];
   const session = new LawSession<{ row: string }>({
-    llm: { complete: async (r) => { seen.push(r.user as Record<string, unknown>); return { content: JSON.stringify(answers.shift()), latencyMs: 0, raw: null }; } },
+    llm: { complete: async (r) => { seen.push(payloadOf(r.user)); return { content: JSON.stringify(answers.shift()), latencyMs: 0, raw: null }; } },
     system: 'S', world: 'cells@1', perceptDoc: 'P', steps: 2, investigative: true, acts: 1,
     parseAct: (raw) => (typeof raw.row === 'string' ? { row: raw.row } : 'act needs "row"'),
     runRequest: async (r, budget) => ('act' in r ? { accepted: true, left: --budget.acts } : { inspected: true }),

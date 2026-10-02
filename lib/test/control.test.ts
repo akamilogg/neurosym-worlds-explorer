@@ -13,6 +13,8 @@ import { isGameLab } from '../src/learn/lab.ts';
 import { system2Prompt } from '../src/learn/prompt.ts';
 import { explorerSystem } from '../src/learn/explorer.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-INVESTIGADOR-ASISTIDO A1: the unknown-world researcher frozen, the researcher and the operator's policy in the
    journal, a run as an object with a state and an inbox, and the control API over it. */
@@ -21,14 +23,15 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
   const h = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 16);
   /* The system prompt without and with the paired regression, and the percept, per world (the grid: its explorer's).
      Changed on purpose on 2026-10-01: the method's balance between the theory and small steps (prompt.ts, PRACTICE), and
-     committing to hypotheses before believing them fully, facts recorded as facts (EVIDENCE). */
+     committing to hypotheses before believing them fully, facts recorded as facts (EVIDENCE); and an investigation
+     step comes back as a part of its own, for a provider's cache (02/10/2026). */
   const FROZEN: Record<string, readonly string[]> = {
-    cells: ['d733f9f040a7167e', 'b903858f07f40a5c', '050b7ce0a173f715'],
-    messages: ['4d19418fefaa5d37', '160f0522be666451', 'e7b3118baeb95c62'],
-    orbit: ['abc9de5a52ab34fd', '8dc711f1fa9fac26', 'fa67491c1a09af17'],
-    tank: ['3dc6b9eb2b35007b', '827956af3c2541ce', '8a934b83bc5bb3a5'],
-    particles3d: ['453ff72d70ecdf11', '596dc0942b180360', 'c82859a959caa037'],
-    grid: ['3850e6c93f86f9f9']
+    cells: ['587b39d7266ad087', '63aa239742bc597f', '050b7ce0a173f715'],
+    messages: ['75bcaf68c5ad2698', '2ed43e88b590cfb4', 'e7b3118baeb95c62'],
+    orbit: ['c737258d4da2abf5', '2c84ab07c45dc8d8', 'fa67491c1a09af17'],
+    tank: ['0403b630ba34e14b', '331b6ac03e4ddf16', '8a934b83bc5bb3a5'],
+    particles3d: ['5f703af577ee7fd8', '205e8f4a0d5c646c', 'c82859a959caa037'],
+    grid: ['0ed2a7a6a2c4f030']
   };
   for (const [name, lab] of Object.entries(LABS)) {
     if (isGameLab(lab)) { assert.deepEqual([h(explorerSystem())], FROZEN[name], name); continue; }
@@ -50,7 +53,7 @@ test('the operator\'s policy: allowed researchers, or one forced; a researcher i
 const draft = { observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]' };
 const answer = (body: string): string => {
   const b = JSON.parse(body);
-  const sys = b.messages[0].content as string, user = b.messages[b.messages.length - 1].content as string;
+  const sys = b.messages[0].content as string, user = userOf(b);
   const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
     : /"task"/.test(user) ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'confirm', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
     : !JSON.parse(user).investigation && JSON.parse(user).round % 2 === 1 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }

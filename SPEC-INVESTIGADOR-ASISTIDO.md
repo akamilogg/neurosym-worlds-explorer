@@ -47,6 +47,20 @@ investigador completo**, y los dos conviven.
       - Motivo: Luna (run `grid-s22-2026-10-01T16-06-05-482Z`) hizo un barrido de cinco `act` y no anotó qué
         direcciones se aceptaban («they do not establish the movement rule»). Además mantuvo como mera pista que el
         borde derecho pierde, que es la regla verdadera.
+    - 02/10/2026: **la pregunta en varios mensajes**, por la caché del proveedor. Antes iba en un solo mensaje de usuario;
+      ahora va así:
+      1. el contexto de la ronda (ronda, percepción, cuaderno, modelo, lugares, último veredicto);
+      2. un mensaje por paso de investigación (`investigation_step`), que solo se añaden;
+      3. un último mensaje con lo que cambia de una respuesta a otra (`steps_left`, contadores, avisos, mensajes del
+         operador).
+      - Motivo, medido con `scripts/cache-probe.ts`: el proveedor reaprovecha mensajes completos anteriores, nunca el
+        principio común de un mensaje que creció. Con un solo mensaje solo se cacheaba el sistema (4.807 tokens en cada
+        llamada). Ahora, dentro de una ronda, cada petición repite exactamente los mensajes anteriores y solo cambia el
+        último (`test/parts.test.ts`).
+      - La información que recibe System 2 es la misma. El prompt común dice ahora que cada paso vuelve «como una parte
+        propia» (no «message»: el mundo `messages` prohíbe la palabra).
+      - Hashes renovados. Los journals con el System 2 simulado no cambian.
+      - Un run anterior a este cambio no puede reanudarse con este código: sus peticiones ya no coinciden con su grabación.
 - **P2. Dos implementaciones completas, no un interruptor dentro de una.**
   - El asistido tiene su propio paquete (`lib/src/learn/assisted/`): su sesión, su prompt y sus instrumentos.
   - Un cambio en el asistido no puede alterar lo que ve el puro.

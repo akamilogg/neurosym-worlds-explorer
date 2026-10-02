@@ -2,7 +2,7 @@ import { hashString, stableStringify } from '../core/hash.ts';
 import type { ApiError } from '../core/net.ts';
 import type { Law } from '../core/predict.ts';
 import { parseReflection } from './explorer.ts';
-import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
+import { lawExplorerParts, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
 import { Notebook } from './notebook.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory } from './assisted/memory.ts';
 import type { ChatClient } from './system2.ts';
@@ -135,7 +135,7 @@ export class LawSession<A> {
         return null;
       }
       const stepsLeft = h.investigative ? Math.max(0, h.steps - (steps - free)) : 0;
-      const payload = lawExplorerPayload({
+      const payload = lawExplorerParts({
         round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
         setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(),
         ...(h.investigative ? { investigation, stepsLeft } : {}), ...(h.acts !== undefined ? { actsLeft: budget.acts } : {}),

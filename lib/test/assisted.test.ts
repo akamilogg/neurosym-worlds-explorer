@@ -12,6 +12,8 @@ import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import { system2Prompt } from '../src/learn/prompt.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-INVESTIGADOR-ASISTIDO A4: the assisted researcher - its own prompt, the operator's messages with its questions. */
 
@@ -57,7 +59,7 @@ const draft = { observations: {}, rules: {}, weights: {}, output: '(p) => p.rows
 function system2(asked: Record<string, any>[], hook: (n: number) => void = () => {}): FetchLike {
   return async (_url, init) => {
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     if (!sys.startsWith('You grade')) { asked.push({ system: sys, user }); hook(asked.length); }
     const cited = user.operator_messages ? [...user.operator_messages.earlier, ...user.operator_messages.new].map((m: { id: string }) => 'operator:' + m.id) : [];

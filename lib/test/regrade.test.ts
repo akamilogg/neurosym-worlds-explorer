@@ -8,13 +8,15 @@ import { regrade } from '../src/runtime/regrade.ts';
 import { gridLab, GRID_GRADING_SYSTEM } from '../src/worlds/grid/lab.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* Grading a finished run again, with another model: the run's grader, the run's learner, the run's truth. */
 
 const fetch: FetchLike = async (_url, init) => {
   const b = JSON.parse(String(init.body));
   const sys = b.messages[0].content as string;
-  const user = sys.startsWith('You grade') ? {} : JSON.parse(b.messages[b.messages.length - 1].content as string);
+  const user = sys.startsWith('You grade') ? {} : JSON.parse(userOf(b));
   /* The run's own grader fails, as a small local model did (HTTP 400). */
   if (sys.startsWith('You grade')) return { ok: false, status: 400, text: async () => 'Bad Request', headers: { get: () => null } };
   const content = { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false,

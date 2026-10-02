@@ -7,6 +7,8 @@ import { runBatch, spread, type BatchDefinition } from '../src/orchestra/batch.t
 import { generateScene, type SceneSpec } from '../src/worlds/particles3d/scene.ts';
 import { LabError } from '../src/runtime/lab-runner.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-ORQUESTADOR R2: a batch of runs, compared by condition from the researchers' findings; cut and resumed without
    running again what ended. The world is particles3d@1 with a stand-in for Blender whose dynamics is known. */
@@ -45,7 +47,7 @@ const NAIVE = '(p) => { const o = {}; const i = p.t.length - 1; for (const n of 
 const world: FetchLike = async (url, init) => {
   if (url.includes('/simulate')) { const text = JSON.stringify(fakeSimulate(JSON.parse(String(init.body)))); return { ok: true, status: 200, text: async () => text, headers: { get: () => null } }; }
   const b = JSON.parse(String(init.body));
-  const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+  const sys = b.messages[0].content as string, raw = userOf(b);
   const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
   const content = sys.startsWith('You grade') ? { grades: [{ id: 'field1', grade: 'exact' }], false_beliefs: [], form: 'compact', form_evidence: 'e' }
     : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }

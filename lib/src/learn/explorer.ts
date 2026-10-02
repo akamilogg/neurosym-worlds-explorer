@@ -5,6 +5,7 @@ import { describeTest, type Probe, type ProbeResult } from './experiments.ts';
 import { STANCES, type BeliefStance, type NoteOp, type Stance } from './notebook.ts';
 import { INVESTIGATION_TOOLS as COMMON_INVESTIGATION, system2Prompt, type WorldInterface } from './prompt.ts';
 import { objectiveLines } from './objective.ts';
+import { UserParts } from './system2.ts';
 import { GRID_ANSWER, GRID_VERDICT } from '../worlds/grid/objective.ts';
 
 /* ============================================================================
@@ -137,6 +138,17 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
     ...(brief.directive ? { operator_directive: brief.directive } : {}),
     ...(brief.task ? { task: brief.task } : {})
   };
+}
+
+/** The same consultation as `explorerPayload`, in messages: the round's context (unchanged during the round), one message
+    per investigation step (`investigation_step`, only ever added), and a last one with what changes from one answer to
+    the next. A provider's cache then reuses the context and the earlier steps of the round. */
+export function explorerParts(brief: ExplorerBrief): UserParts {
+  const { investigation, steps_left, replays_left, memory_answers_left, memory, your_previous_answer_was_refused, operator_directive, task, ...context } =
+    explorerPayload(brief) as Record<string, unknown>;
+  const last = Object.fromEntries(Object.entries({ steps_left, replays_left, memory_answers_left, memory, your_previous_answer_was_refused, operator_directive, task })
+    .filter(([, v]) => v !== undefined));
+  return new UserParts([context, ...((investigation as unknown[] | undefined) ?? []).map((step) => ({ investigation_step: step })), ...(Object.keys(last).length ? [last] : [])]);
 }
 
 /* --- Investigation requests ------------------------------------------------------------ */

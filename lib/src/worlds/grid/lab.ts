@@ -38,7 +38,7 @@ import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type Actio
 import { ceilingOf, tightness } from './informed.ts';
 import { variantStarts } from './variants.ts';
 import { reflectionTask, toolOf } from '../../learn/prompt.ts';
-import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
+import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerParts, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
 import { Notebook, type GameRecord } from '../../learn/notebook.ts';
 import { OVERREACH, assistedSystem } from '../../learn/assisted/session.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory, MEMORY_SECTION } from '../../learn/assisted/memory.ts';
@@ -630,7 +630,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         return null;
       }
       const stepsLeft = investigative ? Math.max(0, cfg.steps - (steps - free)) : 0;
-      const payload = explorerPayload({
+      const payload = explorerParts({
         round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
         formula: from, formulaRound: from ? roundOf.get(from) ?? null : null,
         ...(investigative ? { investigation, stepsLeft } : {}), ...(tools.has('replay') ? { replaysLeft: plays.left } : {}),

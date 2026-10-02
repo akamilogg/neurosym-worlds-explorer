@@ -1,3 +1,4 @@
+import { UserParts } from './system2.ts';
 import { parseJsonLoose } from '../core/net.ts';
 import { normalizeWeights } from '../core/formula.ts';
 import { checkLaw, type Law } from '../core/predict.ts';
@@ -80,6 +81,17 @@ export function lawExplorerPayload(brief: LawExplorerBrief): Record<string, unkn
     ...(brief.directive ? { operator_directive: brief.directive } : {}),
     ...(brief.task ? { task: brief.task } : {})
   };
+}
+
+/** The same consultation as `lawExplorerPayload`, in messages: the round's context, one message per investigation step
+    (`investigation_step`), and a last one with what changes from one answer to the next (the provider's cache reuses
+    whole earlier messages). */
+export function lawExplorerParts(brief: LawExplorerBrief): UserParts {
+  const { investigation, steps_left, acts_left, memory_answers_left, memory, your_previous_answer_was_refused, operator_directive, task, ...context } =
+    lawExplorerPayload(brief) as Record<string, unknown>;
+  const last = Object.fromEntries(Object.entries({ steps_left, acts_left, memory_answers_left, memory, your_previous_answer_was_refused, operator_directive, task })
+    .filter(([, v]) => v !== undefined));
+  return new UserParts([context, ...((investigation as unknown[] | undefined) ?? []).map((step) => ({ investigation_step: step })), ...(Object.keys(last).length ? [last] : [])]);
 }
 
 /* --- Building a law from the explorer's text ------------------------------------------ */

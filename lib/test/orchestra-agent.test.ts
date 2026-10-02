@@ -10,6 +10,8 @@ import { researcherEvents, runDigest } from '../src/orchestra/view.ts';
 import { runAgentOperator } from '../src/orchestra/agent-operator.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-ORQUESTADOR R1: the agent operator - what it sees (Q2), its policy, its help budget, its record. */
 
@@ -19,7 +21,7 @@ function stuck(asked: Record<string, any>[] = []): FetchLike {
   return async (_url, init) => {
     await sleep(40);
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     asked.push(user);
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }

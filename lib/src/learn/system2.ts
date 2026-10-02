@@ -21,6 +21,19 @@ export interface ChatAnswer {
   readonly raw: unknown;
 }
 
+/** A question in several user messages, sent in order: the round's context, one message per investigation step, and a
+    last one with what changes from one answer to the next. A provider's cache reuses whole earlier messages, never the
+    common beginning of a message that grew: a round that grows by messages is mostly read from the cache. */
+export class UserParts {
+  readonly parts: readonly unknown[];
+  constructor(parts: readonly unknown[]) { this.parts = parts; }
+  /** The same parts, the last one with these fields added (the assisted researcher's messages go with the question). */
+  withLast(extra: Record<string, unknown>): UserParts {
+    const last = this.parts[this.parts.length - 1];
+    return new UserParts([...this.parts.slice(0, -1), { ...(last && typeof last === 'object' ? last as Record<string, unknown> : {}), ...extra }]);
+  }
+}
+
 export interface ChatClient {
   complete(request: { system: string; user: unknown; signal?: AbortSignal | null }): Promise<ChatAnswer>;
 }
@@ -55,7 +68,7 @@ export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temp
     temperature: clamp(options.temperature ?? 0.3, 0, 2),
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: JSON.stringify(user, null, 2) }
+      ...(user instanceof UserParts ? user.parts : [user]).map((part) => ({ role: 'user', content: JSON.stringify(part, null, 2) }))
     ]
   };
   if (options.jsonMode) body.response_format = { type: 'json_object' };

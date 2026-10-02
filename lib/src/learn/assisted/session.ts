@@ -1,4 +1,4 @@
-import type { ChatClient } from '../system2.ts';
+import { UserParts, type ChatClient } from '../system2.ts';
 import { LawSession, type LawSessionHost } from '../law-session.ts';
 import { Sources, type LineSelector } from './sources.ts';
 import { JournalMemory } from './memory.ts';
@@ -102,9 +102,11 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       for (const m of fresh) await channel.onDeliver?.(m, question);
       const task = channel.task?.() ?? null;
       const origins = channel.sources?.origins() ?? [];
-      const user = fresh.length || earlier.length || task || origins.length
-        ? { ...(request.user as Record<string, unknown>), ...(task ? { operator_task: task } : {}), ...(origins.length ? { sources: { origins } } : {}),
-          ...(fresh.length || earlier.length ? { operator_messages: { new: fresh, earlier: [...earlier] } } : {}) }
+      const extra = { ...(task ? { operator_task: task } : {}), ...(origins.length ? { sources: { origins } } : {}),
+        ...(fresh.length || earlier.length ? { operator_messages: { new: fresh, earlier: [...earlier] } } : {}) };
+      /* With the question's last part, which changes anyway: the earlier parts stay as they were. */
+      const user = Object.keys(extra).length
+        ? (request.user instanceof UserParts ? request.user.withLast(extra) : { ...(request.user as Record<string, unknown>), ...extra })
         : request.user;
       earlier.push(...fresh);
       const system = channel.system ? channel.system() : request.system;

@@ -9,6 +9,8 @@ import { explorerSystem, parseExplorerTurn } from '../src/learn/explorer.ts';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { gridLab } from '../src/worlds/grid/lab.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-INVESTIGADOR-ASISTIDO §13: the assisted researcher's selective memory over its own record. */
 
@@ -89,7 +91,7 @@ function system2(asked: Record<string, any>[]): FetchLike {
   return async (_url, init) => {
     const b = JSON.parse(String(init.body));
     const sys = b.messages[0].content as string;
-    const user = JSON.parse(b.messages[b.messages.length - 1].content as string);
+    const user = JSON.parse(userOf(b));
     asked.push({ system: sys, user });
     const done = (user.investigation ?? []).length;
     const content = user.round === 1 && done === 0 ? { investigate: [{ memory: 'list', of: 'episodes' }, { memory: 'find', words: 'score' }] }
@@ -140,7 +142,7 @@ test("in a world of laws: the abridged notebook with the run's episodes and mode
   const asked: Record<string, any>[] = [];
   const fetch: FetchLike = async (_url, init) => {
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = JSON.parse(raw);
     asked.push({ system: sys, user });
     const done = (user.investigation ?? []).length;
@@ -174,7 +176,7 @@ test('with no steps left, the memory requests of an answer are still answered (t
   const asked: Record<string, any>[] = [];
   const fetch: FetchLike = async (_url, init) => {
     const b = JSON.parse(String(init.body));
-    const user = JSON.parse(b.messages[b.messages.length - 1].content as string);
+    const user = JSON.parse(userOf(b));
     asked.push(user);
     const done = (user.investigation ?? []).length;
     const content = user.round === 1 && done === 0 ? { investigate: [{ view: 'g1', from: 0, to: 2 }] }
@@ -200,7 +202,7 @@ test('the assisted researcher may insist on investigating with no steps left a f
     let round1 = 0;
     return async (_url, init) => {
       const b = JSON.parse(String(init.body));
-      const user = JSON.parse(b.messages[b.messages.length - 1].content as string);
+      const user = JSON.parse(userOf(b));
       const content = user.round === 1 && ++round1 <= 5 ? { investigate: [{ view: 'g1', from: 0, to: 2 }] }
         : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: user.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] };
       const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });

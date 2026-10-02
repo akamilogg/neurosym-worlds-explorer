@@ -12,6 +12,8 @@ import { particles3dLab, priorWords } from '../src/worlds/particles3d/lab.ts';
 import { findBlender, startBlenderService } from '../src/worlds/particles3d/blender.ts';
 import { mulberry32 } from '../src/worlds/grid/gen.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-MUNDO-3D: particles3d@1, a 3D world simulated by Blender. */
 
@@ -105,7 +107,7 @@ function system2(law: string, asked: Record<string, any>[] = [], first?: string)
       return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
     }
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     if (!sys.startsWith('You grade')) asked.push(user);
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }

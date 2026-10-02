@@ -10,6 +10,8 @@ import { Sources, judgeSelector, sourceFetch, textOfHtml } from '../src/learn/as
 import { SOURCES_SECTION } from '../src/learn/assisted/session.ts';
 import { findingView } from '../src/learn/finding.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-INVESTIGADOR-ASISTIDO A6: sources the assisted researcher reads by itself, where the operator allows. */
 
@@ -90,7 +92,7 @@ function system2(asked: { system: string; user: Record<string, any> }[] = [], ho
   return async (url, init) => {
     if (!/system2\.test/.test(url)) return { ok: false, status: 404, text: async () => 'not here', headers: { get: () => null } };
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     if (!sys.startsWith('You grade')) { asked.push({ system: sys, user }); hook(asked.length); }
     const origins: string[] = user.sources?.origins ?? [];

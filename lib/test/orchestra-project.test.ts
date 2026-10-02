@@ -7,6 +7,8 @@ import { projectFiles, projectStatus, runProject, sendProject, compileCriterion,
 import { generateScene, type SceneSpec } from '../src/worlds/particles3d/scene.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* SPEC-ORQUESTADOR R3, R3b, R4: the project planner - its loop to a computable criterion, the operator's approvals,
    stopping and resuming, and a branch out of a local minimum. World: particles3d@1 with a stand-in for Blender. */
@@ -48,7 +50,7 @@ function world(llmCalls: { n: number } = { n: 0 }): FetchLike {
     if (url.includes('/simulate')) { const text = JSON.stringify(fakeSimulate(JSON.parse(String(init.body)))); return { ok: true, status: 200, text: async () => text, headers: { get: () => null } }; }
     llmCalls.n++;
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     const law = user.operator_messages || 'steps_left' in user ? knownLaw(generateScene(1, 1, 'A')) : NAIVE;
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }

@@ -7,6 +7,8 @@ import { LabError, runLaboratory } from '../src/runtime/lab-runner.ts';
 import { cellsLab } from '../src/worlds/cells/lab.ts';
 import { send } from '../src/runtime/control.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* A CONTINUATION: a run that used up its rounds is given more (--resume <journal> --attempts N). Its history is replayed as
    it was - its ending too: the reflection and the grading it ended with - and then it goes on, live. */
@@ -15,7 +17,7 @@ import type { FetchLike } from '../src/core/net.ts';
 function system2(asked: Record<string, any>[] = []): FetchLike {
   return async (_url, init) => {
     const b = JSON.parse(String(init.body));
-    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     asked.push({ grade: sys.startsWith('You grade'), ...user });
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }

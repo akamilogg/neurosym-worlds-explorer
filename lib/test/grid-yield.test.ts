@@ -6,6 +6,8 @@ import path from 'node:path';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { gridLab } from '../src/worlds/grid/lab.ts';
 import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
 
 /* A check of the grid can run for many minutes; meanwhile the process must still breathe: the heartbeat, the inbox, what is
    printed. A timer has to fire while the episodes are played. */
@@ -13,7 +15,7 @@ test('the grid\'s checks let the process breathe: timers fire while episodes are
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grid-yield-'));
   const fetch: FetchLike = async (_url, init) => {
     const b = JSON.parse(String(init.body));
-    const user = JSON.parse(b.messages[b.messages.length - 1].content as string);
+    const user = JSON.parse(userOf(b));
     const content = { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: user.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] };
     const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
     return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
