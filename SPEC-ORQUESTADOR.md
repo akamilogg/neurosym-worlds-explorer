@@ -88,8 +88,22 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
     `replay`, `table`, `measure`, `simulate`), solo `view`, `inspect` o lecturas. Es la señal de un junior que duda o
     investiga de más y no llega a formular una hipótesis que pruebe. La ronda 1, sin modelo todavía, no cuenta.
 
+  - **regresiones:** al menos 2 episodios de pruebas anteriores que puntúan menos al repetirlos con los modelos nuevos
+    (en las últimas `window` pruebas, 2 por defecto). Sus cambios deshacen lo que funcionaba.
+  - **sin progreso:** su mejor prueba (la de mayor proporción de episodios a 1) no se ha igualado en `window` pruebas.
+  
+  Las dos últimas se añadieron el 02/10/2026, tras un run de Luna con 4, 5, 3 y 4 victorias de 8 y regresiones en las
+  repeticiones, en el que el senior no volvió a intervenir.
+
   Son recuentos mecánicos de hechos del registro, no un diagnóstico: deciden cuándo merece la pena llamarlo, que es lo
-  caro. El diagnóstico es suyo. Tras un mensaje deja `cooldown` rondas al junior (2 por defecto).
+  caro. El diagnóstico es suyo.
+- **Pausa tras un mensaje.** Tras un mensaje, el senior espera a que el junior lo **reciba** y deja `cooldown` pruebas (2
+  por defecto) contadas **desde la entrega**, no desde el envío. Un mensaje enviado durante una respuesta larga del junior
+  le llega una ronda después. Contando desde el envío, el senior quedaba bloqueado justo cuando el junior acababa de
+  leer el consejo.
+- **Después de la reflexión final no escribe.** Ya no hay más preguntas al junior, así que el mensaje nunca le llegaría y
+  gastaría una ayuda del presupuesto. Pasó en el run de Luna `grid-s22-2026-10-02T10-57-10-816Z`. El agente sigue
+  atento: en una continuación decide en la prueba siguiente.
 - **También dentro de la ronda (02/10/2026).** Al principio solo se le llamaba al acabar una ronda.
   - En el run `grid-s22-2026-10-02T10-10-45-109Z`, Qwen pasó la ronda 3 mirando 12 tableros, insistió sin pasos hasta
     agotar los recordatorios y la ronda acabó sin propuesta. En la cuadrícula eso termina el run, así que el senior no

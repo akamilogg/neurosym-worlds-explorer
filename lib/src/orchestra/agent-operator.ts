@@ -116,7 +116,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     const digest = journal ? runDigest(journal) : null;
     /* Rounds it has completed: checked, or reflected on. */
     const rounds = journal ? researcherEvents(journal).filter((e) => e.type === 'check' || e.type === 'reflection').length : 0;
-    const over = status?.state === 'ended' || status?.state === 'interrupted';
+    /* A reflection is how a run ends: after it nothing more is asked of the researcher, so a message would never reach it
+       (and would spend the run's help budget). A continuation that goes on after one is decided on at its next check. */
+    const lastCompleted = journal ? [...researcherEvents(journal)].reverse().find((e) => e.type === 'check' || e.type === 'reflection') : undefined;
+    const ended = status?.state === 'ended' || status?.state === 'interrupted';
+    const over = ended || lastCompleted?.type === 'reflection';
     /* The senior, during a round: a sign about the round in course (it only looks, or insists with no steps left). */
     const now = role === 'senior' && journal ? stuckSignals(journal, o.patience ?? 3, o.looking ?? 3) : null;
     const duringRound = Boolean(now?.in_round && !calledInRound.has(now.current_round));
@@ -154,7 +158,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       d.outcome = out.state + (out.reason ? ': ' + out.reason : '');
     }
     save();
-    if (over) break;
+    if (ended) break;
     await sleep(o.pollMs ?? 2000, o.signal);
   }
   return { decisions: record.decisions, file };
@@ -165,8 +169,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, digest: unknown, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
   duringRound: number | null = null): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
-  const lastMessage = [...decisions].reverse().find((x) => x.decision === 'message');
-  if (!signals.signs.length || (lastMessage && rounds - lastMessage.rounds < (o.cooldown ?? 2))) return null;
+  if (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2)) return null;
   const reader = journalReader(journal);
   const system = seniorSystem(juniorBrief(journal));
   const read: { step: number; requests: Record<string, unknown>[]; results: unknown[] }[] = [];
@@ -194,4 +197,18 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   } catch (e) {
     return { at: at(), rounds, decision: 'error', why: String((e as Error)?.message ?? e), signals: signals.signs };
   }
+}
+
+/** Whether the junior is still to act on the senior's latest message: not delivered yet (it reaches the junior with its
+    next question), or delivered fewer than `cooldown` checks ago. Counted from when the junior got it, not from when it
+    was sent: a message sent during a long answer arrives a round later. */
+export function waitingOnMessage(journal: Record<string, any>, id: string, cooldown: number): boolean {
+  const events = (Array.isArray(journal?.events) ? journal.events : []) as Record<string, any>[];
+  const by = 'agent:' + id;
+  const sent = events.filter((e) => e.type === 'operator_command' && e.by === by && e.accepted).length;
+  const delivered = events.map((e, i) => ({ e, i })).filter(({ e }) => e.type === 'operator_message' && (e.messages ?? []).some((m: { by?: string }) => m.by === by));
+  if (sent > delivered.length) return true;
+  if (!delivered.length) return false;
+  const at = delivered[delivered.length - 1].i;
+  return events.slice(at + 1).filter((e) => e.type === 'check').length < cooldown;
 }

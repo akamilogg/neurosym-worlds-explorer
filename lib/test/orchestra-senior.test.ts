@@ -193,3 +193,50 @@ test('the senior is called during a round in which the junior only looks, and it
   const proposed2 = events.findIndex((e) => e.type === 'proposal' && e.round === 2);
   assert.ok(delivered >= 0 && proposed2 > delivered, 'received within round 2, and then it proposed');
 });
+
+test('regressions and no progress since its best check are signs', async () => {
+  const check = (round: number, wins: number, down = 0) => ({ type: 'check', round, laboratories: [{ place: 'lab1', holds: false, wins, total: 8, ...(round > 1 ? { rerun: { went_up: 0, went_down: down } } : {}) }] });
+  const s = stuckSignals({ events: [check(1, 4), check(2, 5, 1), check(3, 3, 0), check(4, 4, 2)] });
+  assert.equal(s.regressions, 2);
+  assert.equal(s.checks_since_best, 2);
+  assert.ok(s.signs.some((x) => /scored lower when run again/.test(x)));
+  assert.ok(s.signs.some((x) => /best check \(5 of 8 scored 1, round 2\) has not been matched in the 2 checks since/.test(x)));
+  assert.deepEqual(stuckSignals({ events: [check(1, 4), check(2, 5, 0), check(3, 6, 0)] }, 5).signs, [], 'improving: no sign');
+  assert.equal(stuckSignals({ events: [check(1, 5), check(2, 3, 0), check(3, 5, 0)] }).checks_since_best, 0, 'matching its best counts');
+});
+
+test('the senior waits for the junior to get its message, and counts the pause from then', async () => {
+  const { waitingOnMessage } = await import('../src/orchestra/agent-operator.ts');
+  const sent = { type: 'operator_command', kind: 'message', by: 'agent:senior', accepted: true };
+  const got = { type: 'operator_message', question: 9, messages: [{ id: 'o1', text: 't', by: 'agent:senior' }] };
+  const check = { type: 'check', round: 1, laboratories: [] };
+  assert.equal(waitingOnMessage({ events: [] }, 'senior', 2), false, 'nothing sent');
+  assert.equal(waitingOnMessage({ events: [sent, check, check, check] }, 'senior', 2), true, 'sent, not yet delivered: still waiting');
+  assert.equal(waitingOnMessage({ events: [sent, check, got, check] }, 'senior', 2), true, 'one check since the junior got it');
+  assert.equal(waitingOnMessage({ events: [sent, got, check, check] }, 'senior', 2), false, 'two checks since: it may be called again');
+});
+
+test('after the final reflection the senior does not write: the message would never reach the junior', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-'));
+  const out = path.join(dir, 'run.json');
+  const check = (round: number) => ({ type: 'check', round, laboratories: [{ place: 'lab1', holds: false }] });
+  fs.writeFileSync(out, JSON.stringify({ experiment: 'cells@1', researcher: 'assisted', events: [check(1), check(2), check(3), { type: 'reflection', round: 4, beliefs: [] }] }));
+  fs.writeFileSync(out.replace(/\.json$/, '.status.json'), JSON.stringify({ state: 'running', heartbeat: new Date().toISOString(), pid: process.pid }));
+  let asked = 0;
+  const llm: ChatClient = { complete: async () => { asked++; return { content: JSON.stringify({ decision: 'message', text: 'x' }), latencyMs: 0, raw: null }; } };
+  const controller = new AbortController();
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm, pollMs: 10, signal: controller.signal });
+  await sleep(120);
+  controller.abort();
+  const { decisions } = await agent;
+  assert.equal(asked, 0);
+  assert.deepEqual(decisions, []);
+  /* The control: the same run before its reflection - the senior is called. */
+  fs.writeFileSync(out, JSON.stringify({ experiment: 'cells@1', researcher: 'assisted', events: [check(1), check(2), check(3)] }));
+  fs.writeFileSync(out.replace(/\.json$/, '.status.json'), JSON.stringify({ state: 'running', heartbeat: new Date().toISOString(), pid: process.pid }));
+  const again = new AbortController();
+  const control = runAgentOperator({ id: 'control', role: 'senior', journal: out, llm, pollMs: 10, signal: again.signal });
+  await sleep(120);
+  again.abort();
+  assert.ok((await control).decisions.length > 0 && asked > 0, 'without the reflection, it decides');
+});

@@ -87,6 +87,11 @@ export interface StuckSignals {
       no experiment at all in that round (act, replay, table, measure, simulate): it doubts, or investigates too much, and
       does not get to a hypothesis it tests. 0 when it experimented. */
   readonly only_looking: number;
+  /** Episodes of its earlier checks that scored LOWER when run again with its newer models, over its latest checks: its
+      changes keep undoing what worked. */
+  readonly regressions: number;
+  /** Checks since its best one (the most episodes scoring 1, as a share) that did not match it: no progress, or going back. */
+  readonly checks_since_best: number;
   /** The round in course (the latest it acted in), and whether a sign is about it: then it can still be helped in it. */
   readonly current_round: number;
   readonly in_round: boolean;
@@ -97,8 +102,9 @@ export interface StuckSignals {
 /** Instruments that put an idea to the test (the rest only look at what was recorded or read). */
 const EXPERIMENTS = new Set(['act', 'replay', 'table', 'measure', 'simulate', 'launch', 'play', 'try']);
 
-/** `patience`: checks in a row holding nowhere before it is a sign; `looking`: answers of a round only looking. */
-export function stuckSignals(journal: J, patience = 3, looking = 3): StuckSignals {
+/** `patience`: checks in a row holding nowhere before it is a sign; `looking`: answers of a round only looking; `window`:
+    the latest checks where regressions are counted, and the checks without matching its best before that is a sign. */
+export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2): StuckSignals {
   const events = (Array.isArray(journal?.events) ? journal.events : []) as J[];
   const checks = events.filter((e) => e.type === 'check');
   let nowhere = 0;
@@ -111,16 +117,30 @@ export function stuckSignals(journal: J, patience = 3, looking = 3): StuckSignal
   const experimented = answers.some((e) => (e.requests ?? []).some((q: J) => EXPERIMENTS.has(Object.keys(q ?? {})[0] ?? '')));
   /* Round 1 is for looking: there is no model yet. From the next one, a round of only looking is a sign. */
   const onlyLooking = experimented || last <= 1 ? 0 : answers.length;
+  /* Its checks, as it was given them: how many episodes scored 1 of how many, and how many run again scored lower. */
+  const scored = checks.map((c) => {
+    const labs = (c.laboratories ?? []) as J[];
+    const wins = labs.reduce((n, p) => n + (Number(p.wins) || 0), 0), total = labs.reduce((n, p) => n + (Number(p.total) || 0), 0);
+    return { share: total ? wins / total : 0, wins, total, round: c.round, down: labs.reduce((n, p) => n + (Number(p.rerun?.went_down) || 0), 0) };
+  });
+  const regressions = scored.slice(-window).reduce((n, c) => n + c.down, 0);
+  /* Its best share so far, and the latest check that reached it (matching it counts): the checks since, below it. */
+  const top = Math.max(0, ...scored.map((c) => c.share));
+  let best = -1;
+  scored.forEach((c, i) => { if (c.share === top && top > 0) best = i; });
+  const sinceBest = best < 0 ? 0 : scored.length - 1 - best;
   const recent = events.filter((e) => e.type === 'proposal').slice(-patience);
   const distinct = new Set(recent.map((e) => e.fingerprint ?? JSON.stringify(e.formula?.observations ? Object.keys(e.formula.observations) : e.law))).size;
   const signs = [
     ...(nowhere >= patience ? [nowhere + ' checks in a row where its model held in no place'] : []),
     ...(repeated >= 2 ? [repeated + ' requests repeated in its latest round'] : []),
     ...(insisted >= 2 ? ['it asked to investigate ' + insisted + ' times with no steps left in its latest round'] : []),
-    ...(onlyLooking >= looking ? ['it spent ' + onlyLooking + ' investigation answers of its latest round only looking, with no experiment (no act, replay, table or measure)'] : [])
+    ...(onlyLooking >= looking ? ['it spent ' + onlyLooking + ' investigation answers of its latest round only looking, with no experiment (no act, replay, table or measure)'] : []),
+    ...(regressions >= 2 ? [regressions + ' episodes of its earlier checks scored lower when run again with its newer models (its last ' + Math.min(window, scored.length) + ' checks): its changes undo what worked'] : []),
+    ...(sinceBest >= window && best >= 0 ? ['its best check (' + scored[best].wins + ' of ' + scored[best].total + ' scored 1, round ' + scored[best].round + ') has not been matched in the ' + sinceBest + ' checks since'] : [])
   ];
   return { holding_nowhere_in_a_row: nowhere, repeated_requests: repeated, insisted_without_steps: insisted, distinct_models_lately: distinct,
-    only_looking: onlyLooking, current_round: last, in_round: insisted >= 2 || onlyLooking >= looking, signs };
+    only_looking: onlyLooking, regressions, checks_since_best: sinceBest, current_round: last, in_round: insisted >= 2 || onlyLooking >= looking, signs };
 }
 
 /** Where the researcher's prompt stops describing its work and starts describing the shape of its own answer. */
