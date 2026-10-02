@@ -101,6 +101,22 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
   por defecto) contadas **desde la entrega**, no desde el envío. Un mensaje enviado durante una respuesta larga del junior
   le llega una ronda después. Contando desde el envío, el senior quedaba bloqueado justo cuando el junior acababa de
   leer el consejo.
+- **Seguimiento de sus propias hipótesis (02/10/2026).** El junior recibe su mensaje y después hace un experimento (`act`,
+  `replay`, `table`, `measure`). En ese momento se llama al senior **dentro de la misma ronda**, una vez por mensaje
+  (`followUpDue`), sin esperar señales ni la pausa. Lee el resultado y decide:
+  - si los datos del junior **confirman** la hipótesis sin contraejemplos, se lo dice citándolos, le pide que la adopte
+    como regla de trabajo y que **proponga ya** un modelo construido sobre ella;
+  - si la **refutan**, se lo dice para que la descarte;
+  - si no es concluyente, espera.
+  
+  Con una regla confirmada puede decirle **cómo la usa su modelo** en la forma que pide el entorno (qué puntos valen lo
+  mínimo o lo máximo según la regla), pero nunca escribe el código.
+  
+  Motivo: run de Luna `grid-s22-2026-10-02T11-32-33-166Z`. El senior apuntó la columna derecha y el bloqueo de `=`; Luna
+  hizo los experimentos y obtuvo 6 de 6 derrotas en la columna derecha y una victoria inmediata al bloquear. Aun así lo
+  dejó como «sample association» y siguió con heurísticas de distancia. Faltaba alguien que cerrase el ciclo.
+  
+  Cada seguimiento gasta una ayuda: para estos runs, `--help-budget 6`.
 - **Después de la reflexión final no escribe.** Ya no hay más preguntas al junior, así que el mensaje nunca le llegaría y
   gastaría una ayuda del presupuesto. Pasó en el run de Luna `grid-s22-2026-10-02T10-57-10-816Z`. El agente sigue
   atento: en una continuación decide en la prueba siguiente.

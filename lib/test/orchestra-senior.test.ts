@@ -240,3 +240,64 @@ test('after the final reflection the senior does not write: the message would ne
   again.abort();
   assert.ok((await control).decisions.length > 0 && asked > 0, 'without the reflection, it decides');
 });
+
+test('a follow-up is due when the junior, having got the senior\'s message, runs an experiment - once per message', async () => {
+  const { followUpDue } = await import('../src/orchestra/reader.ts');
+  const got = { type: 'operator_message', question: 5, messages: [{ id: 'o1', text: 'test the column', by: 'agent:senior' }] };
+  const look = { type: 'investigation', round: 3, requests: [{ view: 'g1' }] };
+  const table = { type: 'investigation', round: 3, requests: [{ table: { source: 's' }, on: 'final' }] };
+  assert.equal(followUpDue({ events: [table] }, 'senior'), null, 'no message: nothing to follow up');
+  assert.equal(followUpDue({ events: [got, look] }, 'senior'), null, 'it only looked since');
+  assert.deepEqual(followUpDue({ events: [look, got, look, table] }, 'senior'), { message: 0, text: 'test the column', experiment: 'investigation:r3.3', round: 3, requests: table.requests });
+  assert.equal(followUpDue({ events: [table, got] }, 'senior'), null, 'an experiment before the message does not count');
+});
+
+test('the senior follows up its message within the round: the junior ran the experiment, and is told what its data show', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-'));
+  const out = path.join(dir, 'run.json');
+  /* The junior: round 1 proposes; round 2 only looks until it gets a message, then runs a table, then proposes once it has
+     heard back. */
+  const junior: FetchLike = async (_url, init) => {
+    await sleep(40);
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string, raw = b.messages[b.messages.length - 1].content as string;
+    const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
+    const heard = [...(user.operator_messages?.earlier ?? []), ...(user.operator_messages?.new ?? [])].length;
+    const tabled = (user.investigation ?? []).some((s: { requests: Record<string, unknown>[] }) => s.requests.some((q) => 'table' in q));
+    const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'same', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : user.round === 2 && heard === 0 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }
+      : user.round === 2 && !tabled ? { investigate: [{ table: { source: '(p) => p.rows.length', range: [0, 100] }, on: 'episodes' }] }
+      : user.round === 2 && heard < 2 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false,
+        beliefs: [{ id: 'same', stance: user.round === 1 ? 'new' : 'keep', statement: 'the row repeats', evidence: [] }], lessons: ['l'], next_experiment: 'n' };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const seen: any[] = [];
+  const advisor: ChatClient = { complete: async (r) => {
+    const user = r.user as Record<string, any>;
+    seen.push(user);
+    const content = user.follow_up
+      ? { decision: 'message', text: 'Your table confirms it: adopt it as a working rule and propose now a model built on it.', evidence: [user.follow_up.experiment], why: 'confirmed' }
+      : { decision: 'message', text: 'Hypothesis: the length matters. Test it with a table over your episodes.', evidence: ['investigation:r2.1'], why: 'only looking' };
+    return { content: JSON.stringify(content), latencyMs: 0, raw: null };
+  } };
+  const controller = new AbortController();
+  const run = runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--tools', 'view,table', '--steps', '9', '--researcher', 'assisted', '--attempts', '3',
+    '--agents', 'senior=message', '--out', out], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior });
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm: advisor, pollMs: 10, maxOrders: 3, signal: controller.signal });
+  const r = await run;
+  controller.abort();
+  const { decisions } = await agent;
+  const follow = decisions.find((d) => d.follow_up);
+  assert.ok(follow, 'a follow-up');
+  assert.match(follow!.follow_up!, /^investigation:r2\.\d+$/);
+  assert.equal(follow!.decision, 'message');
+  const call = seen.find((u) => u.follow_up)!;
+  assert.match(call.follow_up.your_message, /Test it with a table/);
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  const confirmed = events.findIndex((e) => e.type === 'operator_message' && e.messages.some((m: { text: string }) => /confirms it/.test(m.text)));
+  const proposed2 = events.findIndex((e) => e.type === 'proposal' && e.round === 2);
+  assert.ok(confirmed >= 0 && proposed2 > confirmed, 'it heard back within round 2, then proposed');
+});

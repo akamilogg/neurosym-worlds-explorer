@@ -159,3 +159,30 @@ export function juniorBrief(journal: J): string | null {
   const at = prompt.indexOf(ANSWER_SHAPE);
   return (at >= 0 ? prompt.slice(0, at) : prompt).trimEnd();
 }
+
+/** A follow-up the senior owes (SPEC-ORQUESTADOR §3.3): the junior got its latest message and then ran an experiment.
+    `message` is that message's place among the junior's messages from it (each is followed up once); `experiment` the
+    item of the junior's record that holds the experiment and what it was answered. Null when none is due. */
+export function followUpDue(journal: J, id: string): { message: number; text: string; experiment: string; round: number; requests: unknown } | null {
+  const events = (Array.isArray(journal?.events) ? journal.events : []) as J[];
+  const by = 'agent:' + id;
+  let delivered = -1, at = -1, text = '';
+  events.forEach((e, i) => {
+    if (e.type !== 'operator_message') return;
+    const m = (e.messages ?? []).find((x: J) => x.by === by);
+    if (m) { delivered++; at = i; text = String(m.text ?? ''); }
+  });
+  if (at < 0) return null;
+  /* The ids of the junior's record count its investigation answers, refused ones too, round by round. */
+  const steps = new Map<number, number>();
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.type !== 'investigation' && e.type !== 'investigation_refused') continue;
+    const round = typeof e.round === 'number' ? e.round : 0;
+    const step = (steps.get(round) ?? 0) + 1;
+    steps.set(round, step);
+    if (i > at && e.type === 'investigation' && (e.requests ?? []).some((q: J) => EXPERIMENTS.has(Object.keys(q ?? {})[0] ?? '')))
+      return { message: delivered, text, experiment: 'investigation:r' + round + '.' + step, round, requests: e.requests };
+  }
+  return null;
+}
