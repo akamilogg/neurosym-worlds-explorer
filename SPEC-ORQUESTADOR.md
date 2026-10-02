@@ -117,6 +117,17 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
   dejó como «sample association» y siguió con heurísticas de distancia. Faltaba alguien que cerrase el ciclo.
   
   Cada seguimiento gasta una ayuda: para estos runs, `--help-budget 6`.
+- **Un investigador con tarea propia (02/10/2026).** Su papel le da la misma tarea que al junior: entender el entorno. El
+  registro del junior son sus datos.
+  - No solo revisa ni pule la operativa del junior: investiga ese registro por su cuenta, busca correlaciones y tácticas
+    que el junior no vio y formula **hipótesis nuevas**, rivales de las del junior, en vez de refinar su modelo.
+  - Prioridad a lo que el entorno **es**: qué permite y qué rechaza, y cómo terminan los episodios. Un modelo construido
+    sobre reglas confirmadas supera a una heurística afinada, así que ajustar el modelo del junior solo merece un mensaje
+    cuando las reglas están claras.
+  - Un seguimiento que solo propondría otro pequeño ajuste del modelo rara vez merece un mensaje.
+  - Motivo: run `grid-s22-2026-10-02T12-00-16-111Z`. Tras un buen primer ciclo sobre una regla (las `&` no pasan a
+    columnas mayores, confirmado con un `act` y adoptado), los seguimientos encadenaron cinco mensajes de ajuste
+    táctico de la heurística. El presupuesto se gastó sin volver a las reglas, y el encierro de `=` ni se mencionó.
 - **Después de la reflexión final no escribe.** Ya no hay más preguntas al junior, así que el mensaje nunca le llegaría y
   gastaría una ayuda del presupuesto. Pasó en el run de Luna `grid-s22-2026-10-02T10-57-10-816Z`. El agente sigue
   atento: en una continuación decide en la prueba siguiente.
