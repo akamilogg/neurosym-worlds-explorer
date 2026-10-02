@@ -29,7 +29,8 @@ export interface BatchRun {
   /** The condition it stands for: runs are compared within a condition, and conditions only as declared (Q7). */
   readonly condition: string;
   /** An agent operator that follows it (an assisted run): its id and how many orders it may send. */
-  readonly agent?: { readonly id: string; readonly max_orders?: number };
+  /** An agent operator that follows the run: a coach (default) or a senior (SPEC-ORQUESTADOR §3.3). */
+  readonly agent?: { readonly id: string; readonly max_orders?: number; readonly role?: 'coach' | 'senior'; readonly patience?: number };
   /** A BRANCH (SPEC-ORQUESTADOR §5.5): another run's history, continued with more rounds and handed to the assisted
       researcher, with a first message that states the alternative to explore. */
   readonly fork?: { readonly journal: string; readonly attempts: number; readonly message?: string };
@@ -184,7 +185,7 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     say('batch ' + def.id + ': ' + r.id + ' [' + r.condition + '] ' + (known ? 'resumed' : 'started'));
     const controller = new AbortController();
     const agent = r.agent && options.agentLlm
-      ? runAgentOperator({ id: r.agent.id, journal: out, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, signal: controller.signal, say }) : null;
+      ? runAgentOperator({ id: r.agent.id, journal: out, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, ...(r.agent.role ? { role: r.agent.role } : {}), ...(r.agent.patience ? { patience: r.agent.patience } : {}), signal: controller.signal, say }) : null;
     try {
       const result = await runLaboratory(LABS[r.lab], { args, root: options.root, llm: options.llm, ...(options.judge ? { judge: options.judge } : {}),
         ...(options.fetch ? { fetch: options.fetch } : {}), ...(options.signal ? { signal: options.signal } : {}) });

@@ -48,6 +48,7 @@ export const CLI_USAGE = [
   '',
   'The orchestra (SPEC-ORQUESTADOR):',
   'lab agent <run> [--id coach] [--max-orders N]             an agent operator follows the run (it needs --agents coach=message on the run)',
+  '          [--role senior] [--patience N]                   a senior: when the run is stuck, it reviews the junior record and proposes a hypothesis',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
   'lab project list | status <id>                            the projects; one\'s state and report',
@@ -219,12 +220,13 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       }
       case 'agent': {
         const journal = resolveRun(ctx.root, args.shift());
-        const id = take(args, 'id') ?? 'coach', max = take(args, 'max-orders');
+        const role = take(args, 'role') === 'senior' ? 'senior' as const : 'coach' as const;
+        const id = take(args, 'id') ?? role, max = take(args, 'max-orders'), patience = take(args, 'patience');
         const env = ctx.env ?? process.env;
         const { chatFromEnv } = await import('../orchestra/launch.ts');
         const { runAgentOperator } = await import('../orchestra/agent-operator.ts');
         out('agent:' + id + ' follows ' + path.basename(journal, '.json') + ' (the run must allow it: --agents ' + id + '=message)');
-        const r = await runAgentOperator({ id, journal, llm: chatFromEnv(env, 'AGENT_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
+        const r = await runAgentOperator({ id, journal, role, llm: chatFromEnv(env, 'AGENT_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(patience ? { patience: Number(patience) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
         out('the run ended; the agent\'s decisions: ' + r.file);
         return 0;
       }

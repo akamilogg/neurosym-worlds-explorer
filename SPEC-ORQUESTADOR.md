@@ -69,6 +69,59 @@ entero, un agente. Hay tres niveles, cada uno sobre el anterior:
   repetidas, peticiones de investigación que se repiten. El arnés no le da un diagnóstico hecho: le da el journal.
 - **En el finding:** `assistance` ya separa las ayudas por autor; se añade si el autor era una persona o un agente.
 
+### 3.3 El senior: un modelo más capaz que revisa a un junior atascado (idea del autor, 02/10/2026)
+
+**De dónde sale.** Los modelos pequeños tropiezan con indicios de la solución y no los conectan.
+- Luna hizo un barrido de cinco `act` que mostraba qué direcciones se aceptaban, y no lo convirtió en regla.
+- Mantuvo como «mera asociación» que las derrotas acababan en el borde derecho, que es la regla verdadera.
+- El empujón externo ya sacó a un run de su mínimo local (particles3d L1 C).
+
+Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
+
+**Qué es.** Un papel del agente operador (`--role senior`), junto al coach de siempre.
+- **Cuándo interviene.** Solo cuando el run muestra señales de atasco (`stuckSignals`):
+  - `patience` pruebas seguidas en que el modelo no se sostiene en ningún lugar (3 por defecto);
+  - peticiones repetidas en la última ronda;
+  - insistir en investigar sin pasos.
+  
+  Son recuentos mecánicos de hechos del registro, no un diagnóstico: deciden cuándo merece la pena llamarlo, que es lo
+  caro. El diagnóstico es suyo. Tras un mensaje deja `cooldown` rondas al junior (2 por defecto).
+- **Qué ve.** Exactamente lo que vio el junior (Q2), reconstruido desde su journal (`reader.ts`, `journalReader`):
+  - creencias, notas y métodos;
+  - sus modelos;
+  - cada petición **con lo que el entorno le respondió**;
+  - los veredictos de cada prueba;
+  - sus episodios con su puntuación.
+  
+  Nunca la parte oculta, las medidas del operador ni cómo acabó un episodio más allá de su puntuación (el motivo, como
+  «trap», es del mundo). Para ello la cuadrícula registra ahora también `results` en cada `investigation`, como ya
+  hacían los mundos de leyes.
+- **Cómo indaga.** Con las mismas herramientas que la memoria selectiva del junior (`list`, `open`, `find`), sobre el
+  registro del junior, durante hasta `readSteps` respuestas (4).
+- **Qué propone.** Una sola hipótesis, con la evidencia del registro del junior que la sugiere (citando elementos y
+  puntos) y un experimento para comprobarla.
+  - Nunca afirma como hecho lo que el registro no muestra.
+  - Nunca da la solución entera: el junior debe probar la idea y construir el modelo.
+- **Registro.** En el journal del agente (`agent@1`, `role: senior`), cada decisión guarda:
+  - las señales por las que se le llamó;
+  - lo que leyó;
+  - la evidencia en que se apoya.
+  
+  El mensaje llega al junior como cualquier ayuda, atribuido a `agent:<id>`, dentro de la política del run
+  (`--agents senior=message`) y de su presupuesto de ayuda (`--help-budget`).
+- **Modelo.** `AGENT_LLM_URL` y `AGENT_LLM_MODEL` (por defecto el de los investigadores). La idea es un modelo más
+  capaz que el del junior.
+
+**Uso:**
+- `lab agent <run> --role senior [--patience N]`, sobre un run asistido lanzado con `--agents senior=message`;
+- en un lote: `"agent": {"id": "senior", "role": "senior"}`.
+
+**Riesgo y cómo se mide.**
+- Si el senior propone de más, el run mide al senior y no al junior.
+- Por eso el presupuesto de ayuda y la atribución en el finding: se sabe qué creencias nacieron de un mensaje (`operator:<id>` en su evidencia).
+- La pregunta del experimento es si el junior **aprende o solo obedece**: si la hipótesis del senior acaba como creencia con evidencia propia (sus `act`, sus pruebas) o solo citada.
+- Diseño propuesto: Qwen como junior en grid seed 22, en tres condiciones (solo, con coach, con senior Luna o Sol).
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la

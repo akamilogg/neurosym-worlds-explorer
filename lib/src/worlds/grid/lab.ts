@@ -687,7 +687,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         const entry = { step: investigation.length + 1, requests: asWritten, results, ...(warnings.length || noteWarnings.length ? { warnings: [...warnings, ...noteWarnings] } : {}) };
         investigation.push(entry);
         memory?.recordInvestigation(round, entry.step, entry);
-        log('investigation', { round, requests: requests.map((r) => ('extra' in r ? r.extra : r)), warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
+        /* What it was answered too, as in a world of laws: what an agent reviewing its work reads (SPEC-ORQUESTADOR §3.3). */
+        log('investigation', { round, requests: requests.map((r) => ('extra' in r ? r.extra : r)), results, warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
         say('  investigates: ' + requests.map((r, i) => 'extra' in r ? 'memory ' + String(r.extra.memory) + (r.extra.of ? ' of ' + String(r.extra.of) : '') + (r.extra.words ? ' "' + String(r.extra.words) + '"' : '') + (r.extra.select ? ' (select)' : '')
           : 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
           : 'act' in r ? 'act ' + r.act + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { accepted?: boolean }).accepted ? ' accepted' : ' refused')
