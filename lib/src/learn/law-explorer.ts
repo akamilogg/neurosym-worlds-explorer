@@ -156,7 +156,8 @@ export type LawRequest<A> =
 
 export type LawTurn<A> =
   | { kind: 'investigate'; requests: LawRequest<A>[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
-  | { kind: 'proposal'; parse: LawParse; notes: NoteOp[]; methods: NoteOp[] };
+  | { kind: 'proposal'; parse: LawParse; notes: NoteOp[]; methods: NoteOp[] }
+  | { kind: 'consolidate'; summary: string; keep: number[]; notes: NoteOp[]; methods: NoteOp[] };
 
 /** An answer is either an investigation (requests, and maybe notes) or a proposal. */
 export function parseLawTurn<A>(content: string, context: { world: string; lang?: string; round?: number; maxRequests?: number;
@@ -173,6 +174,13 @@ export function parseLawTurn<A>(content: string, context: { world: string; lang?
   const notes = o ? parseNotes(o.notes, warnings, context.archive === true) : [];
   const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
   const max = context.maxRequests ?? 8;
+  /* It consolidates its round's conversation: its own summary, and the steps it keeps whole. */
+  if (o && obj(o.consolidate) && !Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output) {
+    const c = obj(o.consolidate)!;
+    const summary = typeof c.summary === 'string' ? c.summary.trim() : '';
+    if (summary) return { kind: 'consolidate', summary, keep: (Array.isArray(c.keep) ? c.keep : []).filter((k): k is number => Number.isInteger(k)), notes, methods };
+    warnings.push('"consolidate" needs a "summary"');
+  }
   /* A request of the researcher's own instrument written alone, outside "investigate": plainly a request, run as one. */
   if (o && !Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output && context.extraRequest?.(o)) {
     const { notes: _n, methods: _m, ...request } = o;

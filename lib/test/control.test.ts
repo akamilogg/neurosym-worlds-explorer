@@ -24,14 +24,14 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
   /* The system prompt without and with the paired regression, and the percept, per world (the grid: its explorer's).
      Changed on purpose on 2026-10-01: the method's balance between the theory and small steps (prompt.ts, PRACTICE), and
      committing to hypotheses before believing them fully, facts recorded as facts (EVIDENCE); and an investigation
-     step comes back as a part of its own, and a round's conversation only grows, for a provider's cache (02/10/2026). */
+     step comes back as a part of its own, and a round's conversation only grows, for a provider's cache, and the researcher may consolidate it (02/10/2026). */
   const FROZEN: Record<string, readonly string[]> = {
-    cells: ['735bb0862f53e1cb', '3bcae79c5d59a7f0', '050b7ce0a173f715'],
-    messages: ['4c21eeac5186c214', '38a8abe8a957e1ef', 'e7b3118baeb95c62'],
-    orbit: ['22e369f63ca65ec4', '940130fa4461faf8', 'fa67491c1a09af17'],
-    tank: ['59fa290bd8cdc044', 'f0e6e68876b29c5a', '8a934b83bc5bb3a5'],
-    particles3d: ['ab204a9ba3c9ceba', '691e3df007a3a985', 'c82859a959caa037'],
-    grid: ['9e10b7047fb2964d']
+    cells: ['aa29e39d1e566f7d', '694bc031bab66f5a', '050b7ce0a173f715'],
+    messages: ['531031508dcc8352', 'edf3893d105bd83e', 'e7b3118baeb95c62'],
+    orbit: ['61faed29dea5f3f0', '07a8934ed4dc5e94', 'fa67491c1a09af17'],
+    tank: ['a371eba14ad4d18b', '5119d9e33629e659', '8a934b83bc5bb3a5'],
+    particles3d: ['268b63917ce2663e', 'f21aea4aefef35aa', 'c82859a959caa037'],
+    grid: ['655eb619829d609f']
   };
   for (const [name, lab] of Object.entries(LABS)) {
     if (isGameLab(lab)) { assert.deepEqual([h(explorerSystem())], FROZEN[name], name); continue; }

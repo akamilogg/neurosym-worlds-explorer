@@ -72,6 +72,16 @@ investigador completo**, y los dos conviven.
           repiten los anteriores (`earlier`);
         - las lecturas del senior siguen la misma regla;
         - `test/parts.test.ts` comprueba que cada petición de una ronda contiene la anterior entera como prefijo.
+      - **Consolidar (idea del autor, 02/10/2026).** Como la conversación de una ronda solo crece, el investigador puede
+        consolidarla cuando ha crecido mucho y ya ha sacado lo que necesita:
+        `{"consolidate": {"summary": "...", "keep": [<pasos>]}}`.
+        - La ronda sigue desde su contexto, con el cuaderno tal como está ahora, y una parte con su resumen y los pasos que
+          conserva enteros (`consolidated`).
+        - Se pierde la caché una vez; a partir de ahí vuelve a crecer solo por el final.
+        - El resumen lo escribe él: el harness no resume nada. Lo descartado sigue en el journal y en su memoria, si la
+          tiene.
+        - No gasta paso de investigación; como mucho 2 veces por ronda. Queda registrado (`consolidated`).
+        - Para los dos investigadores (es higiene de contexto, no conocimiento del mundo).
       - Además, en el asistido de la cuadrícula, una ronda que acaba sin propuesta **conserva su modelo** y el run sigue
         (`kept_model`), en vez de terminar. En los mundos de leyes ya era así. El puro de la cuadrícula termina, como
         siempre.

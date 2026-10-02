@@ -42,6 +42,9 @@ import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool,
 import { Notebook, type GameRecord } from '../../learn/notebook.ts';
 import { OVERREACH, assistedSystem } from '../../learn/assisted/session.ts';
 import { RoundConversation } from '../../learn/system2.ts';
+
+/** How many times a round a researcher may consolidate its round's conversation. */
+const MAX_CONSOLIDATIONS = 2;
 import { FREE_MEMORY_ANSWERS, JournalMemory, MEMORY_SECTION } from '../../learn/assisted/memory.ts';
 import { recordTurn, surprises, type TurnRecord } from '../../learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../../learn/ablation.ts';
@@ -620,16 +623,20 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const round = currentRound;
     let refused: string[] = [];
     const investigation: unknown[] = [];
-    let steps = 0, refusals = 0, free = 0, overreach = 0;
+    let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0;
     /* The round's conversation only grows (see RoundConversation): what changes from one answer to the next goes in the
        part added for that answer. */
-    const talk = new RoundConversation();
+    let talk = new RoundConversation();
     const counters = (): Record<string, unknown> => ({ ...(investigative ? { steps_left: Math.max(0, cfg.steps - (steps - free)) } : {}),
       ...(tools.has('replay') ? { replays_left: plays.left } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
     let told: string[] = refused;
     let written: Record<string, unknown> = {};
     const plays = { left: cfg.plays };
-    while (refusals < 3 && steps - free - overreach <= cfg.steps + 3) {
+    /* The round's context: the notebook as it is when the round begins (or when the researcher consolidates). */
+    const context = (): Record<string, unknown> => ({ ...explorerPayload({ round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
+      formula: from, formulaRound: from ? roundOf.get(from) ?? null : null, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
+      places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView }), ...counters() });
+    while (refusals < 3 && steps - free - overreach - consolidated <= cfg.steps + 3) {
       const stop = s.halt();
       if (stop) {
         halted = stop;
@@ -641,9 +648,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       /* A refusal of its previous answer is a part of its own (with any notes that answer wrote). */
       if (refused !== told && refused.length) { talk.add({ your_previous_answer_was_refused: refused, ...written, ...counters() }); written = {}; }
       told = refused;
-      talk.open(() => ({ ...explorerPayload({ round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
-        formula: from, formulaRound: from ? roundOf.get(from) ?? null : null, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
-        places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView }), ...counters() }));
+      talk.open(context);
       const payload = talk.question();
       say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;
@@ -670,6 +675,21 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       if (turn.methods.length) {
         say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', '));
         log('methods', { round, methods: turn.methods });
+      }
+      if (turn.kind === 'consolidate') {
+        /* It consolidates its round's conversation: the context afresh (its notebook as it is now), then its own summary with
+           the steps it keeps whole. Nothing is summarised for it; the steps it drops stay in the journal. */
+        if (consolidated >= MAX_CONSOLIDATIONS) { refused = ['you may consolidate at most ' + MAX_CONSOLIDATIONS + ' times a round']; refusals++; continue; }
+        consolidated++;
+        const keep = [...new Set(turn.keep)].filter((k) => k >= 1 && k <= investigation.length).sort((x, y) => x - y);
+        talk = new RoundConversation();
+        talk.open(context);
+        talk.add({ consolidated: { summary: turn.summary, kept_steps: keep.map((k) => investigation[k - 1]) }, ...written, ...counters() });
+        written = {};
+        told = refused = [];
+        log('consolidated', { round, summary: turn.summary, kept: keep, dropped: investigation.length - keep.length, notes: turn.notes });
+        say('  consolidates its round: keeps ' + keep.length + ' of ' + investigation.length + ' steps');
+        continue;
       }
       if (turn.kind === 'investigate') {
         /* An answer of only memory requests asks nothing of the world: it is free, a few times a round. With no steps left,

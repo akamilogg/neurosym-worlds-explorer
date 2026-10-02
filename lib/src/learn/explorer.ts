@@ -154,7 +154,9 @@ export type ExplorerRequest =
 
 export type ExplorerTurn =
   | { kind: 'investigate'; requests: ExplorerRequest[]; notes: NoteOp[]; methods: NoteOp[]; warnings: string[] }
-  | { kind: 'proposal'; parse: ExplorerParse; notes: NoteOp[]; methods: NoteOp[] };
+  | { kind: 'proposal'; parse: ExplorerParse; notes: NoteOp[]; methods: NoteOp[] }
+  /** It consolidates its round's conversation (see RoundConversation): its summary, and the steps it keeps whole. */
+  | { kind: 'consolidate'; summary: string; keep: number[]; notes: NoteOp[]; methods: NoteOp[] };
 
 /** `archive`: the assisted researcher with a selective memory may archive a note (without it, only write and forget). */
 export function parseNotes(raw: unknown, warnings: string[], archive = false): NoteOp[] {
@@ -180,6 +182,13 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
   const warnings: string[] = [];
   const notes = o ? parseNotes(o.notes, warnings, context.archive === true) : [];
   const methods = o ? parseNotes(o.methods, warnings).map(({ positions: _p, ...m }) => m) : [];
+  /* It consolidates its round's conversation: its own summary, and the steps it keeps whole. */
+  if (o && obj(o.consolidate) && !Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output) {
+    const c = obj(o.consolidate)!;
+    const summary = typeof c.summary === 'string' ? c.summary.trim() : '';
+    if (summary) return { kind: 'consolidate', summary, keep: (Array.isArray(c.keep) ? c.keep : []).filter((k): k is number => Number.isInteger(k)), notes, methods };
+    warnings.push('"consolidate" needs a "summary"');
+  }
   /* A request of the researcher's own instrument written alone, outside "investigate" (a small model does): it is plainly
      a request, never a proposal, so it is run as one - and said so. Only where the researcher has such an instrument. */
   if (o && !Array.isArray(o.investigate) && !o.observations && !o.rules && !o.output && context.extraRequest?.(o)) {

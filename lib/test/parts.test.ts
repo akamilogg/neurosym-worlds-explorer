@@ -76,3 +76,33 @@ test('a round that ends without a proposal: the assisted researcher keeps its mo
   const pure = await runLaboratory(gridLab, { args: [...args, '--out', path.join(dir, 'p.json')], root: dir, llm: { url: 'http://x.test/chat', model: 'm' }, fetch: recorder([], answer) });
   assert.equal(pure.stoppedBy, 'no_hypothesis', 'the unknown-world researcher as it always was');
 });
+
+test('it consolidates its round: the context afresh, its own summary with the steps it keeps; then the conversation grows again', async () => {
+  for (const world of ['grid', 'cells'] as const) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parts-'));
+    const bodies: any[] = [];
+    const view = world === 'grid' ? { view: 'g1', from: 0, to: 2 } : { view: 'ep1', from: 0, to: 3 };
+    const propose = world === 'grid' ? { observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5' } : { observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]' };
+    let consolidated = false;
+    const answer = (u: any) => {
+      if (u.round !== 1) return { rationale: 'r', ...propose, validate: false, beliefs: [{ id: 'b', stance: 'keep', statement: 's' }], lessons: ['l'] };
+      if (!consolidated && (u.investigation ?? []).length < 2) return { investigate: [view], notes: (u.investigation ?? []).length === 1 ? [{ do: 'write', id: 'seen', text: 'two views seen' }] : [] };
+      if (!consolidated) { consolidated = true; return { consolidate: { summary: 'the second view is what matters', keep: [2, 9] } }; }
+      return { rationale: 'r', ...propose, validate: false, beliefs: [{ id: 'b', stance: 'new', statement: 's' }], lessons: ['l'] };
+    };
+    const args = world === 'grid' ? [...GRID.filter((x, i, a) => !(x === '2' && a[i - 1] === '--attempts')), '--attempts', '1', '--out', path.join(dir, 'run.json')]
+      : ['--seed', '1', '--level', '1', '--attempts', '1', '--flat', '--no-grade', '--no-reflection', '--out', path.join(dir, 'run.json')];
+    const r = await runLaboratory(world === 'grid' ? gridLab : cellsLab, { args, root: dir, llm: { url: 'http://x.test/chat', model: 'm' }, fetch: recorder(bodies, answer) });
+    const at = bodies.findIndex((b) => b.messages.some((m: { content: string }) => m.content.includes('"consolidated"')));
+    assert.ok(at > 0, world + ': consolidated');
+    const after = bodies[at].messages;
+    assert.equal(after.length, 3, world + ': system, the context afresh, the summary');
+    assert.match(after[1].content, /two views seen/, world + ': the notebook as it is now, its note in it');
+    const part = JSON.parse(after[2].content).consolidated;
+    assert.equal(part.summary, 'the second view is what matters');
+    assert.deepEqual(part.kept_steps.map((s: { step: number }) => s.step), [2], world + ': the steps it kept (a step it never had is not)');
+    const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+    const e = events.find((x) => x.type === 'consolidated')!;
+    assert.deepEqual([e.kept, e.dropped], [[2], 1], world + ': logged');
+  }
+});
