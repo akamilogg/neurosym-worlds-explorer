@@ -155,6 +155,17 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
     veces. La decisión registra `reminded`.
   - Los elementos del registro de más de `openLimit` caracteres (4000) se le abren recortados: el principio y el tamaño.
     Con `"whole": true` los lee enteros. La memoria del propio junior sigue abriéndolos siempre enteros.
+- **Hipótesis, prueba y cómo incorporarla (03/10/2026).** Un junior a menudo enuncia una regla que su registro
+  sostiene y no la lleva a su modelo, que sigue puntuando con otros rasgos. Lo ha hecho Luna con la columna 4 en varios
+  runs. Por eso cada mensaje del senior lleva:
+  - la hipótesis;
+  - la evidencia;
+  - un experimento;
+  - **cómo usaría el modelo la hipótesis una vez confirmada**: qué puntos valen lo mínimo o lo máximo según la regla, qué
+    tendría que medir una observación y en qué debería dejar de apoyarse.
+  
+  Si el registro ya confirma una regla que el modelo no usa, lo dice y muestra cómo usarla. Nunca escribe el código, y
+  el junior lo trata como referencia que debe comprobar.
 - **Después de la reflexión final no escribe.** Ya no hay más preguntas al junior, así que el mensaje nunca le llegaría y
   gastaría una ayuda del presupuesto. Pasó en el run de Luna `grid-s22-2026-10-02T10-57-10-816Z`. El agente sigue
   atento: en una continuación decide en la prueba siguiente.
