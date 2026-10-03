@@ -114,3 +114,18 @@ test('an assisted run cut and resumed receives each message at the same question
   assert.equal(same(resumed.journal), same(whole.journal));
   assert.deepEqual(resumed.finding.assistance!.messages.map((m) => m.question), [3]);
 });
+
+test('a message sent while a resumed run still replays its history waits, and goes with its first question asked live', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assisted-'));
+  const cut = await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--max-tokens', '450', '--out', path.join(dir, 'cut.json')], root: dir, llm, fetch: system2([]) });
+  assert.equal(cut.stoppedBy, 'token_budget');
+  const logged = fs.readFileSync(cut.journal.replace(/\.json$/, '.replay.jsonl'), 'utf8').split('\n').filter((l) => l.includes('"llm"')).length;
+  /* An agent or a person writes to the resumed run before it has replayed anything (as an agent following "last" did). */
+  const out = path.join(dir, 'resumed.json');
+  send(out, { kind: 'message', text: 'while it replays', by: 'operator' });
+  const resumed = await runLaboratory(cellsLab, { args: ['--resume', cut.journal, '--out', out], root: dir, llm, fetch: system2([]) });
+  const events = JSON.parse(fs.readFileSync(resumed.journal, 'utf8')).events as Record<string, any>[];
+  assert.ok(!events.some((e) => e.type === 'diverged'), 'it did not diverge');
+  const delivered = events.find((e) => e.type === 'operator_message' && e.messages.some((m: { text: string }) => m.text === 'while it replays'));
+  assert.ok(delivered && delivered.question > logged, 'delivered live, after the history: question ' + delivered?.question + ' > ' + logged);
+});

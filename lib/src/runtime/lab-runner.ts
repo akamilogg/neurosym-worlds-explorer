@@ -363,8 +363,9 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   /* The assisted researcher of a laboratory with a loop of its own: the operator's messages with its questions (resuming,
      delivered again at the same questions), and its selective memory, with the Judge to select for it (none in --flat). */
   if (isGameLab(lab) && assistedAfter !== null) throw new LabError('--researcher with --resume: ' + lab.id + ' cannot be handed to the assisted researcher yet; continue it as it is');
+  /* As in a world of laws: a message sent while a resumed run replays its history waits until it asks live. */
   const services = { ...(isGameLab(lab) && researcher === 'assisted'
-    ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => run.operator.take(), scheduled: deliveredMessages(previous) }, run.log),
+    ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous) }, run.log),
       assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }) } }
     : run.services), ...(endings.length ? { endings } : {}) };
   const body = isGameLab(lab)
@@ -881,7 +882,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     ? assistedSession(sessionHost, {
       /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
          sent meanwhile waits for its first new round. */
-      take: () => (helping ? run.operator.take() : []), scheduled: deliveredMessages(previous),
+      /* A message sent while a resumed run still replays its history waits: delivered then, the question would differ from
+         the one its log answers, and the run would diverge. It goes with the first question asked live. */
+      take: () => (helping && run.replay.pending() === 0 ? run.operator.take() : []), scheduled: deliveredMessages(previous),
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') : promptFor(focus)), task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
