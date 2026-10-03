@@ -262,7 +262,6 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   const continuedFrom = previous && moreRounds !== null ? Number(previous.config?.attempts) : null;
   if (previous && moreRounds !== null) {
     const end = [...(previous.events as Record<string, any>[])].reverse().find((e) => e.type === 'end');
-    if (isGameLab(lab)) throw new LabError('--attempts with --resume: ' + lab.id + ' has a loop of its own; it cannot be given more rounds yet');
     if (!end || end.stoppedBy !== 'budget') throw new LabError('--attempts with --resume: only a run that ended by using up its rounds can be given more (this one: ' + (end ? end.stoppedBy : 'did not end') + '); resume it without --attempts');
     if (!(moreRounds > continuedFrom!)) throw new LabError('--attempts with --resume: give it more than the ' + continuedFrom + ' rounds it had');
   }
@@ -363,10 +362,11 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
   /* The assisted researcher of a laboratory with a loop of its own: the operator's messages with its questions (resuming,
      delivered again at the same questions), and its selective memory, with the Judge to select for it (none in --flat). */
-  const services = isGameLab(lab) && researcher === 'assisted'
+  if (isGameLab(lab) && assistedAfter !== null) throw new LabError('--researcher with --resume: ' + lab.id + ' cannot be handed to the assisted researcher yet; continue it as it is');
+  const services = { ...(isGameLab(lab) && researcher === 'assisted'
     ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => run.operator.take(), scheduled: deliveredMessages(previous) }, run.log),
       assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }) } }
-    : run.services;
+    : run.services), ...(endings.length ? { endings } : {}) };
   const body = isGameLab(lab)
     ? lab.run(services).then((result) => {
       const finished = run.finish({ stoppedBy: result.stoppedBy, halted: result.halted ?? null }, result.end);

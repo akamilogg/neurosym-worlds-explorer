@@ -106,3 +106,27 @@ test('it consolidates its round: the context afresh, its own summary with the st
     assert.deepEqual([e.kept, e.dropped], [[2], 1], world + ': logged');
   }
 });
+
+test('a grid run that used up its rounds is continued: its history replayed with its ending, then the rounds it is given', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parts-'));
+  const answer = (u: any) => ('task' in u ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+    : (u.investigation ?? []).length < 1 ? { investigate: [{ view: 'g1', from: 0, to: 2 }] }
+    : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: u.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] });
+  const args = ['--seed', '22', '--attempts', '2', '--explore', '1', '--variants', '1', '--family', '1', '--family-variants', '1', '--confirm-places', '1', '--levels', '2', '--depth', '1',
+    '--steps', '1', '--flat', '--no-grade', '--no-ablation', '--researcher', 'assisted', '--out', path.join(dir, 'run.json')];
+  const llm = { url: 'http://x.test/chat', model: 'm' };
+  const first = await runLaboratory(gridLab, { args, root: dir, llm, fetch: recorder([], answer) });
+  assert.equal(first.stoppedBy, 'budget');
+  const asked: any[] = [];
+  const more = await runLaboratory(gridLab, { args: ['--resume', first.journal, '--attempts', '3', '--out', path.join(dir, 'more.json')], root: dir, llm, fetch: recorder(asked, answer) });
+  assert.equal(more.stoppedBy, 'budget', 'it did not diverge');
+  const j = JSON.parse(fs.readFileSync(more.journal, 'utf8'));
+  const types = j.events.map((e: { type: string }) => e.type);
+  assert.deepEqual(j.continuations, [2]);
+  assert.ok(types.indexOf('budget_extended') > types.indexOf('reflection'), 'its ending, as it was, then more rounds');
+  assert.equal(j.events.filter((e: { type: string }) => e.type === 'check').length, 3, 'a third check');
+  assert.equal(j.events.filter((e: { type: string }) => e.type === 'reflection').length, 2, 'the old ending and the new one');
+  const end = j.events.find((e: { type: string }) => e.type === 'end');
+  assert.equal(end.replay.unused, 0, 'every logged answer was asked for again');
+  assert.ok(asked.length > 0, 'and then it asked live');
+});

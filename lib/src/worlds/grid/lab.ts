@@ -818,7 +818,19 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   let best: { formula: Formula; wins: number; total: number } | null = null;
   let stoppedBy = 'budget';
   let escalations = 0;
+  const endings = s.endings ?? [];
+  if (endings.length) s.journal.continuations = [...endings];
   for (let attempt = 1; attempt <= cfg.attempts && !llmFatal && !halted; attempt++) {
+    /* Where the run's history had an ending (it used up its rounds and was given more): that ending, as it was - its
+       reflection and its grading - then the rounds it was given since. */
+    if (endings.includes(attempt - 1)) {
+      if (cfg.reflection) { say('the ending of the run it continues (attempt ' + (attempt - 1) + '): its reflection'); await propose(best?.formula ?? null, null, 'reflect'); }
+      if (llmFatal || halted) break;
+      if (cfg.grade) await gradeRecovery();
+      const to = endings.find((e) => e > attempt - 1) ?? cfg.attempts;
+      log('budget_extended', { after_attempts: attempt - 1, to_attempts: to, round: currentRound });
+      say('more rounds: ' + (attempt - 1) + ' → ' + to);
+    }
     const round = roundOf.get(candidate) ?? currentRound;
     say('attempt ' + attempt + ' (round ' + round + ') against opponent level ' + cfg.levels[level] + (cfg.epsilon ? ' (errs ' + cfg.epsilon + ')' : '') + '; laboratories: ' + labs().map((l) => l.id).join(', '));
     const outcome = await protocol.round(candidate, { round, attempt, validate: asksToValidate.has(candidate) });

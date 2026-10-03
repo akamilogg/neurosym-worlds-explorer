@@ -82,6 +82,10 @@ investigador completo**, y los dos conviven.
           tiene.
         - No gasta paso de investigación; como mucho 2 veces por ronda. Queda registrado (`consolidated`).
         - Para los dos investigadores (es higiene de contexto, no conocimiento del mundo).
+      - **Continuación en la cuadrícula (03/10/2026).** `--resume <journal> --attempts N` ya funciona también en la
+        cuadrícula, como en los mundos de leyes: se repite la historia tal como fue, incluido su final (reflexión y
+        evaluación), y después siguen las rondas nuevas (`budget_extended`, `continuations`). Traspasar un run de la
+        cuadrícula al asistido en una continuación aún no está construido.
       - Además, en el asistido de la cuadrícula, una ronda que acaba sin propuesta **conserva su modelo** y el run sigue
         (`kept_model`), en vez de terminar. En los mundos de leyes ya era así. El puro de la cuadrícula termina, como
         siempre.
