@@ -281,7 +281,9 @@ export interface LabServices {
   halt(): string | null;
   /** The assisted researcher (SPEC-INVESTIGADOR-ASISTIDO), absent for the unknown-world one: `llm` then carries the operator's
       messages; `memory`, whether it has a selective memory (§13), and the Judge as the selector of its `find`. */
-  readonly assisted?: { readonly memory: boolean; readonly selector?: import('./assisted/sources.ts').LineSelector };
+  readonly assisted?: { readonly memory: boolean; readonly selector?: import('./assisted/sources.ts').LineSelector;
+    /** The records of earlier runs it may read (SPEC-INVESTIGADOR-ASISTIDO §12), and in which mode the operator gave them. */
+    readonly experience?: { readonly reader: import('./assisted/experience.ts').Experience; readonly mode: import('./assisted/experience.ts').ExperienceMode; readonly scope: import('./assisted/experience.ts').ExperienceScope } };
   /** A continuation (`--resume <journal> --attempts N`): the attempts after which the run's history had an ending - its
       reflection and its grading, replayed where they were before the rounds it was given since. */
   readonly endings?: readonly number[];

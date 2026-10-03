@@ -46,6 +46,7 @@ import { RoundConversation } from '../../learn/system2.ts';
 /** How many times a round a researcher may consolidate its round's conversation. */
 const MAX_CONSOLIDATIONS = 2;
 import { FREE_MEMORY_ANSWERS, JournalMemory, MEMORY_SECTION } from '../../learn/assisted/memory.ts';
+import { Experience, experienceSection } from '../../learn/assisted/experience.ts';
 import { recordTurn, surprises, type TurnRecord } from '../../learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../../learn/ablation.ts';
 import { noisyOpponent, playEpisode } from '../../learn/episodes.ts';
@@ -115,7 +116,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* The assisted researcher (SPEC-INVESTIGADOR-ASISTIDO): its own section of the prompt (the operator may write to it), and
      its selective memory when the run gives it one (§13). Without it, the unknown-world researcher's prompt, as it is. */
   const assisted = s.assisted ?? null;
-  const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '') : explorerSystem(tools);
+  const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '')
+    + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '') : explorerSystem(tools);
 
   /* --- Operator-only measures: logged for the operator, never shown to System 2 or the Judge ----------- */
 
@@ -288,6 +290,10 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
      operator's (memory_select). */
   const memory = assisted?.memory ? new JournalMemory(notebook, { ...(assisted.selector ? { selector: assisted.selector } : {}),
     onSelect: (record) => log('memory_select', { round: currentRound, ...record }) }) : null;
+  /* The records of earlier runs it may read (§12): answered by their reader, never by the world; each read counts as a step. */
+  const experience = assisted?.experience?.reader ?? null;
+  const recalls = (q: Record<string, unknown>): boolean => memory !== null && JournalMemory.accepts(q);
+  const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q));
   let gameCounter = 0;
   const resultOf = (winner: string | null): GameRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
   /** What System 2 is told of how an episode ended: the score of the interface, never a word of a game. */
@@ -510,7 +516,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   async function runRequest(req: ExplorerRequest, current: Formula | null, plays: { left: number }): Promise<unknown> {
     /* Its own memory is answered by it, never by the world. */
-    if ('extra' in req) return memory ? memory.run(req.extra) : { error: 'no such instrument' };
+    if ('extra' in req) return recalls(req.extra) ? memory!.run(req.extra) : experience && Experience.accepts(req.extra) ? experience.run(req.extra) : { error: 'no such instrument' };
     /* An instrument withheld by the experiment is refused, never run. */
     const kind = (['view', 'inspect', 'act', 'measure', 'replay', 'table'] as const).find((k) => k in req)!;
     if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
@@ -667,7 +673,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         log('proposal_failed', { round, error: String((error as Error)?.message || error) });
         continue;
       }
-      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory ? { extraRequest: JournalMemory.accepts, archive: true } : {}) });
+      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => games.has(ref.trim()) || resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
       /* What it wrote in its notebook comes back in the next part of the conversation (the notebook shown is the round's). */
       written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}) };
@@ -696,10 +702,10 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
            the memory requests of an answer are still answered (and the others not, said so) rather than all refused. */
         let requests = turn.requests;
         const warnings = [...turn.warnings];
-        const recalls = requests.filter((r) => 'extra' in r);
-        let onlyMemory = memory !== null && requests.length > 0 && recalls.length === requests.length && free < FREE_MEMORY_ANSWERS;
-        if (!onlyMemory && memory !== null && stepsLeft <= 0 && recalls.length && free < FREE_MEMORY_ANSWERS) {
-          requests = recalls; onlyMemory = true;
+        const recalled = requests.filter((r) => 'extra' in r && recalls(r.extra));
+        let onlyMemory = memory !== null && requests.length > 0 && recalled.length === requests.length && free < FREE_MEMORY_ANSWERS;
+        if (!onlyMemory && memory !== null && stepsLeft <= 0 && recalled.length && free < FREE_MEMORY_ANSWERS) {
+          requests = recalled; onlyMemory = true;
           warnings.push('no investigation steps left this round: only your memory requests were answered');
         }
         if (onlyMemory) free++;
@@ -728,7 +734,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         memory?.recordInvestigation(round, entry.step, entry);
         /* What it was answered too, as in a world of laws: what an agent reviewing its work reads (SPEC-ORQUESTADOR §3.3). */
         log('investigation', { round, requests: requests.map((r) => ('extra' in r ? r.extra : r)), results, warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
-        say('  investigates: ' + requests.map((r, i) => 'extra' in r ? 'memory ' + String(r.extra.memory) + (r.extra.of ? ' of ' + String(r.extra.of) : '') + (r.extra.words ? ' "' + String(r.extra.words) + '"' : '') + (r.extra.select ? ' (select)' : '')
+        say('  investigates: ' + requests.map((r, i) => 'extra' in r ? (Experience.accepts(r.extra) ? 'experience ' + String(r.extra.experience) + (r.extra.run ? ' of ' + String(r.extra.run) : '') : 'memory ' + String(r.extra.memory)) + (r.extra.of ? ' of ' + String(r.extra.of) : '') + (r.extra.words ? ' "' + String(r.extra.words) + '"' : '') + (r.extra.select ? ' (select)' : '')
           : 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
           : 'act' in r ? 'act ' + r.act + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { accepted?: boolean }).accepted ? ' accepted' : ' refused')
           : 'replay' in r ? 'replay from ' + r.replay + ' -> ' + ((results[i] as { score?: number; error?: string }).score ?? (results[i] as { error?: string }).error)

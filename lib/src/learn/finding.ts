@@ -49,7 +49,7 @@ export interface Finding {
   readonly model: { readonly round: number | null; readonly fingerprint: string | null; readonly law: unknown } | null;
   readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[];
     /** Assisted researcher: where its evidence comes from - the world (points of episodes), the operator's messages, sources. */
-    readonly grounded?: readonly ('world' | 'operator' | 'sources')[] }[];
+    readonly grounded?: readonly ('world' | 'operator' | 'sources' | 'experience')[] }[];
   /** Assisted researcher (SPEC-INVESTIGADOR-ASISTIDO §7): what help it had. It is provenance, so both views keep it. */
   readonly assistance?: {
     readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string;
@@ -64,6 +64,11 @@ export interface Finding {
     readonly sources: { readonly origins: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[] };
     /** Its selective memory (§13): what it recalled of its own record - lists, items opened, finds (with what the Judge kept). */
     readonly memory?: { readonly mode: string; readonly listed: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[]; readonly selections: number };
+    /** The records of earlier runs it was given (§12), in which mode, and what it read of them. A run given experience of
+        its own world (`meta`) is not a measure of investigating from nothing: `prior_knowledge_of_this_world` says so. */
+    readonly experience?: { readonly mode: string; readonly scope: string; readonly prior_knowledge_of_this_world: boolean;
+      readonly runs: readonly { readonly label: string; readonly same_world: boolean; readonly researcher: string; readonly model: string | null }[];
+      readonly read: readonly string[]; readonly selections: number };
   };
   readonly tested: {
     readonly places: readonly Facts[];
@@ -120,15 +125,16 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
   const beliefs: J[] = Array.isArray(end.notebook?.beliefs) ? end.notebook.beliefs : [];
   const assisted = journal.researcher === 'assisted';
   /* Where a piece of evidence comes from: a message of the operator, a source, or the world (a point or an episode). */
-  const origin = (ref: string): 'world' | 'operator' | 'sources' => (/^operator:/.test(ref) ? 'operator' : /^src:/.test(ref) ? 'sources' : 'world');
+  const origin = (ref: string): 'world' | 'operator' | 'sources' | 'experience' => (/^operator:/.test(ref) ? 'operator' : /^src:/.test(ref) ? 'sources' : /^exp:/.test(ref) ? 'experience' : 'world');
   const claims = beliefs.filter((b) => b.status !== 'dropped').map((b) => {
     /* The latest evidence it cited: a reflection may confirm a belief without citing anything again. */
     const last = Array.isArray(b.history) ? [...b.history].reverse().find((h: J) => Array.isArray(h.evidence) && h.evidence.length) : undefined;
     const evidence: string[] = Array.isArray(last?.evidence) ? last.evidence.map(String) : [];
     return { id: String(b.id), statement: String(b.statement ?? ''), status: String(b.status ?? ''), ...(typeof b.since === 'number' ? { since: b.since } : {}),
-      evidence, ...(assisted ? { grounded: (['world', 'operator', 'sources'] as const).filter((o) => evidence.some((r) => origin(r) === o)) } : {}) };
+      evidence, ...(assisted ? { grounded: (['world', 'operator', 'sources', 'experience'] as const).filter((o) => evidence.some((r) => origin(r) === o)) } : {}) };
   });
   const requests: J[] = events.filter((e) => e.type === 'investigation').flatMap((e) => (Array.isArray(e.requests) ? e.requests : []));
+  const given = events.find((e) => e.type === 'experience');
   const assistance = assisted ? {
     messages: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).map((m: J) => ({ id: String(m.id), question: e.question, text: String(m.text ?? ''),
       ...(m.by ? { by: String(m.by) } : {}), ...(m.at ? { at: String(m.at) } : {}), author: String(m.by ?? '').startsWith('agent:') ? 'agent' as const : 'person' as const }))),
@@ -149,6 +155,15 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
       opened: requests.filter((r) => r.memory === 'open').flatMap((r) => (Array.isArray(r.items) ? r.items : [r.item]).map(String)),
       found: requests.filter((r) => r.memory === 'find').map((r) => String(r.words ?? '') + (r.of ? ' of ' + String(r.of) : '') + (r.select ? ' (select: ' + String(r.select) + ')' : '')),
       selections: events.filter((e) => e.type === 'memory_select').length
+    } } : {}),
+    ...(given ? { experience: {
+      mode: String(given.mode),
+      scope: String(given.scope ?? 'all'),
+      prior_knowledge_of_this_world: (given.runs ?? []).some((r: J) => r.same_world || r.knows_this_world),
+      runs: (given.runs ?? []).map((r: J) => ({ label: String(r.label), same_world: Boolean(r.same_world), researcher: String(r.researcher ?? ''), model: r.model ?? null })),
+      read: requests.filter((r) => typeof r.experience === 'string').map((r) => String(r.experience) + (r.run ? ' ' + String(r.run) : '') + (r.of ? ' of ' + String(r.of) : '')
+        + (Array.isArray(r.items) ? ' ' + r.items.map(String).join(', ') : '') + (r.words ? ' "' + String(r.words) + '"' : '') + (r.select ? ' (select: ' + String(r.select) + ')' : '')),
+      selections: events.filter((e) => e.type === 'experience_select').length
     } } : {})
   } : undefined;
 
@@ -243,7 +258,9 @@ export function findingText(f: Finding): string {
   for (const c of f.claims) lines.push('  claim [' + c.status + '] ' + c.statement + (c.grounded ? '  (from: ' + (c.grounded.join(', ') || 'nothing cited') + ')' : ''));
   if (f.assistance) lines.push('  assisted: ' + f.assistance.messages.length + ' message(s) of the operator' + (f.assistance.focus_changes.length ? ', ' + f.assistance.focus_changes.length + ' change(s) of focus' : '')
     + (f.assistance.sources.opened.length ? ', ' + f.assistance.sources.opened.length + ' read(s) of sources' : '')
-    + (f.assistance.memory ? ', memory ' + f.assistance.memory.mode + ' (' + (f.assistance.memory.listed.length + f.assistance.memory.opened.length + f.assistance.memory.found.length) + ' recall(s))' : ''));
+    + (f.assistance.memory ? ', memory ' + f.assistance.memory.mode + ' (' + (f.assistance.memory.listed.length + f.assistance.memory.opened.length + f.assistance.memory.found.length) + ' recall(s))' : '')
+    + (f.assistance.experience ? ', experience ' + f.assistance.experience.mode + ' (' + f.assistance.experience.scope + ') of ' + f.assistance.experience.runs.length + ' run(s) (' + f.assistance.experience.read.length + ' read(s))'
+      + (f.assistance.experience.prior_knowledge_of_this_world ? ' - WITH PRIOR KNOWLEDGE OF THIS WORLD' : '') : ''));
   const a = f.tested.at_acceptance;
   if (a) {
     const held = (ps: readonly Facts[]) => ps.map((p) => String(p.place) + (p.holds ? '' : ' (not)')).join(', ');

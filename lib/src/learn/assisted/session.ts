@@ -2,6 +2,7 @@ import { UserParts, type ChatClient } from '../system2.ts';
 import { LawSession, type LawSessionHost } from '../law-session.ts';
 import { Sources, type LineSelector } from './sources.ts';
 import { JournalMemory } from './memory.ts';
+import { Experience } from './experience.ts';
 import { ownLaw } from '../law-explorer.ts';
 
 /* ============================================================================
@@ -75,6 +76,8 @@ export interface OperatorChannel {
   /** Its selective memory (SPEC-INVESTIGADOR-ASISTIDO §13): the Judge as the selector of its `find` (none in --flat), and
       where what the Judge picked is told. The prompt's MEMORY_SECTION is the host's to add. */
   readonly memory?: { readonly selector?: LineSelector; onSelect?(record: Record<string, unknown>): void };
+  /** The records of earlier runs it may read (§12). The prompt's section is the host's to add. */
+  readonly experience?: Experience;
 }
 
 /** How many times a round the assisted researcher may ask to investigate with no steps left before it is a refusal. */
@@ -133,15 +136,18 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
   const memory = channel.memory;
   const reads = (q: Record<string, unknown>): boolean => sources !== undefined && sources.origins().length > 0 && Sources.accepts(q);
   const recalls = (q: Record<string, unknown>): boolean => memory !== undefined && JournalMemory.accepts(q);
+  const experience = channel.experience;
+  const remembers = (q: Record<string, unknown>): boolean => experience !== undefined && Experience.accepts(q);
   const session: LawSession<A> = new LawSession<A>({
     ...host, system: assistedSystem(host.system), llm: operatorClient(host.llm, channel, (t, d) => host.log(t, d)),
     /* It may insist on investigating with no steps left a few times before it is a refusal (logged). */
     overreach: OVERREACH,
     /* Its own instruments - the sources once an origin is allowed (`list`, `open`, `find`) and its memory (`memory`) -
        answered here, never by the world. */
-    ...(sources || memory ? {
-      extraRequest: (q: Record<string, unknown>) => recalls(q) || reads(q),
-      runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session.memory!.run(r.extra) : sources!.run(r.extra)) : host.runRequest(r, budget, round))
+    ...(sources || memory || experience ? {
+      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || reads(q),
+      runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra) : sources!.run(r.extra))
+        : host.runRequest(r, budget, round))
     } : {}),
     /* Its episodes and models are kept by the host and the session, not in the notebook. */
     ...(memory ? {

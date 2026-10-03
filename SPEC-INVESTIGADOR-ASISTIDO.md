@@ -359,7 +359,7 @@ va A4, porque los mensajes son lo más directo de la colaboración. Luego A5 y A
 5. **¿La consola lanza runs con claves?** Propuesta: sólo las del entorno del proceso de la consola. Si hacen falta varias
    cuentas, perfiles con nombre definidos fuera de la página.
 
-## 12. Idea futura: memoria de exploraciones (30/09/2026)
+## 12. Memoria de exploraciones (30/09/2026; implementada el 03/10/2026, §12.1)
 
 Explorar mundos deja journals con **métodos y técnicas de exploración** que pueden transferirse de un mundo a otro:
 
@@ -388,6 +388,74 @@ Cómo encajaría con lo que ya existe:
   - ¿Apuntes propios frente a los de otros investigadores o modelos?
   - ¿Cómo se destila un journal largo en apuntes útiles, y quién lo hace: el propio investigador al terminar, o un agente
     del orquestador (SPEC-ORQUESTADOR)?
+
+### 12.1 Implementado (03/10/2026): `--experience`, en dos modos separados
+
+El asistido puede recibir los journals de runs anteriores como experiencia: `--experience a.json,b.json`. Funciona en todos
+los mundos, cuadrícula incluida (`learn/assisted/experience.ts`).
+
+**Lo que lee.** Usa las mismas primitivas que su memoria (§13), sobre el registro de cada run reconstruido por
+`journalReader` (`learn/assisted/record.ts`, el mismo lector que usa el senior):
+
+- `{"experience": "runs"}`: los runs que puede leer;
+- `{"experience": "list" | "open" | "find", "run": "exp1", ...}`: índice, elementos o búsqueda en un run;
+- `find` sin `run` busca en todos, y `select` hace que Jev elija.
+
+Cada respuesta que incluye lecturas de experiencia **cuenta como un paso**, igual que las fuentes. No es gratis como la
+memoria propia: es material ajeno.
+
+**Lo que nunca lee.** La vista del investigador de cada run se cierra por código:
+
+- nada de `hidden_from_the_learner` ni de las medidas o notas del operador;
+- nada de los mensajes que el operador mandó a ese investigador;
+- el run aparece con una etiqueta (`exp1`, `exp2`...), nunca con su nombre de fichero.
+
+La prueba `experience.test.ts` recorre todo lo que se le puede responder y comprueba que nada de eso aparece.
+
+**Los dos modos** (`--experience-mode`), declarados y separados:
+
+- **`transfer`** (por defecto). Sólo runs de **otros** mundos. Responde a si un modo de investigar se transfiere.
+  - Se rechaza un run del mismo mundo (mismo experimento, seed y nivel).
+  - También se rechaza un run de otro mundo que a su vez leyó experiencia de este. El conocimiento se arrastra: cada run
+    registra los mundos que conoció, directa o indirectamente (`worlds`).
+- **`meta`.** Acepta también runs de este mismo mundo: un investigador que investiga las investigaciones de otros.
+  - El prompt le dice que algunos registros pueden ser de su mismo entorno.
+  - `experience: "runs"` le indica cuáles (`environment: "this same one"`).
+  - **No mide investigar desde cero:** el finding lo marca (`prior_knowledge_of_this_world: true`) en las dos vistas, y
+    en el resumen aparece "WITH PRIOR KNOWLEDGE OF THIS WORLD".
+  - Sus runs no se comparan con los de los otros dos modos (P6/Q7). Son otra condición.
+
+**El alcance** (`--experience-scope`) es independiente del modo:
+
+- **`all`** (por defecto): todo lo que cada investigador vio y escribió. Incluye sus observaciones y conclusiones de dominio
+  (por ejemplo, "'=' gana al llegar a la columna 4"), sus modelos, experimentos, episodios y checks.
+- **`methods`**: sólo los métodos que cada investigador escribió en su cuaderno. Nada de creencias, notas, lecciones,
+  modelos, episodios, investigaciones ni checks. Cualquier otra petición responde "only the methods of these runs are
+  given", y `find` sólo busca entre métodos.
+
+Sirve para separar dos causas de una mejora, transferir **método** o transferir **conocimiento del dominio**, con tres
+condiciones al mismo presupuesto:
+
+1. sin experiencia;
+2. `--experience-scope methods`;
+3. `--experience-scope all`.
+
+Cambiar de seed por sí solo no las separa. Límite: un método es lo que el investigador escribió como tal, y puede llevar
+algo de dominio dentro. El código no lo filtra: el alcance sólo restringe qué tipo de elemento se lee.
+
+**Procedencia y reanudación:**
+
+- El journal registra un evento `experience` con el modo, el alcance y, por run: etiqueta, fichero, sha256, mundo, `same_world`,
+  `knows_this_world`, investigador y modelo.
+- Lo que Jev eligió queda en `experience_select`, que es del operador.
+- Una creencia que cita `exp:<run>#<id>` aparece en el finding con `grounded: experience`.
+- Un run reanudado tiene que leer los mismos ficheros. Si alguno cambió (otro sha256), no se reanuda.
+
+**Restricciones:**
+
+- Sólo lo tiene el asistido: el puro rechaza `--experience`.
+- Tampoco un run que se entrega al asistido a mitad, porque su historia es la del puro tal como fue.
+- Sólo se aceptan journals terminados (con evento `end`).
 
 ## 13. Idea futura: memoria selectiva sobre el propio journal (01/10/2026)
 

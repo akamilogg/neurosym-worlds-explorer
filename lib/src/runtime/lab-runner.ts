@@ -22,6 +22,8 @@ import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
 import { assistedSession, assistedSystem, deliveredMessages, operatorClient, type OperatorMessage } from '../learn/assisted/session.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
+import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
+import { createHash } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
@@ -53,6 +55,9 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
   { name: 'task', default: '', help: 'what the operator wants understood, in words (the assisted researcher only)' },
   { name: 'sources-allow', default: '', help: 'origins the assisted researcher may read sources from: directories, URL prefixes or domains, a,b,...' },
+  { name: 'experience', default: '', help: 'journals of earlier runs the assisted researcher may read (list/open/find over what each researcher saw): a,b,...' },
+  { name: 'experience-mode', default: '', help: '"transfer" (the default: runs of other worlds only) or "meta" (runs of this same world too: a researcher of researchers)' },
+  { name: 'experience-scope', default: '', help: '"all" (the default: everything each researcher saw and wrote, its observations and models too) or "methods" (only the methods it wrote in its notebook)' },
   { name: 'memory', default: '', help: '"selective": the assisted researcher\'s notebook travels abridged by a fixed rule, and it recalls the rest itself (list/open/find over its own record, in every world)' },
   { name: 'out', default: '', help: 'the journal (default runs/<name>-<time>.json)' }
 ];
@@ -316,7 +321,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(arg('focus') ? { focus: arg('focus') } : {}),
     ...(arg('task') ? { task: arg('task') } : {}),
     ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {}),
-    ...(arg('memory') ? { memory: arg('memory') } : {})
+    ...(arg('memory') ? { memory: arg('memory') } : {}),
+    ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all' } : {})
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
   Object.defineProperty(worldOptions, '__focus', { value: arg('focus') || '', enumerable: false });
@@ -353,12 +359,19 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (arg('memory') && researcher !== 'assisted') throw new LabError('--memory: a selective memory changes what the researcher is given: only the assisted researcher has one');
   /* A run handed over keeps the unknown-world researcher's history word for word: its notebook would travel otherwise. */
   if (arg('memory') && assistedAfter !== null) throw new LabError('--memory: a run handed to the assisted researcher keeps its history as it was; give the memory to a run that starts assisted');
+  const experienceRuns = loadExperience(lab, cfg, arg('experience'), arg('experience-mode'), arg('experience-scope'), researcher, assistedAfter, previous, options.root);
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
 
   /* --- The run's common services: System 2 and the Judge (their answers logged), the journal, stopping ---------------- */
   const run = openRun(lab, options, { argv, previous, resumeFrom: resumeFrom ?? null, cfg, arg, config: {}, researcher, asked: askedText as Researcher, policy });
   options.onJournal?.(run.outFile);
+  /* The experience it was given (§12): which runs, in which mode, whether of this same world, and each file's hash (a resumed
+     run reads the same ones). What the Judge picked for it is the operator's (experience_select). */
+  const experience = experienceRuns ? { mode: experienceRuns.mode, scope: experienceRuns.scope, reader: new Experience(experienceRuns.runs, { scope: experienceRuns.scope,
+    ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), onSelect: (record) => run.log('experience_select', record) }) } : null;
+  if (experienceRuns) run.log('experience', { mode: experienceRuns.mode, scope: experienceRuns.scope, runs: experienceRuns.given });
+  Object.defineProperty(cfg, '__experience', { value: experience, enumerable: false });
   /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
   /* The assisted researcher of a laboratory with a loop of its own: the operator's messages with its questions (resuming,
      delivered again at the same questions), and its selective memory, with the Judge to select for it (none in --flat). */
@@ -366,7 +379,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   /* As in a world of laws: a message sent while a resumed run replays its history waits until it asks live. */
   const services = { ...(isGameLab(lab) && researcher === 'assisted'
     ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous) }, run.log),
-      assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }) } }
+      assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) } }
     : run.services), ...(endings.length ? { endings } : {}) };
   const body = isGameLab(lab)
     ? lab.run(services).then((result) => {
@@ -378,6 +391,57 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]);
+}
+
+/** The runs given as experience (SPEC-INVESTIGADOR-ASISTIDO §12), read and checked before the run starts: finished journals,
+    labelled in the order given; a run of this same world (same experiment, seed and level) only in the meta mode. */
+function loadExperience(lab: AnyLab, cfg: Record<string, any>, list: string, modeAsked: string, scopeAsked: string, researcher: string, assistedAfter: number | null,
+  previous: Record<string, any> | null, root: string): { mode: ExperienceMode; scope: ExperienceScope; runs: ExperienceRun[]; given: Record<string, unknown>[] } | null {
+  if (!list) {
+    if (modeAsked || scopeAsked) throw new LabError('--experience-' + (modeAsked ? 'mode' : 'scope') + ': give the runs with --experience');
+    return null;
+  }
+  const mode = (modeAsked || 'transfer') as ExperienceMode;
+  if (!EXPERIENCE_MODES.includes(mode)) throw new LabError('--experience-mode: "transfer" or "meta"');
+  const scope = (scopeAsked || 'all') as ExperienceScope;
+  if (!EXPERIENCE_SCOPES.includes(scope)) throw new LabError('--experience-scope: "all" or "methods"');
+  if (researcher !== 'assisted') throw new LabError('--experience: the records of other runs are help: only the assisted researcher reads them');
+  if (assistedAfter !== null) throw new LabError('--experience: a run handed to the assisted researcher keeps its history as it was; give the experience to a run that starts assisted');
+  /* A world by its experiment, seed and level. What a run knew of worlds: its own, and every world it was given experience of
+     (and they of theirs): a run of another world that read this one's carries what it read. */
+  const worldOf = (experiment: unknown, seed: unknown, level: unknown): string => String(experiment) + '|' + String(seed ?? '') + '|' + String(level ?? '');
+  const here = worldOf(lab.id, cfg.seed, cfg.level);
+  const knownBy = (j: Record<string, any>): string[] => {
+    const read = (j.events as Record<string, any>[]).find((e) => e.type === 'experience');
+    return [...new Set([worldOf(j.experiment, j.config?.seed, j.config?.level),
+      ...((read?.runs ?? []) as Record<string, any>[]).flatMap((r) => (Array.isArray(r.worlds) ? r.worlds.map(String) : [worldOf(r.experiment, r.seed, r.level)]))])];
+  };
+  const runs: ExperienceRun[] = [];
+  const given: Record<string, unknown>[] = [];
+  for (const [i, file] of list.split(',').map((f) => f.trim()).filter(Boolean).entries()) {
+    const at = path.resolve(root, file);
+    let text: string;
+    let journal: Record<string, any>;
+    try { text = fs.readFileSync(at, 'utf8'); journal = JSON.parse(text); } catch (e) { throw new LabError('--experience: cannot read ' + file + ': ' + String((e as Error).message ?? e)); }
+    if (!Array.isArray(journal.events) || !journal.events.some((e: { type?: string }) => e.type === 'end')) throw new LabError('--experience: ' + file + ' is not the journal of a finished run');
+    const sameWorld = worldOf(journal.experiment, journal.config?.seed, journal.config?.level) === here;
+    const worlds = knownBy(journal);
+    const knows = worlds.includes(here);
+    if (knows && mode !== 'meta') throw new LabError('--experience: ' + file + (sameWorld ? ' is a run of this same world' : ' read the experience of a run of this same world') + ' (' + lab.id + ', seed ' + cfg.seed + (cfg.level !== undefined ? ', level ' + cfg.level : '') + '): the researcher would start knowing what it found. Only with --experience-mode meta (a researcher of researchers), never to measure investigating from nothing');
+    const label = 'exp' + (i + 1);
+    runs.push({ label, journal, sameWorld });
+    given.push({ label, file: path.relative(root, at).split(path.sep).join('/'), sha256: createHash('sha256').update(text).digest('hex'), experiment: journal.experiment,
+      seed: journal.config?.seed ?? null, ...(journal.config?.level !== undefined ? { level: journal.config.level } : {}), same_world: sameWorld, knows_this_world: knows, worlds,
+      researcher: journal.researcher ?? 'unknown-world', model: journal.config?.llm_model ?? null });
+  }
+  if (!runs.length) throw new LabError('--experience: no runs given');
+  /* Resuming: the same files as the run it resumes read, unchanged; otherwise its recorded answers would not be the ones now. */
+  const before = (previous?.events as Record<string, any>[] | undefined)?.find((e) => e.type === 'experience');
+  if (previous && before) {
+    const was = (before.runs as { label: string; sha256: string }[]).map((r) => r.label + ':' + r.sha256).join(',');
+    if (was !== given.map((r) => r.label + ':' + r.sha256).join(',')) throw new LabError('--experience: the runs given as experience changed since the run it resumes read them; it cannot be resumed with them');
+  }
+  return { mode, scope, runs, given };
 }
 
 /** The origins of `--sources-allow`: URL prefixes and domains as they are, paths from the root. */
@@ -878,6 +942,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The researcher that runs: the unknown-world one's session as it is, or the assisted one's (its own prompt, and the
      operator's messages with its questions; resuming, delivered again at the same questions). */
   const withMemory = cfg.memory === 'selective';
+  const experience = (cfg as { __experience?: { mode: ExperienceMode; scope: ExperienceScope; reader: Experience } | null }).__experience ?? null;
   const session: LawSession<unknown> = journal.researcher === 'assisted'
     ? assistedSession(sessionHost, {
       /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
@@ -885,7 +950,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       /* A message sent while a resumed run still replays its history waits: delivered then, the question would differ from
          the one its log answers, and the run would diverge. It goes with the first question asked live. */
       take: () => (helping && run.replay.pending() === 0 ? run.operator.take() : []), scheduled: deliveredMessages(previous),
-      system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') : promptFor(focus)), task: () => (helping ? task : null),
+      system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '') : promptFor(focus)),
+      task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
         if (m.source) { sources.allow(m.source); log('sources_allowed', { question, origin: m.source }); }
@@ -897,7 +963,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       },
       sources,
       /* Its selective memory (§13), with the Judge to select for it (none in --flat); what it picked is the operator's. */
-      ...(withMemory ? { memory: { ...(cfg.flat ? {} : { selector: judgeSelector(judge) }), onSelect: (record: Record<string, unknown>) => log('memory_select', record) } } : {})
+      ...(withMemory ? { memory: { ...(cfg.flat ? {} : { selector: judgeSelector(judge) }), onSelect: (record: Record<string, unknown>) => log('memory_select', record) } } : {}),
+      /* The records of earlier runs it may read (§12). */
+      ...(experience ? { experience: experience.reader } : {})
     })
     : new LawSession<unknown>(sessionHost);
 

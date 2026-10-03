@@ -1,15 +1,14 @@
-import { Notebook, type BeliefStance, type NoteOp } from '../learn/notebook.ts';
-import { JournalMemory, type EpisodeEntry, type ModelEntry } from '../learn/assisted/memory.ts';
-import { explorerSystem, ownFormula } from '../learn/explorer.ts';
+import { journalReader } from '../learn/assisted/record.ts';
+import { explorerSystem } from '../learn/explorer.ts';
 import { system2Prompt, type Tool } from '../learn/prompt.ts';
 import { isGameLab } from '../learn/lab.ts';
 import { LABS } from '../worlds/labs.ts';
-import type { Formula } from '../core/types.ts';
 
 /* ============================================================================
  * A researcher's RECORD as another agent reads it (SPEC-ORQUESTADOR §3.3): the senior who
  * reviews a junior's work gets the same instruments the junior's selective memory has -
- * `list`, `open`, `find` - over what the junior did and was answered, rebuilt from its journal.
+ * `list`, `open`, `find` - over what the junior did and was answered, rebuilt from its journal
+ * (`journalReader`, kept in learn/assisted/record.ts: a researcher given experience reads with it too).
  *
  * Exactly what the junior saw, never more (Q2): its beliefs and notes and methods as it wrote
  * them, its models, each request it made with what the environment answered, the verdicts of
@@ -17,61 +16,9 @@ import type { Formula } from '../core/types.ts';
  * measures, nor how an episode ended beyond its score (the reason is the world's, not shown).
  * ========================================================================== */
 
-type J = Record<string, any>;
-const score = (winner: unknown): number => (winner === 'A' ? 1 : winner === 'B' ? -1 : 0);
-const scoreOfResult = (r: unknown): number => (r === 'won' ? 1 : r === 'lost' ? -1 : 0);
+export { journalReader };
 
-/** The junior's record from its journal, read with the instruments of a selective memory. */
-export function journalReader(journal: J, options: { openLimit?: number } = {}): JournalMemory {
-  const notebook = new Notebook();
-  const episodes: EpisodeEntry[] = [];
-  const models: ModelEntry[] = [];
-  const memory = new JournalMemory(notebook, { episodes: () => episodes, models: () => models, ...(options.openLimit ? { openLimit: options.openLimit } : {}) });
-  const steps = new Map<number, number>();
-  for (const e of (Array.isArray(journal?.events) ? journal.events : []) as J[]) {
-    const round = typeof e.round === 'number' ? e.round : 0;
-    const notes = (Array.isArray(e.notes) ? e.notes : []) as NoteOp[];
-    switch (e.type) {
-      case 'exploration_game': episodes.push({ episode: String(e.game), round: 0, chosen_by: 'the environment, at random', score: score(e.winner), steps: e.plies }); break;
-      case 'exploration_episode': if (e.episode && typeof e.episode === 'object') episodes.push({ round: 0, ...e.episode, episode: String(e.episode.id ?? e.episode.episode ?? '') }); break;
-      case 'played_by_the_learner': episodes.push({ episode: String(e.game), round, from: e.from, chosen_by: e.how, score: scoreOfResult(e.result), steps: e.turns }); break;
-      case 'investigation': {
-        notebook.applyNotes(round, notes, () => true);
-        const step = (steps.get(round) ?? 0) + 1;
-        steps.set(round, step);
-        memory.recordInvestigation(round, step, { requests: e.requests, ...(e.results !== undefined ? { results: e.results } : { results: '(not recorded in this journal)' }), ...(e.warnings?.length ? { warnings: e.warnings } : {}) });
-        break;
-      }
-      case 'investigation_refused': {
-        const step = (steps.get(round) ?? 0) + 1;
-        steps.set(round, step);
-        memory.recordInvestigation(round, step, { requests: e.requests, results: 'refused: ' + String(e.reason ?? '') });
-        break;
-      }
-      case 'methods': notebook.applyMethods(round, (e.methods ?? []) as NoteOp[]); break;
-      case 'proposal': {
-        notebook.applyStances(round, (e.beliefs ?? []) as BeliefStance[]);
-        notebook.applyNotes(round, notes, () => true);
-        const model = e.law ?? (e.formula ? ownFormula(e.formula as Formula) : null);
-        if (model) models.push({ round, fingerprint: String(e.fingerprint ?? 'r' + round), model, rationale: e.rationale, lessons: e.lessons, next_experiment: e.next_experiment });
-        break;
-      }
-      case 'reflection':
-        notebook.applyStances(round, (e.beliefs ?? []) as BeliefStance[]);
-        notebook.applyNotes(round, notes, () => true);
-        notebook.recordReflection(round, String(e.rationale ?? ''), (e.lessons ?? []) as string[], String(e.next_experiment ?? ''));
-        break;
-      case 'check':
-        /* The verdicts as the junior is given them: per place, how many episodes scored 1, whether it holds, the reruns. */
-        memory.recordCheck(round, { laboratories: (e.laboratories ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}), ...(p.rerun ? { rerun: { went_up: p.rerun.went_up, went_down: p.rerun.went_down } } : {}) })),
-          ...(e.validation ? { validation: { family: (e.validation.family ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}) })) } } : {}),
-          ...(e.accepted ? { accepted: true } : {}) });
-        break;
-      default: break;
-    }
-  }
-  return memory;
-}
+type J = Record<string, any>;
 
 /** Signs that a researcher is stuck (SPEC-ORQUESTADOR §5.5), from what it did and was told - each a fact of its record. */
 export interface StuckSignals {
