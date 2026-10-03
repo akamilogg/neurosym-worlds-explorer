@@ -146,6 +146,13 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
     1. su contexto (señales, resumen, seguimiento, decisiones), sin cambios durante la decisión;
     2. un mensaje por cada paso de lectura (`investigation_step`);
     3. al final, `steps_left`.
+  - Medido con la conversación que solo crece (run de Luna `grid-s22-2026-10-02T17-53-46-721Z`):
+    - el senior pasó de un 23 % a un 58 % de entrada cacheada;
+    - aun así costó 0,53 $, porque cada seguimiento le llevaba 2–4 llamadas: leía más del registro antes de contestar.
+  - Desde entonces, **un seguimiento le permite una sola lectura**, porque el experimento ya lo tiene delante. Si pide
+    leer más, no hay error: se le añade un recordatorio («tu papel no es hacer el trabajo del junior: decide ya; dale
+    la hipótesis con la que seguir, o la tarea que debe continuar, o espera») y se le pregunta de nuevo, como mucho dos
+    veces. La decisión registra `reminded`.
   - Los elementos del registro de más de `openLimit` caracteres (4000) se le abren recortados: el principio y el tamaño.
     Con `"whole": true` los lee enteros. La memoria del propio junior sigue abriéndolos siempre enteros.
 - **Después de la reflexión final no escribe.** Ya no hay más preguntas al junior, así que el mensaje nunca le llegaría y

@@ -339,3 +339,35 @@ test('the senior\'s reading grows by messages (its context unchanged within a de
   const whole = (calls[2].parts[2] as any).investigation_step.results[0].items[0];
   assert.equal(whole.item.results[0].pictures, big, 'asked whole: entire');
 });
+
+test('a follow-up allows one reading; asked to read again, the senior is reminded to hand the junior the next step, and decides', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-'));
+  const out = path.join(dir, 'run.json');
+  /* The junior got the senior's message and then ran an experiment: a follow-up is due. */
+  fs.writeFileSync(out, JSON.stringify({ experiment: 'cells@1', researcher: 'assisted', events: [
+    { type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false }] },
+    { type: 'operator_command', kind: 'message', by: 'agent:senior', accepted: true },
+    { type: 'operator_message', question: 3, messages: [{ id: 'o1', text: 'test the edge with a table', by: 'agent:senior' }] },
+    { type: 'investigation', round: 2, requests: [{ table: { source: 's' }, on: 'episodes' }], results: [{ rows: [] }] }] }));
+  fs.writeFileSync(out.replace(/\.json$/, '.status.json'), JSON.stringify({ state: 'running', heartbeat: new Date().toISOString(), pid: process.pid }));
+  const calls: unknown[] = [];
+  const llm: ChatClient = { complete: async (r) => {
+    calls.push(r.user);
+    const reminded = JSON.stringify((r.user as { parts: unknown[] }).parts).includes('"reminder"');
+    const content = reminded ? { decision: 'message', text: 'Your table confirms it: adopt the edge rule and propose a model built on it.', evidence: ['investigation:r2.1'], why: 'confirmed' }
+      : { investigate: [{ memory: 'list', of: 'notes' }] };
+    return { content: JSON.stringify(content), latencyMs: 0, raw: null };
+  } };
+  const controller = new AbortController();
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm, pollMs: 10, maxOrders: 1, signal: controller.signal });
+  await sleep(150);
+  controller.abort();
+  const { decisions } = await agent;
+  const d = decisions.find((x) => x.follow_up)!;
+  assert.equal(d.decision, 'message', 'it decided, no error');
+  assert.equal(d.read!.length, 1, 'one reading');
+  assert.equal(d.reminded, 1, 'reminded once');
+  assert.equal(calls.length, 3, 'read, reminded, decided');
+  const reminder = (calls[2] as { parts: Record<string, unknown>[] }).parts.at(-1)!;
+  assert.match(String(reminder.reminder), /not to do the junior's work/);
+});
