@@ -228,8 +228,9 @@ test('a team: who may be a member, and of which team', async () => {
   await assert.rejects(run(['--team', teamDir, '--member', 'a']), /only the assisted researcher reads it/);
   await assert.rejects(run(['--researcher', 'assisted', '--team', teamDir, '--member', 'z']), /no member z/);
   await assert.rejects(run(['--researcher', 'assisted', '--member', 'a']), /--team/);
+  /* A laboratory that does not declare teams is refused (every world of laws does now: law-team.test.ts). */
   const { cellsLab } = await import('../src/worlds/cells/lab.ts');
-  await assert.rejects(runLaboratory(cellsLab, { args: ['--researcher', 'assisted', '--team', teamDir, '--member', 'a', '--flat', '--out', path.join(dir, 'y.json')], root: dir, llm, fetch: system2(() => null) }), /cannot be investigated by a team yet/);
+  await assert.rejects(runLaboratory({ ...cellsLab, teams: false }, { args: ['--researcher', 'assisted', '--team', teamDir, '--member', 'a', '--flat', '--out', path.join(dir, 'y.json')], root: dir, llm, fetch: system2(() => null) }), /cannot be investigated by a team yet/);
   assert.ok(PeerChannel.acceptsRead({ peers: 'list' }) && PeerChannel.acceptsPublish({ publish: {} }));
 });
 

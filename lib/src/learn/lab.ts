@@ -106,6 +106,8 @@ export interface LabOperatorContext<S, K> {
 export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   /** The world's id, as models are written for it (e.g. "cells@1"). */
   readonly id: string;
+  /** Whether a run of it may be a member of a team (`--team`, SPEC-INVESTIGACION-PARALELA §5). */
+  readonly teams?: boolean;
   /** One paragraph for --help: what System 2 perceives and must answer. */
   readonly about: string;
   /** The world's own options and flags. */

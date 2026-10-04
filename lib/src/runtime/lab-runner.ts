@@ -25,7 +25,7 @@ import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
 import { createHash } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
-import { PeerChannel, TeamBoard } from '../learn/assisted/board.ts';
+import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -405,7 +405,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       return finished;
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
-      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter });
+      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]).finally(() => { if (team) team.board.end(team.member); });
 }
@@ -416,7 +416,7 @@ function openTeam(lab: AnyLab, dir: string, member: string, researcher: string, 
     if (member) throw new LabError('--member: name the team with --team');
     return null;
   }
-  if (!isGameLab(lab) || !lab.teams) throw new LabError('--team: ' + lab.id + ' cannot be investigated by a team yet (SPEC-INVESTIGACION-PARALELA)');
+  if (!lab.teams) throw new LabError('--team: ' + lab.id + ' cannot be investigated by a team yet (SPEC-INVESTIGACION-PARALELA)');
   if (!member) throw new LabError('--team: which member is this run (--member)?');
   let board: TeamBoard;
   try { board = new TeamBoard(path.resolve(root, dir)); } catch (e) { throw new LabError('--team: ' + String((e as Error).message ?? e)); }
@@ -737,7 +737,8 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * The loop of a laboratory whose model is a LAW (cells, messages, orbit).
  * ========================================================================== */
 
-async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[]; assistedAfter: number | null }): Promise<LabResult> {
+async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[]; assistedAfter: number | null;
+  team: { board: TeamBoard; member: string; channel: PeerChannel } | null }): Promise<LabResult> {
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
@@ -838,12 +839,22 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* What was asked, in the interface's words (the finding's question). */
   journal.objective = { answer: objective.answer.form, verdict: objective.verdictForm };
   let blindCounter = 0;
+  /* A member of a team takes its blind places from the team's ledger - none consulted twice in the team - and spends one of
+     the team's blind confirmations each time its model holds in every family place (SPEC-INVESTIGACION-PARALELA §5.4), each
+     under a key of its own, so that a resumed run is given what it was given. A world that names its blind places itself
+     (orbit) has them from its own stretch, past 100000. */
+  const team = o.team;
+  let confirmations = 0;
   const protocol = new Protocol(objective, {
     places: () => [...places.values()],
-    blindPlaces: (set: number, round: number) => (lab.blindPlaces
+    blindPlaces: (set: number, round: number) => (team
+      ? team.board.blindBoards(team.member, 'c' + confirmations + '.s' + set, cfg.confirmPlaces)
+        .map((index) => ({ id: 'blind' + (++blindCounter), spec: lab.placeOf(spec, (lab.blindPlaces ? 100000 : 0) + index, worldOptions) }))
+      : lab.blindPlaces
       ? lab.blindPlaces(spec, set, round, ctx)
       : Array.from({ length: cfg.confirmPlaces }, () => { const k = ++blindCounter; return { id: 'blind' + k, spec: lab.placeOf(spec, 1000 + k, worldOptions) }; }))
       .map((p) => ({ ...p, role: 'confirmation' as const, seen: false })),
+    ...(team ? { confirm: (c: { round: number }) => team.board.confirm(team.member, 'c' + (++confirmations), c.round) } : {}),
     fingerprint: (law) => lawFingerprint(law),
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
@@ -892,7 +903,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       budget.acts--;
       counter++;
       const e = store(id, place, session.currentRound, 'you', data);
-      return { act: req.act, accepted: true, name: e.id, ...lab.act.shown(e.data) };
+      const answer = { act: req.act, accepted: true, name: e.id, ...lab.act.shown(e.data) };
+      actAnswers.set(e.id, answer);
+      if (team) {
+        const key = 'act|' + place.id + '|' + JSON.stringify(lab.act.asWritten ? lab.act.asWritten(req.act) : req.act);
+        stepInterventions.push({ kind: 'act', place: place.id, key });
+        keyOfEpisode.set(e.id, key);
+      }
+      return answer;
     }
     if ('measure' in req) {
       const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, ...(req.measure.range ? { range: req.measure.range } : {}) };
@@ -965,6 +983,85 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     return { table: req.table.source, on: req.on, ...(lab.residual ? { residuals_of: latest ? 'your latest model' : 'no model yet' } : {}), rows };
   };
 
+  /* --- Its team's board (SPEC-INVESTIGACION-PARALELA §5.2) -------------------------------------------------------------
+     What it publishes carries the records behind its evidence as the world answered them; what it reads is the version its
+     round opens, through its run's log. The operator keeps, apart, the key of each intervention (to measure a team). */
+  const actAnswers = new Map<string, unknown>();
+  const stepAnswers = new Map<string, { requests: unknown; results: unknown }>();
+  const stepsInRound = new Map<number, number>();
+  let stepInterventions: { kind: string; place: string; key: string }[] = [];
+  const stepKeys = new Map<string, string[]>();
+  const keyOfEpisode = new Map<string, string>();
+  /* Every investigation step, as it was asked and answered: what a publication may cite ("r<round>.<step>"). */
+  const logged = (type: string, data: Record<string, unknown> = {}): void => {
+    if (type === 'investigation' && typeof data.round === 'number') {
+      const step = (stepsInRound.get(data.round) ?? 0) + 1;
+      stepsInRound.set(data.round, step);
+      const id = 'r' + data.round + '.' + step;
+      stepAnswers.set(id, { requests: data.requests, results: data.results });
+      if (stepInterventions.length) {
+        stepKeys.set(id, stepInterventions.map((x) => x.key));
+        log('operator_interventions', { round: data.round, step, interventions: stepInterventions });
+        stepInterventions = [];
+      }
+    }
+    log(type, data);
+  };
+  /** Where an entry was observed, as the environment can say it (a team shares its laboratories and its family). */
+  const placeOfTeam = (placeId: string): Record<string, unknown> => ({ place: placeId, same_place_for_the_whole_team: places.get(placeId)?.role !== 'confirmation' });
+  /** The record of the environment behind one of its references, as it answered it; null when there is none. */
+  function evidenceOf(ref: string): { record: Record<string, unknown>; place: string | null; keys: string[] } | null {
+    const r = ref.trim();
+    const step = /^(?:investigation:)?r(\d+)\.(\d+)$/.exec(r);
+    if (step) {
+      const id = 'r' + step[1] + '.' + step[2];
+      const s = stepAnswers.get(id);
+      return s ? { record: { step: id, ...s }, place: null, keys: stepKeys.get(id) ?? [] } : null;
+    }
+    const point = /^(.+)@(\d+)$/.exec(r);
+    if (point) {
+      const e = episodes.get(point[1]);
+      const k = Number(point[2]);
+      if (!e || k > lab.steps(e.data)) return null;
+      return { record: { point: r, place: e.place, episode: e.id, step: k, ...lab.view(e.data, k, k) }, place: e.place, keys: [] };
+    }
+    const e = episodes.get(r);
+    if (!e) return null;
+    return { record: { episode: e.id, place: e.place, chosen_by: e.by, steps: lab.steps(e.data), ...(actAnswers.has(e.id) ? { act: actAnswers.get(e.id) } : {}),
+      ...lab.view(e.data, 0, lab.steps(e.data)) }, place: e.place, keys: keyOfEpisode.has(e.id) ? [keyOfEpisode.get(e.id)!] : [] };
+  }
+  /** A publication: checked, its evidence's records attached, put on the board under its number (the same number when a
+      resumed run publishes it again: nothing is added). What it is answered is the same live or resumed. */
+  function publish(raw: unknown): unknown {
+    const p = parsePublication(raw);
+    if (typeof p === 'string') return { publish: 'refused', error: p };
+    const found = p.evidence.map((ref) => ({ ref, at: evidenceOf(ref) }));
+    const missing = found.filter((x) => !x.at).map((x) => x.ref);
+    if (missing.length) return { publish: 'refused', error: 'no record of yours behind ' + missing.join(', ') + ' (an episode, a point "<episode>@<step>", an act "act<n>", an investigation step "r<round>.<step>" already answered)' };
+    const peers = team!.channel;
+    const n = peers.published + 1;
+    const seenIn = [...new Set(found.flatMap((x) => (x.at!.place ? [x.at!.place] : [])))];
+    const { evidence: _refs, ...said } = p;
+    const entry: BoardEntry = { id: team!.member + '#' + n, member: team!.member, n, round: session.currentRound, window: peers.board.windowOf(session.currentRound), ...said,
+      world: seenIn.map(placeOfTeam), evidence: found.map((x) => ({ ref: x.ref, record: x.at!.record })) };
+    const put = peers.board.publish(entry, { places: seenIn.map((id) => ({ id })), keys: [...new Set(found.flatMap((x) => x.at!.keys))] });
+    peers.published = n;
+    log('peer_publish', { round: session.currentRound, id: entry.id, kind: entry.kind, claim: entry.claim, evidence: p.evidence, window: entry.window,
+      ...(put.replayed ? { replayed: true } : {}), ...(put.conflict ? { conflict: put.conflict } : {}) });
+    say('  publishes ' + entry.id + ' (' + entry.kind + ')' + (put.replayed ? ' [already on the board]' : '') + (put.conflict ? ' [CONFLICT: ' + put.conflict + ']' : ''));
+    return { publish: 'published', id: entry.id, window: entry.window, readable_in_round: entry.window * peers.board.spec.window + 1 };
+  }
+  async function readPeers(q: Record<string, unknown>, round: number): Promise<unknown> {
+    const answer = await team!.channel.run(q, round) as Record<string, unknown>;
+    log('peer_read', { round, peers: q.peers, ...(answer.version !== undefined ? { version: answer.version } : {}),
+      ...(q.items !== undefined || q.item !== undefined ? { items: Array.isArray(q.items) ? q.items.map(String) : [String(q.item)] } : {}),
+      ...(typeof q.evidence === 'string' ? { evidence: q.evidence } : {}), ...(typeof q.words === 'string' ? { words: q.words } : {}),
+      ...(Array.isArray(answer.entries) ? { shown: (answer.entries as { id: string }[]).map((e) => e.id) } : {}),
+      ...(answer.error ? { error: answer.error } : {}) });
+    return answer;
+  }
+  const exchange = team !== null && team.board.spec.exchange && journal.researcher === 'assisted';
+
   const sessionHost: import('../learn/law-session.ts').LawSessionHost<unknown> = {
     llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: lab.perceptDoc, steps: cfg.steps, investigative,
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
@@ -975,7 +1072,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     failures,
     episodes: episodeIndex,
     places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
-    log, say, halt
+    log: logged, say, halt,
+    /* A member of a team tells the board where it is: the versions every member has passed are sealed. */
+    ...(team ? { onRound: (round: number) => team.board.reach(team.member, round) } : {})
   };
   /* The sources the assisted researcher may read (SPEC-INVESTIGADOR-ASISTIDO §6.3): the origins the operator allows, at the
      start and during the run. It reads them itself; the Judge picks lines for it only when it asks (`find` with `select`),
@@ -994,7 +1093,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       /* A message sent while a resumed run still replays its history waits: delivered then, the question would differ from
          the one its log answers, and the run would diverge. It goes with the first question asked live. */
       take: () => (helping && run.replay.pending() === 0 ? run.operator.take() : []), scheduled: deliveredMessages(previous),
-      system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '') : promptFor(focus)),
+      system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
+        + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
@@ -1009,7 +1109,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       /* Its selective memory (§13), with the Judge to select for it (none in --flat); what it picked is the operator's. */
       ...(withMemory ? { memory: { ...(cfg.flat ? {} : { selector: judgeSelector(judge) }), onSelect: (record: Record<string, unknown>) => log('memory_select', record) } } : {}),
       /* The records of earlier runs it may read (§12). */
-      ...(experience ? { experience: experience.reader } : {})
+      ...(experience ? { experience: experience.reader } : {}),
+      /* Its team's board, when the team exchanges (SPEC-INVESTIGACION-PARALELA §5.2). */
+      ...(exchange ? { board: { accepts: (q: Record<string, unknown>) => PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q),
+        run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {})
     })
     : new LawSession<unknown>(sessionHost);
 

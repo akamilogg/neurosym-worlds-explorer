@@ -77,6 +77,8 @@ export interface LawSessionHost<A> {
   say(text: string): void;
   /** Asked before each consultation of System 2: a reason to stop now (cancelled, a budget spent), or null. */
   halt?(): string | null;
+  /** Told when a round begins (a member of a team tells its board where it is). */
+  onRound?(round: number): void;
 }
 
 /** A law's identity: its own code and words (the same law has the same fingerprint). */
@@ -122,6 +124,7 @@ export class LawSession<A> {
     if (this.fatal || this.halted) return null;
     this.currentRound++;
     const round = this.currentRound;
+    h.onRound?.(round);
     const b = this.latest();
     let refused: string[] = [];
     const investigation: unknown[] = [];

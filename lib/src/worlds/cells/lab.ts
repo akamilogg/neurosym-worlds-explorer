@@ -18,6 +18,7 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
   ],
   generate: (seed, o) => generateCells(seed, Number(o.level)),
   placeOf,
+  teams: true,
   runName: (seed, o) => 'cells-s' + seed + 'L' + o.level,
   headline: (spec) => 'level ' + spec.level + ' (width ' + spec.width + ', rule ' + spec.rule + ', radius ' + spec.radius + ')',
   placeInfo: (spec) => ({ width: spec.width, density: spec.density }),

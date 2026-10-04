@@ -56,6 +56,8 @@ export const tankLab: Lab<TankSpec, TankPoint, TankEpisode, TankCase, TankAct> =
 
   generate: (seed) => ({ seed, place: 'p0', steps: STEPS }),
   placeOf: (spec, index) => ({ ...spec, place: 'p' + index }),
+  /* A team shares the one service: its members' episodes are drawn in the order they ask for them. */
+  teams: true,
   runName: (seed) => 'tank-s' + seed,
   headline: (spec) => '(the service\'s place ' + spec.place + ')',
   placeInfo: (spec) => ({ place: spec.place }),

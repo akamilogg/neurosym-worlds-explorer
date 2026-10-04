@@ -116,6 +116,8 @@ export const particles3dLab: Lab<SceneSpec, P3Point, P3Episode, P3Case, P3Act> =
     return generateScene(seed, level, condition);
   },
   placeOf: (spec, index) => placeScene(spec, index),
+  /* A team shares the one service (Blender): its members wait on it in turn. */
+  teams: true,
   runName: (seed, o) => 'particles3d-s' + seed + 'L' + o.level + String(o.condition).toUpperCase(),
   headline: (spec) => 'level ' + spec.level + ', condition ' + spec.condition + ' (' + spec.fields.map((f) => f.type.toLowerCase()).join(' + ') + '; ' + spec.bodies.length + ' particles)',
   placeInfo: (spec) => ({ fields: spec.fields.map((f, i) => ({ marker: spec.markers[i].name, type: f.type, at: f.location })), bodies: spec.bodies, frame: spec.frame }),

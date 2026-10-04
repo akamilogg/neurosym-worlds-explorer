@@ -139,6 +139,7 @@ export const orbitLab: Lab<OrbitSpec, OrbitPoint, OrbitEpisode, OrbitCase, Orbit
     const k = (set === 1 ? 200000 : 100000) + round * 10 + j;
     return { id: 'blind' + k, spec: environmentOf(spec, k, varying(ctx.options)) };
   }),
+  teams: true,
   runName: (seed, o) => 'orbit-s' + seed + 'L' + o.level,
   headline: (spec) => 'level ' + spec.level + ' (' + lawSummary(spec) + ')',
   placeInfo: (spec) => ({ sources: spec.sources, frame: spec.frame }),

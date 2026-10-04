@@ -18,6 +18,7 @@ export const messagesLab: Lab<MessagesSpec, MessagePoint, Episode, MessagesCase>
   defaults: { every: '1' },
   generate: (seed) => generateMessages(seed),
   placeOf,
+  teams: true,
   runName: (seed) => 'messages-s' + seed,
   headline: (spec) => '(rule ' + spec.rule + ', k ' + spec.k + ')',
   placeInfo: (spec) => ({ pools: spec.pools }),

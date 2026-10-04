@@ -107,12 +107,17 @@ export function checkTeam(def: TeamDefinition): void {
   if (!def.id || !ID.test(def.id)) throw new LabError('a team needs an id (letters, digits, - and _)');
   if (!LABS[def.lab]) throw new LabError('team ' + def.id + ': no laboratory ' + def.lab + ' (' + Object.keys(LABS).join(', ') + ')');
   if (!def.condition) throw new LabError('team ' + def.id + ': which condition does it stand for?');
+  const lab = LABS[def.lab];
+  if (!lab.teams) throw new LabError('team ' + def.id + ': ' + lab.id + ' cannot be investigated by a team yet (SPEC-INVESTIGACION-PARALELA)');
+  /* Boards to explore are a laboratory's own (the grid's): a world without them takes none. */
+  const explores = lab.options.some((o) => o.name === 'explore-places');
   if (def.members.length < 1) throw new LabError('team ' + def.id + ': no members');
   const ids = new Set<string>();
   for (const m of def.members) {
     if (!m.id || !/^[a-z0-9][a-z0-9_-]{0,31}$/i.test(m.id) || ids.has(m.id)) throw new LabError('team ' + def.id + ': every member needs an id of its own: ' + JSON.stringify(m.id));
     ids.add(m.id);
     const places = m.explore_places ?? def.explore_places ?? 0;
+    if (places && !explores) throw new LabError('team ' + def.id + ', member ' + m.id + ': ' + lab.id + ' has no boards to explore (explore_places)');
     if (places > MEMBER_STRETCH) throw new LabError('team ' + def.id + ', member ' + m.id + ': at most ' + MEMBER_STRETCH + ' boards to explore');
     if (places && m.researcher === 'unknown-world') throw new LabError('team ' + def.id + ', member ' + m.id + ': boards to explore are the assisted researcher\'s');
     if (m.role && m.researcher === 'unknown-world') throw new LabError('team ' + def.id + ', member ' + m.id + ': a role is a message: only the assisted researcher takes it');
@@ -247,8 +252,9 @@ export function teamAudit(board: TeamBoard, journals: ReadonlyMap<string, string
   }
   /* The model each member held at the end of each window. */
   const window = board.spec.window;
-  const models = new Map([...journals].map(([member, j]) => [member, eventsOf(j).filter((e) => e.type === 'proposal' && e.formula)
-    .map((e) => ({ round: e.round as number, fp: formulaHash(e.formula as Formula) }))]));
+  /* A proposal's model: a formula (the grid) or a law with its print (a world of laws). */
+  const models = new Map([...journals].map(([member, j]) => [member, eventsOf(j).filter((e) => e.type === 'proposal' && (e.formula || e.fingerprint))
+    .map((e) => ({ round: e.round as number, fp: e.formula ? formulaHash(e.formula as Formula) : String(e.fingerprint) }))]));
   const lastWindow = Math.max(0, ...[...models.values()].flatMap((ps) => ps.map((p) => Math.ceil(p.round / window))));
   const modelsByWindow = Array.from({ length: lastWindow }, (_, k) => {
     const held = [...models.values()].map((ps) => ps.filter((p) => p.round <= (k + 1) * window).at(-1)?.fp).filter((x): x is string => !!x);

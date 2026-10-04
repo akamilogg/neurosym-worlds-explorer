@@ -1,6 +1,7 @@
 # SPEC · Investigación en paralelo: varios mundos de una familia a la vez, con intercambio
 
-Estado (04/10/2026): **PA1, PA2, PB1 y PB2 implementados en la cuadrícula** (`unknown-world@1`). PB4 en parte: duplicación,
+Estado (04/10/2026): **PA1 y PA2 implementados en la cuadrícula** (`unknown-world@1`); **PB1 y PB2 en la cuadrícula y en
+todos los mundos de leyes** (cells, messages, orbit, tank, particles3d; §5.5). PB4 en parte: duplicación,
 callejones leídos y modelos por ventana; la convergencia de hipótesis (con el Juez) queda pendiente. PB3 son los
 experimentos con LLM real: pendientes. Incorpora dos evaluaciones externas: la primera dio forma a la propuesta; la
 segunda cerró los contratos de presupuesto, ventanas, publicaciones y confirmación antes de construir el tablón (§3, §5,
@@ -165,6 +166,36 @@ supuesto.
   la familia, gasta una. Agotadas, el protocolo no confirma y se lo dice (`no_blind_confirmation`). Así «el equipo
   resuelve si cualquiera resuelve» no multiplica las oportunidades de pasar el examen.
 
+### 5.5 Equipos en los mundos de leyes
+
+`cells`, `messages`, `orbit`, `tank` y `particles3d` declaran `teams: true`, y `lab team` los acepta como a la cuadrícula.
+Usan el mismo tablón, las mismas ventanas, el mismo libro del examen y el mismo informe del equipo. Lo propio de cada
+mundo lo pone el runner de leyes de forma genérica:
+
+- **Evidencia.** Una referencia lleva adjunto su registro tal como lo respondió el mundo:
+  - un episodio (`ep3`), como lo muestra `view` entero;
+  - un `act`, con su respuesta y el episodio que hizo;
+  - un punto (`ep3@5`), sólo ese paso;
+  - un paso de investigación (`r2.1`), con sus peticiones y respuestas.
+- **Dónde se observó.** Se publica sólo el lugar y si es el mismo para todo el equipo. Los miembros comparten
+  laboratorio y familia, así que nada de la especificación oculta de un lugar sale al tablón.
+- **El examen del equipo.** Cada miembro saca sus lugares ciegos del libro del equipo, que es el mismo tramo de índices
+  que usa la cuadrícula, y gasta una confirmación del equipo cuando su modelo se sostiene en toda la familia.
+  - `orbit`, que nombra sus ciegos por su cuenta, los saca del suyo, desplazado más allá de 100000.
+- **La ronda.** La sesión de leyes avisa al tablón al empezar cada ronda (`onRound`), y así se sellan las versiones.
+- **Lo que guarda el operador.** La clave de cada `act`, de la forma `act|<lugar>|<act tal como se escribió>`, para medir
+  duplicación y callejones evitados. La auditoría del equipo reconoce el modelo de una ley por su huella.
+- **El prompt del tablón** ya no habla de "tamaño, piezas y salidas": dice que los episodios de un colega no son los
+  propios.
+
+**Límites:**
+
+- `tank` y `particles3d` comparten un único servicio entre los miembros. `tank` reparte sus salidas por lugar en el orden
+  en que se las piden (cada run sigue siendo reproducible por su log). Blender atiende a los miembros por turno.
+- No hay tableros de exploración: `explore_places` en un equipo de un mundo de leyes se rechaza.
+
+Pruebas: `lib/test/law-team.test.ts`.
+
 ## 6. Cómo saber si sirve
 
 **Modalidad B, con réplicas (seeds):**
@@ -286,7 +317,8 @@ en caché), con senior Sol ~$0.33; Sol solo $1.29; Qwen local 0 $; reloj 110–3
 - **Determinismo con concurrencia.** Serie y concurrente piden al Juez el mismo conjunto de juicios mientras el caché no
   desaloje (20.000 entradas). En runs muy largos, el orden de desalojo podría cambiar qué se pide; el log tolera otro
   orden, no otro conjunto.
-- **Laboratorios de leyes** (cells, messages, orbit): ni tableros de exploración ni equipos todavía.
+- **Tableros de exploración en los mundos de leyes.** Los equipos ya funcionan en ellos (§5.5); la modalidad A no. Su
+  `act` ya admite `place`, así que falta sobre todo un tramo de exploración en su familia.
 
 ## 10. Cómo se usa
 
