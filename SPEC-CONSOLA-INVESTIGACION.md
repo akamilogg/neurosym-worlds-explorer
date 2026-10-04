@@ -128,6 +128,23 @@ Un enlace `revised_after` describe secuencia y justificación declarada; no prue
 
 Las anotaciones del humano se guardan en un registro del operador, con fecha y referencias. Comentar un evento no modifica el cuaderno del investigador ni le entrega ese comentario. «Enviar como mensaje» es una acción distinta.
 
+**Trayectoria por rondas** (implementada, 04/10/2026). Encima de los carriles hay una tira por run, leída sólo de sus
+eventos tal como los da el corte. Cada ronda es una columna con:
+
+- **El check.** Barra con lo que puntuó 1 de cuántos; un mundo que no da puntuación por punto muestra sólo «sí» o «no», sin
+  inventar nada. Debajo, `↓N`: episodios que empeoraron al repetirse. Encima, `✓` si se aceptó.
+- **El modelo.** `●` es un modelo nuevo y `○ = rN` la vuelta a un modelo ya propuesto; si el evento no trae huella, se
+  calcula de cómo está escrito el modelo. `◇` marca una reflexión.
+- **Los pasos por tipo:** experimentos, observaciones y lecturas de registro.
+- **Las creencias:** `+` nuevas, `~` revisadas, `−` abandonadas.
+- **Marcadores arriba:**
+  - `✉` un mensaje del operador, en la ronda a la que llegó;
+  - `↺rN` el rejuego del modelo de la ronda N (el backtracking);
+  - una línea discontinua cuando se añadieron rondas a un run terminado (perfil del operador).
+
+Al pulsar una ronda se abren sus eventos en el inspector. Una tabla plegable da los mismos datos sin gráfico. Los
+carriles quedan plegados debajo.
+
 **Reanudación y ramas:** el prefijo heredado aparece plegado y referido al original; el tramo nuevo aparece separado. Un replay del modelo r8 dentro del mismo run es recuperación de un modelo, no creación de una rama. La vista muestra qué modelo se ejecutó y cuál se propuso después.
 
 ### 4.4 Evidencia: seguir una idea
