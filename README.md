@@ -1,148 +1,199 @@
-# Neuro-symbolic harness for learning unknown worlds
+# Neuro-symbolic harness for scientific discovery in unknown worlds
 
-Can a language model work out the rules of a game it has never seen, from nothing but a picture of the
-board, its own experiments and how its games end? And if it can, is what it learns something a human can read?
+Can a language model investigate a world it has never seen, the way a scientist would: form hypotheses, design
+experiments that tell them apart, read what comes back, revise, and end with a model of the world that holds where it
+was never tried? And if it can, is what it learned something a person can read and check?
 
-This repository is an experiment built to answer both questions. An LLM (**System 2**) proposes hypotheses,
-writes code that measures what it perceives, runs experiments against the environment and turns what it
-learns into an evaluation formula. A second model (**System 1**, the semantic judge *Jev*) judges positions
-using **only** the observations System 2 chose to give it. A search plays the games. Everything System 2
-learns stays in a form you can read: its code, its rules in plain language, its beliefs and its notebook.
+This repository is a laboratory built to answer those questions. An LLM (**System 2**, the researcher) experiments with an
+environment through primitive instruments, keeps a notebook, and proposes a model of the world. A second model (**System
+1**, the semantic judge *Jev*) answers the questions in plain language that the model asks, seeing **only** what the
+researcher chose to measure. **The world decides**: every model is checked on cases it never saw, validated on other
+worlds that share its rule, and accepted only by worlds nobody has seen. Everything the researcher learns stays readable:
+its code, its rules in words, its beliefs with their evidence, and its notebook.
 
-> Status: research prototype. The results below come from 19 runs; most comparisons are one run per
-> condition. Read them as strong signals, not established results.
+Around that core the project has grown into a research platform: six worlds, two researchers (one that learns only from
+the world, one that can be helped), agents that supervise and coordinate investigations, teams that research in parallel,
+a metric of the scientific method itself beside the outcome, and consoles to follow it all.
+
+> Status: research prototype. Results come from dozens of runs with several models (Qwen, GPT-6 Luna and Sol), most
+> conditions with few repetitions. Read them as strong signals, not established results. Design documents and run reports
+> are in Spanish (`SPEC-*.md`, `INFORME.md`).
+
+## Contents
+
+- [The idea](#the-idea): the model as a readable formula; code observes, the judge judges
+- [Worlds](#worlds): six laboratories, from generated games to a Blender physics world
+- [The researcher's protocol](#the-researchers-protocol): instruments, notebook, check, validation and blind confirmation
+- [Two researchers](#two-researchers): the unknown-world researcher, frozen, and the assisted one
+- [The orchestra](#the-orchestra): agent operators, the senior, batches, the project planner, teams in parallel
+- [Measuring](#measuring): the outcome, and an audit of the method beside it
+- [What we found](#what-we-found)
+- [Repository](#repository) · [Running it](#running-it) · [Documents](#documents)
 
 ## The idea
 
-The value of a position is a formula anyone can read:
+The researcher's model is a formula anyone can read:
 
 ```
-V(s) = Σ_i w_i · r_i(O(s))
-             │      └─ O(s): observations, measured by CODE that System 2 writes over what it perceives
-             └──────── r_i:  rules in plain language, answered by the judge (System 1)
-       w_i: weights summing to 1, composed in code
+V(s)   = Σ_i w_i · r_i(O(s))                                the judge's answers to rules over code observations, weighted
+answer = output(p, { observations: O(s), rules: r_i, V })    optional code; without it the answer is V(s)
+            │      └─ O(s): observations, measured by CODE the researcher writes over what it perceives
+            └──────── r_i:  rules in plain language, answered by the judge (System 1)
 ```
 
-- **Code observes, the judge judges.** An observation is deterministic code: a number with a range, or,
-  without a range, a text the judge reads as written. A rule is a question in words that cites observations.
-- **The judge sees nothing else.** Not the picture, not the position, not the rules of the game: only the
-  words of the rules, the observations and whose turn it is. What System 2 does not measure, the judge does
-  not see.
-- **System 2 never plays and never computes values.** It proposes the formula; a minimax search plays with it.
+- **Code observes, the judge judges.** An observation is deterministic code: a number with a range, or a text the judge
+  reads as written. A rule is a question in words that cites observations.
+- **The judge sees nothing else**: not the picture, the position or the world, only the words of the rules and the
+  observations. What the researcher does not measure, the judge does not see. It works as an attention mechanism the
+  researcher directs.
+- **The researcher never plays and never computes values.** In a game, a search plays with its formula; in a world of
+  laws, its `output` code answers what is asked (the next row, the next position).
 
-## The unknown-world experiment
+## Worlds
 
-To separate "remembers the strategy" from "discovers the strategy", games are **generated from a seed**
-(board size and shape, how each side moves, how each side wins, turn limit), so no model can know them from
-pretraining. System 2 perceives them only as an ASCII picture, rotated or mirrored per seed, with neutral
-symbols. It gets no rules, no meaningful names and no list of legal moves.
+Worlds are **generated or hidden**, so that no model can know them from pretraining, and are perceived only through
+neutral symbols, rotated and mirrored per seed. Each is one declaration (`Lab`: world, senses, episodes, actions,
+objective, the operator's truth) run by one common runner.
 
-It learns only from its own sources:
+| World | What is hidden | What the researcher perceives | Its answer |
+|---|---|---|---|
+| `unknown-world@1` (the grid) | a two-player game generated from a seed: board, moves, how each side wins, turn limit | an ASCII picture of the board | an evaluation formula a search plays with |
+| `orbit@1` | a law of motion drawn per seed, on purpose not Newton's (r^-2.37, a hidden mass, a screened pull…) | noisy tables of positions in a rotated, rescaled frame | the next row of a body it launched |
+| `cells@1` | a local rule over a ring of symbols (level 3: second order; level 4: two layers) | rows of symbols | the next row |
+| `messages@1` | a rule over what short texts say (the test of the Judge) | texts marked 0 or 1 | the mark of a new text |
+| `tank@1` | a stateful environment **outside** the harness, as a service | what the service answers | its next state |
+| `particles3d@1` | particles under force fields with hidden masses and charges, pairwise pulls, chaos at level 6, **simulated by Blender** | tables of 3D positions (never told it is Blender) | the next positions |
 
-The prompt is ONE text for every world (`lib/src/learn/prompt.ts`): a researcher persona, a research method and a general
-account of the instruments. It says nothing about the nature of the world; each world adds only its interface (what its
-model produces and the parameters of each instrument) and the shape of what is perceived. The instruments have common names:
+An environment can live outside the harness: requests carry idempotency keys, and every answer is logged, so a run
+stopped and resumed never acts twice.
 
-| Instrument | What it gives System 2 |
+## The researcher's protocol
+
+The prompt is **one text for every world** (`lib/src/learn/prompt.ts`): a researcher persona, a research method and a
+general account of the instruments. It says nothing about the nature of any world; each world adds only its interface.
+
+| Instrument | What it gives |
 |---|---|
-| `view` / `inspect` | what was recorded in its episodes; what its own model computed at a point, rule by rule and observation by observation |
-| `act` | intervene in the environment (earlier `try` / `launch`); it only says whether it accepted and what followed, never why |
-| `replay` | run an episode again in the environment from any point, with any of its models (earlier `play`) |
+| `view` / `inspect` | what was recorded in its episodes; what its own model computed at a point, rule by rule |
+| `act` | intervene in the environment; it only says whether it was accepted and what followed, never why |
+| `replay` | run an episode again from any point, with any of its models (backtracking included) |
 | `simulate` | run a model forward alone, without the environment |
-| `measure` | run one of its observations over any points |
-| `table` | the rows: the value of its code at every point of a kind, with the score its episode ended with - any statistic over them is System 2's own |
-| notebook | beliefs with a mandatory stance each round, notes pointing to positions, its own methods |
+| `measure` / `table` | run its own code over any points; the rows of a table, any statistic over them is its own |
+| notebook | beliefs with a mandatory stance each round (new, keep, revise, confirm, drop) and their evidence; notes; its own methods |
 
-The environment offers primitive actions only: no precooked analysis, no hints, and no environment-specific
-examples in the prompt. The solver, a heuristic that knows the rules, the hidden spec and a rule-recovery
-grade exist **only for the operator**, in the run journal, and never reach System 2 or the judge.
+The environment offers primitive actions only: no precooked analysis, no hints, no examples from the environment, and
+**no metric to optimize**: for every case it returns a verdict as a fact, and the researcher measures the rest.
+
+Every round the model is **checked** on cases it never saw (with the previous check run again, to catch regressions). When
+the researcher asks, it is **validated** on other worlds of the same family, where the rule is the same and the
+parameters are not; it is **accepted** only by two sets of **blind** worlds nobody has seen. A run that used up its rounds
+can be continued, its history replayed exactly; any run can be stopped and resumed, and a resumed run that asks something
+different stops instead of pretending to be the same run.
+
+## Two researchers
+
+- **The unknown-world researcher** learns only from what the world answers. Its prompt is frozen (a test hashes it), and
+  it refuses all help, logging that it did. It is the reference for measuring the capability itself.
+- **The assisted researcher** shares the protocol and may also be helped, always as a declared condition:
+  - a **task** in words, **messages** and a **focus** on a facet of the world, from a person or an agent;
+  - **sources**: documents it reads by itself, where the operator allows, with `list`, `open` and `find` (and the Judge
+    picking lines when it asks); it cites them, and the finding says which claims rest on the world, on sources, or both;
+  - a **selective memory** over its own record: its notebook travels abridged by a fixed rule, and it recalls the rest
+    itself; it may also **consolidate** its round's conversation into its own summary;
+  - **experience**: the records of earlier runs (only what their researchers saw), in two isolated modes: `transfer`
+    (other worlds only, refusing even runs that indirectly knew this one) or `meta` (a researcher of researchers, which
+    may read runs of this very world, marked as prior knowledge); and two scopes, everything or **only methods**, to tell
+    apart transferring a way of investigating from transferring knowledge of a domain.
+
+Every request to a model is grown as an append-only conversation within a round, so a provider's cache can reuse it.
+
+## The orchestra
+
+Agents that use exactly the operator's API, never see more than the researcher they help, and leave a journal of every
+decision (`SPEC-ORQUESTADOR.md`):
+
+- **Agent operator**: follows an assisted run and helps it out of a dead end, as a person would.
+- **Senior**: a more capable model that reads a stuck junior's record when it shows signs of being stuck (holding nowhere,
+  repeated requests, only looking, regressions), proposes a hypothesis with its evidence, how to test it and how to bring
+  it into the model, and follows up after the junior's next experiment. It guides; it does not do the junior's work.
+- **Batches**: runs compared by condition, from what their researchers found.
+- **Project planner**: pursues a question in a loop (hypotheses with predictions, a batch, a synthesis) until a computable
+  criterion holds or the budget is spent, with the operator approving its plans; it can open **branches** from a run stuck
+  in a local minimum.
+- **Research in parallel** (`SPEC-INVESTIGACION-PARALELA.md`), a separate condition that measures the collective system,
+  never one researcher: a researcher may explore other boards of the family besides its laboratory, and a **team** runs
+  several researchers on one family with a board they publish to (results, dead ends, methods, with the records behind
+  them) and read by windows, with exam boards none of them may explore.
+
+## Measuring
+
+Two metrics, read side by side and never combined into one mark:
+
+- **The outcome**: whether the model holds in the checks, validates on worlds that share the rule, and is accepted by
+  blind worlds. Knowing the hidden truth is not required; where a world has one, the operator also grades how much of it
+  the researcher recovered (rule recovery).
+- **The method** (`SPEC-AUDITORIA-METODO.md`): whether the researcher chains its instruments as a scientific method:
+  hypothesis → an experiment that tells it apart → the result read right → a belief updated in proportion. From a finished
+  journal, `lab audit` reconstructs each experiment with what was held before it, what it showed point by point and what
+  was written after; **code observes** (refused experiments and who cited them, citations to things never shown, orphan
+  steps, paired comparisons, replications, replays set against the record, how beliefs moved) and **the Judge answers
+  closed questions** (purpose, discrimination, reading, scope, response to refutation, use of controls). An extractor
+  structures each text's claims, and facts are checked against what was shown at the points they cite, read by form in
+  every world. The Judge is **calibrated against a person**: a blind sample, a page to label it, and the agreement per
+  question (Cohen's kappa) decide which questions can be trusted.
+
+Every run ends with a **finding** in two views: the operator's (every measure, for audit) and the researcher's (only what
+the world answered), which is what another agent is given.
 
 ## What we found
 
-Evidence level: **solid** means repeated across runs or a direct comparison; **signal** means one or two runs
-per condition. Run-to-run variance is large.
+Evidence level: **solid** means repeated across runs or a direct comparison; **signal** means one or two runs per
+condition. Run-to-run variance is large.
 
-1. **An LLM can discover the rules of a world it does not know, from its own experiments** *(solid)*. One run
-   recovered the entire game: how both sides move and every way a game ends, including the draw at the
-   turn limit, through a rotated picture and with no hints. It got there with controlled `try` pairs that differ
-   in one thing, repeated games from the same start, and tables of final positions.
-2. **Winning is not understanding** *(solid)*. With no instruments at all, System 2 still won 16/16 on one
-   seed while believing it was playing Connect Four: the search won the game for it. The discriminating
-   measure is **rule recovery**, not win rate, and seeds must be checked on starting positions never played.
-3. **A judge that sees only System 2's observations works as an attention mechanism directed by System 2**
-   *(strong signal)*. Removing the picture from the judge turned it from a net cost into a net gain against a
-   code-only ablation (0–3 → 6–2 rounds) and cut judge calls from ~9000 to ~650. Positions that measure the
-   same become one question, so the cache hits: understanding compresses the game.
-4. **Instruments buy interpretability and, as a by-product, cost** *(signal)*. At equal wins: with
-   instruments, ~17 judge calls per trial and real rules recovered; without them, ~785 calls per trial and no
-   rule at all.
-5. **One architecture, two modes** *(observed)*. *Interpretable*: precise observations, hypotheses, rules.
-   *Delegated*: System 2 hands the whole scene to the judge as text and the decision rests with System 1 (the
-   self-driving-car mode). When blinded, System 2 chose delegation on its own: "if I can't see, let the judge
-   see."
-6. **Errors in the instrument become false beliefs** *(solid)*. Draws labelled as losses, verdict labels and
-   duplicated games each led System 2 to drop correct ideas. The fix was always the same: facts, not verdicts.
-7. **Generic method guidance changes behaviour without leaking the environment** *(signal)*, and **the model
-   matters more than the prompt** for reasoning bottlenecks such as over-caution *(signal)*.
+1. **An LLM can discover the rules of a world it does not know, from its own experiments** *(solid)*. One run recovered an
+   entire generated game, every way a game ends included, through a rotated picture and with no hints, with controlled
+   pairs of acts that differ in one thing, repeated games from one start, and tables of final positions. In the physical
+   world, first runs recovered a hidden exponent (r^-2.65 against r^-2.66).
+2. **Winning is not understanding** *(solid)*. With no instruments, a researcher won 16/16 while believing it was playing
+   Connect Four: the search won for it. The discriminating measures are rule recovery and checks on starts never played;
+   a model that wins 8/8 can still fail to generalize, as later replays of the same model showed.
+3. **A judge that sees only the researcher's observations works as an attention mechanism** *(strong signal)*. Removing
+   the picture from the judge turned it from a net cost into a net gain against a code-only ablation and cut its calls
+   from ~9000 to ~650: positions that measure the same become one question.
+4. **Errors in the instrument become false beliefs** *(solid)*. Draws labelled as losses, verdict labels and duplicated
+   games each led the researcher to drop correct ideas. The fix was always the same: facts, not verdicts.
+5. **A senior paired with a cheaper junior is a good pair** *(signal)*. GPT-6 Luna with a GPT-6 Sol senior held 8/8 in
+   round 8 for about $0.33, against $1.29 for Sol alone (7/8). The senior's best contributions were new hypotheses with an
+   experiment to test them; its worst, a fact it misread from a picture, which the junior then refuted by looking.
+6. **Researchers backtrack on their own** *(signal)*. After a refinement broke a model that held, the researcher replayed
+   its earlier model from the new failing starts as a baseline and concluded that neither generalized, instead of
+   assuming the old one was right.
+7. **Generic method guidance changes behaviour without leaking the environment** *(signal)*, and the model matters more
+   than the prompt for bottlenecks such as over-caution or long contexts (the selective memory was built for the latter).
 
-Failure modes we saw in System 2: pretraining priors ("fox", "runner", an imagined Connect Four),
-over-caution in the face of complete evidence, anchoring on a noisy scoreboard, understanding the game without
-carrying it into the formula, and leaving instruments unused.
+Failure modes seen: pretraining priors (an imagined Connect Four), over-caution with complete evidence, anchoring on a
+noisy score, understanding a rule without carrying it into the model, leaving instruments unused, and stating as a fact
+what was a misreading.
 
-**The thesis under test:** if System 2 generalizes to scenarios it has never seen, LLMs have latent
-generalization ability, and what they lack are instruments like these. Still missing to support it: the
-instrument ladder on a discriminating seed, repetitions per condition, rule-recovery scores across runs, and
-a clean comparison of the interpretable and delegated modes on the same formula.
-
-The full account, in Spanish, is in [INFORME.md](INFORME.md) (section *Mundo desconocido: hallazgos de los runs 1–19*).
-
-## Next: a physical world
-
-The same principle, applied to discovering a **law of motion**. Bodies move in a plane under a law drawn per
-seed and, on purpose, not the one a model knows: a pull that falls as r^-2.37 instead of r^-2, a hidden mass, a
-term in the velocity, a screened or anisotropic pull. System 2 perceives only noisy tables of positions, in a
-rotated, mirrored and rescaled frame with neutral symbols, and launches bodies of its own to experiment. Its task
-is to answer, at any row, the next row of the body it launched. The model is the same artifact in every world:
-
-```
-V(s)   = Σ_i w_i · r_i(O(s))                          the judge's answers to rules over code observations, weighted
-answer = output(p, { observations: O(s), rules: r_i, V })     optional code; without it the answer is V(s)
-```
-
-Nothing imposes a shape on the answer (no directions, magnitudes or ranges): System 2 builds it, and may combine its
-rules with any logic it writes - the rule network of `SPEC-RULENET.md`, in its own code.
-
-Every round the law is tested on launches it has never seen, some starting beyond the region it observes, where
-a law that only fits what it has seen breaks down. Ablations compare the law against the same observations
-without the judge, a constant, and a judge that reads the whole table (the delegated mode). The operator grades
-the recovered law against the hidden one. System 2 is never given an error to optimize: for every test point the
-environment returns its verdict (a vector in [-1, 1] per axis, 0 where the prediction agrees) and whether the law was
-accepted, and System 2 works out the rest. First runs with a real model recovered the exponent (r^-2.65 against a hidden
-2.66) and showed why the environment, not only the learner, decides what "finding the law" means. The design and the runs
-are in [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md) (Spanish).
+**The thesis under test:** if a researcher generalizes to worlds it has never seen, LLMs have latent ability to do
+science, and what they lack are instruments and a method like these. The full account is in [INFORME.md](INFORME.md).
 
 ## Repository
 
 | Path | What it is |
 |---|---|
-| [`lib/`](lib/README.md) | `neurosym`, the portable TypeScript core (no runtime dependencies): World, Observer, Formula, Judge, Evaluator, Search, and the learner |
-| `lib/src/worlds/grid/` | the generated games, their ASCII sense, starting-position variants, and operator-only tools |
-| `lib/src/learn/` | the explorer (System 2's protocol), notebook, experiments and probes, ablations, the learning loop |
-| `lib/src/worlds/grid/` (`lab.ts`) | the unknown-world experiment (the grid): a laboratory with a loop of its own (its model is a formula a search plays with), run by the common runner; it writes a JSON journal to `runs/` (journals are not published) |
-| `lib/scripts/calibrate-grid.ts` | finds seeds that leave room to learn (forced win, learnable, not won by a flat judge, not a known game) |
-| `lib/src/worlds/orbit/` | the physical world: laws by level, the table sense, prediction points and test launches, operator-only tools |
-| `lib/src/core/output.ts`, `lib/src/core/predict.ts`, `lib/src/learn/law-*.ts` | a model's output code, the predictor, the law explorer (System 2's protocol there), the law ablations |
-| `lib/src/worlds/orbit/` (`lab.ts`), `lib/scripts/calibrate-orbit.ts` | the physical world, declared as a laboratory and run by the common runner; finds laws that leave room to discover (Newton misses clearly above the noise) |
-| `lib/src/learn/objective.ts`, `protocol.ts`, `operator.ts`, `law-session.ts` | the operator's objective as a contract, the researcher's protocol (the same for every world), the operator's common measures, a session with System 2 for a world whose answer is a model ([SPEC-OBJETIVO.md](SPEC-OBJETIVO.md)) |
-| `lib/src/worlds/*/objective.ts` | each world's objective: the form of its answer, its cases, its verdict and its criterion |
-| `lib/src/learn/lab.ts`, `lib/src/runtime/lab-runner.ts`, `lib/scripts/run-lab.ts` | a world as one declaration (`Lab`: world, senses, episodes, optional actions, objective, the operator's truth and baselines) and the one runner every such world uses: `run-lab.ts --lab cells` (the laboratory API is exported as `neurosym/lab`) |
-| `lib/src/worlds/cells/` (`lab.ts`) | a third world, connected with only its world, senses, actions and objective: rows of symbols under a hidden local rule (level 3: of second order); the answer is the next row |
-| `lib/src/worlds/messages/` (`lab.ts`) | a world whose percept is text - the test of the Judge: short texts marked 0 or 1 by a hidden rule over what they say; the family keeps the rule and changes the wording |
-| `lib/src/worlds/tank/`, `lib/scripts/tank-service.ts` | a laboratory whose environment is OUTSIDE the harness: a service in a process of its own that keeps state and acts; each request is done once (an idempotency key) and its answer logged, so a run stopped and resumed never makes it act twice |
-| `lib/src/learn/finding.ts`, `lib/scripts/finding.ts` | the finding of a run (`finding@1`), derived from its journal for whoever uses the result: the question, the model, what it claims, where it held and where it failed, the known limits, the cost and how to reproduce it. Two views: the operator's (`.finding.json`, every measure of the operator for audit - and, for a world someone wrote, its truth and the grade against it) and the researcher's (`.finding.researcher.json`, what another agent is given: only what the world answered). The lab runner writes both next to the journal, and the script derives them from any journal |
-| `lib/src/view/`, `lib/scripts/journal-view.ts`, `journal-viewer.html` | the journal viewer: an animated visual synthesis of a finished run, built from its journal (open `journal-viewer.html` and drop a journal on it) |
-| `fox-hounds-harness.html` | the original browser harness on Fox & Hounds (a known game), with the library bundled in |
-| `INFORME.md`, `SPEC-*.md` | report and specifications (Spanish) |
+| [`lib/`](lib/README.md) | `neurosym`, the TypeScript core with no runtime dependencies |
+| `lib/src/core/` | World, Observer, Formula, Judge (Jev), Evaluator, Search, the predictor and a model's output code |
+| `lib/src/learn/` | the common prompt, the explorer and law sessions (the researcher's protocol), notebook, objective and protocol (check, validation, blind confirmation), findings |
+| `lib/src/learn/assisted/` | the assisted researcher: operator channel, sources, selective memory, experience, the record reader, the team board |
+| `lib/src/worlds/` | the laboratories: `grid`, `orbit`, `cells`, `messages`, `tank`, `particles3d` (and `foxhounds`, the original known game) |
+| `lib/src/orchestra/` | agent operators and the senior, batches, the project planner, teams |
+| `lib/src/audit/` | the method audit: links and code observations, the Judge's questions, claim extraction and fact checks, calibration |
+| `lib/src/runtime/` | the common runner, control API, CLI, replay log, regrading, the classic console |
+| `lib/src/console/` | the research observatory: now, trajectory by rounds, evidence, queries and an analyst of the record |
+| `lib/src/view/`, `journal-viewer.html` | the journal viewer: an animated synthesis of a finished run |
+| `lib/scripts/` | runners, calibrators that find seeds worth learning, services (tank, Blender), the console, the bundle |
+| `INFORME.md`, `EVAL-UNKNOWN-WORLD.md`, `SPEC-*.md` | the report and the specifications (Spanish) |
 
 ## Running it
 
@@ -152,214 +203,105 @@ Requires Node ≥ 22.6.
 cd lib && npm install && npm test
 ```
 
-Find seeds worth learning (no network needed):
+Endpoints and keys come from the environment only: `LLM_URL` (any OpenAI-compatible `/chat/completions`), `LLM_MODEL`,
+`LLM_KEY`, and `JEV_KEY` (optionally `JEV_URL`, `JEV_MODEL`) for the judge; agents, the planner, the grader and the audit's
+extractor take `AGENT_LLM_*`, `PLANNER_LLM_*`, `GRADER_LLM_*` and `AUDIT_LLM_*` (default `LLM_*`). The easiest way is a
+launcher: copy `lib/lab.example.ps1` (or a `run-<world>.example.ps1` / `.sh`) to the same name without `.example`, fill
+in your keys (those names are git-ignored), and pass any option through. `--flat` runs any world with a judge that knows
+nothing, without a key.
+
+### Runs
+
+The same command line for every world and researcher (`lab` is `node --experimental-strip-types scripts/lab.ts`, or the
+`lab.ps1` launcher):
 
 ```bash
-node --experimental-strip-types scripts/calibrate-grid.ts 1 40 2 2,4
+lab start grid --seed 22 --researcher assisted --memory selective
+lab list
+lab watch last
+lab send last "look at the cells two positions apart"     # the assisted researcher only
+lab stop last
+lab resume last                                           # or --resume <journal> --attempts N to give it more rounds
+lab finding last --view researcher
 ```
 
-Run the experiment. Endpoints and keys come from the environment only: `LLM_URL` (any OpenAI-compatible
-`/chat/completions`), `LLM_MODEL`, `LLM_KEY`, and `JEV_KEY` (optionally `JEV_URL`) for the judge. The easiest way
-is a launcher: copy `lib/run-grid.example.ps1` (Windows) or `lib/run-grid.example.sh` to `run-grid.ps1` /
-`run-grid.sh` in the same folder, fill in your keys (those two names are git-ignored), and pass any option through:
+Useful options: `--tools none` (or a subset) for a baseline without instruments; `--family N`, `--validations N`,
+`--confirm-places N` for the protocol; `--max-minutes N`, `--max-tokens N` as budgets; `--task`, `--focus`,
+`--sources-allow`, `--experience <journals> [--experience-mode meta] [--experience-scope methods]` for the assisted
+researcher. `--help` lists each world's own options (levels, sampling, conditions).
 
-```bash
-./run-grid.sh --seed 22
-```
-
-or set the variables yourself and call the script directly:
-
-```bash
-node --experimental-strip-types scripts/run-grid.ts --seed 22
-```
-
-Useful options: `--tools none` (or a subset such as `view,inspect,probes`) for the baseline without
-instruments, `--flat` for a judge that knows nothing, `--variants N` for new starts in each check, `--family N` and
-`--validations N` for the researcher's protocol (the model is checked on its laboratory board every round, validated on
-boards of other sizes and pieces when System 2 asks, and accepted by boards nobody has seen), and `--quick` to stop the
-first time System 2 judges its model good. `--help` lists them all.
-
-The physical world works the same way, with `lib/run-orbit.example.ps1` / `.sh` as launchers:
-
-```bash
-node --experimental-strip-types scripts/calibrate-orbit.ts 1 20 1
-./run-orbit.sh --seed 3 --level 1
-```
-
-Its options include `--level 1..4`, `--sampling grid|free` (test points that repeat, or new ones every round),
-`--resolution X` (rounded perception), `--tools`, `--delegated` and `--quick` (stop the first time System 2 judges its
-law good, without validating it, to see whether a change makes the exploration promising); `--help` lists them all. It is
-declared as a laboratory (`lib/src/worlds/orbit/lab.ts`) like cells and messages, so it can be stopped and resumed and
-writes its finding. `--regression` answers each laboratory's previous check again with the new law (the paired regression,
-on by default in the grid).
-
-A third world, `cells@1`, uses the same prompt and protocol with nothing of its own but its world, senses, instruments
-and objective. It is declared as a laboratory (`lib/src/worlds/cells/lab.ts`) and run by the common runner, as is
-`messages@1`; `--help` lists each world's options (`lib/run-cells.example.ps1` / `.sh`, or `scripts/run-lab.ts --lab cells`):
-
-```bash
-./run-cells.sh --seed 1 --level 1     # --level 2: a count over five cells; --level 3: the row before matters too
-```
-
-`messages@1` is the test of the Judge (`lib/run-messages.example.ps1` / `.sh`). Everything perceived is text: code
-written against the laboratory's wording breaks on the family's, and a reader of meaning does not. The flat-judge
-ablation in the journal says what the Judge's rules added:
-
-```bash
-./run-messages.sh --seed 1
-```
-
-A laboratory run can be stopped and resumed. Ctrl+C stops it before the next question to System 2 (a second Ctrl+C at
-once), as do `--max-minutes N` and `--max-tokens N`. Every answer from System 2 and the Judge is logged next to the journal
-as it arrives (`<journal>.replay.jsonl`: answers only, never a request or a key). `--resume <journal>` runs the same
-experiment again in a run of its own (`<journal>.resumed-<time>.json`), serving those answers: the run is back where it
-stopped, exactly, and goes on live; the journal it resumes is left as it was. If the resumed run asks something the first
-did not (the code or the configuration changed), it stops there (`diverged`) instead of going on as if it were the same run.
-The budgets stop the run between questions to System 2: they are not a hard ceiling on what a question in flight costs:
-
-```bash
-./run-cells.sh --seed 1 --level 3 --max-tokens 200000
-./run-cells.sh --resume runs/cells-s1L3-<time>.json
-```
-
-An environment can live outside the harness. `tank@1` is a service in a process of its own that keeps state and acts. The
-laboratory learns only what the service answers. Every request carries an idempotency key, and the answer is logged like
-System 2's: a resumed run replays what the service answered instead of acting again, and a request the service had
-already acted on when the run stopped is answered again without acting:
+Some worlds need a service of their own:
 
 ```bash
 node --experimental-strip-types scripts/tank-service.ts --port 18300
-node --experimental-strip-types scripts/run-lab.ts --lab tank --service http://127.0.0.1:18300
+node --experimental-strip-types scripts/particles3d-service.ts --port 18500      # Blender
 ```
 
-A world in 3D, simulated by Blender (SPEC-MUNDO-3D): particles under force fields, with hidden masses and charges, particles
-that pull on each other and, at level 6, chaos. System 2 perceives only tables of positions and is never told the world is
-Blender; if it recognises the engine, that is its own discovery, and the operator measures how it uses it. Blender runs
-as a service in a process of its own. A viewer puts what happened and what the learner's law answers side by side in a
-.blend file (from `lib/`):
+### Agents, batches, projects, teams
 
 ```bash
-cd lib
-node --experimental-strip-types scripts/particles3d-service.ts --port 18500
-node --experimental-strip-types scripts/run-particles3d.ts --seed 1 --level 3 --condition B
-node --experimental-strip-types scripts/particles3d-view.ts runs/<journal>.json --episode ep1
+lab agent last --role senior                       # a senior follows the run (start it with --agents senior=message)
+lab batch examples/batch.example.json
+lab project start examples/project.example.json
+lab project approve <id>
+lab team examples/team.example.json
 ```
 
-A run that used up its rounds can be given more: `--resume <journal> --attempts N` replays its history as it was,
-including the reflection and the grading it ended with, and then goes on (SPEC-MUNDO-3D §10.7).
-
-The orchestra (SPEC-ORQUESTADOR): an **agent operator** that follows an assisted run and helps it out of a dead end, the
-way a person would; **batches** of runs compared by condition from what their researchers found; and a **project
-planner** that pursues a question in a loop - hypotheses with predictions, a batch, a synthesis - until a computable
-criterion is met or its budget is spent, with the operator approving its plans (or not, as its autonomy says). None of
-them sees more than the researchers they help. From `lib/`, with the keys in `lab.ps1` (a copy of `lab.example.ps1`):
+### Grading and auditing
 
 ```bash
-.\lab.ps1 batch examples\batch.example.json
-.\lab.ps1 project start examples\project.example.json
-.\lab.ps1 project status cells-levels
-.\lab.ps1 project approve cells-levels
+lab grade <run>                                    # grade the recovered rule again, with GRADER_LLM_*
+lab audit <run> --flat                             # the method: what code observes, no cost
+lab audit <run> --extract                          # plus the Judge's answers and the checked claims
+lab audit sample <run> --n 30 --with r6.s2         # a blind sample to label, with a page to label it
+lab audit agreement labels.json                    # how far the Judge agrees with you, per question
 ```
 
-Research in parallel (SPEC-INVESTIGACION-PARALELA), a separate condition that measures the collective system, never one
-researcher: an assisted run of the grid may explore other boards of the family besides its laboratory
-(`--explore-places k`; their replays of one step run at once, or serially with `--place-concurrency serial`), and a
-**team** runs several researchers at once on the same family, with a board they publish to (results, dead ends and
-methods, with the records of the environment behind them) and read by windows, a ledger of blind boards none of them
-consulted, and a budget declared fixed or extended:
-
-```bash
-.\lab.ps1 batch examples\batch.grid-explore.json
-.\lab.ps1 team examples\team.example.json
-```
-
-Runs are also controlled from the command line, the same for every laboratory and researcher: start one in a process of
-its own, list them, follow one, stop it, resume it, read its finding (SPEC-INVESTIGADOR-ASISTIDO):
-
-```bash
-node --experimental-strip-types scripts/lab.ts start cells --seed 1 --level 3
-node --experimental-strip-types scripts/lab.ts list
-node --experimental-strip-types scripts/lab.ts watch last
-node --experimental-strip-types scripts/lab.ts stop last
-node --experimental-strip-types scripts/lab.ts finding last --view researcher
-```
-
-The same, as a local page (`http://127.0.0.1:18400`): the runs, one followed live (its events, its current model, its
-checks, its beliefs, its cost and findings), stop, resume and start - and, for the assisted researcher, collaborate:
+### Consoles and viewers
 
 ```bash
 node --experimental-strip-types scripts/lab-console.ts
 ```
 
-A laboratory may have FACETS: what of the world the answer is about, when not all of it is the goal. `cells` level 4 has
-two layers in one row (the even cells and the odd ones, each under a rule of its own); `--focus even` makes only the even
-cells count. A facet at the start defines the task, like a level, for either researcher. The assisted researcher
-(`--researcher assisted`) may also be told what the operator wants understood (`--task`), be sent messages, and be given
-another facet during the run; the unknown-world researcher refuses all of that and logs that it did:
+Opens `http://127.0.0.1:18400`, the classic console (start, follow, stop, resume, message runs, projects) and
+`/research`, the observatory: what each researcher is doing now, the **trajectory by rounds** (checks, regressions,
+models and returns to earlier ones, steps by kind, beliefs moved, messages, replays), the evidence, text queries over a
+fixed cut of the record, and an analyst that investigates the record with a budget of its own.
 
-```bash
-node --experimental-strip-types scripts/lab.ts start cells --seed 1 --level 4 --researcher assisted --task "how the even cells change"
-node --experimental-strip-types scripts/lab.ts send last "look at the cells two positions apart"
-node --experimental-strip-types scripts/lab.ts focus last even "the even layer"
-```
+A finished journal becomes a self-contained animated page with `npm run view -- runs/<journal>.json`, or by dropping it on
+[`journal-viewer.html`](journal-viewer.html).
 
-The assisted researcher may also read sources by itself, where the operator allows: `--sources-allow <dir,url,domain>`,
-or `lab source <run> <dir|url|domain>` during the run. It lists a directory (`{"list": ...}`), opens lines of a document
-(`{"open": ..., "from": 1, "to": 120}`, read afresh every time, so it can check a source again) and finds the lines that
-hold some words (`{"find": ..., "in": ...}`). When a find answers too many lines it may add `"select": "what I need"`, and
-the Judge (Jev) picks the lines that speak to it, seeing only the need and the lines: never the world, and never asked
-whether a line is right. It cites what it read (`src:<document>#L3-8`) next to points of its episodes. A source proposes
-and the world decides: the checks never read it, and the finding says, for each claim, whether it rests on the world, on
-the sources, or on both. Every read goes through the run's log, so a resumed run is answered what the first one read.
-
-Another program (an agent that coordinates investigations, say) runs a laboratory as a call, with no environment variables,
-console, signals or `process.exit`:
+A laboratory can also be run as a call by another program:
 
 ```ts
 import { runLaboratory } from 'neurosym/lab';
 import { cellsLab } from 'neurosym/cells';
 
-const controller = new AbortController();          // abort: stop before the next question to System 2
 const result = await runLaboratory(cellsLab, {
-  args: ['--seed', '1', '--level', '3'], root: '.', signal: controller.signal,
+  args: ['--seed', '1', '--level', '3'], root: '.',
   llm: { url: 'https://.../chat/completions', model: '...', key: '...' }, judge: { key: '...' }
 });
-result.stoppedBy;  // accepted, budget, cancelled, diverged, ...
-result.researcher; // finding@1 for another agent: the model, what it claims, where it held and failed, its limits, its cost
-result.finding;    // the same with every measure of the operator (for audit)
+result.stoppedBy;   // accepted, budget, cancelled, diverged, ...
+result.researcher;  // finding@1 for another agent
+result.finding;     // the same with every measure of the operator
 ```
 
-Every journal ends with `operator_summary`: rounds, the first round the model held, each validation, the acceptance, the
-cost (Judge calls and evaluations it was not asked, LLM calls and tokens) in all and up to the acceptance, what the
-Judge's rules added in the ablations, and - where the run declares baselines that know nothing (cells, orbit) - the checks
-one of them passed too (`check_is_trivial`): an acceptance there would tell nothing.
+## Documents
 
-### Seeing a run
-
-A journal can be turned into a single self-contained page, a visual synthesis of the exploration (built afterwards from
-the data, not live):
-
-```bash
-cd lib && npm run view -- runs/<journal>.json     # writes runs/<journal>.html next to it
-```
-
-or open [`journal-viewer.html`](journal-viewer.html) in a browser and drop any journal on it (`npm run view -- --blank`
-rebuilds it). Nothing leaves the browser. For the animations the journal keeps, for the operator only, what the
-environment showed in each exploration episode and, per place of every check, a trace of a few cases (the model's answer
-and what happened); System 2 is shown neither. The page shows:
-
-- **Síntesis**: the relevant moments in order, as cards. Each moment has a relevance: it rises when the final model cites
-  its evidence, when a check changed the verdict or first held, and when a validation or acceptance happened. A slider
-  sets the minimum relevance, and "solo el camino al modelo final" keeps only the path to the final model: the evidence
-  its surviving beliefs cite, the proposals that introduced them, the checks they refer to, and the validations. Click a
-  card for its detail, animated: what the environment showed (rows growing step by step, messages arriving with their
-  marks, bodies moving along their trails, a game's pictures in turn) and, in a check or a validation, what the model
-  tried case by case (its answer against what came, the cells it got wrong outlined, a running tally). **Presentar**
-  plays the selected moments one after another, each with its animations - for showing a run to someone.
-- **Comprobaciones**: the check score per round, with a table view.
-- **Creencias**: each belief's lineage (new, revised, confirmed, dropped) across rounds.
-- **Línea temporal**: every event by kind and round, sized by relevance, with the path outlined.
-- **Modelo final**, and, apart, what only the operator sees (the truth, the grades, `operator_summary`).
+| Document | About |
+|---|---|
+| [INFORME.md](INFORME.md) | the report: the engine, the runs and what they showed |
+| [EVAL-UNKNOWN-WORLD.md](EVAL-UNKNOWN-WORLD.md) | how to evaluate the unknown-world researcher, step by step |
+| [SPEC-OBJETIVO.md](SPEC-OBJETIVO.md) | the objective as a contract: cases, verdicts, check, validation, blind confirmation |
+| [SPEC-MODELO-DEL-MUNDO.md](SPEC-MODELO-DEL-MUNDO.md) | the world model: discovering rules and validating them as a researcher |
+| [SPEC-MUNDO-FISICO.md](SPEC-MUNDO-FISICO.md), [SPEC-MUNDO-3D.md](SPEC-MUNDO-3D.md) | the physical world, and particles in 3D simulated by Blender |
+| [SPEC-RULENET.md](SPEC-RULENET.md) | a small network of semantic rules, mostly covered by `output` |
+| [SPEC-INVESTIGADOR-ASISTIDO.md](SPEC-INVESTIGADOR-ASISTIDO.md) | the two researchers; sources, selective memory, experience |
+| [SPEC-ORQUESTADOR.md](SPEC-ORQUESTADOR.md) | agent operators, the senior, batches, the planner, branches |
+| [SPEC-INVESTIGACION-PARALELA.md](SPEC-INVESTIGACION-PARALELA.md) | research in parallel: exploration boards and teams |
+| [SPEC-AUDITORIA-METODO.md](SPEC-AUDITORIA-METODO.md) | the method audit and its calibration |
+| [SPEC-CONSOLA-INVESTIGACION.md](SPEC-CONSOLA-INVESTIGACION.md) | the research observatory |
+| [SPEC-APRENDIZAJE-DIFFS-Y-ACCIONES.md](SPEC-APRENDIZAJE-DIFFS-Y-ACCIONES.md) | earlier work: learning from diffs, judging by consensus, explicit actions |
 
 ## License
 
