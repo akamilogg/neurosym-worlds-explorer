@@ -32,7 +32,7 @@ export function journalReader(journal: J, options: Pick<MemoryOptions, 'openLimi
     const round = typeof e.round === 'number' ? e.round : 0;
     const notes = (Array.isArray(e.notes) ? e.notes : []) as NoteOp[];
     switch (e.type) {
-      case 'exploration_game': episodes.push({ episode: String(e.game), round: 0, chosen_by: 'the environment, at random', score: score(e.winner), steps: e.plies }); break;
+      case 'exploration_game': episodes.push({ episode: String(e.game), round: 0, chosen_by: 'the environment, at random', ...(typeof e.place === 'string' ? { place: e.place } : {}), score: score(e.winner), steps: e.plies }); break;
       /* A world of laws logs an exploration episode by its id (`episode: "ep1"`, or `launch` for a launch), next to what the
          journal keeps of it for the operator (`lab.explored`: rows, tables, marks). Only its index entry is the researcher's:
          what it saw of the episode is in the investigations that viewed it. */

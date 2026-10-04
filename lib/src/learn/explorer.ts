@@ -144,7 +144,8 @@ export function explorerPayload(brief: ExplorerBrief): Record<string, unknown> {
 export type ExplorerRequest =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string }
-  | { readonly table: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: 'in_play' | 'final' }
+  /** `place`: only the points of episodes in that place (a researcher with places to explore). */
+  | { readonly table: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: 'in_play' | 'final'; readonly place?: string }
   | { readonly act: string; readonly from: readonly [number, number]; readonly to: readonly [number, number] }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   /** `formula`: a round of its own, a draft it wrote (built and checked like a proposal's), or null for its best formula. */
@@ -214,7 +215,8 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
       } else if (q.table && typeof q.table === 'object') {
         const code = codeRequest(q.table, 'table');
         if (typeof code === 'string') { warnings.push('request #' + i + ': ' + code); continue; }
-        requests.push({ table: code, on: onOf(q, q.table) === 'final' ? 'final' : 'in_play' });
+        const where = q.place ?? (q.table as Record<string, unknown>).place;
+        requests.push({ table: code, on: onOf(q, q.table) === 'final' ? 'final' : 'in_play', ...(typeof where === 'string' ? { place: where } : {}) });
       } else if (typeof (q.replay ?? q.play) === 'string') {
         const at = (q.replay ?? q.play) as string;
         const model = q.model !== undefined ? q.model : q.formula;

@@ -287,6 +287,9 @@ export interface LabServices {
   /** A continuation (`--resume <journal> --attempts N`): the attempts after which the run's history had an ending - its
       reflection and its grading, replayed where they were before the rounds it was given since. */
   readonly endings?: readonly number[];
+  /** A member of a team (SPEC-INVESTIGACION-PARALELA §5): the team's board, its id there, and its reader of the board
+      (reads through the run's log, channel "peer"). The runner ends it on the board when the run ends. */
+  readonly team?: { readonly board: import('./assisted/board.ts').TeamBoard; readonly member: string; readonly channel: import('./assisted/board.ts').PeerChannel };
 }
 
 /** What a loop of its own ends with: why, and what the journal's end keeps besides the common. `final` is the model the
@@ -308,6 +311,10 @@ export interface GameLab {
   readonly regressionByDefault?: boolean;
   /** Its instruments, as --tools names them. */
   readonly tools: readonly string[];
+  /** Its options that are help, only the assisted researcher takes (given another value than their default). */
+  readonly assistedOptions?: readonly string[];
+  /** Whether a run of it may be a member of a team (`--team`, SPEC-INVESTIGACION-PARALELA §5). */
+  readonly teams?: boolean;
   runName(seed: number, options: LabOptions): string;
   run(services: LabServices): Promise<LabRunEnd>;
 }

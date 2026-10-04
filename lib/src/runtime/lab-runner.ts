@@ -25,6 +25,7 @@ import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
 import { createHash } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
+import { PeerChannel, TeamBoard } from '../learn/assisted/board.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 
 /* ============================================================================
@@ -59,6 +60,8 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'experience-mode', default: '', help: '"transfer" (the default: runs of other worlds only) or "meta" (runs of this same world too: a researcher of researchers)' },
   { name: 'experience-scope', default: '', help: '"all" (the default: everything each researcher saw and wrote, its observations and models too) or "methods" (only the methods it wrote in its notebook)' },
   { name: 'memory', default: '', help: '"selective": the assisted researcher\'s notebook travels abridged by a fixed rule, and it recalls the rest itself (list/open/find over its own record, in every world)' },
+  { name: 'team', default: '', help: 'the directory of a team this run is a member of (SPEC-INVESTIGACION-PARALELA §5): its board and its exam (lab team starts one)' },
+  { name: 'member', default: '', help: 'its id in the team' },
   { name: 'out', default: '', help: 'the journal (default runs/<name>-<time>.json)' }
 ];
 const FLAGS: readonly { name: string; help: string }[] = [
@@ -322,6 +325,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(arg('task') ? { task: arg('task') } : {}),
     ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {}),
     ...(arg('memory') ? { memory: arg('memory') } : {}),
+    ...(arg('team') ? { team: arg('team'), member: arg('member') } : {}),
     ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all' } : {})
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
@@ -359,6 +363,12 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (arg('memory') && researcher !== 'assisted') throw new LabError('--memory: a selective memory changes what the researcher is given: only the assisted researcher has one');
   /* A run handed over keeps the unknown-world researcher's history word for word: its notebook would travel otherwise. */
   if (arg('memory') && assistedAfter !== null) throw new LabError('--memory: a run handed to the assisted researcher keeps its history as it was; give the memory to a run that starts assisted');
+  /* A laboratory's options that are help (e.g. the grid's boards to explore): the assisted researcher's only. */
+  for (const name of isGameLab(lab) ? lab.assistedOptions ?? [] : []) {
+    const declared = lab.options.find((o) => o.name === name);
+    if (declared && worldOptions[name] !== declared.default && researcher !== 'assisted') throw new LabError('--' + name + ': it changes what the researcher may do: only the assisted researcher takes it');
+  }
+  const teamBoard = openTeam(lab, arg('team'), arg('member'), researcher, options.root);
   const experienceRuns = loadExperience(lab, cfg, arg('experience'), arg('experience-mode'), arg('experience-scope'), researcher, assistedAfter, previous, options.root);
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
   if (!cfg.flat && !options.judge?.key) throw new LabError('The Judge is needed: its key (JEV_KEY on the command line), or run the --flat control.');
@@ -377,10 +387,17 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
      delivered again at the same questions), and its selective memory, with the Judge to select for it (none in --flat). */
   if (isGameLab(lab) && assistedAfter !== null) throw new LabError('--researcher with --resume: ' + lab.id + ' cannot be handed to the assisted researcher yet; continue it as it is');
   /* As in a world of laws: a message sent while a resumed run replays its history waits until it asks live. */
+  /* A member of a team: its reader of the board reads through the run's log (channel "peer", E7) - a resumed run reads what
+     it read - and the board is told when the run ends, however it ends (a member that ended holds no window open). */
+  const team = teamBoard ? { board: teamBoard.board, member: teamBoard.member, channel: new PeerChannel(teamBoard.board, teamBoard.member, {
+    fetch: run.replay.wrap('peer', PeerChannel.boardFetch(teamBoard.board, options.signal)), ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }),
+    onSelect: (record) => run.log('peer_select', record) }) } : null;
+  if (team) run.log('team', { id: team.board.spec.id, member: team.member, members: team.board.spec.members, window: team.board.spec.window,
+    exchange: team.board.spec.exchange, confirmations: team.board.spec.confirmations });
   const services = { ...(isGameLab(lab) && researcher === 'assisted'
     ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous) }, run.log),
       assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) } }
-    : run.services), ...(endings.length ? { endings } : {}) };
+    : run.services), ...(endings.length ? { endings } : {}), ...(team ? { team } : {}) };
   const body = isGameLab(lab)
     ? lab.run(services).then((result) => {
       const finished = run.finish({ stoppedBy: result.stoppedBy, halted: result.halted ?? null }, result.end);
@@ -390,7 +407,24 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
       confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
-  return Promise.race([body, run.diverged]);
+  return Promise.race([body, run.diverged]).finally(() => { if (team) team.board.end(team.member); });
+}
+
+/** The team a run is a member of (`--team <dir> --member <id>`), checked before the run starts. */
+function openTeam(lab: AnyLab, dir: string, member: string, researcher: string, root: string): { board: TeamBoard; member: string } | null {
+  if (!dir) {
+    if (member) throw new LabError('--member: name the team with --team');
+    return null;
+  }
+  if (!isGameLab(lab) || !lab.teams) throw new LabError('--team: ' + lab.id + ' cannot be investigated by a team yet (SPEC-INVESTIGACION-PARALELA)');
+  if (!member) throw new LabError('--team: which member is this run (--member)?');
+  let board: TeamBoard;
+  try { board = new TeamBoard(path.resolve(root, dir)); } catch (e) { throw new LabError('--team: ' + String((e as Error).message ?? e)); }
+  if (!board.spec.members.includes(member)) throw new LabError('--member: no member ' + member + ' in team ' + board.spec.id + ' (' + board.spec.members.join(', ') + ')');
+  /* The board is help: only the assisted researcher reads it. An unknown-world member belongs only to a team that does not
+     exchange (it shares the exam's ledger, nothing else). */
+  if (board.spec.exchange && researcher !== 'assisted') throw new LabError('--team: the board of team ' + board.spec.id + ' is help: only the assisted researcher reads it (a team without exchange takes either)');
+  return { board, member };
 }
 
 /** The runs given as experience (SPEC-INVESTIGADOR-ASISTIDO §12), read and checked before the run starts: finished journals,

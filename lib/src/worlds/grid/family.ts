@@ -72,3 +72,29 @@ export function boardOf(base: GridSpec, index: number, options: { maxAttempts?: 
   }
   throw new Error('no playable board ' + index + ' in the family of ' + base.id);
 }
+
+/* ============================================================================
+ * Which boards of the family each use takes (SPEC-INVESTIGACION-PARALELA E1). The exam - the
+ * boards a model is validated on and the blind ones - and the search never share a board:
+ *
+ *   0                   the base board (the first laboratory)
+ *   1 .. 499            the family of validation (place1, place2, ...)
+ *   500 .. 999          exploration boards: the researcher's to act in, never checked there;
+ *                       a team gives each member its own stretch (`offset`)
+ *   1000 ..             blind confirmation boards, never seen before their check
+ * ========================================================================== */
+
+export const FAMILY_INDEX = { validation: 1, exploration: 500, blind: 1000 } as const;
+
+/** The boards of exploration `1..count` from `offset` on (a team member's own stretch). */
+export function explorationIndices(count: number, offset = 0): number[] {
+  return Array.from({ length: Math.max(0, count) }, (_, k) => FAMILY_INDEX.exploration + offset + k + 1);
+}
+
+/** Why boards of the search and of the exam would overlap, or null: every exploration board inside its stretch, and none
+    of them a board of validation or a blind one. */
+export function examOverlap(validation: number, exploration: readonly number[]): string | null {
+  if (validation > FAMILY_INDEX.exploration - FAMILY_INDEX.validation) return 'at most ' + (FAMILY_INDEX.exploration - FAMILY_INDEX.validation) + ' boards of validation';
+  const outside = exploration.filter((i) => i <= FAMILY_INDEX.exploration || i >= FAMILY_INDEX.blind);
+  return outside.length ? 'exploration boards outside their stretch (' + (FAMILY_INDEX.exploration + 1) + '..' + (FAMILY_INDEX.blind - 1) + '): ' + outside.join(', ') : null;
+}

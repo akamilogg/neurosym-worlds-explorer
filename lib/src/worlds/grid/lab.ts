@@ -54,7 +54,9 @@ import { parseJsonLoose, type ApiError } from '../../core/net.ts';
 import { describeGridTruth } from './describe.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
   type GridMove, type GridSense, type GridSpec, type GridState } from './index.ts';
-import { boardOf } from './family.ts';
+import { boardOf, examOverlap, explorationIndices, FAMILY_INDEX } from './family.ts';
+import { PEERS_SECTION, PeerChannel, parsePublication, type BoardEntry } from '../../learn/assisted/board.ts';
+import { hashString } from '../../core/hash.ts';
 import { GRID_ANSWER, GRID_VERDICT, gridObjective } from './objective.ts';
 import { Protocol } from '../../learn/protocol.ts';
 import { GRADING_STRUCTURE, formOf, operatorSummary, type AblationRecord } from '../../learn/operator.ts';
@@ -78,6 +80,13 @@ export const GRID_GRADING_SYSTEM = 'You grade how well a learner recovered the h
     + GRADING_STRUCTURE + ' '
     + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [learner claims about the rules that no true rule supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
 
+/** What the assisted researcher is told when it has exploration boards (SPEC-INVESTIGACION-PARALELA §4): interface words
+    only, never how to use them. */
+export const PLACES_SECTION = [
+  'YOUR PLACES. Besides your laboratories, you have places to explore (`places`, role "a place to explore"): boards of the same family as your laboratory - the same kind of environment, with another size, other pieces or other starts. Your model is never checked there, and validating never uses them.',
+  'Each point names its place (an episode is played in one place). act and replay work from points of episodes in your laboratories and in your places to explore; "<episode>@0" of an episode in a place starts there. A table may be narrowed to one place: {"table": {...}, "on": "in_play", "place": "<place>"}. The replays of one answer are played after its other requests, from what those left; their episodes are named in the order you asked, once all of them have ended.'
+].join('\n');
+
 export const gridLab: GameLab = {
   kind: 'game',
   id: 'unknown-world@1',
@@ -90,11 +99,16 @@ export const gridLab: GameLab = {
     { name: 'probe-positions', default: '40', help: 'labelled positions a table and the ablation read, at most' },
     { name: 'plays', default: '4', help: 'episodes System 2 may run itself per round with "replay"' },
     { name: 'variants', default: '7', help: 'a laboratory\'s check: episodes from N starts never played, besides the usual one' },
-    { name: 'family-variants', default: '3', help: 'episodes from new starts per board in a validation or a confirmation, besides the usual one' }
+    { name: 'family-variants', default: '3', help: 'episodes from new starts per board in a validation or a confirmation, besides the usual one' },
+    { name: 'explore-places', default: '0', help: 'boards of the family to explore besides the laboratory, never checked there (SPEC-INVESTIGACION-PARALELA §4; the assisted researcher)' },
+    { name: 'explore-offset', default: '0', help: 'where its exploration boards start in their stretch of the family (a team gives each member its own)' },
+    { name: 'place-concurrency', default: 'concurrent', help: 'with exploration boards, the replays of one step: "concurrent" (at once) or "serial" (one after another); the same episodes either way' }
   ],
   flags: [{ name: 'reveal-choices', help: 'inspect also shows every position the search considered (default: only the one it chose)' }],
   defaults: { seed: '22', explore: '4', family: '4', 'confirm-places': '3' },
   aliases: { 'confirm-boards': 'confirm-places' },
+  assistedOptions: ['explore-places'],
+  teams: true,
   tools: EXPLORER_TOOLS,
   runName: (seed) => 'grid-s' + seed,
   run: (s) => runGrid(s)
@@ -108,16 +122,23 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     flat: s.cfg.flat, ablation: s.cfg.ablation, variants: Number(o.variants), reflection: s.cfg.reflection, grade: s.cfg.grade,
     steps: s.cfg.steps, plays: Number(o.plays), revealChoices: o['reveal-choices'] === 'true', tools: s.cfg.tools as ExplorerTool[],
     family: s.cfg.family, validations: s.cfg.validations, confirmBoards: s.cfg.confirmPlaces, familyVariants: Math.max(0, Number(o['family-variants'])),
-    quick: s.cfg.quick, regression: s.cfg.regression
+    quick: s.cfg.quick, regression: s.cfg.regression,
+    explorePlaces: Math.max(0, Math.floor(Number(o['explore-places']) || 0)), exploreOffset: Math.max(0, Math.floor(Number(o['explore-offset']) || 0)),
+    concurrent: o['place-concurrency'] !== 'serial'
   };
+  if (!['serial', 'concurrent'].includes(o['place-concurrency'])) throw new Error('--place-concurrency: "serial" or "concurrent"');
   s.journal.config = { ...s.journal.config, levels: cfg.levels };
   const tools: ReadonlySet<ExplorerTool> = new Set(cfg.tools);
   const investigative = INVESTIGATION_TOOLS.some((t) => tools.has(t));
   /* The assisted researcher (SPEC-INVESTIGADOR-ASISTIDO): its own section of the prompt (the operator may write to it), and
      its selective memory when the run gives it one (§13). Without it, the unknown-world researcher's prompt, as it is. */
   const assisted = s.assisted ?? null;
+  /* A member of a team (SPEC-INVESTIGACION-PARALELA §5): its board, read and written only if the team exchanges. */
+  const team = s.team ?? null;
+  const exchange = team !== null && team.board.spec.exchange && assisted !== null;
   const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '')
-    + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '') : explorerSystem(tools);
+    + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '')
+    + (cfg.explorePlaces ? '\n\n' + PLACES_SECTION : '') + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : explorerSystem(tools);
 
   /* --- Operator-only measures: logged for the operator, never shown to System 2 or the Judge ----------- */
 
@@ -176,7 +197,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   const judge = s.judge;
   /* One cache of the Judge's answers for every board: it is keyed on what the observations measure, never on the board. */
   const jevCache = new Map();
-  const evaluator = new Evaluator<GridState>(observer, judge, { maximizer: 'A', runners: [s.codeRunner()], cache: jevCache });
+  /* And its requests in flight: two searches on two boards at once ask the same judgment once. */
+  const jevInflight = new Map();
+  const evaluator = new Evaluator<GridState>(observer, judge, { maximizer: 'A', runners: [s.codeRunner()], cache: jevCache, inflight: jevInflight });
   const outputs = new OutputRunner([s.codeRunner()]);
   /** A model's output must answer a number on points of its own episodes before anything plays with it (every rule answering
       0.5: no Judge call). */
@@ -202,7 +225,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
      model is checked there every round. When it asks to validate, the model plays on boards it has not seen; a board where
      it does not hold becomes a laboratory. When it holds on all of them, boards nobody has seen decide acceptance. */
 
-  type Role = 'laboratory' | 'family' | 'confirmation';
+  type Role = 'laboratory' | 'family' | 'confirmation' | 'exploration';
   interface Place {
     readonly id: string;
     readonly index: number;
@@ -225,14 +248,24 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const se = asciiSense(board);
     const ob = new Observer<GridState>(w, { kinds: ['sense', 'code'], runners: [s.codeRunner()], senses: { ascii: (x) => se.render(x) },
       perceive: (_s, percepts) => readPicture(Object.values(percepts)[0]) });
-    const ev = new Evaluator<GridState>(ob, judge, { maximizer: 'A', runners: [s.codeRunner()], cache: jevCache });
-    return { id, index, spec: board, world: w, sense: se, observer: ob, evaluator: ev, role, seen: role === 'laboratory', planner: plannerFor(w, board) };
+    const ev = new Evaluator<GridState>(ob, judge, { maximizer: 'A', runners: [s.codeRunner()], cache: jevCache, inflight: jevInflight });
+    return { id, index, spec: board, world: w, sense: se, observer: ob, evaluator: ev, role, seen: role === 'laboratory' || role === 'exploration', planner: plannerFor(w, board) };
   }
   const places = new Map<string, Place>([[base.id, base]]);
   for (let k = 1; k <= cfg.family; k++) places.set('place' + k, makePlace('place' + k, k, 'family'));
+  /* Boards to explore (SPEC-INVESTIGACION-PARALELA §4, E1): from their own stretch of the family, never a board of validation
+     or a blind one; the learner acts there and its model is never checked there. */
+  const exploring = explorationIndices(cfg.explorePlaces, cfg.exploreOffset);
+  const overlap = examOverlap(cfg.family, exploring);
+  if (overlap) throw new Error('exploration boards: ' + overlap);
+  for (const [k, index] of exploring.entries()) places.set('explore' + (k + 1), makePlace('explore' + (k + 1), index, 'exploration'));
   /** Evaluations, on every board, where a model's output read none of its rules (so the Judge was not asked). */
   const judgeUnread = (): number => [...places.values()].reduce((n, p) => n + p.evaluator.stats.judgeUnread, 0);
   const labs = (): Place[] => [...places.values()].filter((p) => p.role === 'laboratory');
+  /** Where the learner may act and replay: its laboratories and its boards to explore. */
+  const actable = (p: Place): boolean => p.role === 'laboratory' || p.role === 'exploration';
+  const actableIds = (): string => [...places.values()].filter(actable).map((p) => p.id).join(', ');
+  const whereToAct = (): string => (cfg.explorePlaces ? 'your laboratories and your places to explore: ' : 'your laboratories: ') + actableIds();
 
   /* Every state the learner can name belongs to a board: what is perceived and how an episode ends depend on it. */
   const placeOf = new WeakMap<GridState, Place>();
@@ -266,7 +299,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   Object.assign(s.journal.hidden_from_the_learner, { spec, generator: report, glyphs: { you: sense.glyphA, other: sense.glyphB }, orientation: sense.orientation,
     /* The hidden rules, where every laboratory keeps them (the operator's finding reads them). */
-    truth: describeGridTruth(spec, sense) });
+    truth: describeGridTruth(spec, sense),
+    /* Its boards to explore: which of the family, and what they are (SPEC-INVESTIGACION-PARALELA E1). */
+    ...(exploring.length ? { exploration: [...places.values()].filter((p) => p.role === 'exploration').map((p) => ({ id: p.id, index: p.index, spec: p.spec })) } : {}) });
   s.journal.objective = { answer: GRID_ANSWER.form, verdict: GRID_VERDICT };
   const log = s.log;
   const say = s.say;
@@ -293,7 +328,10 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* The records of earlier runs it may read (§12): answered by their reader, never by the world; each read counts as a step. */
   const experience = assisted?.experience?.reader ?? null;
   const recalls = (q: Record<string, unknown>): boolean => memory !== null && JournalMemory.accepts(q);
-  const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q));
+  /* Its team's board (§5.2): what it publishes and reads there is answered by the board, never by the world. */
+  const peers = exchange ? team!.channel : null;
+  const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q))
+    || (peers !== null && (PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q)));
   let gameCounter = 0;
   const resultOf = (winner: string | null): GameRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
   /** What System 2 is told of how an episode ended: the score of the interface, never a word of a game. */
@@ -338,6 +376,22 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       const stored = store(0, 'the environment: your steps chosen at random', ep.states, ep.outcome.winner);
       log('exploration_game', { game: stored.id, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1,
         frames: ep.states.map((s, step) => ({ step, picture: sense.render(s) })) });
+    }
+    /* The same on each board to explore, each with its own seed. */
+    for (const place of [...places.values()].filter((p) => p.role === 'exploration')) {
+      for (let g = 0; g < cfg.explore; g++) {
+        const rnd = mulberry32(cfg.seed * 1009 + place.index * 7919 + g);
+        const pw = place.world;
+        const opponent = noisyOpponent(pw, (s) => place.planner.respond(s), cfg.epsilon, rnd);
+        const ep = await playEpisode(pw, (s, actor) => {
+          if (actor === 'B') return opponent(s);
+          const moves = pw.actions(s);
+          return moves[Math.floor(rnd() * moves.length)];
+        });
+        const stored = store(0, 'the environment: your steps chosen at random', ep.states, ep.outcome.winner, undefined, place);
+        log('exploration_game', { game: stored.id, place: place.id, winner: ep.outcome.winner, reason: ep.outcome.reason, plies: ep.states.length - 1,
+          frames: ep.states.map((s, step) => ({ step, picture: place.sense.render(s) })) });
+      }
     }
   }
 
@@ -445,23 +499,32 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         held: score.held[i], critical: score.critical[i], samples: score.samplesByEpisode[i] })), detail: score };
     }
   });
+  /* A member of a team takes its blind boards from the team's ledger - none consulted twice in the team - and spends one of
+     the team's blind confirmations each time its model holds on every board of the family (§5.4). Each under a key of its
+     own history, so a resumed run is given what it was given. */
+  let confirmations = 0;
   const protocol = new Protocol(objective, {
     places: () => [...places.values()],
-    blindPlaces: () => Array.from({ length: cfg.confirmBoards }, () => { const k = ++confirmCounter; return makePlace('blind' + k, 1000 + k, 'confirmation'); }),
+    blindPlaces: (set) => team
+      ? team.board.blindBoards(team.member, 'c' + confirmations + '.s' + set, cfg.confirmBoards).map((index) => makePlace('blind' + (++confirmCounter), index, 'confirmation'))
+      : Array.from({ length: cfg.confirmBoards }, () => { const k = ++confirmCounter; return makePlace('blind' + k, FAMILY_INDEX.blind + k, 'confirmation'); }),
+    ...(team ? { confirm: (c: { round: number }) => team.board.confirm(team.member, 'c' + (++confirmations), c.round) } : {}),
     fingerprint: (f) => formulaHash(f),
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: judgeUnread(), llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
     say: (line) => say(line),
-    roleWords: { laboratory: 'your laboratory: you can act and replay here', validated: 'a place where your model was validated' }
+    roleWords: { laboratory: 'your laboratory: you can act and replay here', validated: 'a place where your model was validated',
+      exploration: 'a place to explore: you can act and replay here; your model is never checked here' }
   });
   let unaddressed: string[] = [];
 
   type Labelled = LabelledPosition<GridState> & { readonly ref: string };
 
-  async function probeSet(): Promise<Labelled[]> {
+  async function probeSet(only?: string): Promise<Labelled[]> {
     const inPlay: Labelled[] = [], finals: Labelled[] = [];
     const seen = new Set<string>();
     for (const g of games.values()) {
+      if (only !== undefined && g.place !== only) continue;
       /* The score the game ended with for the learner; the operator's code-only fit still reads won / not won. */
       const score = g.result === 'won' ? 1 : g.result === 'lost' ? -1 : 0;
       const label = score > 0 ? 'win' : 'loss';
@@ -489,14 +552,39 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* Its own games, played on request: from a position of its games, with a formula it names or drafts. The opponent is
      the usual one, with a fresh seed each time, so a repeated experiment can end differently - as the real one would. */
   let playCounter = 0;
-  async function play(from: string, formula: Formula, how: string): Promise<unknown> {
+  /** A replay admitted: where it starts, with what, and the seed of everything the learner does not control. */
+  interface ReplayJob { readonly from: string; readonly how: string; readonly formula: Formula; readonly start: GridState; readonly place: Place; readonly seed: number }
+  interface Played { readonly states: GridState[]; readonly winner: string | null; readonly reason: string | null; readonly turns: Map<number, TurnRecord<GridState>>; readonly ms: number }
+
+  /** A replay request checked and given its seed - in the order asked - or what it is answered when it is not played. */
+  function admitReplay(req: Extract<ExplorerRequest, { replay: string }>, current: Formula | null, plays: { left: number }): ReplayJob | { result: unknown } {
+    if (plays.left <= 0) return { result: { replay: req.replay, error: 'no replays left this round' } };
+    const formula = req.formula === null ? current : typeof req.formula === 'number' ? formulaOfRound.get(req.formula) ?? null : req.formula;
+    if (!formula) return { result: { replay: req.replay, error: req.formula === null ? 'you have no model yet: write a draft' : 'no model of round ' + req.formula } };
+    if (typeof req.formula === 'object' && req.formula !== null) {
+      const recent = [...games.values()].flatMap((g) => g.states).slice(-60);
+      const observed = replayOnEvidence(multiObserver, formula.observations, recent.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
+      const failures = observed.length ? observed : outputFailures(formula, recent);
+      if (failures.length) return { result: { replay: req.replay, error: 'your draft failed on points of your episodes: ' + failures.join(' | ') } };
+    }
+    plays.left--;
+    const how = req.formula === null ? 'your_model' + (current && roundOf.has(current) ? ' (round ' + roundOf.get(current) + ')' : '')
+      : typeof req.formula === 'number' ? 'your model of round ' + req.formula : 'a draft model';
+    const from = req.replay;
     const start = resolve(from);
-    if (!start) return { replay: from, error: 'no such point' };
+    if (!start) return { result: { replay: from, error: 'no such point' } };
     const place = where(start);
-    if (place.role !== 'laboratory') return { replay: from, error: 'you can replay only in your laboratories: ' + labs().map((l) => l.id).join(', ') };
+    if (!actable(place)) return { result: { replay: from, error: 'you can replay only in ' + whereToAct() } };
+    if (place.world.outcome(start).over) return { result: { replay: from, error: 'that episode has already ended there' } };
+    return { from, how, formula, start, place, seed: cfg.seed * 3571 + (++playCounter) * 131 + level * 1_000_003 };
+  }
+
+  /** The episode of a replay admitted (nothing is stored yet). */
+  async function playJob(j: ReplayJob): Promise<Played> {
+    const t0 = Date.now();
+    const { place, start, formula } = j;
     const pw = place.world;
-    if (pw.outcome(start).over) return { replay: from, error: 'that episode has already ended there' };
-    const rnd = mulberry32(cfg.seed * 3571 + (++playCounter) * 131 + level * 1_000_003);
+    const rnd = mulberry32(j.seed);
     const opponent = noisyOpponent(pw, (s) => place.planner.respond(s), cfg.epsilon, rnd);
     const turns = new Map<number, TurnRecord<GridState>>();
     const ep = await playEpisode(pw, async (s, actor) => {
@@ -508,32 +596,41 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       turns.set(turn, await recordTurn(place.evaluator, pw, s, chosen, { formula, depth: cfg.depth, maximizer: 'A', turn }));
       return chosen;
     }, { start });
-    const g = store(currentRound, 'your replay: ' + how + ', from ' + from, ep.states, ep.outcome.winner, turns, place);
-    log('played_by_the_learner', { round: currentRound, game: g.id, from, how, result: g.result, turns: ep.states.length - 1, reason: ep.outcome.reason,
-      ...(roundOf.has(formula) ? {} : { draft: formula }) });
-    return { replay: from, with: how, episode: g.id, score: scoreOfResult(g.result), steps: ep.states.length - 1 };
+    return { states: ep.states, winner: ep.outcome.winner, reason: ep.outcome.reason, turns, ms: Date.now() - t0 };
   }
 
+  /** A replay's episode stored (named now), logged, and answered. */
+  function commitReplay(j: ReplayJob, p: Played): unknown {
+    const g = store(currentRound, 'your replay: ' + j.how + ', from ' + j.from, p.states, p.winner, p.turns, j.place);
+    log('played_by_the_learner', { round: currentRound, game: g.id, from: j.from, how: j.how, result: g.result, turns: p.states.length - 1, reason: p.reason,
+      ...(roundOf.has(j.formula) ? {} : { draft: j.formula }) });
+    intervened('replay', j.place, gameKey(g.id, hashString(j.place.index + '|' + world.key(j.start) + '|' + formulaHash(j.formula))));
+    return { replay: j.from, with: j.how, episode: g.id, score: scoreOfResult(g.result), steps: p.states.length - 1 };
+  }
+
+  /* --- What the operator keeps of each intervention, to measure a team (SPEC-INVESTIGACION-PARALELA §6): the same experiment
+     on the same board - an act from the same position, a replay from the same position with the same model - has the same
+     key, whoever made it. Logged only in a team; never shown. */
+  let stepInterventions: { kind: string; place: string; index: number; key: string }[] = [];
+  const keyOfGame = new Map<string, string>();
+  const keyOfAct = new Map<string, string>();
+  const gameKey = (id: string, key: string): string => { keyOfGame.set(id, key); return key; };
+  function intervened(kind: string, place: Place, key: string): void { if (team) stepInterventions.push({ kind, place: place.id, index: place.index, key }); }
+  /* What the environment answered to each act and each investigation step, as it answered it: the records a publication carries. */
+  const actAnswers = new Map<string, Record<string, unknown>>();
+  const stepAnswers = new Map<string, { requests: unknown; results: unknown }>();
+  const stepKeys = new Map<string, string[]>();
+
   async function runRequest(req: ExplorerRequest, current: Formula | null, plays: { left: number }): Promise<unknown> {
-    /* Its own memory is answered by it, never by the world. */
-    if ('extra' in req) return recalls(req.extra) ? memory!.run(req.extra) : experience && Experience.accepts(req.extra) ? experience.run(req.extra) : { error: 'no such instrument' };
+    /* Its own memory is answered by it, never by the world; its team's board by the board. */
+    if ('extra' in req) return recalls(req.extra) ? memory!.run(req.extra) : experience && Experience.accepts(req.extra) ? experience.run(req.extra)
+      : peers && PeerChannel.acceptsRead(req.extra) ? readPeers(req.extra) : peers && PeerChannel.acceptsPublish(req.extra) ? publish(req.extra.publish) : { error: 'no such instrument' };
     /* An instrument withheld by the experiment is refused, never run. */
     const kind = (['view', 'inspect', 'act', 'measure', 'replay', 'table'] as const).find((k) => k in req)!;
     if (!tools.has(kind)) return { [kind]: (req as Record<string, unknown>)[kind], error: '"' + kind + '" is not available in this experiment' };
     if ('replay' in req) {
-      if (plays.left <= 0) return { replay: req.replay, error: 'no replays left this round' };
-      const formula = req.formula === null ? current : typeof req.formula === 'number' ? formulaOfRound.get(req.formula) ?? null : req.formula;
-      if (!formula) return { replay: req.replay, error: req.formula === null ? 'you have no model yet: write a draft' : 'no model of round ' + req.formula };
-      if (typeof req.formula === 'object' && req.formula !== null) {
-        const recent = [...games.values()].flatMap((g) => g.states).slice(-60);
-        const observed = replayOnEvidence(multiObserver, formula.observations, recent.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
-        const failures = observed.length ? observed : outputFailures(formula, recent);
-        if (failures.length) return { replay: req.replay, error: 'your draft failed on points of your episodes: ' + failures.join(' | ') };
-      }
-      plays.left--;
-      const how = req.formula === null ? 'your_model' + (current && roundOf.has(current) ? ' (round ' + roundOf.get(current) + ')' : '')
-        : typeof req.formula === 'number' ? 'your model of round ' + req.formula : 'a draft model';
-      return play(req.replay, formula, how);
+      const j = admitReplay(req, current, plays);
+      return 'result' in j ? j.result : commitReplay(j, await playJob(j));
     }
     if ('view' in req) {
       const g = games.get(req.view);
@@ -564,20 +661,25 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     if ('table' in req) {
       /* The rows behind the probe facts: each position probes use, the code's value, and the score that game ended with. */
       const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.table.source }, ...(req.table.range ? { range: req.table.range } : {}) };
-      const rows = (await probeSet()).filter((p) => !!p.final === (req.on === 'final')).map((p) => {
+      /* Narrowed to one place when it asks (SPEC-INVESTIGACION-PARALELA §4). */
+      const only = cfg.explorePlaces ? req.place : undefined;
+      if (only !== undefined && !places.get(only)?.seen) return { table: req.table.source, on: req.on, place: only, error: 'no such place of yours: ' + actableIds() };
+      const rows = (await probeSet(only)).filter((p) => !!p.final === (req.on === 'final')).map((p) => {
         const o = multiObserver.observe(p.state, { ...SENSES, m: decl });
         const err = o.errors.find((e) => e.id === 'm');
         return { point: p.ref, episode_score: p.score, ...(err ? { error: err.error } : { value: o.values.m ?? o.texts.m }) };
       });
-      return { table: req.table.source, on: req.on, rows };
+      return { table: req.table.source, on: req.on, ...(only !== undefined ? { place: only } : {}), rows };
     }
     if ('act' in req) {
       const s = resolve(req.act);
       if (!s) return { act: req.act, error: 'no such point' };
       const place = where(s);
-      if (place.role !== 'laboratory') return { act: req.act, error: 'you can act only in your laboratories: ' + labs().map((l) => l.id).join(', ') };
+      if (!actable(place)) return { act: req.act, error: 'you can act only in ' + whereToAct() };
       if (place.world.outcome(s).over || s.turn !== 'A') return { act: req.act, error: 'the next step there is not yours' };
       const from = place.sense.locate(req.from[0], req.from[1]), to = place.sense.locate(req.to[0], req.to[1]);
+      const key = hashString(place.index + '|' + world.key(s) + '|' + JSON.stringify([req.from, req.to]));
+      intervened('act', place, key);
       /* The environment answers only allowed or not: never why. */
       const move = from && to ? place.world.actions(s).find((m) => m.from[0] === from[0] && m.from[1] === from[1] && m.to[0] === to[0] && m.to[1] === to[1]) : undefined;
       if (!move) return { act: req.act, from: req.from, to: req.to, accepted: false };
@@ -586,8 +688,11 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       tries.push(after);
       /* What anyone who makes the move sees: whether the game ended there, and who won. Never why. */
       const outcome = place.world.outcome(after);
-      return { act: req.act, from: req.from, to: req.to, accepted: true, name: 'act' + tries.length, picture: picture(after),
+      const answer = { act: req.act, from: req.from, to: req.to, accepted: true, name: 'act' + tries.length, picture: picture(after),
         episode_ended: outcome.over ? { score: outcome.winner === 'A' ? 1 : outcome.winner === 'B' ? -1 : 0 } : false };
+      actAnswers.set(answer.name, answer);
+      keyOfAct.set(answer.name, key);
+      return answer;
     }
     const decl: MeasureDecl = { spec: { kind: 'code', lang: 'js', source: req.measure.source }, ...(req.measure.range ? { range: req.measure.range } : {}) };
     return {
@@ -599,6 +704,98 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         return err ? { point: ref, error: err.error } : { point: ref, value: o.values.m ?? o.texts.m };
       })
     };
+  }
+
+  /* --- One step of an investigation with places to explore (SPEC-INVESTIGACION-PARALELA §4) -----------------------------
+     The step's requests are answered in the order asked, except its replays: each is admitted in its turn (checked, given
+     its seed), then all are played - at once, or one after another with --place-concurrency serial - and their episodes are
+     named in the order asked once every one has ended. Serial or concurrent, the episodes are the same; only the clock
+     differs (step_clock, operator only). */
+  async function runStep(requests: readonly ExplorerRequest[], current: Formula | null, plays: { left: number }): Promise<unknown[]> {
+    const results: unknown[] = new Array(requests.length);
+    const jobs: { at: number; job: ReplayJob }[] = [];
+    const t0 = Date.now();
+    for (const [at, r] of requests.entries()) {
+      if ('replay' in r && tools.has('replay')) {
+        const j = admitReplay(r, current, plays);
+        if ('result' in j) results[at] = j.result; else jobs.push({ at, job: j });
+      } else results[at] = await runRequest(r, current, plays);
+    }
+    const t1 = Date.now();
+    const played: Played[] = [];
+    if (cfg.concurrent) played.push(...await Promise.all(jobs.map(({ job }) => playJob(job))));
+    else for (const { job } of jobs) played.push(await playJob(job));
+    for (const [k, { at, job }] of jobs.entries()) results[at] = commitReplay(job, played[k]);
+    if (jobs.length) log('step_clock', { round: currentRound, mode: cfg.concurrent ? 'concurrent' : 'serial', replays: jobs.map(({ job }, k) => ({ place: job.place.id, ms: played[k].ms })),
+      replays_ms: Date.now() - t1, step_ms: Date.now() - t0 });
+    return results;
+  }
+
+  /* --- Its team's board (SPEC-INVESTIGACION-PARALELA §5.2) ------------------------------------------------------------ */
+
+  async function readPeers(q: Record<string, unknown>): Promise<unknown> {
+    const answer = await peers!.run(q, currentRound) as Record<string, unknown>;
+    log('peer_read', { round: currentRound, peers: q.peers, ...(answer.version !== undefined ? { version: answer.version } : {}),
+      ...(q.items !== undefined || q.item !== undefined ? { items: Array.isArray(q.items) ? q.items.map(String) : [String(q.item)] } : {}),
+      ...(typeof q.evidence === 'string' ? { evidence: q.evidence } : {}), ...(typeof q.words === 'string' ? { words: q.words } : {}),
+      ...(Array.isArray(answer.entries) ? { shown: (answer.entries as { id: string }[]).map((e) => e.id) } : {}),
+      ...(answer.error ? { error: answer.error } : {}) });
+    return answer;
+  }
+
+  /** What a place is, as anyone who sees its pictures can tell: its size and its pieces, and whether every member of the
+      team has this same board (the laboratory and the boards of validation) or it is this member's own. */
+  const placeInfo = (p: Place): Record<string, unknown> => ({ place: p.id, board: p.spec.width + 'x' + p.spec.height, pieces: { yours: p.spec.A.count, other: p.spec.B.count },
+    same_board_for_the_whole_team: p.index < FAMILY_INDEX.exploration });
+
+  /** The record of the environment behind one of its references, as it answered it (and, for the operator, the keys of the
+      interventions behind it); null when there is none. */
+  function evidenceOf(ref: string): { record: Record<string, unknown>; place: Place | null; keys: string[] } | null {
+    const r = ref.trim();
+    const step = /^(?:investigation:)?r(\d+)\.(\d+)$/.exec(r);
+    if (step) {
+      const id = 'r' + step[1] + '.' + step[2];
+      const s = stepAnswers.get(id);
+      return s ? { record: { step: id, ...s }, place: null, keys: stepKeys.get(id) ?? [] } : null;
+    }
+    const act = /^(?:act|try)(\d+)$/.exec(r);
+    if (act) {
+      const name = 'act' + act[1];
+      const a = actAnswers.get(name);
+      const place = a ? where(tries[Number(act[1]) - 1]) : null;
+      return a && place ? { record: { ...a, place: place.id }, place, keys: keyOfAct.has(name) ? [keyOfAct.get(name)!] : [] } : null;
+    }
+    const point = /^(g\d+)@(\d+)$/.exec(r);
+    if (point) {
+      const g = games.get(point[1]);
+      const st = g?.states[Number(point[2])];
+      return g && st ? { record: { point: r, place: g.place, episode: g.id, step: Number(point[2]), picture: picture(st) }, place: places.get(g.place) ?? null, keys: [] } : null;
+    }
+    const g = games.get(r);
+    return g ? { record: { episode: g.id, place: g.place, chosen_by: g.how, score: scoreOfResult(g.result), steps: g.states.length - 1,
+      frames: g.states.map((s, k) => ({ step: k, picture: picture(s) })) }, place: places.get(g.place) ?? null, keys: keyOfGame.has(g.id) ? [keyOfGame.get(g.id)!] : [] } : null;
+  }
+
+  /** A publication: checked, its evidence's records attached, put on the board under its number (the same number when a
+      resumed run publishes it again: nothing is added). What it is answered is the same live or resumed. */
+  function publish(raw: unknown): unknown {
+    const p = parsePublication(raw);
+    if (typeof p === 'string') return { publish: 'refused', error: p };
+    const found = p.evidence.map((ref) => ({ ref, at: evidenceOf(ref) }));
+    const missing = found.filter((x) => !x.at).map((x) => x.ref);
+    if (missing.length) return { publish: 'refused', error: 'no record of yours behind ' + missing.join(', ') + ' (an episode "g<n>", a point "g<n>@<step>", an act "act<n>", an investigation step "r<round>.<step>")' };
+    const board = peers!.board;
+    const n = peers!.published + 1;
+    const seenIn = [...new Map(found.flatMap((x) => (x.at!.place ? [[x.at!.place.id, x.at!.place] as const] : []))).values()];
+    const { evidence: _refs, ...said } = p;
+    const entry: BoardEntry = { id: team!.member + '#' + n, member: team!.member, n, round: currentRound, window: board.windowOf(currentRound), ...said,
+      world: seenIn.map(placeInfo), evidence: found.map((x) => ({ ref: x.ref, record: x.at!.record })) };
+    const put = board.publish(entry, { places: seenIn.map((pl) => ({ id: pl.id, index: pl.index })), keys: found.flatMap((x) => x.at!.keys) });
+    peers!.published = n;
+    log('peer_publish', { round: currentRound, id: entry.id, kind: entry.kind, claim: entry.claim, evidence: p.evidence, window: entry.window,
+      ...(put.replayed ? { replayed: true } : {}), ...(put.conflict ? { conflict: put.conflict } : {}) });
+    say('  publishes ' + entry.id + ' (' + entry.kind + ')' + (put.replayed ? ' [already on the board]' : '') + (put.conflict ? ' [CONFLICT: ' + put.conflict + ']' : ''));
+    return { publish: 'published', id: entry.id, window: entry.window, readable_in_round: entry.window * board.spec.window + 1 };
   }
 
   /** How each of its formulas did (facts of its own games), with the best and the latest named. */
@@ -627,6 +824,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     if (llmFatal || halted) return null;
     currentRound++;
     const round = currentRound;
+    /* A member of a team tells the board where it is: the versions every member has passed are sealed. */
+    team?.board.reach(team.member, round);
     let refused: string[] = [];
     const investigation: unknown[] = [];
     let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0;
@@ -673,7 +872,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         log('proposal_failed', { round, error: String((error as Error)?.message || error) });
         continue;
       }
-      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
+      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience || peers ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => games.has(ref.trim()) || resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
       /* What it wrote in its notebook comes back in the next part of the conversation (the notebook shown is the round's). */
       written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}) };
@@ -723,18 +922,28 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
           }
           continue;
         }
+        stepInterventions = [];
         const results: unknown[] = [];
-        for (const r of requests) results.push(await runRequest(r, from, plays));
+        if (cfg.explorePlaces) results.push(...await runStep(requests, from, plays));
+        else for (const r of requests) results.push(await runRequest(r, from, plays));
         /* A draft travels back as it wrote it, never as the host's formula object. */
         const asWritten = requests.map((r) => 'replay' in r && r.formula !== null && typeof r.formula === 'object' ? { replay: r.replay, model: ownFormula(r.formula) } : 'extra' in r ? r.extra : r);
         const entry = { step: investigation.length + 1, requests: asWritten, results, ...(warnings.length || noteWarnings.length ? { warnings: [...warnings, ...noteWarnings] } : {}) };
         investigation.push(entry);
+        /* What the environment answered at this step, as it answered it: a publication may cite it ("r<round>.<step>"). */
+        stepAnswers.set('r' + round + '.' + entry.step, { requests: asWritten, results });
+        if (team && stepInterventions.length) {
+          stepKeys.set('r' + round + '.' + entry.step, stepInterventions.map((i) => i.key));
+          log('operator_interventions', { round, step: entry.step, interventions: stepInterventions });
+        }
         talk.add({ investigation_step: entry, ...written, ...counters() });
         written = {};
         memory?.recordInvestigation(round, entry.step, entry);
         /* What it was answered too, as in a world of laws: what an agent reviewing its work reads (SPEC-ORQUESTADOR §3.3). */
         log('investigation', { round, requests: requests.map((r) => ('extra' in r ? r.extra : r)), results, warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
-        say('  investigates: ' + requests.map((r, i) => 'extra' in r ? (Experience.accepts(r.extra) ? 'experience ' + String(r.extra.experience) + (r.extra.run ? ' of ' + String(r.extra.run) : '') : 'memory ' + String(r.extra.memory)) + (r.extra.of ? ' of ' + String(r.extra.of) : '') + (r.extra.words ? ' "' + String(r.extra.words) + '"' : '') + (r.extra.select ? ' (select)' : '')
+        say('  investigates: ' + requests.map((r, i) => 'extra' in r && PeerChannel.acceptsPublish(r.extra) ? 'publish ' + String((results[i] as { id?: string; error?: string }).id ?? (results[i] as { error?: string }).error)
+          : 'extra' in r && PeerChannel.acceptsRead(r.extra) ? 'peers ' + String(r.extra.peers)
+          : 'extra' in r ? (Experience.accepts(r.extra) ? 'experience ' + String(r.extra.experience) + (r.extra.run ? ' of ' + String(r.extra.run) : '') : 'memory ' + String(r.extra.memory)) + (r.extra.of ? ' of ' + String(r.extra.of) : '') + (r.extra.words ? ' "' + String(r.extra.words) + '"' : '') + (r.extra.select ? ' (select)' : '')
           : 'view' in r ? 'view ' + r.view : 'inspect' in r ? 'inspect ' + r.inspect
           : 'act' in r ? 'act ' + r.act + ' ' + JSON.stringify(r.from) + '>' + JSON.stringify(r.to) + ((results[i] as { accepted?: boolean }).accepted ? ' accepted' : ' refused')
           : 'replay' in r ? 'replay from ' + r.replay + ' -> ' + ((results[i] as { score?: number; error?: string }).score ?? (results[i] as { error?: string }).error)

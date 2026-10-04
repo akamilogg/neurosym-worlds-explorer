@@ -1,0 +1,11 @@
+{
+  "format": "batch@1",
+  "id": "grid-explore",
+  "concurrency": 3,
+  "budget": { "tokens_per_run": 1500000 },
+  "runs": [
+    { "id": "a0-s22", "lab": "grid", "researcher": "assisted", "condition": "A0", "args": ["--seed", "22", "--family", "3"] },
+    { "id": "a2-serial-s22", "lab": "grid", "researcher": "assisted", "condition": "A2 serial", "args": ["--seed", "22", "--family", "3", "--explore-places", "2", "--place-concurrency", "serial"] },
+    { "id": "a2-concurrent-s22", "lab": "grid", "researcher": "assisted", "condition": "A2 concurrent", "args": ["--seed", "22", "--family", "3", "--explore-places", "2"] }
+  ]
+}

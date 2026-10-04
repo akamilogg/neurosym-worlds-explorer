@@ -17,10 +17,12 @@
  * (protocol.ts).
  * ========================================================================== */
 
-export type Role = 'laboratory' | 'family' | 'confirmation';
+export type Role = 'laboratory' | 'family' | 'confirmation' | 'exploration';
 
 /** A place a model can be checked in: a laboratory (the learner's), a board or setup of the family, or a blind one. The
-    protocol changes its role (a family place where the model does not hold becomes a laboratory) and marks it seen. */
+    protocol changes its role (a family place where the model does not hold becomes a laboratory) and marks it seen.
+    An EXPLORATION place (SPEC-INVESTIGACION-PARALELA E1) is the learner's to act in, never checked, validated or
+    confirmed in: it is part of the search, so it is never part of the exam. */
 export interface Place {
   readonly id: string;
   role: Role;

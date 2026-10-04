@@ -68,6 +68,9 @@ export interface EvaluatorOptions<S> {
   readonly strictMeasures?: boolean;
   /** Where judgments are kept (default: a private Map). A host passes its own to clear or inspect it. */
   readonly cache?: Map<string, Record<string, JudgeAnswer>>;
+  /** The Judge's requests in flight, shared like `cache` by evaluators that share it: two searches that run at once (in
+      two places) and need the same judgment ask for it once. Default: a private Map. */
+  readonly inflight?: Map<string, Promise<Record<string, JudgeAnswer>>>;
   /** Where merged policy priors are kept (default: a private Map). */
   readonly priorCache?: Map<string, PolicyMerge | null>;
   readonly onJudged?: (event: JudgedEvent<S>) => void;
@@ -112,7 +115,7 @@ export class Evaluator<S = unknown> {
   readonly maximizer: string;
   readonly stats: EvaluatorStats = { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0, judgeUnread: 0 };
   private readonly cache: Map<string, Record<string, JudgeAnswer>>;
-  private readonly inflight = new Map<string, Promise<Record<string, JudgeAnswer>>>();
+  private readonly inflight: Map<string, Promise<Record<string, JudgeAnswer>>>;
   private readonly priors: Map<string, PolicyMerge | null>;
   private readonly options: EvaluatorOptions<S>;
 
@@ -121,6 +124,7 @@ export class Evaluator<S = unknown> {
     this.judge = judge;
     this.options = options;
     this.cache = options.cache ?? new Map();
+    this.inflight = options.inflight ?? new Map();
     this.priors = options.priorCache ?? new Map();
     this.maximizer = options.maximizer ?? observer.world.actors[0];
     this.outputs = new OutputRunner(options.runners ?? []);

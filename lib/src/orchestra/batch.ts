@@ -51,6 +51,8 @@ export interface BatchOptions {
   /** Where the batch's runs and report go (default <root>/runs/batches/<id>). */
   readonly dir?: string;
   readonly llm: LabRunOptions['llm'];
+  /** A team's member on a model of its own (SPEC-INVESTIGACION-PARALELA §5.1): its System 2, by its id (default `llm`). */
+  readonly llmFor?: (member: string) => LabRunOptions['llm'] | undefined;
   readonly judge?: LabRunOptions['judge'];
   readonly fetch?: LabRunOptions['fetch'];
   readonly signal?: AbortSignal;
@@ -109,8 +111,8 @@ export function spread(values: readonly (number | null | undefined)[]): Spread {
   return { median: at(0.5), q1: at(0.25), q3: at(0.75) };
 }
 
-/** A run's row, from its researcher's finding. */
-function rowOf(def: BatchRun, journal: string | null, f: Finding | null, error?: string): BatchRunRow {
+/** A run's row, from its researcher's finding (a batch's, a team's). */
+export function rowOf(def: BatchRun, journal: string | null, f: Finding | null, error?: string): BatchRunRow {
   const cost = (f?.cost.total ?? {}) as Record<string, number>, toAcc = (f?.cost.to_acceptance ?? {}) as Record<string, number>;
   const accepted = f?.outcome.status === 'accepted';
   return { id: def.id, condition: def.condition, lab: def.lab, researcher: f?.researcher ?? def.researcher ?? (def.fork ? 'assisted' : 'unknown-world'), journal,

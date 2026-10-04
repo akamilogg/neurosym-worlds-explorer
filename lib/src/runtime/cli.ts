@@ -52,6 +52,7 @@ export const CLI_USAGE = [
   'lab grade <run>                                           grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*)',
   'lab audit <run> [--flat]                                  audit its method (operator only): links, citations, controls; J1-J6 by the Judge (JEV_*), or code only with --flat',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
+  'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
   'lab project list | status <id>                            the projects; one\'s state and report',
   'lab project approve <id> [note] | reject <id> <note>      decide what it waits for (a criterion, a plan)',
@@ -272,6 +273,18 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const report = await runBatch(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'AGENT_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
         out(batchText(report));
         out('report: ' + path.join(report.dir, 'batch.json'));
+        return 0;
+      }
+      case 'team': {
+        const file = args[0];
+        if (!file) { out('lab team <team.json>'); return 2; }
+        const env = ctx.env ?? process.env;
+        const { runTeam, teamText } = await import('../orchestra/team.ts');
+        const { chatFromEnv, labEndpointsFromEnv } = await import('../orchestra/launch.ts');
+        const def = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const report = await runTeam(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'AGENT_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
+        out(teamText(report));
+        out('report: ' + path.join(report.dir, 'team-report.json'));
         return 0;
       }
       case 'project': {

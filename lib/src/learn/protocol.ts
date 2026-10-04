@@ -11,7 +11,11 @@ import type { Objective, Place, Rerun, RunOutput } from './objective.ts';
  *      all of them at the latest check (the same fingerprint, the same laboratories) is
  *      validated on that check, without a new one that could fail by chance.
  *   3. A family place where it does not hold becomes a laboratory.
- *   4. When it holds in every family place, two blind sets nobody has seen decide.
+ *   4. When it holds in every family place, two blind sets nobody has seen decide - when
+ *      a confirmation may be spent (a team's are counted: SPEC-INVESTIGACION-PARALELA §5.4).
+ *
+ * Exploration places (SPEC-INVESTIGACION-PARALELA E1) are the learner's to act in and are
+ * never checked, validated or confirmed in: a place of the search is never part of the exam.
  *
  * What System 2 is told (`view`) is facts and the protocol's own judgments ("holds",
  * "accepted"), never a statistic over its cases. The journal gets the operator's view.
@@ -35,7 +39,10 @@ export interface ProtocolOptions<M, P extends Place> {
   readonly cost?: () => Readonly<Record<string, number>>;
   readonly say?: (line: string) => void;
   /** How System 2 is told the role of a place it knows. */
-  readonly roleWords?: { readonly laboratory: string; readonly validated: string };
+  readonly roleWords?: { readonly laboratory: string; readonly validated: string; readonly exploration?: string };
+  /** Asked when a model held in every family place, before the blind sets: null spends one confirmation, a reason refuses
+      it (a team's confirmations are counted: SPEC-INVESTIGACION-PARALELA §5.4). Default: always allowed. */
+  readonly confirm?: (context: { round: number; attempt: number }) => string | null;
   /** Operator only: models that know nothing (e.g. "the same row again"), run on the same cases as every check. A place
       where one of them holds too is one whose check cannot tell a model from knowing nothing: journalled, never shown. */
   readonly baselines?: readonly { readonly name: string; readonly model: M }[];
@@ -72,6 +79,8 @@ export interface RoundOutcome<P, R> {
     readonly places: readonly PlaceOutcome<P, R>[];
     readonly becameLaboratories: readonly string[];
     readonly blind: readonly BlindSet<P, R>[] | null;
+    /** Why no blind confirmation was made although the model held in every family place (none left to spend). */
+    readonly confirmationRefused?: string;
     readonly operator?: Record<string, unknown>;
   } | null;
   /** Why a validation asked for was not run. */
@@ -137,6 +146,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
   placesView(): { place: string; role: string }[] {
     return this.options.places().filter((p) => p.role !== 'confirmation' && p.seen)
       .map((p) => ({ place: p.id, role: p.role === 'laboratory' ? this.options.roleWords?.laboratory ?? 'your laboratory: you can act here'
+        : p.role === 'exploration' ? this.options.roleWords?.exploration ?? 'a place to explore: you can act here; your model is never checked here'
         : this.options.roleWords?.validated ?? 'a place where your model was validated' }));
   }
 
@@ -244,20 +254,27 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
         const fam = await this.checkIn(model, family, { round, attempt, purpose: 'validation' });
         /* A place where the model does not hold becomes a laboratory. */
         const becameLaboratories = fam.outcomes.filter((o) => !o.holds).map((o) => { o.place.role = 'laboratory'; return o.place.id; });
-        /* 3. It holds everywhere: places nobody has seen decide. */
+        /* 3. It holds everywhere: places nobody has seen decide - if a confirmation may be spent. */
         let blind: BlindSet<P, R>[] | null = null;
-        if (!becameLaboratories.length) {
+        const confirmationRefused = becameLaboratories.length ? null : this.options.confirm?.({ round, attempt }) ?? null;
+        if (!becameLaboratories.length && confirmationRefused === null) {
           blind = [];
           for (let set = 0; set < (this.options.confirmSets ?? 2); set++) {
-            const c = await this.checkIn(model, this.options.blindPlaces(set, round), { round, attempt, purpose: 'blind', set });
+            const where = this.options.blindPlaces(set, round);
+            /* E1: a blind place is one nobody has seen, never a place of the search. */
+            const seen = where.filter((p) => p.role !== 'confirmation' || p.seen);
+            if (seen.length) throw new Error('a blind confirmation in a place that is not blind: ' + seen.map((p) => p.id + ' (' + p.role + ')').join(', '));
+            const c = await this.checkIn(model, where, { round, attempt, purpose: 'blind', set });
             blind.push({ ok: c.outcomes.length > 0 && c.outcomes.every((o) => o.holds), places: c.outcomes, ...(c.operator ? { operator: c.operator } : {}) });
           }
           accepted = blind.every((b) => b.ok);
         }
-        validation = { places: fam.outcomes, becameLaboratories, blind, ...(fam.operator ? { operator: fam.operator } : {}) };
+        validation = { places: fam.outcomes, becameLaboratories, blind, ...(confirmationRefused !== null ? { confirmationRefused } : {}), ...(fam.operator ? { operator: fam.operator } : {}) };
         this.milestones.validations.push({ round, attempt, heldIn: fam.outcomes.filter((o) => o.holds).map((o) => o.place.id), becameLaboratories, blindConfirmed: blind ? accepted : null });
         this.say('  validation (' + (this.options.validations - this.validationsLeft) + '/' + this.options.validations + ')' +
-          (becameLaboratories.length ? ': now laboratories: ' + becameLaboratories.join(', ') : ': holds in every family place; blind confirmation ' + (accepted ? 'CONFIRMED' : 'NOT confirmed')));
+          (becameLaboratories.length ? ': now laboratories: ' + becameLaboratories.join(', ')
+            : confirmationRefused !== null ? ': holds in every family place; no blind confirmation: ' + confirmationRefused
+            : ': holds in every family place; blind confirmation ' + (accepted ? 'CONFIRMED' : 'NOT confirmed')));
       }
       if (refused) this.say('  validation refused: ' + refused);
     }
@@ -272,7 +289,8 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       round,
       ...(reused ? { not_checked_again: 'this model already held in every one of your laboratories in round ' + reused.round + ': these are the verdicts of that check' } : {}),
       laboratories: laboratories.map((o) => this.placeView(o)),
-      ...(validation ? { validation: { validated_in: validation.places.map((o) => this.placeView(o)), ...(validation.becameLaboratories.length ? { now_your_laboratories: validation.becameLaboratories } : {}) } }
+      ...(validation ? { validation: { validated_in: validation.places.map((o) => this.placeView(o)), ...(validation.becameLaboratories.length ? { now_your_laboratories: validation.becameLaboratories } : {}),
+        ...(validation.confirmationRefused !== undefined ? { no_blind_confirmation: validation.confirmationRefused } : {}) } }
         : refused ? { validation: { refused } } : {}),
       accepted,
       validations_left: this.validationsLeft
@@ -287,6 +305,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       ...(validation ? { validation: {
         family: validation.places.map((o) => this.placeJournal(o)), ...(validation.operator ? { family_operator: validation.operator } : {}),
         became_laboratories: validation.becameLaboratories,
+        ...(validation.confirmationRefused !== undefined ? { confirmation_refused: validation.confirmationRefused } : {}),
         ...(validation.blind ? { blind_confirmation: { confirmed: accepted, sets: validation.blind.map((b) => ({ ok: b.ok, places: b.places.map((o) => this.placeJournal(o)), ...(b.operator ? { operator: b.operator } : {}) })) } } : {})
       } } : refused ? { validation: { refused } } : {}),
       accepted, validations_left: this.validationsLeft, cost

@@ -1751,7 +1751,7 @@ var Neurosym = (() => {
       __publicField(this, "maximizer");
       __publicField(this, "stats", { evaluations: 0, terminal: 0, judgeCalls: 0, vectorHits: 0, fallbacks: 0, priorCalls: 0, judgeUnread: 0 });
       __publicField(this, "cache");
-      __publicField(this, "inflight", /* @__PURE__ */ new Map());
+      __publicField(this, "inflight");
       __publicField(this, "priors");
       __publicField(this, "options");
       __publicField(this, "outputs");
@@ -1759,6 +1759,7 @@ var Neurosym = (() => {
       this.judge = judge;
       this.options = options;
       this.cache = options.cache ?? /* @__PURE__ */ new Map();
+      this.inflight = options.inflight ?? /* @__PURE__ */ new Map();
       this.priors = options.priorCache ?? /* @__PURE__ */ new Map();
       this.maximizer = options.maximizer ?? observer.world.actors[0];
       this.outputs = new OutputRunner(options.runners ?? []);
@@ -3941,7 +3942,8 @@ var Neurosym = (() => {
             warnings.push("request #" + i + ": " + code);
             continue;
           }
-          requests.push({ table: code, on: onOf(q, q.table) === "final" ? "final" : "in_play" });
+          const where = q.place ?? q.table.place;
+          requests.push({ table: code, on: onOf(q, q.table) === "final" ? "final" : "in_play", ...typeof where === "string" ? { place: where } : {} });
         } else if (typeof (q.replay ?? q.play) === "string") {
           const at = q.replay ?? q.play;
           const model = q.model !== void 0 ? q.model : q.formula;

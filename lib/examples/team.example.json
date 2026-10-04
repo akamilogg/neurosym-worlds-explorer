@@ -1,0 +1,17 @@
+{
+  "format": "team@1",
+  "id": "trio-s22",
+  "lab": "grid",
+  "condition": "communicated",
+  "args": ["--seed", "22", "--family", "3", "--attempts", "8"],
+  "window": 3,
+  "exchange": true,
+  "confirmations": 2,
+  "explore_places": 2,
+  "budget": { "mode": "fixed", "tokens": 4500000, "coordination_tokens": 0 },
+  "members": [
+    { "id": "a", "role": "Your part in the team: identify the rule of the environment." },
+    { "id": "b", "role": "Your part in the team: try to refute the rule the others hold, in your own places." },
+    { "id": "c", "role": "Your part in the team: look for the places and starts where a model that holds in the laboratory fails." }
+  ]
+}

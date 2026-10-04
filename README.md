@@ -261,6 +261,18 @@ them sees more than the researchers they help. From `lib/`, with the keys in `la
 .\lab.ps1 project approve cells-levels
 ```
 
+Research in parallel (SPEC-INVESTIGACION-PARALELA), a separate condition that measures the collective system, never one
+researcher: an assisted run of the grid may explore other boards of the family besides its laboratory
+(`--explore-places k`; their replays of one step run at once, or serially with `--place-concurrency serial`), and a
+**team** runs several researchers at once on the same family, with a board they publish to (results, dead ends and
+methods, with the records of the environment behind them) and read by windows, a ledger of blind boards none of them
+consulted, and a budget declared fixed or extended:
+
+```bash
+.\lab.ps1 batch examples\batch.grid-explore.json
+.\lab.ps1 team examples\team.example.json
+```
+
 Runs are also controlled from the command line, the same for every laboratory and researcher: start one in a process of
 its own, list them, follow one, stop it, resume it, read its finding (SPEC-INVESTIGADOR-ASISTIDO):
 

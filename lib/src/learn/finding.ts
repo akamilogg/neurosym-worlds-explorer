@@ -49,7 +49,7 @@ export interface Finding {
   readonly model: { readonly round: number | null; readonly fingerprint: string | null; readonly law: unknown } | null;
   readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[];
     /** Assisted researcher: where its evidence comes from - the world (points of episodes), the operator's messages, sources. */
-    readonly grounded?: readonly ('world' | 'operator' | 'sources' | 'experience')[] }[];
+    readonly grounded?: readonly ('world' | 'operator' | 'sources' | 'experience' | 'peers')[] }[];
   /** Assisted researcher (SPEC-INVESTIGADOR-ASISTIDO §7): what help it had. It is provenance, so both views keep it. */
   readonly assistance?: {
     readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string;
@@ -69,6 +69,15 @@ export interface Finding {
     readonly experience?: { readonly mode: string; readonly scope: string; readonly prior_knowledge_of_this_world: boolean;
       readonly runs: readonly { readonly label: string; readonly same_world: boolean; readonly researcher: string; readonly model: string | null }[];
       readonly read: readonly string[]; readonly selections: number };
+  };
+  /** Research in parallel (SPEC-INVESTIGACION-PARALELA): a separate condition, declared - boards to explore besides the
+      laboratory, and the team the run was a member of, with what it published and read on the board. Provenance: both
+      views keep it. */
+  readonly parallel?: {
+    readonly exploration_places?: number;
+    readonly concurrency?: string;
+    readonly team?: { readonly id: string; readonly member: string; readonly members: readonly string[]; readonly window: number; readonly exchange: boolean;
+      readonly confirmations: number | null; readonly published: readonly string[]; readonly read: readonly string[] };
   };
   readonly tested: {
     readonly places: readonly Facts[];
@@ -127,13 +136,13 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
   const beliefs: J[] = Array.isArray(end.notebook?.beliefs) ? end.notebook.beliefs : [];
   const assisted = journal.researcher === 'assisted';
   /* Where a piece of evidence comes from: a message of the operator, a source, or the world (a point or an episode). */
-  const origin = (ref: string): 'world' | 'operator' | 'sources' | 'experience' => (/^operator:/.test(ref) ? 'operator' : /^src:/.test(ref) ? 'sources' : /^exp:/.test(ref) ? 'experience' : 'world');
+  const origin = (ref: string): 'world' | 'operator' | 'sources' | 'experience' | 'peers' => (/^operator:/.test(ref) ? 'operator' : /^src:/.test(ref) ? 'sources' : /^exp:/.test(ref) ? 'experience' : /^peer:/.test(ref) ? 'peers' : 'world');
   const claims = beliefs.filter((b) => b.status !== 'dropped').map((b) => {
     /* The latest evidence it cited: a reflection may confirm a belief without citing anything again. */
     const last = Array.isArray(b.history) ? [...b.history].reverse().find((h: J) => Array.isArray(h.evidence) && h.evidence.length) : undefined;
     const evidence: string[] = Array.isArray(last?.evidence) ? last.evidence.map(String) : [];
     return { id: String(b.id), statement: String(b.statement ?? ''), status: String(b.status ?? ''), ...(typeof b.since === 'number' ? { since: b.since } : {}),
-      evidence, ...(assisted ? { grounded: (['world', 'operator', 'sources', 'experience'] as const).filter((o) => evidence.some((r) => origin(r) === o)) } : {}) };
+      evidence, ...(assisted ? { grounded: (['world', 'operator', 'sources', 'experience', 'peers'] as const).filter((o) => evidence.some((r) => origin(r) === o)) } : {}) };
   });
   const requests: J[] = events.filter((e) => e.type === 'investigation').flatMap((e) => (Array.isArray(e.requests) ? e.requests : []));
   const given = events.find((e) => e.type === 'experience');
@@ -168,6 +177,18 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
       selections: events.filter((e) => e.type === 'experience_select').length
     } } : {})
   } : undefined;
+
+  /* Research in parallel: its boards to explore, and its team. */
+  const team = events.find((e) => e.type === 'team');
+  const explorePlaces = Number(journal.config?.explorePlaces ?? 0);
+  const parallel = team || explorePlaces > 0 ? {
+    ...(explorePlaces > 0 ? { exploration_places: explorePlaces, concurrency: String(journal.config?.placeConcurrency ?? 'concurrent') } : {}),
+    ...(team ? { team: { id: String(team.id), member: String(team.member), members: (team.members ?? []).map(String), window: Number(team.window), exchange: Boolean(team.exchange),
+      confirmations: typeof team.confirmations === 'number' ? team.confirmations : null,
+      published: events.filter((e) => e.type === 'peer_publish').map((e) => String(e.id)),
+      read: events.filter((e) => e.type === 'peer_read').map((e) => 'v' + String(e.version ?? '?') + ' ' + String(e.peers) + (Array.isArray(e.items) ? ' ' + e.items.join(', ') : '')
+        + (e.evidence ? ' evidence ' + String(e.evidence) : '') + (e.words ? ' "' + String(e.words) + '"' : '') + (e.error ? ' (' + String(e.error) + ')' : '')) } } : {})
+  } : null;
 
   const blindSets: J[] = acceptance?.validation?.blind_confirmation?.sets ?? [];
   const atAcceptance = acceptance ? {
@@ -210,6 +231,7 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
     model: law ? { round, fingerprint, law } : null,
     claims,
     ...(assistance ? { assistance } : {}),
+    ...(parallel ? { parallel } : {}),
     tested: { places: places.map((p) => ({ ...p })), at_acceptance: atAcceptance, validations: summary.validations ?? [] },
     counterexamples,
     limitations: {
@@ -258,6 +280,8 @@ export function findingText(f: Finding): string {
   const lines: string[] = [];
   lines.push(f.question.world + ': ' + (f.outcome.status === 'accepted' ? 'accepted in round ' + f.outcome.round : f.outcome.status)
     + (f.model?.fingerprint ? ' (model ' + f.model.fingerprint + ')' : ''));
+  if (f.parallel) lines.push('  in parallel (a separate condition):' + (f.parallel.exploration_places ? ' ' + f.parallel.exploration_places + ' board(s) to explore (' + f.parallel.concurrency + ')' : '')
+    + (f.parallel.team ? ' member ' + f.parallel.team.member + ' of team ' + f.parallel.team.id + ' (' + f.parallel.team.members.length + ' members, ' + (f.parallel.team.exchange ? 'board every ' + f.parallel.team.window + ' round(s): ' + f.parallel.team.published.length + ' published, ' + f.parallel.team.read.length + ' read(s)' : 'no board') + ')' : ''));
   for (const c of f.claims) lines.push('  claim [' + c.status + '] ' + c.statement + (c.grounded ? '  (from: ' + (c.grounded.join(', ') || 'nothing cited') + ')' : ''));
   if (f.assistance) lines.push('  assisted: ' + f.assistance.messages.length + ' message(s) of the operator' + (f.assistance.focus_changes.length ? ', ' + f.assistance.focus_changes.length + ' change(s) of focus' : '')
     + (f.assistance.sources.opened.length ? ', ' + f.assistance.sources.opened.length + ' read(s) of sources' : '')
