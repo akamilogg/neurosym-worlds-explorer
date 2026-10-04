@@ -46,6 +46,9 @@ export interface Measures {
     readonly discrimination: Readonly<Record<string, number>>;
     readonly reading: Readonly<Record<string, number>>;
     readonly scope: Readonly<Record<string, number>>;
+    /** J3-J4 of the observations a later text cites. */
+    readonly observation_reading: Readonly<Record<string, number>>;
+    readonly observation_scope: Readonly<Record<string, number>>;
     readonly refutation: Readonly<Record<string, number>>;
     readonly control: Readonly<Record<string, number>>;
   };
@@ -68,6 +71,7 @@ export function measuresOf(record: LinkRecord, judged: Judgements | null): Measu
   const revised = record.beliefs.filter((b) => b.stances.some((s) => s.stance === 'revise')).length;
   const dropped = record.beliefs.filter((b) => b.stances.some((s) => s.stance === 'drop')).length;
   const links = judged ? Object.values(judged.links) : [];
+  const looks = judged ? Object.values(judged.observations) : [];
   const rounds = judged ? Object.values(judged.rounds) : [];
   const complete = links.filter((v) => ['own', 'operator'].includes(v.purpose?.answer ?? '') && v.discrimination?.answer === 'yes' && v.reading?.answer === 'correct' && v.scope?.answer === 'fitting').length;
   return {
@@ -82,6 +86,7 @@ export function measuresOf(record: LinkRecord, judged: Judgements | null): Measu
     ...(judged ? { judged: {
       complete_chains: share(complete, links.length),
       purpose: split(links, 'purpose'), discrimination: split(links, 'discrimination'), reading: split(links, 'reading'), scope: split(links, 'scope'),
+      observation_reading: split(looks, 'reading'), observation_scope: split(looks, 'scope'),
       refutation: split(rounds, 'refutation'), control: split(rounds, 'control')
     } } : {})
   };

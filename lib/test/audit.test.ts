@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { linksOf } from '../src/audit/links.ts';
+import { linkTexts, roundTexts } from '../src/audit/judge.ts';
 import { auditMethod } from '../src/audit/audit.ts';
 import { labCli } from '../src/runtime/cli.ts';
 import { findingOf, findingView } from '../src/learn/finding.ts';
@@ -84,7 +85,9 @@ test('the audit: J1-J4 for each experiment, J5-J6 for each round; measures besid
   const shown: JudgeRequest[] = [];
   const a = await auditMethod(file, standIn(shown));
   assert.equal(a.format, 'method_audit@1');
-  assert.equal(a.judged!.calls, 5, 'three experiment links and two rounds');
+  assert.equal(a.judged!.calls, 6, 'three experiment links, the observation cited after, and two stretches');
+  assert.deepEqual(Object.keys(a.judged!.observations), ['r1.s1']);
+  assert.deepEqual(Object.keys(a.judged!.rounds).sort(), ['r1', 'r2']);
   assert.deepEqual(Object.keys(a.judged!.links).sort(), ['r1.s2', 'r2.s1', 'r2.s2']);
   assert.equal(a.judged!.links['r1.s2'].reading!.answer, 'correct');
   assert.equal(a.judged!.links['r1.s2'].reading!.p, 0.7);
@@ -124,3 +127,45 @@ test('a run not ended is not audited; lab audit --flat audits with code only', a
   assert.equal(a.judged, null);
   assert.equal(await labCli(['audit', file], { root: dir, out: (l) => lines.push(l), env: {} }), 1, 'without --flat, the Judge is needed');
 });
+
+test('only what was shown is seen: a part of a table is that part; the Judge is shown the frames and rows themselves', () => {
+  const table = (from: number, to: number) => '   t      A.x\n' + Array.from({ length: to - from + 1 }, (_, i) => '   ' + (from + i) + '   ' + (1.5 * (from + i)).toFixed(2)).join('\n');
+  const j = {
+    experiment: 'particles3d@1', researcher: 'assisted', config: { seed: 1, level: 1 },
+    events: [
+      { type: 'exploration_episode', episode: 'ep1', place: 'lab1', table: 'SECRET-ROWS' },
+      { type: 'investigation', round: 1, requests: [{ view: 'ep1', from: 0, to: 2 }], results: [{ view: 'ep1', rows_in_table: 90, table: table(0, 2) }] },
+      /* An act whose table shows only its first rows ("view it for the rest"). */
+      { type: 'investigation', round: 1, requests: [{ act: { launch: [{ name: 'A' }], place: 'lab1' } }], results: [{ accepted: true, name: 'act1', rows_in_table: 90, more: 'view it for the rest', table: table(0, 3) }] },
+      { type: 'proposal', round: 1, rationale: 'x', beliefs: [{ id: 'b', stance: 'new', statement: 'A drifts', evidence: ['ep1@1', 'ep1@999', 'act1@3', 'act1@50'] }] },
+      { type: 'end', stoppedBy: 'budget' }
+    ]
+  };
+  const r = linksOf(j);
+  const status = Object.fromEntries(r.citations.map((c) => [c.ref, c.status]));
+  assert.deepEqual([status['ep1@1'], status['ep1@999'], status['act1@3'], status['act1@50']], ['seen', 'unseen', 'seen', 'unseen']);
+  assert.match(linkTexts(r.links[0]).shown, /ep1@1 \(cited after\):\n\s+1\s+1\.50/, 'the row itself, marked as cited');
+  assert.match(linkTexts(linksOf(journal()).links[0]).shown, /g1@3 \(cited after\):\nboard 3/, 'the frame itself');
+  assert.ok(!/SECRET/.test(JSON.stringify(r.links.map(linkTexts))));
+});
+
+test('a stretch is judged in the order it was lived: the verdict of the check it was given comes before what closed it', () => {
+  const j = {
+    experiment: 'cells@1', researcher: 'assisted', config: { seed: 1, level: 1 },
+    events: [
+      { type: 'investigation', round: 1, requests: [{ view: 'ep1', from: 0, to: 1 }], results: [{ view: 'ep1', frames: frames(0, 1) }] },
+      { type: 'proposal', round: 1, rationale: 'r', beliefs: [{ id: 'grow', stance: 'new', statement: 'the edge grows' }] },
+      { type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false, points: 9, operator_only: 'SECRET-MEASURE' }], operator_analysis: 'SECRET' },
+      { type: 'reflection', round: 2, rationale: 'the check failed: the edge does not grow', beliefs: [{ id: 'grow', stance: 'drop', why: 'the check of round 1' }] },
+      { type: 'end', stoppedBy: 'budget' }
+    ]
+  };
+  const r = linksOf(j);
+  assert.deepEqual(r.rounds.map((s) => [s.id, s.checks_before.length]), [['r1', 0], ['r2.reflection', 1]], 'a reflection with no step is a stretch too');
+  const t = roundTexts(r.rounds[1], r).timeline;
+  assert.ok(t.indexOf('held_at_start') < t.indexOf('verdict_of_a_check_it_was_given') && t.indexOf('verdict_of_a_check_it_was_given') < t.indexOf('closed_by'), 'in order');
+  assert.match(t, /"holds":false/);
+  assert.match(t, /"stance":"drop"/);
+  assert.ok(!/SECRET/.test(t), 'the verdict as it was given, never the measures of the operator');
+});
+

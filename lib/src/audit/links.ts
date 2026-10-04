@@ -41,6 +41,9 @@ export interface Link {
   readonly requests: readonly unknown[];
   /** What the world answered, made compact by code: no pictures beyond a few, tables clipped. */
   readonly result: readonly unknown[];
+  /** What it was shown, point by point ("g1@3": the picture at that step; "ep1@40": that row of the table), exactly as it
+      was shown: the evidence a reading of the step is judged against. */
+  readonly shown: Readonly<Record<string, string>>;
   /** Whether the world refused any of its experiments (O1). */
   readonly refused: boolean;
   /** Episodes it made (an act's, a replay's), and points it showed. */
@@ -77,9 +80,19 @@ export interface LinkRecord {
   readonly orphans: readonly string[];
   readonly controls: readonly ControlGroup[];
   readonly beliefs: readonly { id: string; statement: string; stances: readonly { round: number; stance: string }[] }[];
-  /** Per round: the beliefs held at its start, the links it made, and the proposal or reflection that closed it. */
-  readonly rounds: readonly { round: number; held: readonly { id: string; statement: string }[]; links: readonly string[];
-    closed_by: { type: string; rationale: string; beliefs: readonly unknown[] } | null }[];
+  /** The stretches between one proposal or reflection and the next, in order: the beliefs held at the start, the verdicts
+      of checks it was given (as it was given them), the links it made, and what closed it. */
+  readonly rounds: readonly Segment[];
+}
+
+export interface Segment {
+  /** "r<round>" closed by a proposal, "r<round>.reflection" by a reflection, "open" when nothing closed it. */
+  readonly id: string;
+  readonly round: number;
+  readonly held: readonly { id: string; statement: string }[];
+  readonly checks_before: readonly unknown[];
+  readonly links: readonly string[];
+  readonly closed_by: { type: string; rationale: string; beliefs: readonly unknown[] } | null;
 }
 
 const POINT = /\b([A-Za-z][\w-]*?\d+)@(\d+)(?:\s*[–-]\s*(\d+))?/g;
@@ -110,6 +123,25 @@ function clipDeep(v: unknown): unknown {
   return s.length <= 600 ? v : clip(s, 600);
 }
 
+/** The rows of a text table as shown: each row's step (its first column when that is a whole number, else its place among the
+    rows, from `first`) and the row itself. */
+export function tableRows(table: string, first = 0): { step: number; line: string }[] {
+  /* The first number of a row, even glued to the next one ("0-0.0009505612": step 0, then a negative value). */
+  const lead = (l: string): number | null => { const m = /^\s*(-?\d+(?:\.\d+)?)(?![\d.])/.exec(l); return m ? Number(m[1]) : null; };
+  const rows = table.split('\n').filter((l) => l.trim()).slice(1).filter((l) => lead(l) !== null);
+  const whole = rows.length > 0 && rows.every((l) => Number.isInteger(lead(l)));
+  return rows.map((line, i) => ({ step: whole ? lead(line)! : first + i, line }));
+}
+
+/** The verdicts of a check as the researcher is given them: per place, whether it held, how many episodes scored 1, the
+    reruns; the validation; whether it was accepted. Never the operator's measures. */
+export function checkAsGiven(e: J): unknown {
+  return { round: e.round, laboratories: (e.laboratories ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}),
+    ...(p.rerun ? { rerun: { went_up: p.rerun.went_up, went_down: p.rerun.went_down } } : {}) })),
+    ...(e.validation ? { validation: { family: (e.validation.family ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}) })) } } : {}),
+    ...(e.accepted ? { accepted: true } : {}) };
+}
+
 /** The points a text cites, and the steps. */
 export function citesIn(text: string): { points: { episode: string; from: number; to: number; ref: string }[]; steps: { round: number; step: number; ref: string }[] } {
   const points = [...text.matchAll(POINT)].map((m) => ({ episode: m[1], from: Number(m[2]), to: m[3] !== undefined ? Number(m[3]) : Number(m[2]), ref: m[0] }));
@@ -123,6 +155,7 @@ export function linksOf(journal: J): LinkRecord {
   const beliefs = new Map<string, { statement: string; status: string; stances: { round: number; stance: string }[] }>();
   /* What the researcher had by each moment: episodes it knew of, and the points it had been shown. */
   const exists = new Set<string>();
+  /* An episode shown whole in one answer: the single position an act of the grid makes (its name is the point). */
   const seenAll = new Set<string>();
   const seen = new Map<string, Set<number>>();
   const show = (ep: string, from: number, to: number): void => {
@@ -140,13 +173,11 @@ export function linksOf(journal: J): LinkRecord {
   const pendingLinks: Link[] = [];
   const citations: Citation[] = [];
   const closers: { round: number; type: string; text: string; beliefs: J[] }[] = [];
-  const rounds = new Map<number, { held: { id: string; statement: string }[]; links: string[]; closed_by: LinkRecord['rounds'][number]['closed_by'] }>();
   let operatorMessage: string | null = null;
   const held = (): { id: string; statement: string }[] => [...beliefs.entries()].filter(([, b]) => b.status !== 'drop').map(([id, b]) => ({ id, statement: b.statement }));
-  const roundOf = (r: number) => {
-    if (!rounds.has(r)) rounds.set(r, { held: held(), links: [], closed_by: null });
-    return rounds.get(r)!;
-  };
+  /* The stretch in course, from the latest proposal or reflection: what it held then, the checks it was given, its links. */
+  const segments: Segment[] = [];
+  let segment = { held: held(), checks_before: [] as unknown[], links: [] as string[] };
 
   /* Each link is told what of the next proposal or reflection cites it. */
   const close = (e: J, type: string): void => {
@@ -173,7 +204,7 @@ export function linksOf(journal: J): LinkRecord {
       (l as { after: Link['after'] }).after = { ...after, cites_this: cites };
     }
     closers.push({ round, type, text, beliefs: entries });
-    roundOf(round).closed_by = { type, rationale: after.rationale, beliefs: after.beliefs };
+    segments.push({ id: 'r' + round + (type === 'reflection' ? '.reflection' : ''), round, ...segment, closed_by: { type, rationale: after.rationale, beliefs: after.beliefs } });
     for (const b of entries) {
       const id = String(b.id);
       const was = beliefs.get(id);
@@ -181,6 +212,7 @@ export function linksOf(journal: J): LinkRecord {
       beliefs.set(id, { statement: String(b.statement ?? was?.statement ?? ''), status: stance === 'drop' ? 'drop' : stance, stances: [...(was?.stances ?? []), { round, stance }] });
     }
     operatorMessage = null;
+    segment = { held: held(), checks_before: [], links: [] };
   };
 
   for (const e of events) {
@@ -199,6 +231,7 @@ export function linksOf(journal: J): LinkRecord {
           exists.add(m[1]);
           if (m[2] !== undefined) show(m[1], Number(m[2]), Number(m[2]) + Number(m[3] ?? 0));
         }
+        segment.checks_before.push(checkAsGiven(e));
         break;
       case 'operator_message': operatorMessage = (e.messages ?? []).map((m: J) => String(m.text ?? '')).join('\n\n') || operatorMessage; break;
       case 'investigation': {
@@ -210,31 +243,51 @@ export function linksOf(journal: J): LinkRecord {
         const instruments = requests.map(kindOf);
         const kind: LinkKind = instruments.some((k) => EXPERIMENT_KINDS.has(k)) ? 'experiment' : instruments.some((k) => OBSERVATION_KINDS.has(k)) ? 'observation' : 'recall';
         const made: string[] = [];
+        const shown: Record<string, string> = {};
         let refused = false;
-        const r0 = roundOf(round);
+        /* Only what an answer showed counts as seen: the frames it held, the rows of the table it gave (a part of an episode
+           when the range asked was a part), the points of a table's rows, the point an inspect answered. */
+        const showRows = (ep: string, table: string, first: number): void => {
+          for (const row of tableRows(table, first)) { show(ep, row.step, row.step); shown[ep + '@' + row.step] = row.line; }
+        };
         requests.forEach((q, i) => {
           const x = (results[i] ?? {}) as J, k = instruments[i], qq = q as J;
           if (EXPERIMENT_KINDS.has(k) && (x.error || x.accepted === false)) refused = true;
-          if (k === 'view' && !x.error) {
+          if (x.error) return;
+          if (k === 'view') {
             const ep = String(qq.view);
             const frames: J[] = Array.isArray(x.frames) ? x.frames : [];
-            if (frames.length) for (const f of frames) show(ep, Number(f.step), Number(f.step));
-            else show(ep, Number(qq.from ?? 0), Number(qq.to ?? qq.from ?? 0));
-            if (typeof x.table === 'string') seenAll.add(ep);
+            for (const f of frames) { show(ep, Number(f.step), Number(f.step)); if (typeof f.picture === 'string') shown[ep + '@' + f.step] = f.picture; }
+            if (typeof x.table === 'string') showRows(ep, x.table, Number(qq.from ?? 0));
+            if (!frames.length && typeof x.table !== 'string') exists.add(ep);
           }
-          if (k === 'table' && Array.isArray(x.rows)) for (const row of x.rows as J[]) { const p = pointOf(row.point); if (p) show(p.ep, p.step, p.step); }
-          for (const field of ['inspect', 'act', 'replay', 'simulate']) { const p = pointOf(qq[field]); if (p && !x.error) show(p.ep, p.step, p.step); }
+          if (k === 'table' && Array.isArray(x.rows)) for (const row of x.rows as J[]) {
+            const p = pointOf(row.point);
+            if (p) { show(p.ep, p.step, p.step); shown[String(row.point)] = typeof row.value === 'string' ? row.value : JSON.stringify(row.value ?? row); }
+          }
+          if (k === 'inspect') { const p = pointOf(qq.inspect); if (p) { show(p.ep, p.step, p.step); shown[String(qq.inspect)] = clip(JSON.stringify(x), 800); } }
+          /* Its own code measured at points: what it measured there is what it saw of them. */
+          if (k === 'measure' && Array.isArray(x.values)) for (const v of x.values as J[]) {
+            const p = pointOf(v.point);
+            if (p) { show(p.ep, p.step, p.step); shown[String(v.point)] = typeof v.value === 'string' ? v.value : JSON.stringify(v.value); }
+          }
+          /* A simulation shows, step by step after its point, what its model said and what was observed. */
+          if (k === 'simulate' && Array.isArray(x.steps)) {
+            const p = pointOf(qq.simulate);
+            if (p) for (const st of x.steps as J[]) if (typeof st.step === 'number') { show(p.ep, st.step, st.step); shown[p.ep + '@' + st.step] = clip(JSON.stringify(st), 600); }
+          }
           for (const name of [x.name, x.episode].filter((n) => typeof n === 'string')) {
             made.push(String(name)); exists.add(String(name));
-            if (x.table || x.picture) seenAll.add(String(name));
+            if (typeof x.table === 'string') showRows(String(name), x.table, 0);
+            else if (typeof x.picture === 'string') { seenAll.add(String(name)); shown[String(name)] = x.picture; }
           }
         });
         const link: Link = { id: 'r' + round + '.s' + step, round, step, kind, instruments,
           before: { beliefs: held(), ...(operatorMessage ? { operator_message: operatorMessage } : {}) },
-          requests, result: requests.map((q, i) => compactResult(q, results[i])), refused, made, after: null };
+          requests, result: requests.map((q, i) => compactResult(q, results[i])), shown, refused, made, after: null };
         links.push(link);
         pendingLinks.push(link);
-        r0.links.push(link.id);
+        segment.links.push(link.id);
         break;
       }
       case 'proposal': close(e, 'proposal'); break;
@@ -277,7 +330,7 @@ export function linksOf(journal: J): LinkRecord {
   return {
     links, citations, refused: refusals, orphans, controls,
     beliefs: [...beliefs.entries()].map(([id, b]) => ({ id, statement: b.statement, stances: b.stances })),
-    rounds: [...rounds.entries()].sort(([a], [b]) => a - b).map(([round, r]) => ({ round, ...r }))
+    rounds: [...segments, ...(segment.links.length || segment.checks_before.length ? [{ id: 'open', round: links.at(-1)?.round ?? 0, ...segment, closed_by: null }] : [])]
   };
 }
 

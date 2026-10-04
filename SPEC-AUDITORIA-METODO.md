@@ -307,6 +307,37 @@ mensaje del senior, la réplica y el replay contra lo grabado) y un Jev sustitut
 - 14 comparaciones, todas usadas: 3 pareadas, 1 replicada y 10 contra lo grabado;
 - 19 creencias, 4 revisadas.
 
+**Revisión externa (04/10/2026): tres arreglos y más cobertura.** La prioridad es que la auditoría reconstruya fielmente
+lo que el investigador vio; después se calibra a Jev y se comparan investigadores.
+
+- **"Visto" es sólo lo que se mostró.**
+  - Antes, recibir una tabla o un dibujo marcaba visto el episodio entero.
+  - Ahora cuentan sólo los fotogramas de un `view`, las filas de la tabla que se dio (parte del episodio si se pidió una
+    parte, o si un `act` sólo muestra las primeras filas), los puntos de las filas de `table`, el punto de un `inspect`, los
+    puntos donde midió su `measure` y los pasos de un `simulate`.
+  - La única excepción es el dibujo de un `act` de la cuadrícula, porque ese episodio es una sola posición.
+  - Con esto, en el run 3D queda una cita no vista, y es real: `ep1@0–89` cuando sólo había mirado partes.
+- **Jev ve la evidencia misma.**
+  - Cada eslabón guarda lo que mostró punto a punto (`shown`: el dibujo, la fila, el valor medido), tal como lo vio el
+    investigador.
+  - A Jev le llegan primero los puntos citados después (marcados `cited after`, también dentro de un rango) y luego el
+    resto mientras quepa; lo que no cabe se dice.
+  - Si lo mostrado no basta para juzgar, la respuesta es `cannot_tell` (en J3, J4, J5 y J6), nunca una conjetura.
+- **J5-J6 se juzgan en el orden vivido.**
+  - La unidad ya no es la ronda, sino el tramo entre una propuesta o reflexión y la siguiente.
+  - En orden: las creencias al empezar, los veredictos de los checks que recibió (tal como se le dieron, sin medidas del
+    operador), sus pasos con lo que mostraron y lo que cerró el tramo.
+  - Una reflexión sin pasos también es un tramo: es el caso propuesta → check fallido → reflexión que abandona una
+    creencia.
+- **J3-J4 también para observaciones.** Una mirada también se puede leer mal o generalizar de más, así que se juzgan las
+  observaciones que un texto posterior cita (`observation_reading`, `observation_scope`).
+
+Las pruebas cubren los tres casos de la revisión: tabla parcial, evidencia visual en lo que ve Jev y check entre propuesta
+y reflexión.
+
+Las métricas todavía no deben usarse para comparar modelos hasta MA4 (calibración con la muestra etiquetada). Las pruebas
+usan un Jev sustituto: verifican la integración, no la calidad del juicio real.
+
 **Pendiente:**
 
 - **MA2:** extracción estructurada y O6. Hace falta para el caso del "salto" del senior, que es un hecho falso, y para
