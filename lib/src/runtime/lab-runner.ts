@@ -542,10 +542,19 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
     : { url: options.judge?.url || JEV_DEFAULT_URL, apiKey: options.judge?.key, model: options.judge?.model, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev', network) });
   const llmUse = { calls: 0, tokens: 0 };
+  const consoleUsage = { llm_tokens_live: 0, llm_tokens_replayed: 0, usage_unknown: false };
+  let replayedAnswers = 0;
   const llm = openAiChatClient({ url: options.llm.url!, apiKey: options.llm.key, model: options.llm.model!, jsonMode: options.llm.jsonMode ?? true, temperature: options.llm.temperature ?? 0.4,
     timeoutMs: options.llm.timeoutMs ?? 180000, retries: 1, ...(options.llm.maxTokens ? { maxTokens: options.llm.maxTokens } : {}),
     ...(options.llm.extraBody ? { extraBody: options.llm.extraBody } : {}), fetch: replay.wrap('llm', network),
-    onRequest: () => { llmUse.calls++; }, onAnswer: (a) => { llmUse.tokens += tokensOf(a.raw); } });
+    onRequest: () => { llmUse.calls++; }, onAnswer: (a) => {
+      const n = tokensOf(a.raw); llmUse.tokens += n;
+      const replayed = replay.stats().replayed.llm ?? 0;
+      if (replayed > replayedAnswers) consoleUsage.llm_tokens_replayed += n;
+      else consoleUsage.llm_tokens_live += n;
+      replayedAnswers = replayed;
+      if (!Number.isFinite((a.raw as { usage?: { total_tokens?: number } })?.usage?.total_tokens)) consoleUsage.usage_unknown = true;
+    } });
 
   const commit = commitOf(options.root);
   const journal: Record<string, any> = {
@@ -594,7 +603,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     try {
       fs.writeFileSync(files.status, JSON.stringify({ run: path.basename(outFile, '.json'), journal: outFile, lab: lab.id, researcher, state, pid: process.pid,
         started: started.toISOString(), heartbeat: new Date().toISOString(), round: lastRound(), events: journal.events.length,
-        cost: { llm_calls: llmUse.calls, llm_tokens: llmUse.tokens, jev_calls: judge.stats.calls }, ...(stoppedBy ? { stoppedBy } : {}) }, null, 2));
+        cost: { llm_calls: llmUse.calls, llm_tokens: llmUse.tokens, jev_calls: judge.stats.calls, ...consoleUsage }, ...(stoppedBy ? { stoppedBy } : {}) }, null, 2));
     } catch { /* the state is a convenience: a run never stops for it */ }
   }
   function pollInbox(): void {
@@ -700,6 +709,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         stoppedBy: stop.stoppedBy, ...(stop.halted ? { halted: stop.halted, resume: 'the same command with --resume ' + outFile } : {}),
         /* OPERATOR ONLY (SPEC-OBJETIVO O11): answers replayed from the log and asked live; unused ones mean the resumed run diverged. */
         replay: replay.stats(),
+        console_usage: { ...consoleUsage },
         ...end
       });
       /* OPERATOR ONLY (SPEC-OBJETIVO O10): the finding, next to the journal, read as it was written. */

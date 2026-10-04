@@ -8,6 +8,7 @@ import { LABS } from '../worlds/labs.ts';
 import { isGameLab } from '../learn/lab.ts';
 import { listProjects, projectStatus, projectText, sendProject } from '../orchestra/project.ts';
 import { readProjectFile, startProject } from '../orchestra/launch.ts';
+import { researchConsole } from '../console/api.ts';
 
 /* ============================================================================
  * The CONSOLE (SPEC-INVESTIGADOR-ASISTIDO §8, A3): a local page over the control API, the
@@ -98,6 +99,7 @@ const body = (req: http.IncomingMessage): Promise<Json> => new Promise((ok, fail
 
 export function serveConsole(options: ConsoleOptions): Promise<{ url: string; close(): Promise<void> }> {
   const root = options.root;
+  const research = researchConsole(root, options.env);
   const server = http.createServer(async (req, res) => {
     const send_ = (status: number, data: unknown, type = 'application/json') => {
       res.writeHead(status, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
@@ -108,6 +110,8 @@ export function serveConsole(options: ConsoleOptions): Promise<{ url: string; cl
     if (host !== '127.0.0.1' && host !== 'localhost') return send_(403, { error: 'the console answers only on 127.0.0.1' });
     try {
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      if (await research.handle(req, res, url)) return;
+      if (req.method !== 'GET' && req.headers.origin && req.headers.origin !== 'http://' + req.headers.host) return send_(403, { error: 'same-origin commands only' });
       const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
       if (req.method === 'GET' && url.pathname === '/') return send_(200, CONSOLE_PAGE, 'text/html');
       if (req.method === 'GET' && url.pathname === '/api/labs') return send_(200, labsView());
@@ -183,10 +187,13 @@ export function serveConsole(options: ConsoleOptions): Promise<{ url: string; cl
       return send_(404, { error: 'not found' });
     } catch (e) { return send_(500, { error: String((e as Error).message ?? e) }); }
   });
-  return new Promise((ok) => server.listen(options.port ?? 18400, '127.0.0.1', () => {
+  return new Promise((ok, fail) => {
+    server.once('error', error => { research.close(); fail(error); });
+    server.listen(options.port ?? 18400, '127.0.0.1', () => {
     const a = server.address() as { port: number };
-    ok({ url: 'http://127.0.0.1:' + a.port, close: () => new Promise((r) => server.close(() => r())) });
-  }));
+    ok({ url: 'http://127.0.0.1:' + a.port, close: () => { research.close(); return new Promise((r) => server.close(() => r())); } });
+    });
+  });
 }
 
 /* --- The page: one file, no dependencies, the viewer's look ----------------------------------------------------------- */
@@ -249,6 +256,7 @@ dialog label { display: block; margin: 8px 0 2px; font-size: 13px; color: var(--
 <header>
   <div><h1>Consola de laboratorios</h1><div class="muted">Los runs de los dos investigadores: seguirlos, pararlos, reanudarlos y, en el asistido, colaborar.</div></div>
   <button class="primary" id="new">Nuevo run</button>
+  <a href="/research">Observatorio · ramas, evidencia y análisis</a>
 </header>
 <main>
   <section class="panel" aria-label="Runs"><h2>Proyectos</h2><ul class="runs" id="projects"></ul><h2 style="margin-top:14px">Runs</h2><ul class="runs" id="runs"></ul></section>

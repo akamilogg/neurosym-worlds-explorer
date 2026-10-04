@@ -13,3 +13,5 @@ const argv = process.argv.slice(2);
 const i = argv.indexOf('--port');
 const c = await serveConsole({ root: ROOT, port: i >= 0 ? Number(argv[i + 1]) : 18400, synthesis: (journal) => viewerHtml(journal) });
 console.log('console on ' + c.url + ' (runs in ' + ROOT + '/runs)');
+console.log('research observatory on ' + c.url + '/research');
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void c.close().then(() => process.exit(0)); });
