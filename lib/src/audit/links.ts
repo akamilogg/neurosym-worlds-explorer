@@ -128,7 +128,10 @@ function clipDeep(v: unknown): unknown {
 export function tableRows(table: string, first = 0): { step: number; line: string }[] {
   /* The first number of a row, even glued to the next one ("0-0.0009505612": step 0, then a negative value). */
   const lead = (l: string): number | null => { const m = /^\s*(-?\d+(?:\.\d+)?)(?![\d.])/.exec(l); return m ? Number(m[1]) : null; };
-  const rows = table.split('\n').filter((l) => l.trim()).slice(1).filter((l) => lead(l) !== null);
+  const lines = table.split('\n').filter((l) => l.trim());
+  /* A table names its columns ("t  A.x  A.y"); a header of numbers only is the column ruler of a picture, not a table. */
+  if (!lines.length || lines[0].trim().split(/\s+/).every((h) => /^-?\d+(\.\d+)?$/.test(h))) return [];
+  const rows = lines.slice(1).filter((l) => lead(l) !== null);
   const whole = rows.length > 0 && rows.every((l) => Number.isInteger(lead(l)));
   return rows.map((line, i) => ({ step: whole ? lead(line)! : first + i, line }));
 }

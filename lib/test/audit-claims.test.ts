@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { linksOf, shownBy } from '../src/audit/links.ts';
+import { linksOf, shownBy, tableRows } from '../src/audit/links.ts';
 import { checkFact, pointsOf, recordedPoints } from '../src/audit/facts.ts';
 import { EXTRACT_SYSTEM, extractClaims, factMeasures } from '../src/audit/extract.ts';
 import { auditMethod } from '../src/audit/audit.ts';
@@ -40,6 +40,10 @@ test('what an answer showed is read by its form, the same for every world', () =
   assert.deepEqual(shownBy({ view: 'ep3', from: 2 }, 'view', { rows: ['..#', '.##'] }), [['ep3@2', '..#'], ['ep3@3', '.##']]);
   assert.equal(shownBy({ inspect: 'g4@5' }, 'inspect', { chose: 'x', your_search_value: 0.4 })[0][0], 'g4@5');
   assert.deepEqual(pointsOf('g1@0-2'), ['g1@0', 'g1@1', 'g1@2']);
+  /* A picture whose header is a ruler of numbers is not a table: its rows are not steps. */
+  assert.deepEqual(tableRows(picture(0, '2,1')), []);
+  const act = linksOf({ events: [{ type: 'investigation', round: 1, requests: [{ act: 'g1@0' }], results: [{ act: 'g1@0', accepted: true, name: 'act1', picture: picture(1, '1,2') }] }] }).links[0];
+  assert.deepEqual(Object.keys(act.shown), ['act1'], 'the position an act made, whole');
 });
 
 /** A Judge stand-in: a claim that names a cell no picture it is shown has '=' at is contradicted; it keeps what it was shown. */

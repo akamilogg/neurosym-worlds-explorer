@@ -42,13 +42,18 @@ export function pointsOf(cite: string, most = 6): string[] {
   return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => m[1] + '@' + (from + i));
 }
 
+/** What the Judge is shown of a fact: the claim, and what was shown at its points. */
+export function factTexts(claim: string, points: readonly string[], recorded: Map<string, string>): Record<string, string> {
+  return { claim, shown: points.filter((p) => recorded.has(p)).map((p) => p + ':\n' + recorded.get(p)).join('\n\n').slice(0, 6000) };
+}
+
 /** A claim of a fact checked: what was shown at its points, judged. Without a Judge, or with nothing shown, unverifiable. */
 export async function checkFact(claim: string, cites: readonly string[], recorded: Map<string, string>, judge: Judge | null): Promise<FactCheck> {
   const points = [...new Set(cites.flatMap((c) => pointsOf(c)))];
   const shown = points.filter((p) => recorded.has(p));
   if (!shown.length) return { status: 'unverifiable', detail: points.length ? 'nothing was recorded as shown at ' + points.join(', ') : 'it cites no point', points };
   if (!judge) return { status: 'unverifiable', detail: 'not judged (no Judge in this audit)', points: shown };
-  const texts = { claim, shown: shown.map((p) => p + ':\n' + recorded.get(p)).join('\n\n').slice(0, 6000) };
+  const texts = factTexts(claim, shown, recorded);
   const answers = await judge.judge({ world: 'method-audit', rulesOfTheWorld: '', sideToMove: '', measurements: {}, texts, questions: FACT_QUESTION });
   const raw = (answers.fact?.raw ?? {}) as { probabilities?: Record<string, unknown> };
   const distribution = Object.fromEntries(Object.entries(raw.probabilities ?? {}).map(([k, v]) => [k, Number(v)]).filter(([, v]) => Number.isFinite(v as number))) as Record<string, number>;

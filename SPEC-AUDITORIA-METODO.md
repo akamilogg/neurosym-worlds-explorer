@@ -1,7 +1,7 @@
 # SPEC · Auditoría del método: una métrica más, sobre cómo investiga
 
-Estado (04/10/2026): **MA1, MA2 y MA3 implementados** (`lib/src/audit/`, `lab audit <run> [--flat]`, §12). Pendientes: MA4 (muestra
-etiquetada) y MA5 (auditar los runs existentes).
+Estado (04/10/2026): **MA1–MA4 implementados** (MA4: la herramienta; falta que el operador etiquete la muestra) (`lib/src/audit/`, `lab audit <run> [--flat]`, §12). Pendiente: etiquetar
+la primera muestra y MA5 (auditar los runs existentes).
 
 ## 1. Motivación
 
@@ -379,8 +379,49 @@ todos los mundos:** la auditoría no contiene código de ningún mundo.
   están desfasados por el punto de partida del replay. Las citas usan el índice. El desfase queda señalado como tarea
   aparte del arnés.
 
+**MA4 · Calibración contra una persona** (`audit/calibration.ts`; `lab audit sample`, `lab audit agreement`).
+
+- **La muestra** (`label@1`).
+  - Sale de runs ya auditados con Jev.
+  - Estratificada: va alternando experimentos, observaciones, tramos y hechos, al azar con semilla (la misma semilla da la
+    misma muestra).
+  - Delante van los casos de referencia que el operador nombra con `--with` (§7).
+  - Cada elemento lleva **exactamente lo que vio Jev** (los mismos textos, preguntas y opciones) y **no lleva sus
+    respuestas**: el etiquetado es ciego, sin anclaje.
+- **La página de etiquetado** (`<muestra>.html`).
+  - Es autónoma, sin servidor: se abre en el navegador.
+  - Guarda las respuestas en el navegador mientras se etiqueta, y "Descargar etiquetas" devuelve el mismo fichero
+    rellenado.
+  - Cada pregunta admite `skip` ("no puedo decidir").
+  - No va en la consola porque hay un rediseño de la consola en curso (SPEC-CONSOLA-INVESTIGACION).
+- **El acuerdo** (`<etiquetas>.agreement.json`), por pregunta y unidad (`experiment.reading`, `stretch.refutation`,
+  `fact.fact`...):
+  - n, acuerdo y kappa de Cohen;
+  - la matriz de confusión (operador × Jev);
+  - el acuerdo cuando Jev estaba seguro (p ≥ 0.7) y cuando no;
+  - los desacuerdos uno a uno;
+  - una lectura: `usable` (kappa ≥ 0.6 con 10 o más), `reformulate` (kappa < 0.4 con 10 o más), `uncertain` o `too_few`.
+  - Si un run se volvió a auditar después de la muestra, sus elementos quedan fuera y se dice: el acuerdo se mide contra
+    la auditoría que se etiquetó.
+- **Qué hacer con el resultado** (§7):
+  - una pregunta `reformulate` se reescribe (y se vuelve a muestrear) o pasa al código;
+  - hasta que las preguntas que se usan salgan `usable`, las métricas juzgadas no deben compararse entre modelos.
+- **Arreglo hecho al probar la página con el run real.** La lectura por forma tomaba el dibujo de un `act` como una tabla
+  (las filas del tablero como pasos). Ahora una tabla de texto es la que nombra sus columnas; una cabecera de sólo números
+  es la regla de columnas de un dibujo.
+
+**Siguiente paso (del operador).** El orden es:
+
+1. Auditar con Jev, y con `--extract`, uno o dos runs con casos de referencia; por ejemplo, la continuación grid-s22 con
+   `--with r6.s2,r15.s1,r9.s2`.
+2. `lab audit sample <run> --n 30 --with ...`.
+3. Etiquetar en la página.
+4. `lab audit agreement`.
+
+**Coste:** la auditoría con Jev, ~$0.02 de extracción y ~40–70 llamadas a Jev por run; una hora del operador.
+
 **Pendiente:**
 
-- **MA4:** la muestra etiquetada por el operador, para medir el acuerdo con Jev.
+- **MA4:** etiquetar la primera muestra (tarea del operador) y, según el acuerdo, reformular preguntas.
 - **MA5:** auditar los runs existentes.
 
