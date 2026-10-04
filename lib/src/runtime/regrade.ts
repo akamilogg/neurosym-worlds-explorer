@@ -9,6 +9,7 @@ import type { ChatClient } from '../learn/system2.ts';
 import { LABS } from '../worlds/labs.ts';
 import { GRID_GRADING_SYSTEM } from '../worlds/grid/lab.ts';
 import { LabError } from './lab-runner.ts';
+import { methodOf } from '../audit/audit.ts';
 
 /* ============================================================================
  * Grading a finished run AGAIN (operator only): the same grader the run used - how well the
@@ -70,7 +71,7 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   const stamped = { t: last, ...event, regraded: new Date().toISOString() };
   journal.events = [...events, stamped];
   fs.writeFileSync(journalFile, JSON.stringify(journal, null, 2));
-  const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(journalFile) });
+  const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(journalFile), ...methodOf(journalFile) });
   fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.json', JSON.stringify(finding, null, 2));
   fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.researcher.json', JSON.stringify(findingView(finding, 'researcher'), null, 2));
   return { score: typeof event.score === 'number' ? event.score : null, event: stamped, finding };

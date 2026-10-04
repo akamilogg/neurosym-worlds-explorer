@@ -74,7 +74,7 @@ export function runStatus(journal: string, options: { staleMs?: number; now?: nu
 }
 
 /** Whether a file is a run's journal (not one of the files next to it). */
-const isJournal = (name: string): boolean => name.endsWith('.json') && !/\.(finding|finding\.researcher|status)\.json$/.test(name);
+const isJournal = (name: string): boolean => name.endsWith('.json') && !/\.(finding|finding\.researcher|status|method)\.json$/.test(name);
 
 /** The runs in a folder (default: <root>/runs), newest first. */
 export function listRuns(folder: string): RunInfo[] {

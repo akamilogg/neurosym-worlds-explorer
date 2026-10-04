@@ -1,6 +1,7 @@
 # SPEC · Auditoría del método: una métrica más, sobre cómo investiga
 
-Estado (03/10/2026): **propuesta, sin implementar.**
+Estado (04/10/2026): **MA1 y MA3 implementados** (`lib/src/audit/`, `lab audit <run> [--flat]`, §12). Pendientes: MA2
+(extracción estructurada y verificador de hechos O6), MA4 (muestra etiquetada) y MA5 (auditar los runs existentes).
 
 ## 1. Motivación
 
@@ -239,3 +240,77 @@ cuesta el run; la auditoría sobre ellas es marginal.
   senior y la lectura (J3) del junior; se informan por separado.
 - ¿Conviene que el extractor vea los fotogramas citados para normalizar mejor las afirmaciones, a costa de más tokens?
   Con dibujos ASCII de ~150 tokens por fotograma, citar 5 por propuesta añade ~750 tokens: poco.
+
+## 12. Lo implementado (04/10/2026)
+
+**MA1 · Lo que observa el código** (`audit/links.ts`). Reconstruye los eslabones de un journal terminado. Cada uno lleva:
+
+- lo que el investigador tenía antes: sus creencias no abandonadas y el mensaje del operador que aún no había contestado;
+- lo que pidió;
+- lo que respondió el mundo, compactado (sin dibujos largos y con las tablas recortadas);
+- lo que escribió después: la siguiente propuesta o reflexión, y qué parte de ella cita el paso.
+
+Sobre eso calcula O1–O5 con tres ajustes respecto a §4:
+
+- **O1 son experimentos rechazados, no "fantasma".** Un `act` rechazado puede ser evidencia en sí (un movimiento que no es
+  legal) o una prueba que no llegó a hacerse (el bloqueo de g112@12). Cuál de las dos cosas es lo decide el juicio (J3),
+  no el código. El código informa del rechazo y de quién lo citó después.
+- **O4 distingue tres comparaciones:**
+  - `paired`: peticiones desde el mismo punto que difieren;
+  - `replicated`: la misma petición repetida;
+  - `against_recorded`: un replay contrastado con el episodio grabado del que parte. Aquí entran las líneas base del
+    modelo de la ronda 8 en las rondas 12–14.
+- **O2/O3 cuentan como cita más formas de referirse a un paso:** el punto `g20@6`; el paso ("round 3 investigation step
+  2", `investigation:r8.2`); un episodio que el paso creó, nombrado solo (`g94`) o dentro de un rango (`g94–g96`); y los
+  puntos que mostró un check (`check8-lab1-2@4+1`).
+
+**MA3 · Lo que juzga Jev** (`audit/judge.ts`). Usa las preguntas cerradas J1–J4 por eslabón experimental y J5–J6 por
+ronda, con el contrato neutral.
+
+- Jev ve sólo los textos del eslabón: `held_before`, `operator_message`, `requests`, `result` y `written_after`.
+- Para separar lo que propone el senior, J1 tiene la opción `operator`.
+- Cada veredicto guarda la opción más probable, su probabilidad y la distribución entera.
+
+**El fichero** `method_audit@1` (`<run>.method.json`, `audit/audit.ts`) contiene:
+
+- las medidas (§6), con `complete_chains` y los repartos de cada pregunta;
+- el resultado del run al lado, sin combinarlo: sus checks, si aceptó y la recuperación de reglas si la hay;
+- lo observado y lo juzgado.
+
+Además:
+
+- El journal no se toca.
+- El finding del operador enlaza la auditoría (`operator.method_audit`), también tras `lab grade`; el del investigador nunca
+  la ve.
+- `lab list` no confunde el fichero con un run.
+
+**Uso:**
+
+- `lab audit <run>` necesita `JEV_KEY`.
+- `lab audit <run> --flat` sólo hace lo del código y no cuesta nada.
+
+**Pruebas** (`audit.test.ts`): un journal sintético con los casos de referencia sembrados (el par de `act` desde el mismo
+punto, el `act` rechazado y citado, una cita a un episodio inexistente, otra a un punto nunca visto, un paso huérfano, el
+mensaje del senior, la réplica y el replay contra lo grabado) y un Jev sustituto. Comprueban que:
+
+- Jev no ve nada oculto: ni la verdad, ni las medidas del operador, ni sus notas;
+- las medidas no se combinan en una nota;
+- el journal queda igual;
+- el comando funciona en `--flat`.
+
+**Primera lectura** (`--flat`, sobre una copia de la continuación grid-s22 de 16 rondas):
+
+- 15 experimentos, 29 observaciones y 3 lecturas de registro;
+- 388 citas, todas a algo visto;
+- 2 experimentos rechazados, los dos citados después;
+- 4 pasos huérfanos;
+- 14 comparaciones, todas usadas: 3 pareadas, 1 replicada y 10 contra lo grabado;
+- 19 creencias, 4 revisadas.
+
+**Pendiente:**
+
+- **MA2:** extracción estructurada y O6. Hace falta para el caso del "salto" del senior, que es un hecho falso, y para
+  la tabla método × acierto por afirmación.
+- **MA4:** la muestra etiquetada por el operador, para medir el acuerdo con Jev.
+- **MA5:** auditar los runs existentes.
+

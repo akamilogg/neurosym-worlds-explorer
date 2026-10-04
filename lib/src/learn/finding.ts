@@ -88,7 +88,9 @@ export interface Finding {
     readonly learner: { readonly rationale?: string; readonly lessons: readonly string[]; readonly next_experiment?: string } | null;
   };
   /** The operator's view only. */
-  readonly operator?: { readonly rule_recovery?: Facts; readonly judge?: unknown; readonly truth?: unknown };
+  readonly operator?: { readonly rule_recovery?: Facts; readonly judge?: unknown; readonly truth?: unknown;
+    /** The method audit of the run (SPEC-AUDITORIA-METODO), when there is one: its file and its measures, beside the outcome. */
+    readonly method_audit?: { readonly file: string; readonly judge: string | null; readonly measures: unknown } };
   readonly cost: { readonly total?: Facts; readonly to_acceptance?: Facts };
   readonly reproduce: { readonly experiment: string; readonly started?: string; readonly config?: unknown; readonly journal?: string; readonly commit?: string };
 }
@@ -106,7 +108,7 @@ function missed(p: J): number | null {
 }
 
 /** The finding of a journal (any world run through the protocol). `meta`: what the journal does not hold. */
-export function findingOf(journal: J, meta: { journal?: string; commit?: string } = {}): Finding {
+export function findingOf(journal: J, meta: { journal?: string; commit?: string; method?: { file: string; judge: string | null; measures: unknown } } = {}): Finding {
   const events: J[] = Array.isArray(journal.events) ? journal.events : [];
   const end: J = [...events].reverse().find((e) => e.type === 'end') ?? {};
   const checks = events.filter((e) => e.type === 'check');
@@ -220,7 +222,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string 
     operator: {
       ...(recovery && !recovery.error ? { rule_recovery: { score: recovery.score, form: recovery.form, grades: recovery.grades, false_beliefs: recovery.false_beliefs } } : {}),
       ...(summary.judge ? { judge: summary.judge } : {}),
-      ...(journal.hidden_from_the_learner?.truth ? { truth: journal.hidden_from_the_learner.truth } : {})
+      ...(journal.hidden_from_the_learner?.truth ? { truth: journal.hidden_from_the_learner.truth } : {}),
+      ...(meta.method ? { method_audit: meta.method } : {})
     },
     cost: { ...(summary.cost ? { total: summary.cost } : {}), ...(summary.cost_per_acceptance ? { to_acceptance: summary.cost_per_acceptance } : {}) },
     reproduce: { experiment: String(journal.experiment ?? ''), ...(journal.started ? { started: journal.started } : {}), ...(journal.config ? { config: journal.config } : {}),
