@@ -33,7 +33,7 @@ export interface ProjectFile {
 }
 
 /** The endpoints of a role from the environment (a role's own, else the researchers'). */
-export function endpointsFromEnv(env: NodeJS.ProcessEnv, role: 'LLM' | 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM'): { url?: string; model?: string; key?: string } {
+export function endpointsFromEnv(env: NodeJS.ProcessEnv, role: 'LLM' | 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM' | 'AUDIT_LLM'): { url?: string; model?: string; key?: string } {
   const pick = (k: string) => env[role + '_' + k] || env['LLM_' + k];
   return { url: pick('URL'), model: pick('MODEL'), key: pick('KEY') };
 }
@@ -44,9 +44,9 @@ export function labEndpointsFromEnv(env: NodeJS.ProcessEnv): { llm: LabRunOption
 }
 
 /** An agent's or the planner's client, through a replay log when one is given. */
-export function chatFromEnv(env: NodeJS.ProcessEnv, role: 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM', replay?: { file: string; from?: string; channel: string }): ChatClient {
+export function chatFromEnv(env: NodeJS.ProcessEnv, role: 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM' | 'AUDIT_LLM', replay?: { file: string; from?: string; channel: string }): ChatClient {
   const e = endpointsFromEnv(env, role);
-  if (!e.url || !e.model) throw new LabError('the ' + (role === 'PLANNER_LLM' ? 'planner' : role === 'GRADER_LLM' ? 'grader' : 'agent') + ' needs an LLM: ' + role + '_URL and ' + role + '_MODEL (or LLM_URL and LLM_MODEL)');
+  if (!e.url || !e.model) throw new LabError('the ' + (role === 'PLANNER_LLM' ? 'planner' : role === 'GRADER_LLM' ? 'grader' : role === 'AUDIT_LLM' ? 'audit\'s extractor' : 'agent') + ' needs an LLM: ' + role + '_URL and ' + role + '_MODEL (or LLM_URL and LLM_MODEL)');
   const log = replay ? new ReplayLog(replay.file, replay.from ? { from: replay.from } : {}) : null;
   return openAiChatClient({ url: e.url, apiKey: e.key, model: e.model, jsonMode: true, temperature: 0.3, timeoutMs: 180000, retries: 1, ...(log ? { fetch: log.wrap(replay!.channel) } : {}) });
 }

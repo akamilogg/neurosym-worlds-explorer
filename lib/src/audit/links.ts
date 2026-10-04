@@ -155,7 +155,7 @@ export function linksOf(journal: J): LinkRecord {
   const beliefs = new Map<string, { statement: string; status: string; stances: { round: number; stance: string }[] }>();
   /* What the researcher had by each moment: episodes it knew of, and the points it had been shown. */
   const exists = new Set<string>();
-  /* An episode shown whole in one answer: the single position an act of the grid makes (its name is the point). */
+  /* An episode an answer showed whole in one picture (an episode made by a step that is a single position). */
   const seenAll = new Set<string>();
   const seen = new Map<string, Set<number>>();
   const show = (ep: string, from: number, to: number): void => {
@@ -245,40 +245,24 @@ export function linksOf(journal: J): LinkRecord {
         const made: string[] = [];
         const shown: Record<string, string> = {};
         let refused = false;
-        /* Only what an answer showed counts as seen: the frames it held, the rows of the table it gave (a part of an episode
-           when the range asked was a part), the points of a table's rows, the point an inspect answered. */
-        const showRows = (ep: string, table: string, first: number): void => {
-          for (const row of tableRows(table, first)) { show(ep, row.step, row.step); shown[ep + '@' + row.step] = row.line; }
-        };
+        /* Only what an answer showed counts as seen, read by its form, never by the world or the instrument (see shownBy). */
         requests.forEach((q, i) => {
-          const x = (results[i] ?? {}) as J, k = instruments[i], qq = q as J;
+          const x = (results[i] ?? {}) as J, k = instruments[i];
           if (EXPERIMENT_KINDS.has(k) && (x.error || x.accepted === false)) refused = true;
           if (x.error) return;
-          if (k === 'view') {
-            const ep = String(qq.view);
-            const frames: J[] = Array.isArray(x.frames) ? x.frames : [];
-            for (const f of frames) { show(ep, Number(f.step), Number(f.step)); if (typeof f.picture === 'string') shown[ep + '@' + f.step] = f.picture; }
-            if (typeof x.table === 'string') showRows(ep, x.table, Number(qq.from ?? 0));
-            if (!frames.length && typeof x.table !== 'string') exists.add(ep);
+          const ep = episodeOf(q, k);
+          if (ep) exists.add(ep);
+          for (const [point, content] of shownBy(q, k, x)) {
+            const p = pointOf(point);
+            if (p) show(p.ep, p.step, p.step);
+            shown[point] = content;
           }
-          if (k === 'table' && Array.isArray(x.rows)) for (const row of x.rows as J[]) {
-            const p = pointOf(row.point);
-            if (p) { show(p.ep, p.step, p.step); shown[String(row.point)] = typeof row.value === 'string' ? row.value : JSON.stringify(row.value ?? row); }
-          }
-          if (k === 'inspect') { const p = pointOf(qq.inspect); if (p) { show(p.ep, p.step, p.step); shown[String(qq.inspect)] = clip(JSON.stringify(x), 800); } }
-          /* Its own code measured at points: what it measured there is what it saw of them. */
-          if (k === 'measure' && Array.isArray(x.values)) for (const v of x.values as J[]) {
-            const p = pointOf(v.point);
-            if (p) { show(p.ep, p.step, p.step); shown[String(v.point)] = typeof v.value === 'string' ? v.value : JSON.stringify(v.value); }
-          }
-          /* A simulation shows, step by step after its point, what its model said and what was observed. */
-          if (k === 'simulate' && Array.isArray(x.steps)) {
-            const p = pointOf(qq.simulate);
-            if (p) for (const st of x.steps as J[]) if (typeof st.step === 'number') { show(p.ep, st.step, st.step); shown[p.ep + '@' + st.step] = clip(JSON.stringify(st), 600); }
-          }
+          /* An episode the step made (an act's, a replay's): shown as far as the answer showed it; a single picture of it is
+             all of it (a position). */
           for (const name of [x.name, x.episode].filter((n) => typeof n === 'string')) {
             made.push(String(name)); exists.add(String(name));
-            if (typeof x.table === 'string') showRows(String(name), x.table, 0);
+            const text = Object.values(x).find((v) => typeof v === 'string' && tableRows(v).length > 1) as string | undefined;
+            if (text) for (const row of tableRows(text, 0)) { show(String(name), row.step, row.step); shown[name + '@' + row.step] = row.line; }
             else if (typeof x.picture === 'string') { seenAll.add(String(name)); shown[String(name)] = x.picture; }
           }
         });
@@ -332,6 +316,49 @@ export function linksOf(journal: J): LinkRecord {
     beliefs: [...beliefs.entries()].map(([id, b]) => ({ id, statement: b.statement, stances: b.stances })),
     rounds: [...segments, ...(segment.links.length || segment.checks_before.length ? [{ id: 'open', round: links.at(-1)?.round ?? 0, ...segment, closed_by: null }] : [])]
   };
+}
+
+/** The episode a request is about, when it names one: `view: "g12"`, or the episode of a point (`simulate: "ep1@40"`). */
+function episodeOf(q: unknown, k: string): string | null {
+  const v = (q as J)?.[k];
+  if (typeof v !== 'string') return null;
+  const m = /^(.+)@(\d+)$/.exec(v);
+  return m ? m[1] : v;
+}
+
+/** The points an answer showed, and what it showed at each, read by the answer's FORM - the same for every world:
+    - an item that names its point (`{"point": "g2@26", "value": ...}`), or one with a `step` (a frame, a message, a
+      simulated step) of the episode the request is about;
+    - a string in a list, one per step from where the request began;
+    - a text table, row by row (its first column the step when it is a whole number, else its place from where it began);
+    - the point a request names, when the answer is about that point alone (an inspect).
+    The content is the item as it was shown: its picture or text when it has one, else the item itself. */
+export function shownBy(q: unknown, k: string, x: J): [string, string][] {
+  const out: [string, string][] = [];
+  const qq = (q ?? {}) as J;
+  const ep = episodeOf(q, k);
+  const from = Number.isFinite(Number(qq.from)) ? Number(qq.from) : 0;
+  const after = (() => { const m = typeof qq[k] === 'string' ? /@(\d+)$/.exec(qq[k]) : null; return m ? Number(m[1]) : null; })();
+  const contentOf = (item: J): string => {
+    for (const key of ['picture', 'text', 'value']) if (typeof item[key] === 'string') return item[key];
+    const { step: _s, point: _p, ...rest } = item;
+    return clip(JSON.stringify(rest), 800);
+  };
+  let pointed = false;
+  for (const v of Object.values(x)) {
+    if (Array.isArray(v)) v.forEach((item, idx) => {
+      if (item && typeof item === 'object' && typeof (item as J).point === 'string' && /@\d+$/.test((item as J).point)) { out.push([(item as J).point, contentOf(item as J)]); pointed = true; }
+      else if (item && typeof item === 'object' && Number.isFinite((item as J).step) && ep) { out.push([ep + '@' + (item as J).step, contentOf(item as J)]); pointed = true; }
+      else if (typeof item === 'string' && ep && after === null) { out.push([ep + '@' + (from + idx), item]); pointed = true; }
+    });
+    else if (typeof v === 'string' && ep && after === null && !x.name && !x.episode) {
+      const rows = tableRows(v, from);
+      if (rows.length > 1) { for (const r of rows) out.push([ep + '@' + r.step, r.line]); pointed = true; }
+    }
+  }
+  /* An answer about one point and nothing else it pointed at: that point, with the whole answer. */
+  if (!pointed && ep && after !== null && !EXPERIMENT_KINDS.has(k)) out.push([ep + '@' + after, clip(JSON.stringify(x), 800)]);
+  return out;
 }
 
 /** What of a proposal's citations points at this link: its step, an episode it made, or a point it showed. */

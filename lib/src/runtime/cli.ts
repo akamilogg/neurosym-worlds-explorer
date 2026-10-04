@@ -50,7 +50,8 @@ export const CLI_USAGE = [
   'lab agent <run> [--id coach] [--max-orders N]             an agent operator follows the run (it needs --agents coach=message on the run)',
   '          [--role senior] [--patience N]                   a senior: when the run is stuck, it reviews the junior record and proposes a hypothesis',
   'lab grade <run>                                           grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*)',
-  'lab audit <run> [--flat]                                  audit its method (operator only): links, citations, controls; J1-J6 by the Judge (JEV_*), or code only with --flat',
+  'lab audit <run> [--flat] [--extract]                      audit its method (operator only): links, citations, controls; J1-J6 by the Judge (JEV_*), or code only with --flat;',
+  '                                                           --extract: each text\'s claims structured by AUDIT_LLM_* (default LLM_*), the facts among them checked',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
   'lab project list | status <id>                            the projects; one\'s state and report',
@@ -240,12 +241,22 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const { JevJudge, JEV_DEFAULT_URL } = await import('../core/jev.ts');
         if (!flat && !env.JEV_KEY) { out('the Judge is needed: JEV_KEY (or --flat for what code observes only)'); return 1; }
         const judge = flat ? null : new JevJudge({ url: env.JEV_URL || JEV_DEFAULT_URL, apiKey: env.JEV_KEY, model: env.JEV_MODEL || undefined, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8 });
-        const a = await auditMethod(journal, judge);
+        let extractor: { llm: import('../learn/system2.ts').ChatClient; model: string } | null = null;
+        if (args.includes('--extract')) {
+          const { chatFromEnv, endpointsFromEnv } = await import('../orchestra/launch.ts');
+          extractor = { llm: chatFromEnv(env, 'AUDIT_LLM'), model: endpointsFromEnv(env, 'AUDIT_LLM').model ?? '' };
+        }
+        const a = await auditMethod(journal, judge, extractor);
         const m = a.measures;
         out('links: ' + m.links.experiment + ' experiments, ' + m.links.observation + ' observations, ' + m.links.recall + ' readings of a record');
         out('citations: ' + m.citations.seen + ' seen, ' + m.citations.unseen + ' not seen, ' + m.citations.missing + ' to nothing; refused experiments ' + m.refused_experiments.count + ' (' + m.refused_experiments.cited_after + ' cited after)');
         out('orphan steps ' + m.orphan_steps.count + '; controls ' + m.controls.groups + ' (' + m.controls.used + ' used); beliefs ' + m.beliefs.count + ' (' + m.beliefs.revised + ' revised, ' + m.beliefs.dropped + ' dropped)');
         if (m.judged) out('judged (' + a.judge + ', ' + (a.judged?.calls ?? 0) + ' calls' + (a.judged?.errors.length ? ', ' + a.judged.errors.length + ' failed' : '') + '): complete chains ' + m.judged.complete_chains + '; reading ' + JSON.stringify(m.judged.reading) + '; refutation ' + JSON.stringify(m.judged.refutation));
+        if (a.extracted) {
+          const c = a.measures.claims as { claims: number; by_kind: Record<string, number>; facts: { checked: number; true: number; false: number; unverifiable: number }; false_facts: { author: string; text: string }[] };
+          out('claims (' + a.extracted.model + (a.extracted.same_model_as_researcher ? ', THE SAME MODEL AS THE RESEARCHER' : '') + '): ' + c.claims + ' ' + JSON.stringify(c.by_kind) + '; facts checked ' + c.facts.checked + ': ' + c.facts.true + ' true, ' + c.facts.false + ' false, ' + c.facts.unverifiable + ' unverifiable');
+          for (const f of c.false_facts.slice(0, 5)) out('  false (' + f.author + '): ' + f.text);
+        }
         out('outcome, beside it: ' + JSON.stringify(a.outcome.checks.map((c: { scored_1?: number; of?: number; holds: boolean }) => c.scored_1 !== undefined ? c.scored_1 + '/' + c.of : c.holds ? 'holds' : 'fails')) + (a.outcome.rule_recovery !== undefined ? ', rule recovery ' + a.outcome.rule_recovery : ''));
         out('written to ' + path.basename(auditFile(journal)) + '; the operator\'s finding links it');
         return 0;

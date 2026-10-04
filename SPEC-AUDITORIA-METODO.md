@@ -1,7 +1,7 @@
 # SPEC · Auditoría del método: una métrica más, sobre cómo investiga
 
-Estado (04/10/2026): **MA1 y MA3 implementados** (`lib/src/audit/`, `lab audit <run> [--flat]`, §12). Pendientes: MA2
-(extracción estructurada y verificador de hechos O6), MA4 (muestra etiquetada) y MA5 (auditar los runs existentes).
+Estado (04/10/2026): **MA1, MA2 y MA3 implementados** (`lib/src/audit/`, `lab audit <run> [--flat]`, §12). Pendientes: MA4 (muestra
+etiquetada) y MA5 (auditar los runs existentes).
 
 ## 1. Motivación
 
@@ -338,10 +338,49 @@ y reflexión.
 Las métricas todavía no deben usarse para comparar modelos hasta MA4 (calibración con la muestra etiquetada). Las pruebas
 usan un Jev sustituto: verifican la integración, no la calidad del juicio real.
 
+**MA2 · Afirmaciones y hechos** (`audit/extract.ts`, `audit/facts.ts`; `lab audit <run> --extract`). **Igual para
+todos los mundos:** la auditoría no contiene código de ningún mundo.
+
+- **Qué se extrae.** Un LLM convierte el texto de cada propuesta, cada reflexión y cada mensaje del operador (el senior
+  incluido) en afirmaciones con:
+  - el texto, conservando todo lo que dice (lugares, valores, pasos);
+  - el tipo: `fact` (algo observado en puntos concretos), `sample_pattern` (una regularidad de una muestra) o `hypothesis`
+    (una regla o explicación, por firme que se diga);
+  - las citas.
+- **Qué ve el extractor.** El texto y lo que se mostró en los puntos que cita. Nada oculto.
+- **Qué no hace.** Ni juzga ni corrige, y no normaliza a ningún formato de mundo.
+- **Qué modelo.** Usa `AUDIT_LLM_*` (por defecto `LLM_*`). Si es el mismo modelo que el investigador, la auditoría lo dice
+  (`same_model_as_researcher`).
+- **O6, la comprobación.** El código observa y Jev juzga, como en el resto:
+  1. El código reúne lo que el run registró como **mostrado** en los puntos que cita un hecho.
+  2. Esa lectura se hace **por la forma de la respuesta**, nunca por el mundo ni por el instrumento (`shownBy`):
+     - elementos que nombran su punto (`{"point": "g2@26", ...}`);
+     - elementos con `step` del episodio pedido (fotogramas, mensajes, pasos simulados);
+     - listas de cadenas (una por paso);
+     - tablas de texto, fila a fila;
+     - la respuesta entera de una petición sobre un solo punto.
+  3. Jev, con el contrato neutral, dice si lo mostrado respalda la afirmación (`supported`), la contradice
+     (`contradicted`) o no basta (`cannot_tell`).
+  4. Si en esos puntos no se mostró nada, o no hay Jev, el hecho queda `unverifiable` sin preguntar.
+- **Lo que sustituye.** Una primera versión leía las casillas de los dibujos de la cuadrícula. Se descartó porque cada
+  mundo nuevo habría necesitado su verificador. La lectura por forma también sustituyó, en MA1, el tratamiento por
+  instrumento de `view`, `table`, `measure` y `simulate`, con los mismos resultados en los runs reales de la cuadrícula y
+  del mundo 3D.
+- **El precio.** El código ya no comprueba casillas de forma exacta; la comprobación es tan buena como el juicio de Jev
+  sobre dibujos y tablas en texto. El caso del "salto" del senior en g76@6–7 queda como caso de referencia para la
+  calibración (MA4).
+- **Medidas** (`measures.claims`):
+  - afirmaciones por tipo;
+  - hechos comprobados (verdaderos, falsos, inverificables y exactitud), por autor: investigador u operador;
+  - la lista de hechos falsos, con sus puntos y la respuesta de Jev.
+- **La tabla método × acierto de §6, a nivel de afirmación,** cubre los hechos. Para las hipótesis haría falta calificar cada
+  una contra la validación o la verdad: sigue pendiente.
+- **Hallazgo de paso.** En los episodios de un `replay`, el índice del fotograma (`g76@6`) y la etiqueta `step N` del dibujo
+  están desfasados por el punto de partida del replay. Las citas usan el índice. El desfase queda señalado como tarea
+  aparte del arnés.
+
 **Pendiente:**
 
-- **MA2:** extracción estructurada y O6. Hace falta para el caso del "salto" del senior, que es un hecho falso, y para
-  la tabla método × acierto por afirmación.
 - **MA4:** la muestra etiquetada por el operador, para medir el acuerdo con Jev.
 - **MA5:** auditar los runs existentes.
 
