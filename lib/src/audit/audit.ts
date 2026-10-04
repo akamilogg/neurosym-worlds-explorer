@@ -4,6 +4,8 @@ import type { Judge } from '../core/types.ts';
 import { linksOf, type LinkRecord } from './links.ts';
 import { judgeMethod, type Judgements, type Verdict } from './judge.ts';
 import { findingOf } from '../learn/finding.ts';
+import type { ChatClient } from '../learn/system2.ts';
+import { extractClaims, factMeasures, type Source } from './extract.ts';
 
 /* ============================================================================
  * THE METHOD AUDIT of a finished run (SPEC-AUDITORIA-METODO, MA1 + MA3): its links and what code
@@ -30,6 +32,9 @@ export interface MethodAudit {
   readonly outcome: J;
   readonly observed: Omit<LinkRecord, 'links' | 'rounds'> & { readonly links: readonly J[] };
   readonly judged: Judgements | null;
+  /** What each text claims, structured by an LLM (MA2), with the facts among them checked against the recorded pictures (O6);
+      null when the audit did not extract. */
+  readonly extracted: { readonly model: string; readonly same_model_as_researcher: boolean; readonly sources: readonly Source[] } | null;
 }
 
 export interface Measures {
@@ -39,6 +44,8 @@ export interface Measures {
   readonly orphan_steps: { readonly count: number; readonly share: number | null };
   readonly controls: { readonly groups: number; readonly used: number; readonly paired: number; readonly replicated: number; readonly against_recorded: number };
   readonly beliefs: { readonly count: number; readonly revised: number; readonly dropped: number };
+  /** The claims the extractor structured, by kind, and the facts among them checked (MA2, O6); absent without extraction. */
+  readonly claims?: Record<string, any>;
   /** From the Judge (null without it): shares of the experiment links (or rounds) by answer. */
   readonly judged?: {
     readonly complete_chains: number | null;
@@ -106,20 +113,23 @@ export function outcomeOf(journal: J): J {
 }
 
 /** Audits a finished run; with no Judge, only what code observes. Writes `<run>.method.json` and returns it. */
-export async function auditMethod(journalFile: string, judge: (Judge & { readonly id: string }) | null): Promise<MethodAudit> {
+export async function auditMethod(journalFile: string, judge: (Judge & { readonly id: string }) | null,
+  extractor: { readonly llm: ChatClient; readonly model: string } | null = null): Promise<MethodAudit> {
   const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')) as J;
   if (!(journal.events ?? []).some((e: J) => e.type === 'end')) throw new Error('audit: the run has not ended (M1: the audit is of a finished run)');
   const record = linksOf(journal);
   const judged = judge ? await judgeMethod(record, judge) : null;
+  const sources = extractor ? await extractClaims(journal, record, extractor.llm, judge) : null;
   const { links, rounds: _rounds, ...rest } = record;
   const audit: MethodAudit = {
     format: 'method_audit@1', run: path.basename(journalFile), audited: new Date().toISOString(),
     researcher: String(journal.researcher ?? 'unknown-world'), model: journal.config?.llm_model ?? null,
     judge: judge ? judge.id : null,
-    measures: measuresOf(record, judged),
+    measures: { ...measuresOf(record, judged), ...(sources ? { claims: factMeasures(sources) } : {}) },
     outcome: outcomeOf(journal),
     observed: { ...rest, links: links.map((l) => ({ id: l.id, kind: l.kind, instruments: l.instruments, refused: l.refused, made: l.made, cited_by: l.after?.cites_this ?? [] })) },
-    judged
+    judged,
+    extracted: extractor && sources ? { model: extractor.model, same_model_as_researcher: extractor.model === (journal.config?.llm_model ?? null), sources } : null
   };
   fs.writeFileSync(auditFile(journalFile), JSON.stringify(audit, null, 2));
   /* The operator's finding links it; the researcher's is left as it was (M1). */
