@@ -65,6 +65,15 @@ test('only methods: everything else of the runs is not there to read, not even a
   assert.match(JSON.stringify(opened.items[1]), /only the methods/);
   const found = await x.run({ experience: 'find', words: 'edge' }) as any;
   assert.equal(found.runs[0].matches, 0, 'the observation about the edge is not found');
+  /* A request that mixes in a field of the memory's own (another operation) is answered as the operation checked. */
+  for (const mixed of [{ experience: 'list', run: 'exp1', memory: 'open', items: ['note:edge', 'belief:grow'] },
+    { experience: 'find', run: 'exp1', memory: 'open', items: ['note:edge'], words: 'edge' },
+    { experience: 'open', run: 'exp1', memory: 'find', words: 'edge', items: ['method:pair'] },
+    { experience: 'list', run: 'exp1', memory: 'list', of: 'methods', item: 'note:edge' }]) {
+    const answer = JSON.stringify(await x.run(mixed));
+    assert.ok(!/edge grows|right edge|SECRET/.test(answer), 'nothing outside the methods: ' + JSON.stringify(mixed) + ' -> ' + answer.slice(0, 200));
+    assert.match(answer, new RegExp('"experience":"' + mixed.experience + '"'));
+  }
   assert.ok(!/edge grows|SECRET/.test(JSON.stringify([runs, listed, opened, found])));
   const all = new Experience([{ label: 'exp1', journal: journal(), sameWorld: false }]);
   assert.ok((await all.run({ experience: 'find', words: 'edge' }) as any).runs[0].matches >= 2, 'with all, observations too');

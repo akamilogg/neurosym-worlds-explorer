@@ -93,7 +93,10 @@ export class Experience {
         researcher: r.journal.researcher === 'assisted' ? 'assisted' : 'unaided', items: this.counts(r.label) })) };
     }
     if (!['list', 'open', 'find'].includes(what)) return { experience: what, error: 'experience is "runs", "list", "open" or "find"' };
-    const { experience: _, run, ...rest } = q;
+    /* Only the fields of these requests pass to the reader, and the operation is the one asked as "experience": a field of
+       the request (a "memory" of its own) never changes what was checked against the scope. */
+    const run = q.run;
+    const rest: Record<string, unknown> = Object.fromEntries(Object.entries(q).filter(([k]) => FIELDS.has(k)));
     /* Only methods: every request is narrowed to them, and anything else is not there to read. */
     let refusedIds: string[] = [];
     if (this.scope === 'methods') {
@@ -107,7 +110,7 @@ export class Experience {
         if (!(rest.items as string[]).length) return { experience: what, ...(run ? { run } : {}), error: 'only the methods of these runs are given (ids "method:<id>")' };
       }
     }
-    const memoryRequest = { memory: what, ...rest };
+    const memoryRequest = { ...rest, memory: what };
     if (typeof run === 'string') {
       const reader = this.reader(run);
       if (!reader) return { experience: what, run, error: 'no such run (runs: ' + labels.join(', ') + ')' };
@@ -121,6 +124,9 @@ export class Experience {
     return { experience: 'find', runs: answers };
   }
 }
+
+/** The fields a request of experience may carry to the reader (besides its operation and its run). */
+const FIELDS = new Set(['of', 'items', 'item', 'words', 'find', 'select', 'whole']);
 
 /** A memory answer without its own word for the request (`memory`), told here as `experience`. */
 function strip(answer: unknown): Record<string, unknown> {
