@@ -52,6 +52,8 @@ export const CLI_USAGE = [
   'lab grade <run>                                           grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*)',
   'lab audit <run> [--flat] [--extract]                      audit its method (operator only): links, citations, controls; J1-J6 by the Judge (JEV_*), or code only with --flat;',
   '                                                           --extract: each text\'s claims structured by AUDIT_LLM_* (default LLM_*), the facts among them checked',
+  'lab audit sample <run>[,<run>] [--n 30] [--seed N] [--with <ids>]  a blind sample of what the Judge judged in audited runs, and a page to label it',
+  'lab audit agreement <labels.json>                        the agreement of the operator\'s labels with the Judge, per question (kappa, confusion)',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
@@ -235,6 +237,34 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         return 0;
       }
       case 'audit': {
+        /* Calibration against a person (MA4): a blind sample to label, and the agreement of the labels with the Judge. */
+        if (args[0] === 'sample') {
+          args.shift();
+          const runs = (args.shift() ?? '').split(',').filter(Boolean).map((r) => resolveRun(ctx.root, r));
+          const n = Number(take(args, 'n') ?? 30), seed = Number(take(args, 'seed') ?? 1), refs = (take(args, 'with') ?? '').split(',').filter(Boolean);
+          const { sample, labelPage } = await import('../audit/calibration.ts');
+          const labels = sample(runs, { n, seed, references: refs });
+          const outFile = path.resolve(take(args, 'out') ?? path.join(path.dirname(runs[0]), 'labels-' + labels.created.replace(/[:.]/g, '-') + '.json'));
+          fs.writeFileSync(outFile, JSON.stringify(labels, null, 2));
+          fs.writeFileSync(outFile.replace(/\.json$/, '') + '.html', labelPage(labels));
+          const by: Record<string, number> = {};
+          for (const i of labels.items) by[i.unit] = (by[i.unit] ?? 0) + 1;
+          out(labels.items.length + ' items to label ' + JSON.stringify(by) + (refs.length ? ', ' + labels.items.filter((i) => i.reference).length + ' of them reference cases' : '') + '; the Judge\'s answers are not in it');
+          out('label them in ' + path.basename(outFile.replace(/\.json$/, '') + '.html') + ' (open it in a browser; "Descargar etiquetas" saves them), then: lab audit agreement <the labels file>');
+          return 0;
+        }
+        if (args[0] === 'agreement') {
+          const file = path.resolve(args[1] ?? '');
+          const { agreement } = await import('../audit/calibration.ts');
+          const labels = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const a = agreement(labels, (run) => resolveRun(ctx.root, run));
+          out(a.labelled + ' items labelled' + (a.stale.length ? '; ' + a.stale.length + ' left out: their run was audited again after the sample (' + a.stale.slice(0, 3).join(', ') + ')' : ''));
+          for (const q of a.questions) out(q.question + ': n ' + q.n + ', agreement ' + q.agreement + ', kappa ' + q.kappa + ' -> ' + q.reading
+            + ' (sure ' + q.when_sure.agreement + ' of ' + q.when_sure.n + ', unsure ' + q.when_unsure.agreement + ' of ' + q.when_unsure.n + ')');
+          fs.writeFileSync(file.replace(/\.json$/, '') + '.agreement.json', JSON.stringify(a, null, 2));
+          out('written to ' + path.basename(file.replace(/\.json$/, '') + '.agreement.json'));
+          return 0;
+        }
         const journal = resolveRun(ctx.root, args[0]);
         const env = ctx.env ?? process.env;
         const flat = args.includes('--flat');
