@@ -3,7 +3,7 @@ import { parseJsonLoose } from '../core/net.ts';
 import type { ChatClient } from '../learn/system2.ts';
 import { orderOutcome, runStatus, send } from '../runtime/control.ts';
 import { researcherEvents, runDigest } from './view.ts';
-import { followUpDue, journalReader, juniorBrief, stuckSignals, type StuckSignals } from './reader.ts';
+import { followUpDue, journalReader, juniorBrief, juniorPercept, stuckSignals, type StuckSignals } from './reader.ts';
 import { UserParts } from '../learn/system2.ts';
 
 /* ============================================================================
@@ -47,9 +47,15 @@ export const SENIOR_ROLE = [
   'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"}'
 ].join('\n');
 
-/** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), its instructions. */
-export const seniorSystem = (brief: string | null): string =>
-  brief ? SENIOR_HEAD + '\n\n=== THE JUNIOR\'S BRIEF ===\n\n' + brief + '\n\n=== END OF THE JUNIOR\'S BRIEF ===\n\n' + SENIOR_ROLE : SENIOR_HEAD + '\n\n' + SENIOR_ROLE;
+/** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), what the
+    junior's code receives at a point (its `percept`, which reaches the junior with every round rather than in its brief:
+    without it the senior may advise reading what the junior's code cannot see), its instructions. */
+export const seniorSystem = (brief: string | null, percept: string | null = null): string =>
+  SENIOR_HEAD + '\n\n'
+  + (brief ? '=== THE JUNIOR\'S BRIEF ===\n\n' + brief + '\n\n=== END OF THE JUNIOR\'S BRIEF ===\n\n' : '')
+  + (percept ? '=== WHAT THE JUNIOR\'S CODE RECEIVES AT A POINT (its `percept`, given to it with every round) ===\n\n' + percept
+    + '\n\nIts observations and output can read these fields and nothing else; what its views and tables show besides them is for the junior to read, not for its code.\n\n=== END ===\n\n' : '')
+  + SENIOR_ROLE;
 
 export type AgentRole = 'coach' | 'senior';
 
@@ -213,7 +219,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
      to have had time with its last message. */
   if (!followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const reader = journalReader(journal, { openLimit: o.openLimit ?? 4000 });
-  const system = seniorSystem(juniorBrief(journal));
+  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal));
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
   const experiment = followUp ? ((await reader.run({ memory: 'open', items: [followUp.experiment] })) as { items?: { item?: unknown }[] }).items?.[0]?.item ?? null : null;

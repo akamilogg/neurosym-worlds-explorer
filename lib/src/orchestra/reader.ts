@@ -3,6 +3,7 @@ import { explorerSystem } from '../learn/explorer.ts';
 import { system2Prompt, type Tool } from '../learn/prompt.ts';
 import { isGameLab } from '../learn/lab.ts';
 import { LABS } from '../worlds/labs.ts';
+import { GRID_PERCEPT_DOC } from '../worlds/grid/sense.ts';
 
 /* ============================================================================
  * A researcher's RECORD as another agent reads it (SPEC-ORQUESTADOR §3.3): the senior who
@@ -110,6 +111,14 @@ export function juniorBrief(journal: J): string | null {
       ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) }), tools);
   const at = prompt.indexOf(ANSWER_SHAPE);
   return (at >= 0 ? prompt.slice(0, at) : prompt).trimEnd();
+}
+
+/** What the junior's code receives at a point (its `percept`, given in every round's message, not in its brief): the
+    fields its observations and output can read. Null when the journal's world is not known here. */
+export function juniorPercept(journal: J): string | null {
+  const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
+  if (!lab) return null;
+  return isGameLab(lab) ? GRID_PERCEPT_DOC : lab.perceptDoc;
 }
 
 /** A follow-up the senior owes (SPEC-ORQUESTADOR §3.3): the junior got its latest message and then ran an experiment.

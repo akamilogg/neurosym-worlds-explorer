@@ -64,6 +64,18 @@ test('the console lists runs and shows one: its state, events, model, check, bel
   } finally { await c.close(); }
 });
 
+test('the console lists the runs of a batch started on its own, by their path, and shows them', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-'));
+  await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--attempts', '1', '--flat', '--no-grade', '--no-reflection', '--out', path.join(root, 'runs', 'batches', 'b1', 'r1.json')], root,
+    llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: stub });
+  const c = await serveConsole({ root, port: 0 });
+  try {
+    const runs = (await call(c.url + '/api/runs')).json;
+    assert.deepEqual(runs.map((x: { run: string }) => x.run), ['batches/b1/r1']);
+    assert.equal((await call(c.url + '/api/runs/' + encodeURIComponent('batches/b1/r1'))).json.status.state, 'ended');
+  } finally { await c.close(); }
+});
+
 test('the console is local and careful: other hosts, other folders, ended runs and unknown labs are refused', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-'));
   await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--attempts', '1', '--flat', '--no-grade', '--no-reflection', '--out', path.join(root, 'runs', 'one.json')], root,

@@ -48,6 +48,15 @@ function runByName(root: string, name: string): RunInfo | null {
 /** A run's name for the page: its path under runs/, without .json. */
 const nameOf = (root: string, journal: string): string => path.relative(path.join(root, 'runs'), journal).split(path.sep).join('/').replace(/\.json$/, '');
 
+/** The runs the page lists: those of the folder, and those of the batches started on their own (`lab batch`, under
+    runs/batches/<id>/), by their path - newest first. A project's batches are shown with the project. */
+function allRuns(root: string): RunInfo[] {
+  const batches = path.join(root, 'runs', 'batches');
+  const inBatches = fs.existsSync(batches) ? fs.readdirSync(batches, { withFileTypes: true }).filter((d) => d.isDirectory())
+    .flatMap((d) => listRuns(path.join(batches, d.name)).map((r) => ({ ...r, run: nameOf(root, r.journal) }))) : [];
+  return [...listRuns(path.join(root, 'runs')), ...inBatches].sort((a, b) => (b.started ?? '').localeCompare(a.started ?? ''));
+}
+
 /** What the page shows of a project: its record and state, its batches (tables, and their runs by name), its report. */
 export function projectView(root: string, id: string): Json | null {
   const s = projectStatus(root, id);
@@ -116,7 +125,7 @@ export function serveConsole(options: ConsoleOptions): Promise<{ url: string; cl
       if (req.method === 'GET' && url.pathname === '/') return send_(200, CONSOLE_PAGE, 'text/html');
       if (req.method === 'GET' && url.pathname === '/api/labs') return send_(200, labsView());
       if (parts[0] === 'api' && parts[1] === 'runs' && parts.length === 2) {
-        if (req.method === 'GET') return send_(200, listRuns(path.join(root, 'runs')));
+        if (req.method === 'GET') return send_(200, allRuns(root));
         if (req.method === 'POST') {
           const b = await body(req);
           if (!LABS[b.lab]) return send_(400, { error: 'unknown laboratory ' + b.lab });
