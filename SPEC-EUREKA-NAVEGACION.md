@@ -313,5 +313,47 @@ sus protocolos (5 de cada familia) y comparamos:
     cortada, conexión escalada y un parámetro cambiado funciona (203 conexiones). Tardaron 113–161 s con dos a la vez.
   - Pruebas: `lib/test/c302-service.test.ts`, con un trabajador sustituto.
 
-**Siguiente (N1):** los generadores de las dos familias de estímulo, con semilla, comparados con las estadísticas de sus
-protocolos; después el laboratorio (N2).
+## 11. N1 hecho (05/10/2026): las dos familias de estímulo
+
+Medidas sobre sus 100 protocolos (67 de la familia vista y 33 de la no vista) y reproducidas en
+`lib/src/worlds/c302nav/stimuli.ts`, con semilla. Ninguna línea de su código: sólo lo que describen y lo que se mide en
+los estímulos.
+
+**`steps` (la vista):**
+
+- trenes irregulares; cada pulso sortea por su cuenta:
+  - anchura en {60, 120, 200, 320, 400} ms;
+  - separación hasta el siguiente en {100, 200, 400, 700, 900} ms;
+  - total en {2,5; 3,5; 4,5; 5,5; 6} pA;
+  - reparto izquierda/(izquierda + derecha) en {0; 0,25; 0,5; 0,75; 1};
+- el primer pulso, a 200, 350 o 500 ms;
+- siguen hasta el final del run (el último termina a 8985 ms como mucho).
+
+**`rotating` (la no vista):**
+
+- en cada run, una anchura en {150, 250, 350} ms y un periodo en {500, 700, 900, 1200} ms;
+- el primer pulso a 200 ms;
+- el total gira como 3,25 + 2,75·cos(2πt/T + φ), con T en {2000, 3000, 4500} ms;
+- el reparto gira como 0,5 + 0,45·cos(2πt/T' + φ'), con T' ≈ 1,43·T;
+- las fases son al azar;
+- el último pulso termina a 8900 ms como mucho. Con esta regla coinciden sus 33 protocolos; con el final del run, sólo
+  24.
+
+**Comparación (400 protocolos nuestros frente a los suyos):**
+
+| | pulsos por run | fracción de tiempo con corriente |
+|---|---|---|
+| `steps` | 8–18, mediana 13 (suyos: 10–18, mediana 13) | 0,316 (suyos: 0,311) |
+| `rotating` | 7–18 (suyos: 7–18) | 0,343 (suyos: 0,341) |
+
+Anchuras, separaciones, totales y repartos tienen exactamente los mismos conjuntos de valores.
+
+**Una diferencia que no reproducimos:**
+
+- Algunos de sus pulsos no caen en la rejilla de 5 ms: aparecen anchuras de 55 y 65 ms.
+- Los nuestros empiezan en múltiplos de 5 ms.
+- Es una de las razones posibles de que sus señales no se reconstruyan al número (§10), y no cambia la familia.
+
+Pruebas: `lib/test/c302nav-stimuli.test.ts`.
+
+**Siguiente (N2):** el laboratorio `c302-navigation@1`.
