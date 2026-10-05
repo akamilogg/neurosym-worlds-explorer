@@ -51,7 +51,7 @@ export const CLI_USAGE = [
   'The orchestra (SPEC-ORQUESTADOR):',
   'lab agent <run> [--id coach] [--max-orders N]             an agent operator follows the run (it needs --agents coach=message on the run)',
   '          [--role senior] [--patience N]                   a senior: when the run is stuck, it reviews the junior record and proposes a hypothesis',
-  'lab grade <run>                                           grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*)',
+  'lab grade <run> [--senior [id]]                          grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*); --senior: its senior\'s own notebook',
   'lab audit <run> [--flat] [--extract]                      audit its method (operator only): links, citations, controls; J1-J6 by the Judge (JEV_*), or code only with --flat;',
   '                                                           --extract: each text\'s claims structured by AUDIT_LLM_* (default LLM_*), the facts among them checked',
   'lab audit sample <run>[,<run>] [--n 30] [--seed N] [--with <ids>]  a blind sample of what the Judge judged in audited runs, and a page to label it',
@@ -230,8 +230,19 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const journal = resolveRun(ctx.root, args[0]);
         const env = ctx.env ?? process.env;
         const { chatFromEnv, endpointsFromEnv } = await import('../orchestra/launch.ts');
-        const { regrade } = await import('./regrade.ts');
+        const { regrade, gradeSenior } = await import('./regrade.ts');
         const model = endpointsFromEnv(env, 'GRADER_LLM').model ?? '';
+        /* --senior [id]: what the run's senior understood, from its own notebook (SPEC-ORQUESTADOR §3.3.1). */
+        const s = args.indexOf('--senior');
+        if (s >= 0) {
+          const id = args[s + 1] && !args[s + 1].startsWith('--') ? args[s + 1] : 'senior';
+          const { agentFile } = await import('../orchestra/agent-operator.ts');
+          const g = await gradeSenior(journal, agentFile(journal, id), chatFromEnv(env, 'GRADER_LLM'), model);
+          if (g.score === null) { out('the grading failed: ' + String(g.event.error)); return 1; }
+          out('the senior\'s recovery ' + g.score + ' (graded by ' + model + '): ' + (g.event.grades as { id: string; grade: string }[]).map((x) => x.id + ':' + x.grade).join(' '));
+          out('appended to ' + path.basename(agentFile(journal, id)));
+          return 0;
+        }
         const r = await regrade(journal, chatFromEnv(env, 'GRADER_LLM'), model);
         if (r.score === null) { out('the grading failed: ' + String(r.event.error)); return 1; }
         out('rule recovery ' + r.score + ' (graded by ' + model + '): ' + (r.event.grades as { id: string; grade: string }[]).map((g) => g.id + ':' + g.grade).join(' '));

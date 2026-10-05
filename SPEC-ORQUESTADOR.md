@@ -224,6 +224,117 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
 - La pregunta del experimento es si el junior **aprende o solo obedece**: si la hipótesis del senior acaba como creencia con evidencia propia (sus `act`, sus pruebas) o solo citada.
 - Diseño propuesto: Qwen como junior en grid seed 22, en tres condiciones (solo, con coach, con senior Luna o Sol).
 
+### 3.3.1 El senior como investigador con memoria (implementado, 05/10/2026)
+
+**De dónde sale.** En el run N2 de `navigation-goals` (`runs/batches/c302nav-n2-task`), el senior aportó las tres ideas
+que acabaron en el modelo aceptado. Aun así, cada decisión empezaba de cero:
+- **Sólo cacheaba el 29 % de su entrada** (el junior, el 62 %). En cada decisión pagaba otra vez el resumen de las 3
+  últimas rondas, y la ventana avanzaba, así que ni ese resumen se reutilizaba.
+- **No recordaba su propio razonamiento.** Lo único que veía de antes eran sus decisiones (`your_decisions`), no por qué
+  las tomó ni lo que había leído.
+- **Al reanudar el run perdía todo.** El senior nuevo repitió una hipótesis parecida a la última y gastó una ayuda.
+- **No tenía dónde anotar.** Siendo un investigador con tarea propia (§3.3), no podía guardar sus hipótesis, sus
+  métodos ni lo que había descartado.
+
+Idea del autor: si un senior sigue a un junior, no tiene por qué olvidarlo todo. Es un investigador en toda regla,
+aunque no actúe sobre el mundo, y puede tener su propio cuaderno, anotar insights y recuperar métodos.
+
+**Qué cambia.**
+- **Una conversación que sólo crece en todo el run**, no una por decisión. Funciona como la del junior dentro de una
+  ronda:
+  1. el sistema (igual que hoy);
+  2. su contexto inicial: su cuaderno y el resumen del run hasta ese momento;
+  3. en cada decisión se añade sólo lo nuevo: las rondas completadas desde la anterior (`new_rounds`), las señales o el
+     seguimiento por los que se le llama, y después sus lecturas y su decisión.
+  
+  Nada de lo enviado cambia después, así que en cada decisión se reutiliza el prefijo de todas las anteriores.
+- **Consolidar, como el junior.** Cuando lo crea conveniente, el senior responde `{"consolidate": {"summary": "...",
+  "keep": [...]}}`. Su conversación se reinicia desde un contexto nuevo: su cuaderno tal como está, su resumen y los
+  pasos que quiso conservar. Rompe la caché una vez.
+  - Si la conversación pasa de un tamaño (`maxContextTokens`, unos 150k por defecto), se le pide que consolide antes de
+    seguir, con un aviso como los de "sin lecturas".
+  - El arnés nunca resume por él.
+- **Su propio cuaderno**, el mismo `Notebook` del junior y en el mismo formato:
+  - **creencias** con postura (`new`, `keep`, `revise`, `confirm`, `drop`) y evidencia del registro del junior;
+  - **notas;**
+  - **métodos**, cómo lee y cruza el registro, que recupera en cada consolidación.
+  
+  Lo escribe con los mismos campos que el junior (`beliefs`, `notes`, `methods`) en cualquiera de sus respuestas,
+  también en las que sólo lee o espera.
+- **Su memoria también cubre su cuaderno.** `list`, `open` y `find` leen hoy el registro del junior. Añaden los tipos
+  `my_beliefs`, `my_notes` y `my_methods`, y sus decisiones anteriores con lo que leyó (`my_decisions`).
+- **Sobrevive a una reanudación.** Su estado (cuaderno, decisiones y la conversación desde su última consolidación) vive
+  en su registro (`agent@1`). Un run reanudado, sea por el lote o con `lab agent`, carga el del run del que deriva y
+  sigue donde estaba.
+
+**Qué no cambia.**
+- Sólo lee el registro del junior; nunca actúa sobre el mundo ni ve la parte oculta (Q2).
+- Su cuaderno **es suyo:** el junior nunca lo ve. Lo que le llega son sus mensajes, como hoy, con la misma política
+  (`--agents`) y el mismo presupuesto (`--help-budget`).
+- **Cuándo se le llama no cambia:** señales, pausa tras un mensaje, seguimiento y dentro de la ronda (§3.3). Una espera
+  sigue sin gastar ayuda, y ahora además le deja escribir en su cuaderno.
+- El brief del junior palabra por palabra y el percepto (§3.3) siguen en su sistema.
+
+**Medidas (sólo operador).**
+- **Coste:** la entrada cacheada por decisión y en el total del run. Se espera pasar del 29 % a más del 70 %.
+- **Lo que entendió el senior frente al junior.** Con verdad, el calificador puntúa también el cuaderno del senior
+  (`operator_rule_recovery` con `subject: senior`). Así se sabe si las ideas se quedaron en el senior o llegaron al junior.
+- **Si el junior aprende o sólo obedece** (§3.3): ahora puede compararse cada creencia del senior con la del junior que
+  nació de su mensaje.
+
+**Coste estimado.** En el run N2, el senior hizo 24 llamadas con 0,73 M tokens de entrada (29 % cacheados) por 1,42 $.
+- Con la conversación persistente, cada decisión paga sólo lo nuevo: una o dos rondas y sus lecturas, en vez de tres
+  rondas más todo lo leído.
+- La conversación crecerá, y las consolidaciones lo compensan.
+- Estimación grosera: entre un 40 % y un 60 % menos de coste a igual número de decisiones. Se medirá.
+
+**Plan.**
+- **S1.** Estado persistente del senior en su registro: cuaderno, decisiones y conversación. Carga al reanudar.
+- **S2.** La conversación que sólo crece entre decisiones (`new_rounds`), con `consolidate` y el aviso de tamaño.
+- **S3.** Su cuaderno: campos `beliefs`, `notes` y `methods` en sus respuestas, y los tipos `my_*` en su memoria.
+  Su papel (`SENIOR_ROLE`) explica el cuaderno y la consolidación, sin tocar el brief del junior.
+- **S4.** El calificador sobre su cuaderno, la entrada cacheada en el informe del lote, y pruebas: estado que sobrevive
+  a una reanudación, prefijo que no cambia entre decisiones, consolidación y cuaderno.
+- Validación: repetir el run N2 con la misma seed y comparar coste, entrada cacheada, mensajes y resultado.
+
+**Implementado (05/10/2026).** Las piezas:
+- **Su estado** (`lib/src/orchestra/senior.ts`, `SeniorState`) vive en su registro (campo `senior`). Contiene:
+  - su cuaderno;
+  - su conversación desde la última consolidación;
+  - la última ronda del junior que ya ha visto (`since`);
+  - sus seguimientos y llamadas dentro de ronda.
+- **La reanudación** no necesita nada del lote. El journal reanudado guarda `resumed_from` en su evento de inicio, y el
+  agente lee de ahí el registro del run anterior:
+  - toma su estado y sus decisiones (`earlier`);
+  - cuenta sus órdenes;
+  - no vuelve a decidir sobre rondas ya decididas.
+
+  La consola dice «goes on from …».
+- **La conversación** (`seniorDecides` en `agent-operator.ts`):
+  - la abre con su cuaderno y las 3 últimas rondas;
+  - en cada decisión añade `new_rounds` (sólo las rondas posteriores a `since`) y `call` (`n`, señales, `during_round`,
+    `follow_up`, órdenes restantes, memoria, pasos);
+  - después, sus lecturas (`investigation_step`, con ids `d<llamada>.<paso>`) y `your_decision`.
+
+  Lo que escribe en el cuaderno se le devuelve como `you_wrote`.
+- **Consolidación:** `{"consolidate": {...}}`, como mucho dos veces por llamada. Pasado `maxContextTokens` (150k
+  estimados), se le pide; si a la segunda no lo hace, la conversación se reinicia desde su cuaderno.
+- **Su memoria** (`seniorMemory`): los tipos `my_beliefs`, `my_notes`, `my_methods` y `my_decisions` junto a los del
+  junior. `open` mezcla ids de ambos en el orden pedido, y `find` sin tipo devuelve también los suyos (`yours`).
+- **Su papel** (`SENIOR_ROLE`) explica la conversación, el cuaderno y la consolidación. El brief del junior no cambia.
+- **Medidas:**
+  - `lab grade <run> --senior [id]` califica su cuaderno (creencias, notas, métodos y los mensajes que envió) contra la
+    verdad, con el calificador del run. El resultado va a su registro (`gradings`, `subject: senior`), nunca al journal
+    del run.
+  - El informe del lote dice, por run, lo que costó su agente: decisiones, llamadas, tokens de entrada, porcentaje
+    cacheado y coste, sumando los runs de los que se reanudó (`agentUsage`).
+- **Pruebas** (`lib/test/orchestra-senior-memory.test.ts`):
+  - una decisión posterior repite todo lo anterior y añade sólo lo nuevo;
+  - el cuaderno se escribe y se relee;
+  - la consolidación y el aviso de tamaño;
+  - el estado sobrevive a una reanudación;
+  - la calificación del senior y el informe del lote.
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la

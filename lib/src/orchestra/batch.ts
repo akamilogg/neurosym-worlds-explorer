@@ -5,7 +5,7 @@ import type { Finding } from '../learn/finding.ts';
 import { LabError, runLaboratory, type LabRunOptions } from '../runtime/lab-runner.ts';
 import { finding as findingOfRun, runStatus, send } from '../runtime/control.ts';
 import { LABS } from '../worlds/labs.ts';
-import { runAgentOperator } from './agent-operator.ts';
+import { agentFile, agentUsage, runAgentOperator } from './agent-operator.ts';
 
 /* ============================================================================
  * The ORCHESTRATOR (SPEC-ORQUESTADOR §4, R2): a BATCH of runs declared beforehand - each with
@@ -74,6 +74,9 @@ export interface BatchRunRow {
   readonly tokens_total: number | null;
   readonly tokens_to_acceptance: number | null;
   readonly help: number;
+  /** Its agent operator, when it had one: what it cost over the run (and the runs it resumed), and how much of its input the
+      provider took from its cache. */
+  readonly agent?: { readonly id: string; readonly decisions: number; readonly calls: number; readonly tokens_in: number; readonly cached_share: number | null; readonly cost: number };
   readonly error?: string;
 }
 
@@ -118,7 +121,16 @@ export function rowOf(def: BatchRun, journal: string | null, f: Finding | null, 
   return { id: def.id, condition: def.condition, lab: def.lab, researcher: f?.researcher ?? def.researcher ?? (def.fork ? 'assisted' : 'unknown-world'), journal,
     status: error ? 'error' : f?.outcome.status ?? 'not run', accepted, round: accepted ? f!.outcome.round : null,
     tokens_total: typeof cost.llm_tokens === 'number' ? cost.llm_tokens : null, tokens_to_acceptance: accepted && typeof toAcc.llm_tokens === 'number' ? toAcc.llm_tokens : null,
-    help: f?.assistance?.messages.length ?? 0, ...(error ? { error } : {}) };
+    help: f?.assistance?.messages.length ?? 0, ...(agentRow(def, journal)), ...(error ? { error } : {}) };
+}
+
+/** What a run's agent operator cost, from its record next to the run's journal. */
+function agentRow(def: BatchRun, journal: string | null): { agent?: BatchRunRow['agent'] } {
+  if (!def.agent || !journal) return {};
+  const record = readJson(agentFile(journal, def.agent.id));
+  if (!record) return {};
+  const u = agentUsage(record);
+  return { agent: { id: def.agent.id, decisions: u.decisions, calls: u.calls, tokens_in: u.tokens_in, cached_share: u.cached_share, cost: u.cost } };
 }
 
 /** The table by condition, from the rows (researchers' findings only). */
@@ -140,7 +152,9 @@ export function batchText(report: BatchReport): string {
   const s = (x: Spread) => (x.median === null ? '-' : x.median + (x.q1 !== x.q3 ? ' [' + x.q1 + '–' + x.q3 + ']' : ''));
   return ['batch ' + report.id + (report.ended ? ' (ended ' + report.ended + ')' : ' (running)'),
     ...report.table.map((c) => '  ' + c.condition + ': ' + c.accepted + '/' + c.runs + ' accepted; round ' + s(c.acceptance_round) + '; tokens to acceptance ' + s(c.tokens_to_acceptance) + '; tokens ' + s(c.tokens_total) + '; help ' + s(c.help)),
-    ...report.runs.map((r) => '    ' + r.id + ' [' + r.condition + ']: ' + r.status + (r.round !== null ? ' in round ' + r.round : '') + (r.error ? ' - ' + r.error : '')),
+    ...report.runs.map((r) => '    ' + r.id + ' [' + r.condition + ']: ' + r.status + (r.round !== null ? ' in round ' + r.round : '') + (r.error ? ' - ' + r.error : '')
+      + (r.agent ? '; agent:' + r.agent.id + ' ' + r.agent.decisions + ' decisions, ' + r.agent.calls + ' calls, ' + Math.round(r.agent.tokens_in / 1000) + 'k tokens in'
+        + (r.agent.cached_share !== null ? ' (' + Math.round(r.agent.cached_share * 100) + '% cached)' : '') + ', $' + r.agent.cost : '')),
     ...(report.audit.length ? ['  AUDIT (operator only): ' + report.audit.map((a) => a.condition + ' recovery ' + s(a.rule_recovery)).join('; ')] : [])].join('\n');
 }
 

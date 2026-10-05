@@ -36,6 +36,63 @@ function learnerOf(end: J): { beliefs: unknown; dropped: unknown; notes: unknown
 
 export interface Regrade { readonly score: number | null; readonly event: J; readonly finding: Finding }
 
+type AnyLab = (typeof LABS)[string];
+
+/** The truth the run kept; else, for a world of laws that has one, the laboratory's own from the run's spec and options (a
+    run whose truth could not be read when it ran). */
+function truthOf(journal: J, lab: AnyLab): { id: string; statement: string }[] {
+  const events = (journal.events ?? []) as J[];
+  const before = [...events].reverse().find((e) => e.type === 'operator_rule_recovery' || e.type === 'operator_law_recovery');
+  const kept = (before?.truth ?? journal.hidden_from_the_learner?.truth) as { id: string; statement: string }[] | undefined;
+  const spec = journal.hidden_from_the_learner?.spec;
+  const truth = kept?.length ? kept : !isGameLab(lab) && lab.truth && spec ? lab.truth(spec, worldOptionsIn(lab.options, journal.config ?? {})) as { id: string; statement: string }[] : kept;
+  if (!Array.isArray(truth) || !truth.length) throw new LabError('grade: the run keeps no truth to grade against');
+  return truth;
+}
+
+/** Grades what a SENIOR understood (SPEC-ORQUESTADOR §3.3.1), operator only: its own notebook - its beliefs, notes and
+    methods - against the run's truth, with the run's grader. The grading goes to the senior's record (`gradings`), never to
+    the run's journal: what the senior understood and what reached the junior are measured apart. */
+export async function gradeSenior(journalFile: string, agentRecord: string, llm: ChatClient, graderModel: string): Promise<{ score: number | null; event: J }> {
+  const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')) as J;
+  const lab = Object.values(LABS).find((l) => l.id === journal.experiment);
+  if (!lab) throw new LabError('grade: ' + path.basename(journalFile) + ' is not a run of a known laboratory');
+  if (!fs.existsSync(agentRecord)) throw new LabError('grade: no senior followed this run (' + path.basename(agentRecord) + ')');
+  const record = JSON.parse(fs.readFileSync(agentRecord, 'utf8')) as J;
+  const nb = record.senior?.notebook as J | undefined;
+  if (!nb) throw new LabError('grade: ' + path.basename(agentRecord) + ' keeps no notebook of a senior');
+  const truth = truthOf(journal, lab);
+  const beliefs = (nb.beliefs ?? []) as J[];
+  const learner = { beliefs: beliefs.filter((b) => b.status !== 'dropped').map((b) => ({ id: b.id, statement: b.statement, status: b.status })),
+    dropped: beliefs.filter((b) => b.status === 'dropped').map((b) => ({ id: b.id, statement: b.statement })),
+    notes: (nb.notes ?? []).map((n: J) => ({ id: n.id, text: n.text })), methods: (nb.methods ?? []).map((m: J) => ({ id: m.id, text: m.text })),
+    messages_to_the_junior: [...(record.earlier?.decisions ?? []), ...(record.decisions ?? [])].filter((d: J) => d.decision === 'message').map((d: J) => d.text) };
+  let system: string, user: string;
+  if (isGameLab(lab)) {
+    const glyphs = journal.hidden_from_the_learner?.glyphs ?? {};
+    system = GRID_GRADING_SYSTEM;
+    user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: glyphs.you, other: glyphs.other }, learner });
+  } else {
+    if (!lab.grading) throw new LabError('grade: ' + lab.id + ' has no grader');
+    system = lab.grading.system;
+    const glossary = journal.hidden_from_the_learner?.glossary;
+    user = JSON.stringify({ true_statements: truth, ...(glossary ? { learner_names: glossary } : {}), learner: { [lab.grading.finalKey ?? 'final_model']: null, ...learner } });
+  }
+  let event: J;
+  try {
+    const content = (await llm.complete({ system, user })).content;
+    const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
+    const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
+    const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
+    event = { type: 'operator_rule_recovery', subject: 'senior', truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel, at: new Date().toISOString() };
+  } catch (e) {
+    event = { type: 'operator_rule_recovery', subject: 'senior', truth, error: String((e as Error)?.message ?? e), grader_model: graderModel, at: new Date().toISOString() };
+  }
+  record.gradings = [...(record.gradings ?? []), event];
+  fs.writeFileSync(agentRecord, JSON.stringify(record, null, 2));
+  return { score: typeof event.score === 'number' ? event.score : null, event };
+}
+
 export async function regrade(journalFile: string, llm: ChatClient, graderModel: string): Promise<Regrade> {
   const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')) as J;
   const lab = Object.values(LABS).find((l) => l.id === journal.experiment);
@@ -43,13 +100,7 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   const events = (journal.events ?? []) as J[];
   const end = [...events].reverse().find((e) => e.type === 'end');
   if (!end) throw new LabError('grade: the run has not ended');
-  const before = [...events].reverse().find((e) => e.type === 'operator_rule_recovery' || e.type === 'operator_law_recovery');
-  /* The truth the run kept; else, for a world of laws that has one, the laboratory's own from the run's spec and options
-     (a run whose truth could not be read when it ran). */
-  const kept = (before?.truth ?? journal.hidden_from_the_learner?.truth) as { id: string; statement: string }[] | undefined;
-  const spec = journal.hidden_from_the_learner?.spec;
-  const truth = kept?.length ? kept : !isGameLab(lab) && lab.truth && spec ? lab.truth(spec, worldOptionsIn(lab.options, journal.config ?? {})) as { id: string; statement: string }[] : kept;
-  if (!Array.isArray(truth) || !truth.length) throw new LabError('grade: the run keeps no truth to grade against');
+  const truth = truthOf(journal, lab);
   const learner = learnerOf(end);
   let system: string, user: string, type: string;
   if (isGameLab(lab)) {

@@ -105,7 +105,7 @@ test('a senior is called only when the junior is stuck, reads its record, propos
     assert.ok(s.system.includes(brief));
     assert.ok(s.system.includes(juniorPercept(JSON.parse(fs.readFileSync(out, 'utf8')))!), 'and what the code of the junior receives at a point');
   }
-  assert.match(seen[0].user.signals.join(' '), /held in no place/, 'called for a sign of being stuck');
+  assert.match(seen[0].user.call.signals.join(' '), /held in no place/, 'called for a sign of being stuck');
   assert.ok(seen[1].user.investigation[0].results[0].items.some((i: { id: string }) => i.id === 'belief:same'), 'it read the record');
   const message = decisions.find((d) => d.decision === 'message')!;
   assert.deepEqual(message.evidence, ['belief:same', 'check:r1']);
@@ -193,8 +193,8 @@ test('the senior is called during a round in which the junior only looks, and it
   const { decisions } = await agent;
   const message = decisions.find((d) => d.decision === 'message')!;
   assert.equal(message.during_round, 2, 'called during round 2');
-  assert.equal(seen[0].during_round, 2);
-  assert.match(seen[0].signals.join(' '), /only looking/);
+  assert.equal(seen[0].call.during_round, 2);
+  assert.match(seen[0].call.signals.join(' '), /only looking/);
   const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
   const delivered = events.findIndex((e) => e.type === 'operator_message');
   const proposed2 = events.findIndex((e) => e.type === 'proposal' && e.round === 2);
@@ -285,8 +285,8 @@ test('the senior follows up its message within the round: the junior ran the exp
   const advisor: ChatClient = { complete: async (r) => {
     const user = payloadOf(r.user);
     seen.push(user);
-    const content = user.follow_up
-      ? { decision: 'message', text: 'Your table confirms it: adopt it as a working rule and propose now a model built on it.', evidence: [user.follow_up.experiment], why: 'confirmed' }
+    const content = user.call?.follow_up
+      ? { decision: 'message', text: 'Your table confirms it: adopt it as a working rule and propose now a model built on it.', evidence: [user.call.follow_up.experiment], why: 'confirmed' }
       : { decision: 'message', text: 'Hypothesis: the length matters. Test it with a table over your episodes.', evidence: ['investigation:r2.1'], why: 'only looking' };
     return { content: JSON.stringify(content), latencyMs: 0, raw: null };
   } };
@@ -301,11 +301,12 @@ test('the senior follows up its message within the round: the junior ran the exp
   assert.ok(follow, 'a follow-up');
   assert.match(follow!.follow_up!, /^investigation:r2\.\d+$/);
   assert.equal(follow!.decision, 'message');
-  const call = seen.find((u) => u.follow_up)!;
+  const asked = seen.find((u) => u.call?.follow_up)!;
+  const call = asked.call;
   assert.match(call.follow_up.your_message, /Test it with a table/);
   assert.ok(call.follow_up.its_record.requests.some((q: Record<string, unknown>) => 'table' in q), 'the experiment comes with the follow-up: no reading needed');
   assert.ok(call.follow_up.its_record.results, 'and what it was answered');
-  assert.ok(call.run.latest_rounds.length <= 3, 'the run in its latest rounds only');
+  assert.ok(asked.run.latest_rounds.length <= 3, 'the run in its latest rounds only');
   assert.equal(follow!.usage!.calls, 1, 'decided in one call');
   const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
   const confirmed = events.findIndex((e) => e.type === 'operator_message' && e.messages.some((m: { text: string }) => /confirms it/.test(m.text)));
@@ -337,11 +338,11 @@ test('the senior\'s reading grows by messages (its context unchanged within a de
   await agent;
   assert.equal(calls.length, 3);
   assert.ok(calls.every((u) => u instanceof UserParts));
-  assert.deepEqual(calls[1].parts[0], calls[0].parts[0], 'its context, unchanged');
-  assert.deepEqual(calls[2].parts.slice(0, 2), calls[1].parts.slice(0, 2), 'the earlier messages repeated');
-  const clipped = (calls[1].parts[1] as any).investigation_step.results[0].items[0];
+  assert.deepEqual(calls[1].parts.slice(0, 2), calls[0].parts, 'its opening and its call, unchanged');
+  assert.deepEqual(calls[2].parts.slice(0, 3), calls[1].parts.slice(0, 3), 'the earlier messages repeated');
+  const clipped = (calls[1].parts[2] as any).investigation_step.results[0].items[0];
   assert.ok(clipped.clipped && clipped.clipped.size > 9000 && clipped.clipped.beginning.length === 4000);
-  const whole = (calls[2].parts[2] as any).investigation_step.results[0].items[0];
+  const whole = (calls[2].parts[3] as any).investigation_step.results[0].items[0];
   assert.equal(whole.item.results[0].pictures, big, 'asked whole: entire');
 });
 

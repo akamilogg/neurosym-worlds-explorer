@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { parseJsonLoose } from '../core/net.ts';
 import type { ChatClient } from '../learn/system2.ts';
 import { orderOutcome, runStatus, send } from '../runtime/control.ts';
 import { researcherEvents, runDigest } from './view.ts';
 import { followUpDue, journalReader, juniorBrief, juniorPercept, stuckSignals, type StuckSignals } from './reader.ts';
 import { UserParts } from '../learn/system2.ts';
+import { emptySeniorState, keepNotebook, notebookBrief, seniorMemory, seniorNotebook, tokensOf, writeNotebook, type SeniorState } from './senior.ts';
 
 /* ============================================================================
  * The AGENT OPERATOR (SPEC-ORQUESTADOR §3, R1): an agent that follows an assisted run and does
@@ -39,12 +41,15 @@ export const SENIOR_ROLE = [
   'YOUR TASK is the junior\'s task: to understand this environment. You are a researcher in your own right, and the junior\'s record is your data - its episodes, the answers to its experiments, the verdicts of its checks. Do not only review its work and polish how it operates: investigate that record yourself, with your own method and greater capability. Look across all its episodes for correlations it never considered, regularities that hold in every case, and tactics its data reveal; and form NEW hypotheses of your own - rival theories it never entertained - rather than refinements of its current model.',
   'Put first what the environment IS: what it allows and refuses, how episodes end and with what score. A model built on rules that the record confirms beats any tuned heuristic; adjusting the weights or features of the junior\'s model is worth a message only once those rules are clear. A hypothesis about the rules is worth more than a fix to its model.',
   'You are called because the junior shows signs of being stuck (`signals`). Review its record as a demanding senior would. Read its notes and the answers it got, and look for what it has not interpreted: a regularity in the answers it did not connect; a fact it recorded and did not build on; a clue it dismissed or held as "only an association"; an alternative it wrote down and never tested; a reading that its own data contradict.',
-  'Your instruments read the junior\'s record only (they ask nothing of the environment): {"investigate": [{"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks"}, {"memory": "open", "items": ["<id>", ...]}, {"memory": "find", "words": "...", "of": "<kind>" (optional)}]}. Ids: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it was answered), "check:r<round>". Each of your reading answers comes back, with what it read, as a part of its own (`investigation_step`), and `steps_left` says how many such answers you have; `memory` how many items of each kind there are. A large item comes clipped (its beginning and its size): add \"whole\": true to the open request to read it entire.',
+  'Your instruments read the junior\'s record and your own (they ask nothing of the environment): {"investigate": [{"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks" | "my_beliefs" | "my_notes" | "my_methods" | "my_decisions"}, {"memory": "open", "items": ["<id>", ...]}, {"memory": "find", "words": "...", "of": "<kind>" (optional)}]}. Ids of the junior\'s record: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it was answered), "check:r<round>". Ids of yours: "my_belief:<id>", "my_note:<id>", "my_method:<id>", "my_decision:<n>" (what you decided, what you read for it, and what came of it). Each of your reading answers comes back, with what it read, as a part of its own (`investigation_step`), and `steps_left` says how many such answers you have; `memory` how many items of each kind there are. A large item comes clipped (its beginning and its size): add \"whole\": true to the open request to read it entire.',
+  'YOUR CONVERSATION lasts the whole run: you are called many times, and what you read and decided before is above, as it was. Each call adds only what is new: the junior\'s rounds completed since your last call (`new_rounds`) and why you are called now (`call`). Do not read again what is above: read what is new, or what you have not read yet.',
+  'YOUR NOTEBOOK is yours - the junior never sees it; only your messages reach it. In ANY of your answers (while you read, when you decide, when you consolidate) you may add "beliefs": [{"id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "...", "why": "...", "evidence": ["<items or points of the junior\'s record>"]}], "notes": [{"do": "write" | "forget" | "archive", "id": "<id>", "text": "..."}] and "methods": [{"do": "write" | "forget", "id": "<id>", "text": "how you read and cross the record"}]. Write in it what you understand of the environment, what you ruled out and why, which of your hypotheses the junior tested and what came of them: it is what you keep when your conversation is consolidated, and what you start from in a run resumed. Ids are lowercase snake_case.',
+  'When your conversation has grown long and you have taken from it what you need, CONSOLIDATE it: answer {"consolidate": {"summary": "what you understand so far and what you are doing, in your words", "keep": ["<ids of investigation steps above to keep whole, e.g. d3.2>"]}} - write first in your notebook what you want to keep. Your conversation then goes on from your notebook as it is, the junior\'s latest rounds, your summary and the steps you kept; the rest is gone from it (your memory still holds the junior\'s record and your decisions). At most twice a call; when you are told your conversation is too long, consolidate before anything else.',
   'You may be called at the end of one of its rounds, or during a round (`during_round`), when it keeps looking without testing anything or keeps asking to investigate with no steps left: your message then reaches it within that round, before it answers again. Then help it commit: point to the hypothesis its own record supports best and tell it to propose a model that tests it now - a model that fails also teaches.',
   'You may also be called to FOLLOW UP (`follow_up`): after your last message the junior ran an experiment; `follow_up` holds your message and that experiment as its record keeps it - what it asked and what it was answered. Read it there: a follow-up allows you one reading of the record at most, since the experiment is already in front of you. If the junior\'s own results confirm the hypothesis, with no counterexample in its record, tell it plainly: its data confirm it (cite them); adopt it as a working rule in its beliefs, and propose now a model built on it. If they refute it, say so, so that it drops it. If they are inconclusive, wait. A follow-up that would only propose another small adjustment of the junior\'s model is rarely worth a message: look instead for what the record still says about the environment.',
   'Finding a rule is not enough: a junior often states a rule its record supports and never builds it into its model, which keeps scoring on other features. So with a hypothesis, guide how its model would use it once confirmed, in the form the environment asks for - which points the rule makes worth the least or the most, what an observation would have to measure, what the model should stop relying on. And when its record already confirms a rule its model does not use, say so plainly and show how the model would use it. Never write the model\'s code: the junior builds it, and treats your guidance as a reference to test, like everything you say.',
   'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); ONE experiment with its instruments that would test it; and how its model would use the hypothesis once the experiment confirms it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. Your message is a colleague\'s suggestion, and it may be wrong. If you found nothing worth its attention, wait.',
-  'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"}'
+  'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"} - or {"consolidate": {...}}; with "beliefs", "notes" and "methods" in any of them when you write in your notebook.'
 ].join('\n');
 
 /** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), what the
@@ -81,6 +86,17 @@ export interface AgentDecision {
   /** What the decision cost: its calls to the model, their tokens (in, of them cached, out) and the provider's cost when it
       reports one (OpenRouter: `usage.cost`). */
   readonly usage?: Usage;
+  /** The senior (§3.3.1): what it wrote in its notebook while deciding, and how many times it consolidated its conversation. */
+  readonly wrote?: Readonly<Record<string, unknown>>;
+  readonly consolidated?: number;
+}
+
+/** What an agent cost over a run and the runs it was resumed from: its decisions' usage added up. */
+export function agentUsage(record: { decisions?: readonly AgentDecision[]; earlier?: { decisions?: readonly AgentDecision[] } } | null): Usage & { decisions: number; cached_share: number | null } {
+  const all = [...(record?.earlier?.decisions ?? []), ...(record?.decisions ?? [])];
+  const u: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
+  for (const d of all) if (d.usage) { u.calls += d.usage.calls; u.tokens_in += d.usage.tokens_in; u.cached_in += d.usage.cached_in; u.tokens_out += d.usage.tokens_out; u.cost = Math.round((u.cost + d.usage.cost) * 1e6) / 1e6; }
+  return { ...u, decisions: all.length, cached_share: u.tokens_in ? Math.round(u.cached_in / u.tokens_in * 100) / 100 : null };
 }
 
 export interface Usage { calls: number; tokens_in: number; cached_in: number; tokens_out: number; cost: number }
@@ -120,6 +136,8 @@ export interface AgentOperatorOptions {
   readonly digestRounds?: number;
   /** The senior: items of the junior's record larger than this many characters are opened clipped (default 4000). */
   readonly openLimit?: number;
+  /** The senior: how large (in tokens, estimated) its conversation may grow before it is asked to consolidate (150000). */
+  readonly maxContextTokens?: number;
 }
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
@@ -136,11 +154,14 @@ export const agentFile = (journal: string, id: string): string => journal.replac
 export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decisions: AgentDecision[]; file: string }> {
   const file = agentFile(o.journal, o.id);
   const role: AgentRole = o.role ?? 'coach';
-  const record = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
+  const record: { format: string; agent: string; role: AgentRole; run: string; started: string; decisions: AgentDecision[]; usage?: Usage;
+    continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
   const save = () => fs.writeFileSync(file, JSON.stringify(record, null, 2));
+  /* The senior keeps a state of its own (SPEC-ORQUESTADOR §3.3.1): its notebook and its conversation. */
+  if (role === 'senior') record.senior = emptySeniorState();
   save();
   const say = o.say ?? (() => {});
-  let seenRounds = -1, orders = 0;
+  let seenRounds = -1, orders = 0, loaded = false;
   /* The senior is also called during a round, once per round, when a sign is about the round in course. */
   const calledInRound = new Set<number>();
   /* Each of its messages is followed up once: when the junior, having got it, runs an experiment. */
@@ -149,6 +170,26 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   while (!o.signal?.aborted) {
     const status = fs.existsSync(o.journal) ? runStatus(o.journal) : null;
     const journal = readJson(o.journal);
+    /* A run resumed from another: the senior goes on where it was, with the state its record of that run keeps. */
+    if (role === 'senior' && !loaded && journal) {
+      const start = (journal.events ?? []).find((e: Record<string, unknown>) => e.type === 'start');
+      if (start) {
+        loaded = true;
+        const from = typeof start.resumed_from === 'string' ? agentFile(start.resumed_from, o.id) : null;
+        const earlier = from ? readJson(from) : null;
+        if (earlier?.senior) {
+          record.senior = earlier.senior as SeniorState;
+          record.continued_from = from!;
+          record.earlier = { decisions: [...(earlier.earlier?.decisions ?? []), ...(earlier.decisions ?? [])] };
+          for (const k of record.senior.followed_up ?? []) followedUp.add(k);
+          for (const r of record.senior.called_in_round ?? []) calledInRound.add(r);
+          orders = record.earlier.decisions.filter((d) => d.decision === 'message' || d.decision === 'stop').length;
+          seenRounds = Math.max(-1, ...record.earlier.decisions.map((d) => Number(d.rounds) || 0));
+          say('agent:' + o.id + ' goes on from ' + path.basename(from!) + ' (' + record.earlier.decisions.length + ' decisions, ' + orders + ' orders)');
+          save();
+        }
+      }
+    }
     const digest = journal ? runDigest(journal) : null;
     /* Rounds it has completed: checked, or reflected on. */
     const rounds = journal ? researcherEvents(journal).filter((e) => e.type === 'check' || e.type === 'reflection').length : 0;
@@ -171,7 +212,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       const completed = rounds > seenRounds && rounds > 0;
       seenRounds = Math.max(seenRounds, rounds);
       let d: AgentDecision | null;
-      if (role === 'senior') d = await seniorDecides(o, journal, digest, rounds, record.decisions, maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp);
+      if (role === 'senior') {
+        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!);
+        record.senior!.followed_up = [...followedUp];
+        record.senior!.called_in_round = [...calledInRound];
+      }
       else try {
         const answer = await o.llm.complete({ system: AGENT_OPERATOR_SYSTEM, user: { you_are: 'agent:' + o.id, run: digest, your_decisions: record.decisions.slice(-8), orders_left: maxOrders - orders } });
         const parsed = (parseJsonLoose(answer.content) ?? {}) as { decision?: string; text?: string; why?: string };
@@ -211,59 +256,107 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
 }
 
 /** The senior's turn: nothing unless the run shows signs of being stuck (and it has left the junior time since its last
-    message); then it reads the junior's record and decides. Null: it was not called (nothing is recorded). */
-async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, _digest: unknown, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
-  duringRound: number | null = null, followUp: ReturnType<typeof followUpDue> = null): Promise<AgentDecision | null> {
+    message); then it reads the junior's record and decides. Null: it was not called (nothing is recorded). Its conversation
+    is the state's: it only grows (SPEC-ORQUESTADOR §3.3.1), and what it writes in its notebook is kept there. */
+async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
+  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
      to have had time with its last message. */
   if (!followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
-  const reader = journalReader(journal, { openLimit: o.openLimit ?? 4000 });
+  const nb = seniorNotebook(state);
+  const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
   const system = seniorSystem(juniorBrief(journal), juniorPercept(journal));
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
+  const call = decisions.length + 1;
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
-  const experiment = followUp ? ((await reader.run({ memory: 'open', items: [followUp.experiment] })) as { items?: { item?: unknown }[] }).items?.[0]?.item ?? null : null;
-  /* The run in its latest rounds only: the rest of the record is there to read. */
-  const brief = runDigest(journal, { rounds: o.digestRounds ?? 3 });
-  const read: { step: number; requests: Record<string, unknown>[]; results: unknown[] }[] = [];
-  const at = () => new Date().toISOString();
-  /* A follow-up has the junior's experiment in front of it: one reading at most. A decision on a sign, `readSteps`. */
+  const experiment = followUp ? ((await memory.run({ memory: 'open', items: [followUp.experiment] })) as { items?: { item?: unknown }[] }).items?.[0]?.item ?? null : null;
+  const latestRound = (): number => Math.max(0, ...((journal.events ?? []) as Record<string, any>[]).filter((e) => typeof e.round === 'number').map((e) => e.round as number));
+  /* Its opening: its notebook, and the junior's run in its latest rounds (the rest of the record is there to read). */
+  const opening = (): Record<string, unknown> => {
+    state.since = latestRound();
+    return { you_are: 'agent:' + o.id, your_notebook: notebookBrief(nb), run: runDigest(journal, { rounds: o.digestRounds ?? 3 }),
+      note: 'Earlier rounds of the junior and your own earlier decisions are in your memory.' };
+  };
+  /* Only what is new since its latest call: the rounds the junior completed, and why it is called now. */
+  const opened = state.conversation.length === 0;
+  if (opened) state.conversation.push(opening());
+  else {
+    const fresh = (runDigest(journal, { rounds: 1000 }).latest_rounds as Record<string, any>[]).filter((r) => r.round > state.since);
+    if (fresh.length) state.conversation.push({ new_rounds: fresh });
+    state.since = Math.max(state.since, latestRound());
+  }
   const limit = followUp ? 1 : o.readSteps ?? 4;
+  const callPart = (): Record<string, unknown> => ({ call: { n: call, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}),
+    ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
+    orders_left: ordersLeft, memory: memory.counts(), steps_left: limit } });
+  state.conversation.push(callPart());
+  const read: { step: string; requests: Record<string, unknown>[]; results: unknown[] }[] = [];
+  const at = () => new Date().toISOString();
   const asked = () => read.map((r) => r.requests);
-  /* Its conversation only grows: the first part with the readings it may make, then each reading (or reminder) after. */
-  const tail: Record<string, unknown>[] = [];
-  let reminded = 0;
+  const maxTokens = o.maxContextTokens ?? 150000;
+  let reminded = 0, consolidated = 0, toldToConsolidate = 0;
+  const done = (d: AgentDecision): AgentDecision => { keepNotebook(state, nb); return d; };
   try {
-    for (let turn = 0; turn <= limit + 3; turn++) {
-      const stepsLeft = Math.max(0, limit - read.length);
-      const context = { you_are: 'agent:' + o.id, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}),
-        ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
-        run: brief, memory: reader.counts(), your_decisions: decisions.slice(-6), orders_left: ordersLeft };
-      const answer = await o.llm.complete({ system, user: new UserParts([{ ...context, steps_left: limit }, ...tail]) });
+    for (let turn = 0; turn <= limit + 7; turn++) {
+      /* Too long: it is asked to consolidate; asked twice and it did not, its conversation restarts from its notebook. */
+      if (tokensOf(state.conversation, system) > maxTokens) {
+        if (toldToConsolidate >= 2) {
+          state.conversation = [opening(), { restarted: 'your conversation outgrew ' + maxTokens + ' tokens and you did not consolidate it: it goes on from your notebook' }, callPart()];
+          state.consolidations++;
+        } else {
+          toldToConsolidate++;
+          state.conversation.push({ context_tokens: tokensOf(state.conversation, system), reminder: 'Your conversation is too long: consolidate it now, before anything else ({"consolidate": {...}}), after writing in your notebook what you want to keep.' });
+        }
+      }
+      const answer = await o.llm.complete({ system, user: new UserParts([...state.conversation]) });
       addUsage(usage, answer.raw);
-      const parsed = (parseJsonLoose(answer.content) ?? {}) as { investigate?: unknown[]; decision?: string; text?: string; why?: string; evidence?: unknown[] };
+      const parsed = (parseJsonLoose(answer.content) ?? {}) as Record<string, any>;
+      const { wrote, warnings } = writeNotebook(nb, rounds, parsed);
+      const written = { ...(Object.keys(wrote).length ? { you_wrote: wrote } : {}), ...(warnings.length ? { notebook_warnings: warnings } : {}) };
+      if (parsed.consolidate && typeof parsed.consolidate === 'object' && consolidated < 2) {
+        consolidated++;
+        const keep = new Set((Array.isArray(parsed.consolidate.keep) ? parsed.consolidate.keep : []).map(String));
+        const kept = state.conversation.map((p) => (p as Record<string, any>).investigation_step).filter((s) => s && keep.has(String(s.step)));
+        keepNotebook(state, nb);
+        state.conversation = [opening(), { consolidated: { summary: String(parsed.consolidate.summary ?? ''), kept_steps: kept }, ...written }, callPart()];
+        state.consolidations++;
+        continue;
+      }
+      const stepsLeft = Math.max(0, limit - read.length);
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {
-        const requests = parsed.investigate.filter((q): q is Record<string, unknown> => Boolean(q) && typeof q === 'object' && typeof (q as Record<string, unknown>).memory === 'string').slice(0, 8);
+        const requests = parsed.investigate.filter((q: unknown): q is Record<string, unknown> => Boolean(q) && typeof q === 'object' && typeof (q as Record<string, unknown>).memory === 'string').slice(0, 8);
         const results: unknown[] = [];
-        for (const q of requests) results.push(await reader.run(q));
-        read.push({ step: read.length + 1, requests, results });
-        tail.push({ investigation_step: read[read.length - 1], steps_left: Math.max(0, limit - read.length) });
+        for (const q of requests) results.push(await memory.run(q));
+        read.push({ step: 'd' + call + '.' + (read.length + 1), requests, results });
+        state.conversation.push({ investigation_step: read[read.length - 1], steps_left: Math.max(0, limit - read.length), ...written });
         continue;
       }
       /* It asks to read again with no readings left: no error - it is reminded what its part is, and asked once more. */
       if (Array.isArray(parsed.investigate) && reminded < 2) {
         reminded++;
-        tail.push({ steps_left: 0, reminder: 'You have no readings left. Your part is not to do the junior\'s work: decide now. Write to the junior the hypothesis it should go on with, or the task it should carry on (with the evidence in its record and one experiment), or wait if there is nothing worth its attention.' });
+        state.conversation.push({ steps_left: 0, ...written, reminder: 'You have no readings left. Your part is not to do the junior\'s work: decide now. Write to the junior the hypothesis it should go on with, or the task it should carry on (with the evidence in its record and one experiment), or wait if there is nothing worth its attention.' });
+        continue;
+      }
+      if (!parsed.decision && Object.keys(wrote).length && turn < limit + 6) {
+        /* It only wrote in its notebook: taken, and it is asked for its decision. */
+        state.conversation.push({ ...written, reminder: 'Noted in your notebook. Now decide: {"decision": "wait" | "message", ...}.' });
         continue;
       }
       const decision = parsed.decision === 'message' && parsed.text?.trim() ? 'message' : 'wait';
-      return { at: at(), rounds, ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
+      const d: AgentDecision = { at: at(), rounds, ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
         why: String(parsed.why ?? (Array.isArray(parsed.investigate) ? 'it kept asking to read after being reminded to decide' : '')), signals: signals.signs,
-        read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}), usage };
+        read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}),
+        ...(consolidated ? { consolidated } : {}), ...(Object.keys(wrote).length ? { wrote } : {}), usage };
+      /* What it decided stays in its conversation, as it was. */
+      state.conversation.push({ your_decision: { n: call, decision, ...(d.text ? { text: d.text } : {}), ...(d.why ? { why: d.why } : {}) }, ...written });
+      return done(d);
     }
-    return { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked(), usage };
+    const d: AgentDecision = { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked(), usage };
+    state.conversation.push({ your_decision: { n: call, decision: 'wait', why: d.why } });
+    return done(d);
   } catch (e) {
-    return { at: at(), rounds, decision: 'error', why: String((e as Error)?.message ?? e), signals: signals.signs, usage };
+    return done({ at: at(), rounds, decision: 'error', why: String((e as Error)?.message ?? e), signals: signals.signs, usage });
   }
 }
 

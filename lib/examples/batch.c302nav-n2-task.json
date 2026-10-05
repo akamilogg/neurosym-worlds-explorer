@@ -1,0 +1,14 @@
+{
+  "format": "batch@1",
+  "id": "c302nav-n2-task",
+  "concurrency": 1,
+  "budget": { "tokens_per_run": 5000000 },
+  "runs": [
+    { "id": "n2-task-s1", "lab": "c302nav", "condition": "N2: EurekaBench framing (task + its statement and simulator description as sources), assisted + senior, real names", "researcher": "assisted",
+      "args": ["--seed", "1", "--attempts", "16", "--names", "real", "--memory", "selective", "--help-budget", "16", "--max-minutes", "300",
+        "--task", "This laboratory is EurekaBench's navigation-goals problem, run on our own c302 service. The panel of cells is part of the nervous system of C. elegans; the current injected into AWCL and AWCR stands for the odor the worm senses as it moves; the two signals are the commands of its two navigation actions, reorientation and steering. Understand the mechanism by which the odor drive becomes these two actions: what decides at each moment which action the drive produces and how strongly, what carries over from one moment to the next and on what timescale, what moves it, and what this means for how the worm navigates towards an odor source. The problem's own statement and a description of its simulator are among your sources; their simulator is not yours: your instruments are the ones in your interface.",
+        "--sources-allow", "D:/OctaneDoc/OctLocalServer/EurekaBench-sources/navigation-goals",
+        "--eureka", "D:/OctaneDoc/OctLocalServer/EurekaBench"],
+      "agent": { "id": "senior", "role": "senior", "max_orders": 16, "patience": 2 } }
+  ]
+}
