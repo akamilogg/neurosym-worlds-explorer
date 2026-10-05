@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { findingOf, findingView, type Finding, type FindingView } from '../learn/finding.ts';
+import { LABS } from '../worlds/labs.ts';
 
 /* ============================================================================
  * The CONTROL of laboratory runs (SPEC-INVESTIGADOR-ASISTIDO §4): the same for both
@@ -145,7 +146,7 @@ export function resumeRun(journal: string, options: { args?: readonly string[]; 
 }
 
 /** The laboratories' names on the command line, by the id their journals carry. */
-const LAB_IDS: Readonly<Record<string, string>> = { cells: 'cells@1', messages: 'messages@1', orbit: 'orbit@1', grid: 'unknown-world@1', tank: 'tank@1', particles3d: 'particles3d@1' };
+const LAB_IDS: Readonly<Record<string, string>> = Object.fromEntries(Object.entries(LABS).map(([name, lab]) => [name, lab.id]));
 
 function launch(journal: string, args: readonly string[], env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
   fs.mkdirSync(path.dirname(journal), { recursive: true });

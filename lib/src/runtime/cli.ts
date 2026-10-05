@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findingText } from '../learn/finding.ts';
+import { LABS } from '../worlds/labs.ts';
 import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, watch, type RunInfo, type RunOrder } from './control.ts';
 
 /* ============================================================================
@@ -35,7 +36,7 @@ export interface CliContext {
 }
 
 export const CLI_USAGE = [
-  'lab start <lab> [--researcher R] [--policy P] [args...]   start a run in a process of its own (labs: cells, messages, orbit, grid, tank)',
+  'lab start <lab> [--researcher R] [--policy P] [args...]   start a run in a process of its own (labs: ' + Object.keys(LABS).join(', ') + ')',
   'lab list                                                  the runs, newest first',
   'lab status <run>                                          a run\'s state and its latest events',
   'lab watch <run>                                           its events as they come, until it ends',
