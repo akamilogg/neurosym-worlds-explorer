@@ -120,7 +120,7 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   /** Whether the paired regression is on unless --no-regression (true), or off unless --regression (false). */
   readonly regressionByDefault?: boolean;
   /** An environment OUTSIDE the harness, reached over HTTP at this address: the runner gives the laboratory `ctx.effects`. */
-  readonly external?: { url(options: LabOptions): string };
+  readonly external?: { url(options: LabOptions): string; /** How long one request may take (default 15 s): a simulation can take minutes. */ readonly timeoutMs?: number };
   /** FACETS of the task (SPEC-INVESTIGADOR-ASISTIDO §6.2): what of the world the answer is about, when not all of it is the
       goal. `--focus <id>` picks one at the start (it defines the task, like a level, for either researcher); the assisted
       researcher may be given another during the run. The interface says what counts, the objective checks only that. */

@@ -60,7 +60,7 @@ test('the console lists runs and shows one: its state, events, model, check, bel
     assert.match(v.finding.researcher, /^cells@1/);
     assert.equal((await call(c.url + '/api/runs/one?since=' + v.total)).json.events.length, 0, 'only what is new');
     assert.equal((await call(c.url + '/view/one')).text, '<html>synthesis of cells@1</html>');
-    assert.equal((await call(c.url + '/api/labs')).json.map((l: { name: string }) => l.name).join(','), 'cells,messages,orbit,grid,tank,particles3d');
+    assert.equal((await call(c.url + '/api/labs')).json.map((l: { name: string }) => l.name).join(','), 'cells,messages,orbit,grid,tank,particles3d,c302nav');
   } finally { await c.close(); }
 });
 

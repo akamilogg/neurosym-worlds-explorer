@@ -694,7 +694,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       async request(route, body) {
         const key = lineage + '#' + (++sequence);
         return (await fetchJson(external.replace(/\/$/, '') + route, { method: 'POST', body, headers: { 'Idempotency-Key': key }, fetch: envFetch,
-          timeoutMs: 15000, retries: 3, retryNetwork: true })).data;
+          timeoutMs: (lab as LawLab).external?.timeoutMs ?? 15000, retries: 3, retryNetwork: true })).data;
       }
     };
   }

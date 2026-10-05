@@ -50,6 +50,7 @@ test('at most `concurrency` simulations at once; a bad request is said (and kept
   await s.handle('POST', '/simulate', { duration_ms: 10, crash: true }, 'crash');
   assert.equal(s.stats().simulations, 4 + 1 + 2, 'the failure was simulated again, the bad request was not');
   assert.equal((await s.handle('POST', '/simulate', {}, null)).status, 400, 'a duration is needed');
+  assert.equal((await s.handle('POST', '/wiring', { cells: ['AVAL'] }, null)).status, 200, 'the wiring needs no duration');
 });
 
 test('over HTTP, on 127.0.0.1', async () => {

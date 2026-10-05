@@ -3,7 +3,8 @@
 
      node --experimental-strip-types scripts/c302-service.ts --python <path to python> [--port 18600] [--concurrency 4]
 
-   POST /simulate runs one simulation (an Idempotency-Key makes it run once); GET /stats says how many were run and how
+   POST /simulate runs one simulation (an Idempotency-Key makes it run once); POST /wiring gives the connections among
+   some cells; GET /stats says how many were run and how
    many answered again. It listens on 127.0.0.1 only. Ctrl+C stops it. */
 import { SIMULATE_PY, serveC302 } from '../src/worlds/c302/service.ts';
 

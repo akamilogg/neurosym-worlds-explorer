@@ -2,7 +2,8 @@
 
 It reads one request as JSON on stdin and writes one answer as JSON on stdout:
 
-  request  {"cells": [...] | null, "stimuli": [...], "record": [...] | null, "parameter_set": "C1",
+  request  {"wiring": true, "cells": [...]}   the connections among those cells (see `wiring`); or a simulation:
+           {"cells": [...] | null, "stimuli": [...], "record": [...] | null, "parameter_set": "C1",
             "duration_ms": 9000, "dt_ms": 0.05, "save_every_ms": 5,
             "remove_connections": [...], "connection_number_scaling": {...}, "connection_polarity_override": {...},
             "param_overrides": {...}}
@@ -60,6 +61,26 @@ def check(req, known):
             raise BadRequest("param_overrides[%r] is a string with its unit" % k)
 
 
+def wiring(req):
+    """The connections among the cells of a network, as c302 reads them: chemical (with the transmitter of the presynaptic
+    cell, which sets its sign: GABA inhibits) or gap junctions, and the number of contacts (the connection's weight). Each
+    is named as the simulation's changes name it: "PRE-POST", or "PRE-POST_GJ" for a gap junction."""
+    import c302
+    known, conns = c302.get_cell_names_and_connection(c302.DEFAULT_DATA_READER)
+    cells = req.get("cells") or sorted(known)
+    unknown = sorted(set(cells) - set(known))
+    if unknown:
+        raise BadRequest("unknown cells: %s" % unknown)
+    inside = set(cells)
+    out = []
+    for c in conns:
+        if c.pre_cell in inside and c.post_cell in inside:
+            gap = "_GJ" in c.synclass
+            out.append({"name": "%s-%s%s" % (c.pre_cell, c.post_cell, "_GJ" if gap else ""), "pre": c.pre_cell, "post": c.post_cell, "kind": "gap_junction" if gap else "chemical",
+                        "neurotransmitter": None if gap else c.synclass, "number": c.number})
+    return {"cells": sorted(inside), "connections": out}
+
+
 def simulate(req):
     import c302
     import numpy as np
@@ -111,7 +132,7 @@ def simulate(req):
 if __name__ == "__main__":
     try:
         request = json.loads(sys.stdin.read())
-        answer = simulate(request)
+        answer = wiring(request) if request.get("wiring") else simulate(request)
     except BadRequest as e:
         answer = {"error": str(e), "bad_request": True}
     except Exception as e:  # anything else is the service's, not the request's

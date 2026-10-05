@@ -7,6 +7,7 @@ import * as grid from '../src/worlds/grid/index.ts';
 import * as cells from '../src/worlds/cells/index.ts';
 import * as messages from '../src/worlds/messages/index.ts';
 import * as tank from '../src/worlds/tank/index.ts';
+import * as c302nav from '../src/worlds/c302nav/index.ts';
 import { scoreOf as verdict } from '../src/core/predict.ts';
 import { INVESTIGATION_TOOLS as common } from '../src/learn/prompt.ts';
 
@@ -36,7 +37,8 @@ test('each world entry exposes its world, its family and its objective', () => {
     [grid, ['boardOf', 'checkRulesAt', 'gridObjective']],
     [cells, ['generateCells', 'placeOf', 'cellsObjective', 'cellsInterface']],
     [messages, ['messagesObjective', 'messagesInterface']],
-    [tank, ['tankObjective', 'tankInterface', 'serveTank', 'createTankService']]
+    [tank, ['tankObjective', 'tankInterface', 'serveTank', 'createTankService']],
+    [c302nav, ['c302NavObjective', 'c302NavInterface', 'protocolOf', 'signalsOf']]
   ] as const)
     for (const name of names) assert.equal(typeof (world as Record<string, unknown>)[name], 'function', name);
 });

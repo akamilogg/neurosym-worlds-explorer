@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
  *                    every save_every_ms. Each request with an Idempotency-Key is simulated once:
  *                    asked again (a resumed run), it is answered what it was answered, and asked
  *                    again while it is still running, it waits for the same simulation.
+ *   POST /wiring     the connections among the cells of a network (chemical with their transmitter, gap
+ *                    junctions, and the number of contacts of each).
  *   GET  /stats      simulations run, answered again, running and waiting.
  *
  * It belongs to no problem: which cells, which stimuli and what is read from the calcium are the
@@ -76,7 +78,7 @@ export function createC302Service(options: { worker: readonly string[]; concurre
   };
   const free = (): void => { running--; queue.shift()?.(); };
   const simulate = async (body: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
-    if (!(Number(body.duration_ms) > 0)) return { status: 400, body: { error: 'duration_ms is needed' } };
+    if (!body.wiring && !(Number(body.duration_ms) > 0)) return { status: 400, body: { error: 'duration_ms is needed' } };
     await slot();
     try {
       simulations++;
@@ -87,7 +89,8 @@ export function createC302Service(options: { worker: readonly string[]; concurre
   return {
     async handle(method, route, body, key) {
       if (method === 'GET' && route === '/stats') return { status: 200, body: this.stats() };
-      if (method !== 'POST' || route !== '/simulate') return { status: 404, body: { error: 'POST /simulate, GET /stats' } };
+      if (method !== 'POST' || (route !== '/simulate' && route !== '/wiring')) return { status: 404, body: { error: 'POST /simulate, POST /wiring, GET /stats' } };
+      if (route === '/wiring') body = { ...body, wiring: true };
       if (key && done.has(key)) { again++; return done.get(key)!; }
       if (key && inFlight.has(key)) { again++; return inFlight.get(key)!; }
       const p = simulate(body);

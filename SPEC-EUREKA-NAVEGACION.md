@@ -357,3 +357,75 @@ Anchuras, separaciones, totales y repartos tienen exactamente los mismos conjunt
 Pruebas: `lib/test/c302nav-stimuli.test.ts`.
 
 **Siguiente (N2):** el laboratorio `c302-navigation@1`.
+
+## 12. N2 hecho (05/10/2026): el laboratorio `c302-navigation@1`
+
+Declarado como cualquier otro mundo de leyes, en `lib/src/worlds/c302nav/` (`world.ts`, `objective.ts`, `interface.ts`,
+`lab.ts`), y registrado como `--lab c302nav`. El arnés no cambia salvo en una cosa genérica: un laboratorio externo puede
+declarar cuánto puede tardar una petición (`external.timeoutMs`). Aquí son 40 minutos, porque una simulación tarda minutos
+y puede esperar en la cola del servicio.
+
+**Lugares.**
+
+- El laboratorio (`lab1`) toma sus episodios de la familia vista (`steps`).
+- Los lugares de la familia, de la no vista (`rotating`): validar es pasar a la otra dinámica de estímulo.
+- Los ciegos, de una u otra por turnos.
+- Cada lugar tiene su semilla; cada episodio sortea la suya y simula su protocolo.
+
+**El percepto.** En un punto, el código recibe `p = { step, t, inputs }`: los tiempos y la corriente en cada célula
+estimulada hasta ese paso, nada después. No ve las señales pasadas: el modelo responde desde el estímulo, como el suyo.
+`view` muestra hasta 60 filas: el tiempo, las corrientes, las dos señales y el calcio de las células registradas (en
+unidades de 1e-8 mM, como las señales).
+
+**El objetivo.**
+
+- La respuesta: `{reorientation, steering}` en ese paso.
+- El veredicto, por punto y señal: tanh((lo que vino − la respuesta) / s), con s la desviación típica de esa señal en el
+  episodio. Es un hecho; qué significa el resto del rango lo averigua el investigador.
+- Se sostiene en un lugar cuando el R² de cada señal, sobre todos los puntos del lugar, llega al umbral del operador
+  (`--hold-r2`, por defecto 0,5 para reorientación y 0,3 para giro) y ningún punto falla. Con la regresión emparejada,
+  también en el check anterior.
+- Líneas base del operador: "nada se mueve" (ceros) y "el estímulo ahora". Si una se sostiene, el check no distinguía.
+
+**El `act`.**
+
+- Estímulos de pulso o seno en cualquier célula del panel, qué células registrar, quitar, escalar o cambiar de signo
+  conexiones (`"PRE-POST"` o `"PRE-POST_GJ"`), parámetros del modelo por nombre (`param_overrides`, lo que pide I11) y
+  duración de hasta 9 s.
+- O `{"wiring": true}`: las conexiones entre las células del panel, con su tipo, transmisor y número de contactos. Es
+  una ruta nueva del servicio, `POST /wiring`, genérica de c302.
+- La forma se comprueba antes de pedirlo y se explica el error. Si el servicio lo rechaza, el investigador sólo sabe que
+  fue rechazado, como en los demás mundos.
+
+**Coste en tiempo.** Las simulaciones que se piden juntas (la exploración, los episodios de un check) se piden a la vez;
+las claves de idempotencia siguen el orden en que se sortearon, así que un run reanudado las reproduce. Con los valores por
+defecto (`--every 20`, `--explore 3`, `--check-episodes 2`, `--family 2`, `--confirm-places 1`, `--acts 2`), cada punto
+de check es uno de cada 20 pasos (91 por episodio).
+
+**La verdad del operador.** Con `--eureka <copia local de EurekaBench>` se leen los 18 *insights* de su rúbrica (con su
+tipo, hallazgo o limitación) para el calificador. No se copia nada al repositorio; sin esa opción, no hay calificación de
+recuperación y nada más cambia.
+
+**Lo que no se ha hecho aún:**
+
+- **La lectura de EurekaBench** (sus 100 configuraciones re-simuladas y sus medidas, §6). Es del operador y no la
+  necesita el run; va con N4.
+- **El umbral calibrado con referencias** (§9). Por ahora es un R² fijo por señal; se calibrará en N4 con los modelos de
+  referencia sobre episodios nuestros, nunca sobre su conjunto de prueba.
+- **Equipos** (`--team`): no se declaran para este mundo; con simulaciones de minutos, primero los runs individuales.
+
+**Comprobado.**
+
+- Pruebas en `lib/test/c302nav-lab.test.ts`, con un trabajador sustituto en el servicio real:
+  - la lectura de las señales;
+  - la forma del `act` y del cableado;
+  - que la interfaz no dice nada de la biología;
+  - un run completo, que se reanuda sin volver a simular: exploración, `act`, check, validación en la familia no vista y
+    confirmación ciega, con un modelo que reproduce al sustituto (R² 1).
+- Con c302 real: un episodio de `steps` y el cableado, pedidos a la vez, tardaron 103 s.
+  - La reorientación va de 0 a 7,2 (media 2,1, desviación 1,8); el giro, de −3,3 a 0,3.
+  - El calcio entre pulsos es del orden de 1e-12 mM y sube varios órdenes durante ellos. Por eso las señales quedan en
+    unidades de orden 1.
+  - El cableado del panel tiene 204 conexiones, las mismas que se midieron en N0.
+
+**Siguiente:** N3 (nombres neutros), luego N4.
