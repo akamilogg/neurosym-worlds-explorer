@@ -56,3 +56,20 @@ test('a run that has not ended is not graded', async () => {
   fs.writeFileSync(file, JSON.stringify({ experiment: 'unknown-world@1', events: [{ type: 'start' }] }));
   await assert.rejects(regrade(file, { complete: async () => ({ content: '{}', latencyMs: 0, raw: null }) }, 'm'), /has not ended/);
 });
+
+test('a world of laws whose run kept no truth is graded against the laboratory\'s own, from the run\'s spec and options', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'regrade-'));
+  const copy = path.join(dir, 'eureka'), rubric = path.join(copy, 'domains', 'neuroscience', 'navigation-goals', 'tests');
+  fs.mkdirSync(rubric, { recursive: true });
+  fs.writeFileSync(path.join(rubric, 'rubric.yaml'), 'insights:\r\n  criteria:\r\n  - id: I1\r\n    criterion: Does it explain A?\r\n    kind: finding\r\n');
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(file, JSON.stringify({ experiment: 'c302-navigation@1', config: { eureka: copy, names: 'real' },
+    hidden_from_the_learner: { spec: { seed: 1, place: 'steps', family: 'steps', names: 'real', namesSeed: 1 } },
+    events: [{ t: 0, type: 'start' }, { t: 1, type: 'end', stoppedBy: 'budget', final: null, notebook: { beliefs: [], notes: [], reflections: [] } }] }));
+  const asked: any[] = [];
+  const out = await regrade(file, { complete: async (q) => { asked.push(JSON.parse(String(q.user)));
+    return { content: JSON.stringify({ grades: [{ id: 'I1', grade: 'partial', evidence: 'e' }], false_beliefs: [], form: 'compact', form_evidence: 'e' }), latencyMs: 0, raw: null }; } }, 'm');
+  assert.deepEqual(asked[0].true_statements, [{ id: 'I1', statement: '[finding] Does it explain A?' }]);
+  assert.equal(out.score, 0.5);
+  assert.deepEqual(out.event.truth, asked[0].true_statements, 'the truth it was graded against is kept with the grading');
+});

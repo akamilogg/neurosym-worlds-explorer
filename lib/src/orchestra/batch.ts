@@ -166,7 +166,14 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     report.table = batchTable(report.runs);
     fs.writeFileSync(file, JSON.stringify(report, null, 2));
   };
-  const say = options.print ?? (() => {});
+  /* What the batch says goes to its console and, with the time, to batch.log next to its runs: a batch cut short leaves its
+     story behind. */
+  const print = options.print ?? (() => {});
+  const say = (line: string): void => {
+    print(line);
+    try { fs.mkdirSync(dir, { recursive: true }); fs.appendFileSync(path.join(dir, 'batch.log'), new Date().toISOString() + ' ' + line + '\n'); } catch { /* the console has it */ }
+  };
+  const traceOf = (e: unknown): string => String((e as Error)?.stack || (e as Error)?.message || e);
   const perRun = def.budget?.tokens_per_run ?? (def.budget?.tokens ? Math.floor(def.budget.tokens / Math.max(1, def.runs.length)) : null);
 
   const one = async (r: BatchRun): Promise<void> => {
@@ -186,8 +193,10 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     save();
     say('batch ' + def.id + ': ' + r.id + ' [' + r.condition + '] ' + (known ? 'resumed' : 'started'));
     const controller = new AbortController();
+    /* An agent that fails is said and the run goes on without it: its failure never takes the batch down. */
     const agent = r.agent && options.agentLlm
-      ? runAgentOperator({ id: r.agent.id, journal: out, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, ...(r.agent.role ? { role: r.agent.role } : {}), ...(r.agent.patience ? { patience: r.agent.patience } : {}), signal: controller.signal, say }) : null;
+      ? runAgentOperator({ id: r.agent.id, journal: out, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, ...(r.agent.role ? { role: r.agent.role } : {}), ...(r.agent.patience ? { patience: r.agent.patience } : {}), signal: controller.signal, say })
+        .catch((e) => { say('batch ' + def.id + ': ' + r.id + ': agent:' + r.agent!.id + ' failed and stopped following the run: ' + traceOf(e)); }) : null;
     try {
       const result = await runLaboratory(LABS[r.lab], { args, root: options.root, llm: options.llm, ...(options.judge ? { judge: options.judge } : {}),
         ...(options.fetch ? { fetch: options.fetch } : {}), ...(options.signal ? { signal: options.signal } : {}) });
@@ -195,7 +204,7 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
       say('batch ' + def.id + ': ' + r.id + ' ' + result.stoppedBy);
     } catch (e) {
       rows.set(r.id, rowOf(r, out, null, String((e as Error)?.message ?? e)));
-      say('batch ' + def.id + ': ' + r.id + ' failed: ' + String((e as Error)?.message ?? e));
+      say('batch ' + def.id + ': ' + r.id + ' failed: ' + traceOf(e));
     } finally {
       controller.abort();
       await agent;

@@ -116,7 +116,8 @@ export function insightsOf(eureka: string): { id: string; statement: string }[] 
   const file = [path.join(eureka, 'domains', 'neuroscience', 'navigation-goals', 'tests', 'rubric.yaml'), path.join(eureka, 'tests', 'rubric.yaml'), eureka]
     .find((f) => fs.existsSync(f) && fs.statSync(f).isFile());
   if (!file) throw new Error('no rubric.yaml of navigation-goals under ' + eureka);
-  const text = fs.readFileSync(file, 'utf8');
+  /* Its lines as they come, whatever their ending (a Windows checkout ends them with CR LF, and `.` never matches a CR). */
+  const text = fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n');
   const at = text.search(/^insights:/m);
   if (at < 0) return [];
   const out: { id: string; statement: string }[] = [];

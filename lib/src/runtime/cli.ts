@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findingText } from '../learn/finding.ts';
+import { LabError } from './lab-runner.ts';
 import { LABS } from '../worlds/labs.ts';
 import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, watch, type RunInfo, type RunOrder } from './control.ts';
 
@@ -385,9 +386,18 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         return 2;
     }
   } catch (e) {
-    out(String((e as Error).message ?? e));
+    out(failureText(e));
     return 1;
   }
+}
+
+/** What a failure says on the console: a configuration error by its message; anything else with its kind and where it
+    came from, so that a failure never ends a command without a trace (an error's message may be empty). */
+export function failureText(e: unknown): string {
+  if (e instanceof LabError) return e.message;
+  if (e === undefined || e === null || e === '') return 'a failure that says nothing: ' + JSON.stringify(e);
+  const err = e as Error | undefined;
+  return (err?.stack || (err?.name ? err.name + ': ' : '') + String(err?.message ?? e)) || 'a failure that says nothing: ' + JSON.stringify(e);
 }
 
 /** An origin as the operator wrote it: a URL prefix or a domain as it is, a path made absolute. */

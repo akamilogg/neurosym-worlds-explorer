@@ -119,6 +119,9 @@ test('the insights come from a local copy of EurekaBench, for the operator only'
   fs.writeFileSync(path.join(rubric, 'rubric.yaml'), 'completeness:\n  criteria:\n  - id: C1\n    criterion: c\ninsights:\n  criteria:\n  - id: I1\n    criterion: Does it explain A?\n    kind: finding\n  - id: I2\n    criterion: Does it explain B?\n    kind: limitation\n');
   assert.deepEqual(insightsOf(copy), [{ id: 'I1', statement: '[finding] Does it explain A?' }, { id: 'I2', statement: '[limitation] Does it explain B?' }]);
   assert.deepEqual(c302NavLab.truth!(c302NavLab.generate(1, {}), { eureka: '' }), []);
+  /* A Windows checkout ends its lines with CR LF: the same insights. */
+  fs.writeFileSync(path.join(rubric, 'rubric.yaml'), fs.readFileSync(path.join(rubric, 'rubric.yaml'), 'utf8').replace(/\n/g, '\r\n'));
+  assert.deepEqual(insightsOf(copy).map((x) => x.id), ['I1', 'I2']);
 });
 
 /* A model that reads the drive as the stand-in makes the signals: it holds in the laboratory and in the family. */

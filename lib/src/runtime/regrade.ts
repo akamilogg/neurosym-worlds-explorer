@@ -10,6 +10,7 @@ import { LABS } from '../worlds/labs.ts';
 import { GRID_GRADING_SYSTEM } from '../worlds/grid/lab.ts';
 import { LabError } from './lab-runner.ts';
 import { methodOf } from '../audit/audit.ts';
+import { worldOptionsIn } from '../orchestra/reader.ts';
 
 /* ============================================================================
  * Grading a finished run AGAIN (operator only): the same grader the run used - how well the
@@ -43,7 +44,11 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   const end = [...events].reverse().find((e) => e.type === 'end');
   if (!end) throw new LabError('grade: the run has not ended');
   const before = [...events].reverse().find((e) => e.type === 'operator_rule_recovery' || e.type === 'operator_law_recovery');
-  const truth = (before?.truth ?? journal.hidden_from_the_learner?.truth) as { id: string; statement: string }[] | undefined;
+  /* The truth the run kept; else, for a world of laws that has one, the laboratory's own from the run's spec and options
+     (a run whose truth could not be read when it ran). */
+  const kept = (before?.truth ?? journal.hidden_from_the_learner?.truth) as { id: string; statement: string }[] | undefined;
+  const spec = journal.hidden_from_the_learner?.spec;
+  const truth = kept?.length ? kept : !isGameLab(lab) && lab.truth && spec ? lab.truth(spec, worldOptionsIn(lab.options, journal.config ?? {})) as { id: string; statement: string }[] : kept;
   if (!Array.isArray(truth) || !truth.length) throw new LabError('grade: the run keeps no truth to grade against');
   const learner = learnerOf(end);
   let system: string, user: string, type: string;

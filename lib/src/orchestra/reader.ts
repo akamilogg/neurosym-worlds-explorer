@@ -95,7 +95,7 @@ export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2):
 const ANSWER_SHAPE = 'When you propose, answer with ONE JSON object and nothing else:';
 
 /** A run's world options, from its journal's configuration (kept there under camel-cased names). */
-const worldOptionsIn = (options: readonly { name: string; default: string }[], config: J): Record<string, string> =>
+export const worldOptionsIn = (options: readonly { name: string; default: string }[], config: J): Record<string, string> =>
   Object.fromEntries(options.map((o) => { const v = config[o.name.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase())]; return [o.name, v === undefined ? o.default : String(v)]; }));
 
 /** The brief the junior works under, word for word: the common prompt (persona, method, instruments, protocol) and its
