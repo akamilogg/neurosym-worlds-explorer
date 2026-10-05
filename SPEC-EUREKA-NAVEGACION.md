@@ -1,7 +1,8 @@
 # SPEC · Un problema de EurekaBench como mundo de nuestro arnés: `navigation-goals` (c302)
 
-Estado (04/10/2026): **propuesta, sin implementar.** Revisada el mismo día: el problema se porta como un mundo que
-implementa nuestra interfaz de laboratorio; el arnés no se adapta a su evaluación.
+Estado (05/10/2026): **N0 hecho** (§10): entorno, tiempos, fidelidad del simulador, lectura de las señales decidida y
+servicio de c302. Revisada el 04/10: el problema se porta como un mundo que implementa nuestra interfaz de
+laboratorio; el arnés no se adapta a su evaluación.
 
 Contexto: [EurekaBench](https://github.com/EurekaBench/EurekaBench) (Geng et al., 2026) evalúa agentes de código que
 descubren mecanismos con simuladores científicos. De sus 24 problemas, los de la clase "simulador como mundo" son los que
@@ -111,7 +112,9 @@ Un servicio propio en Python (`scripts/c302-service.py`, o lanzado por un `.ts` 
 - **`act`** pide una simulación con un protocolo del investigador:
   - estímulos de pulso o seno sobre las células sensoriales;
   - qué células registrar;
-  - y, como intervención causal, quitar o escalar conexiones o cambiar su polaridad.
+  - como intervención causal, quitar o escalar conexiones o cambiar su polaridad;
+  - y cambiar parámetros del modelo de c302 (`param_overrides`). Sin esto no se puede descubrir I11 ("lo que el gusano
+    aprendió del olor cambia las reglas de cambio"); su simulador lo permite y el nuestro también debe.
 
   Cuenta contra un presupuesto de `act` por ronda, como en los demás mundos.
 - **`view`, `table`, `measure`, `inspect` y `simulate`** funcionan como en los otros mundos de leyes.
@@ -238,3 +241,77 @@ declaradas.
 - **Si se traen más problemas de c302** (`biological-networks`, `phase-memory`), el mismo servicio y el mismo laboratorio,
   con otra lectura de señales y otro objetivo, deberían servirlos. Conviene que el servicio no tenga nada propio de
   `navigation-goals`.
+
+## 10. N0 hecho (04–05/10/2026)
+
+**El entorno.**
+
+- La copia de EurekaBench está en `D:\OctaneDoc\OctLocalServer\EurekaBench`, fuera del repositorio.
+- Su `.venv` tiene Python 3.12 con las versiones que fijan: c302 en su commit, pyNeuroML 1.3.22, libNeuroML 0.6.7,
+  PyLEMS, neuromllite, cect y wormneuroatlas, más numpy 1.26 y scipy.
+- Java 11. **c302 corre en Windows.**
+
+**Tiempos** (una configuración de 9 s, `dt` 0,05 ms):
+
+| red | tiempo |
+|---|---|
+| panel de 28 células | unos 93 s |
+| el mismo panel con 6 simulaciones a la vez | 120–140 s cada una (16 núcleos) |
+| la red completa de 302 células | 51 minutos (además escribía 1,2 GB en disco, porque el ejecutor de prueba registraba cada paso de integración) |
+
+**Fidelidad del simulador.**
+
+- Su `simulator.py`, ejecutado en local y sin copiarlo, y nuestro ejecutor dan **el mismo calcio** en todas las células
+  con el mismo estímulo: diferencia 0,0, la misma red (204 conexiones).
+- La red completa no explica su conjunto de prueba; encaja peor que el panel.
+- Su tiempo de construcción (1932 s con 6 procesos para 100 configuraciones) también cuadra con el panel.
+
+**Su lectura de las señales.** El script con el que generaron el conjunto de prueba no está publicado. Re-simulamos 10 de
+sus protocolos (5 de cada familia) y comparamos:
+
+- **Reorientación:** AVA − AVB, filtrada **dos veces** con el filtro causal de 200 ms. Su enunciado lo deja entrever: el
+  simulador lee la señal con ese filtro "y la evaluación la lee de la misma manera".
+  - Correlación 0,96 por configuración y R² 0,93 con una sola transformación lineal para todas (unos 1,2 × 10⁸ más un
+    pequeño desplazamiento).
+  - Persistencia de 215 / 265 ms (familia vista / no vista) frente a 175 / 200 ms las suyas.
+  - Casi el mismo número de cruces del punto medio por configuración.
+  - **Conclusión: equivalente.**
+- **Giro:** no lo reproducimos.
+  - RIAL − RIAR, con normalización por célula, llega a una correlación de 0,5–0,7.
+  - Ni RIA ni ninguna combinación lineal de las 28 células del panel lo explican (R² 0,65 fuera de muestra).
+  - Puede leer otra magnitud (voltaje) o algo no lineal.
+  - **Conclusión: no equivalente.** Su propio mecanismo de referencia sólo logra R² 0,17 en el giro.
+
+**Decisiones.**
+
+- **La lectura del mundo:**
+  - reorientación = AVA − AVB del calcio, filtrada dos veces a 200 ms;
+  - giro = RIAL − RIAR, filtrado igual.
+
+  Están documentadas como nuestras. La de giro declara que no es la suya.
+- **La lectura de EurekaBench del operador:** sus 100 protocolos re-simulados con nuestro servicio. Las medidas de
+  reorientación se consideran comparables con las suyas; las de giro, no.
+- **Los *insights* se pueden obtener con nuestro laboratorio.** Hablan del circuito, que es el mismo, y el investigador
+  puede registrar cualquier célula del panel, cambiar el cableado y los parámetros, y repetir.
+  - Sobre el estado que persiste, sus dos valores, la dirección del cambio, los regímenes y las neuronas que lo sostienen
+    (I1, I2, I4, I9, I10, I13–I18): equivalentes.
+  - Sobre ir hacia el olor (I3, I5, I7, I12): c302 no tiene cuerpo ni gradiente, así que se derivan razonando desde el
+    mecanismo, igual que su juez.
+  - Sobre comparar las dos acciones (I6, I8): obtenibles por el registro directo de RIA, aunque nuestra señal de giro no
+    sea la suya.
+  - I11: requiere `param_overrides` en el `act` (§4.2).
+- **El servicio** (hecho, 05/10) es genérico de c302, no de `navigation-goals`.
+  - Partes: `lib/src/worlds/c302/service.ts` y `simulate.py`; se arranca con `scripts/c302-service.ts --python <python con
+    c302>`.
+  - `POST /simulate` simula una red con estímulos (pulso o seno), cambios de cableado (quitar, escalar, cambiar la
+    polaridad) y de parámetros (`param_overrides`), y devuelve el calcio de las células pedidas cada 5 ms.
+  - Una clave de idempotencia hace que se simule una vez; pedida otra vez mientras corre, espera a la misma simulación.
+  - Simula hasta `--concurrency` a la vez, un proceso Python por petición.
+  - `GET /stats` dice cuántas simulaciones corrió y cuántas veces respondió de nuevo.
+  - La lectura de las señales es del laboratorio.
+  - Comprobado con c302 real: la configuración 0 da el mismo calcio que antes, y una simulación con seno, conexión
+    cortada, conexión escalada y un parámetro cambiado funciona (203 conexiones). Tardaron 113–161 s con dos a la vez.
+  - Pruebas: `lib/test/c302-service.test.ts`, con un trabajador sustituto.
+
+**Siguiente (N1):** los generadores de las dos familias de estímulo, con semilla, comparados con las estadísticas de sus
+protocolos; después el laboratorio (N2).
