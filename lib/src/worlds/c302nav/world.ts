@@ -1,6 +1,7 @@
 import { hashString } from '../../core/hash.ts';
 import type { World } from '../../core/types.ts';
 import { SAVE_EVERY_MS } from './stimuli.ts';
+import { mulberry32 } from '../grid/gen.ts';
 
 /* ============================================================================
  * c302-navigation@1 as the learner perceives it (SPEC-EUREKA-NAVEGACION §4.2): episodes of
@@ -26,6 +27,68 @@ export type Signal = typeof SIGNALS[number];
 export const READOUT_TAU_MS = 200;
 /** Calcium (mM) to the units the learner perceives. */
 export const UNIT = 1e8;
+
+/* ============================================================================
+ * NAMES (SPEC-EUREKA-NAVEGACION N3). With real names the learner sees the cells, connections and
+ * signals as c302 and the problem name them. With neutral names it never sees a real one: each
+ * cell of the panel is "C01".."C28" by a permutation drawn from the run's seed, a connection is
+ * named after its neutral cells, a transmitter is "T1".."Tn" (also drawn), and the two signals
+ * are "s1" and "s2". The laboratory translates at its border: the service and the operator keep
+ * the real names; the operator's glossary says which is which.
+ * ========================================================================== */
+
+export type NamesMode = 'real' | 'neutral';
+export const NEUTRAL_CELLS: readonly string[] = PANEL.map((_, i) => 'C' + String(i + 1).padStart(2, '0'));
+const TRANSMITTERS = ['Acetylcholine', 'GABA', 'Glutamate', 'Serotonin', 'Dopamine', 'Octopamine', 'Tyramine', 'FMRFamide'];
+
+export interface Naming {
+  readonly mode: NamesMode;
+  /** The two signals as the learner names them (reorientation, then steering). */
+  readonly signals: readonly [string, string];
+  /** The cells as the learner names them, in the order it is told them. */
+  readonly cells: readonly string[];
+  cell(real: string): string;
+  /** The real cell of a name the learner gave, or null when there is none in this run. */
+  real(shown: string): string | null;
+  connection(real: string): string;
+  realConnection(shown: string): string | null;
+  transmitter(real: string): string;
+  /** OPERATOR ONLY: the learner's names and what they are. */
+  glossary(): Record<string, string>;
+}
+
+const shuffled = <T>(xs: readonly T[], rnd: () => number): T[] => {
+  const out = [...xs];
+  for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; }
+  return out;
+};
+
+/** The names of a run: the real ones, or neutral ones drawn from its seed. */
+export function namingOf(mode: NamesMode, seed: number): Naming {
+  if (mode === 'real') {
+    const known = new Set<string>(PANEL);
+    return { mode, signals: ['reorientation', 'steering'], cells: PANEL,
+      cell: (c) => c, real: (c) => (known.has(c) ? c : null), connection: (c) => c,
+      realConnection: (c) => { const m = /^([A-Z0-9]+)-([A-Z0-9]+)(_GJ)?$/.exec(c); return m && known.has(m[1]) && known.has(m[2]) ? c : null; },
+      transmitter: (t) => t, glossary: () => ({}) };
+  }
+  const rnd = mulberry32(seed * 2654435 + 302);
+  const order = shuffled(PANEL, rnd);
+  const toShown = new Map(order.map((c, i) => [c as string, NEUTRAL_CELLS[i]]));
+  const toReal = new Map(order.map((c, i) => [NEUTRAL_CELLS[i], c as string]));
+  const tOrder = shuffled(TRANSMITTERS, rnd);
+  const tShown = new Map(tOrder.map((t, i) => [t, 'T' + (i + 1)]));
+  const conn = (c: string, map: Map<string, string>): string | null => {
+    const m = /^([A-Z0-9]+)-([A-Z0-9]+)(_GJ)?$/.exec(c);
+    return m && map.has(m[1]) && map.has(m[2]) ? map.get(m[1]) + '-' + map.get(m[2]) + (m[3] ?? '') : null;
+  };
+  return { mode, signals: ['s1', 's2'], cells: NEUTRAL_CELLS,
+    cell: (c) => toShown.get(c) ?? c, real: (c) => toReal.get(c) ?? null,
+    connection: (c) => conn(c, toShown) ?? c, realConnection: (c) => conn(c, toReal),
+    transmitter: (t) => tShown.get(t) ?? 'T?',
+    glossary: () => ({ s1: 'the reorientation signal (AVA - AVB)', s2: 'the steering signal (RIAL - RIAR)',
+      ...Object.fromEntries(NEUTRAL_CELLS.map((n) => [n, toReal.get(n)!])), ...Object.fromEntries([...tShown].map(([t, n]) => [n, t])) }) };
+}
 
 /** A stimulus as the service takes it: a square pulse, or a sine while it lasts. */
 export interface Stimulus {
@@ -53,14 +116,18 @@ export interface C302NavSpec {
   /** The family its episodes draw their drive from: "steps" (irregular trains) or "rotating" (periodic trains turning
       smoothly). */
   readonly family: 'steps' | 'rotating';
+  /** How the learner is told the cells and signals, and the seed its neutral names are drawn from (the run's). */
+  readonly names: NamesMode;
+  readonly namesSeed: number;
 }
 
-/** An episode as it was perceived: the times, the current into each stimulated cell, the two signals, and the calcium of
-    the cells recorded (units of 1e-8 mM). An act that asked for the wiring has no steps and says it. */
+/** An episode as it was perceived, in the learner's names: the times, the current into each stimulated cell, the two
+    signals, and the calcium of the cells recorded (units of 1e-8 mM). An act that asked for the wiring has no steps and
+    says it. */
 export interface C302NavEpisode {
   readonly t: readonly number[];
   readonly inputs: Readonly<Record<string, readonly number[]>>;
-  readonly signals: Readonly<Record<Signal, readonly number[]>>;
+  readonly signals: Readonly<Record<string, readonly number[]>>;
   readonly calcium: Readonly<Record<string, readonly number[]>>;
   /** What was asked of the network besides the stimuli (an act's). */
   readonly changes?: NetworkChanges;
@@ -78,7 +145,7 @@ export interface C302NavPoint {
 
 export const C302NAV_PERCEPT_DOC = 'At a point of an episode your code receives p = { step, t, inputs }: `p.t` is the time of each step from the start '
   + 'up to this one (ms, every ' + SAVE_EVERY_MS + ' ms; `p.t[p.step]` is now), and `p.inputs` the current injected into each stimulated cell at each '
-  + 'of those steps (pA), by cell name - e.g. `p.inputs.AWCL[p.step]`. Nothing after this step.';
+  + 'of those steps (pA), by the name of the cell: `p.inputs[<cell>][p.step]` is the current into it now. Nothing after this step.';
 
 export const perceiveC302Nav = (point: C302NavPoint): C302NavPoint => point;
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { serveC302 } from '../src/worlds/c302/service.ts';
 import { c302NavLab, holdR2Of, insightsOf, parseC302NavAct } from '../src/worlds/c302nav/lab.ts';
 import { c302NavInterface } from '../src/worlds/c302nav/interface.ts';
-import { C302NAV_PERCEPT_DOC, inputTraces, onepole, signalsOf } from '../src/worlds/c302nav/world.ts';
+import { C302NAV_PERCEPT_DOC, PANEL, inputTraces, namingOf, onepole, signalsOf } from '../src/worlds/c302nav/world.ts';
 import { r2 } from '../src/worlds/c302nav/objective.ts';
 import { LABS } from '../src/worlds/labs.ts';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
@@ -49,7 +49,8 @@ test('the signals are read as the world says: the difference of the calcium, fil
   assert.deepEqual(inputTraces([{ cell: 'AWCL', delay_ms: 5, duration_ms: 10, amplitude_pa: 2 }], [0, 5, 10, 15, 20]).AWCL, [0, 0, 2, 2, 0], 'a pulse shows after it starts, until it ends');
   assert.equal(r2([{ answer: 1, came: 1 }, { answer: 2, came: 2 }]), 1);
   assert.equal(r2([{ answer: 0, came: 1 }, { answer: 0, came: 1 }]), null, 'no spread, no R²');
-  assert.deepEqual(holdR2Of({ 'hold-r2': '0.6,0.2' }), { reorientation: 0.6, steering: 0.2 });
+  assert.deepEqual(holdR2Of({ 'hold-r2': '0.6,0.2' }), [0.6, 0.2]);
+  assert.deepEqual(holdR2Of({}), [0.5, 0.3]);
 });
 
 test('the act: stimuli into any cell of the panel, cells recorded, connections and parameters changed, or the wiring; its form checked', () => {
@@ -74,7 +75,7 @@ test('the laboratory learns the world only by asking the service: episodes of ei
   const served = await serveC302({ worker, concurrency: 4 });
   try {
     let n = 0;
-    const options = { service: served.url, acts: '2', 'hold-r2': '0.5,0.3', eureka: '' };
+    const options = { service: served.url, acts: '2', 'hold-r2': '0.5,0.3', names: 'real', eureka: '' };
     const ctx = { seed: 1, options, family: 2, every: 20, checkEpisodes: 2, confirmPlaces: 1, explore: 2,
       effects: { request: async (route: string, body: unknown) => (await fetchJson(served.url + route, { body, headers: { 'Idempotency-Key': 'test#' + (++n) }, retries: 0 })).data } } as LabContext;
     const spec = c302NavLab.generate(1, options);
@@ -89,7 +90,8 @@ test('the laboratory learns the world only by asking the service: episodes of ei
     assert.deepEqual(c302NavLab.at(e, 40)!.state, cases[2].state);
     assert.equal(cases[2].state.t.length, 41, 'a point perceives up to its step, nothing after');
     assert.ok(c302NavLab.agrees(cases[2].came, cases[2]));
-    assert.equal(c302NavLab.answerIssue(5), 'the answer must be {"reorientation": <number>, "steering": <number>} (it was 5)');
+    assert.match(c302NavLab.answerIssue(5)!, /a number for each of the two signals/);
+    assert.equal(c302NavLab.answerIssue({ reorientation: 1, steering: 2 }), null);
     const rows = c302NavLab.view(e, 0, 500) as { rows: unknown[] };
     assert.equal(rows.rows.length, 60, 'at most 60 rows a view');
     assert.equal(c302NavLab.placeOf(spec, 1, options).family, 'rotating', 'the family\'s places draw the drive never seen');
@@ -164,5 +166,89 @@ test('a run: episodes from the service, a check, a validation in the drive never
     const again = JSON.parse(fs.readFileSync(path.join(work, 'resumed.json'), 'utf8')).events.find((e: { type: string }) => e.type === 'end');
     assert.equal(again.replay.replayed.env, 6);
     assert.equal(served.service.stats().simulations, 6, 'nothing simulated again');
+  } finally { await served.close(); }
+});
+
+/* N3: with neutral names the learner never sees a real one - not in the prompt, an episode, an act's answer or the wiring -
+   and what it names is translated to the real names for the service; the operator keeps the glossary. */
+test('neutral names: drawn from the seed, one to one, translated at the border; the grader is given the glossary', async () => {
+  const a = namingOf('neutral', 1), b = namingOf('neutral', 2);
+  assert.equal(new Set(PANEL.map((c) => a.cell(c))).size, 28);
+  assert.ok(PANEL.every((c) => a.real(a.cell(c)) === c));
+  assert.notDeepEqual(PANEL.map((c) => a.cell(c)), PANEL.map((c) => b.cell(c)), 'another seed, another permutation');
+  assert.equal(a.realConnection(a.connection('AWCL-AIYL_GJ')), 'AWCL-AIYL_GJ');
+  assert.equal(a.real('AWCL'), null, 'a real name is no name of this run');
+  assert.equal(a.glossary()[a.cell('AVAL')], 'AVAL');
+
+  const iface = c302NavLab.interface({ regression: true, world: { names: 'neutral' } });
+  const words = [...iface.lines.map((l) => (typeof l === 'string' ? l : Array.isArray(l) ? l[1] : '')), C302NAV_PERCEPT_DOC].join('\n');
+  for (const c of PANEL) assert.doesNotMatch(words, new RegExp('\\b' + c + '\\b'), c);
+  assert.doesNotMatch(words, /reorientation|steering/);
+  assert.match(words, /"s1": <number>, "s2": <number>/);
+
+  const served = await serveC302({ worker, concurrency: 4 });
+  try {
+    let n = 0;
+    const asked: unknown[] = [];
+    const options = { service: served.url, acts: '2', 'hold-r2': '0.5,0.3', names: 'neutral', eureka: '' };
+    const ctx = { seed: 1, options, family: 2, every: 20, checkEpisodes: 2, confirmPlaces: 1, explore: 2,
+      effects: { request: async (route: string, body: unknown) => { asked.push(body); return (await fetchJson(served.url + route, { body, headers: { 'Idempotency-Key': 'n#' + (++n) }, retries: 0 })).data; } } } as LabContext;
+    const spec = c302NavLab.generate(1, options);
+    assert.equal(c302NavLab.placeOf(spec, 1, options).names, 'neutral', 'the names are the run\'s in every place');
+    const naming = namingOf('neutral', 1);
+    const e = await c302NavLab.episode(spec, mulberry32(2), ctx);
+    const aiyl = naming.cell('AIYL'), awcl = naming.cell('AWCL');
+    const acted = await c302NavLab.act!.start(spec, parseC302NavAct({ stimuli: [{ cell: awcl, delay_ms: 100, duration_ms: 200, amplitude_pa: 4 }], record: [aiyl],
+      remove: [naming.connection('AWCL-AIYL')], duration_ms: 1000 }) as never, 'act1', ctx);
+    assert.deepEqual((asked[1] as { stimuli: { cell: string }[] }).stimuli.map((x) => x.cell), ['AWCL'], 'the service is asked in the real names');
+    assert.deepEqual((asked[1] as { remove_connections: string[] }).remove_connections, ['AWCL-AIYL']);
+    assert.equal(acted!.calcium[aiyl][30], 8);
+    const wiring = await c302NavLab.act!.start(spec, { wiring: true }, 'act2', ctx);
+    const seen = JSON.stringify([e.inputs, Object.keys(e.calcium), Object.keys(e.signals), c302NavLab.view(e, 0, 2), c302NavLab.act!.shown(acted!), c302NavLab.act!.shown(wiring!),
+      c302NavLab.cases(spec, 'ep1', e, 20)[3], c302NavLab.indexInfo!(acted!)]);
+    for (const c of PANEL) assert.doesNotMatch(seen, new RegExp('\\b' + c + '\\b'), c);
+    assert.doesNotMatch(seen, /Glutamate|reorientation|steering/);
+    assert.deepEqual(Object.keys(e.signals), ['s1', 's2']);
+    assert.equal(await c302NavLab.act!.start(spec, { stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 10, amplitude_pa: 1 }] }, 'act3', ctx), null, 'a real name is refused, never saying why');
+    assert.equal(c302NavLab.answerIssue({ s1: 1, s2: 2 }), null);
+    assert.deepEqual(c302NavLab.grading!.glossary!(spec, options), naming.glossary());
+  } finally { await served.close(); }
+});
+
+test('a run with neutral names: nothing System 2 is ever sent names a real cell, transmitter or signal; a model in its names holds', async () => {
+  const served = await serveC302({ worker, concurrency: 4 });
+  try {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'c302nav-neutral-'));
+    const naming = namingOf('neutral', 3);
+    const [l, r] = [naming.cell('AWCL'), naming.cell('AWCR')];
+    const sent: string[] = [];
+    const model = { ...HOLDING, output: HOLDING.output.replace('p.inputs.AWCL', 'p.inputs.' + l).replace('p.inputs.AWCR', 'p.inputs.' + r)
+      .replace('{ reorientation: f(f(tot))[p.step], steering: f(f(d))[p.step] }', '{ s1: f(f(tot))[p.step], s2: f(f(d))[p.step] }') };
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).startsWith(served.url)) return globalThis.fetch(url as string, init as RequestInit) as never;
+      const b = JSON.parse(String(init.body));
+      const sys = b.messages[0].content as string;
+      const user = JSON.parse(userOf(b));
+      if (!sys.startsWith('You grade')) sent.push(JSON.stringify(b.messages));
+      const done = (user.investigation ?? []).length;
+      const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+        : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+        : user.round === 1 && done === 0 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }, { act: { wiring: true } }] }
+        : model;
+      const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+      return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+    };
+    const out = path.join(work, 'run.json');
+    await runLaboratory(c302NavLab, { args: ['--seed', '3', '--attempts', '1', '--explore', '1', '--check-episodes', '1', '--family', '1', '--confirm-places', '1', '--flat',
+      '--no-grade', '--no-reflection', '--no-ablation', '--names', 'neutral', '--service', served.url, '--out', out], root: work, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
+    assert.ok(sent.length >= 2);
+    for (const text of sent) {
+      for (const c of PANEL) assert.doesNotMatch(text, new RegExp('\\b' + c + '\\b'), c);
+      assert.doesNotMatch(text, /reorientation|steering|Glutamate/);
+    }
+    const journal = JSON.parse(fs.readFileSync(out, 'utf8'));
+    const end = journal.events.find((e: { type: string }) => e.type === 'end');
+    assert.equal(end.stoppedBy, 'accepted');
+    assert.equal(journal.hidden_from_the_learner.glossary[l], 'AWCL', 'the operator keeps which name is which');
   } finally { await served.close(); }
 });

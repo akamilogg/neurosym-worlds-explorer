@@ -93,6 +93,10 @@ export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2):
 /** Where the researcher's prompt stops describing its work and starts describing the shape of its own answer. */
 const ANSWER_SHAPE = 'When you propose, answer with ONE JSON object and nothing else:';
 
+/** A run's world options, from its journal's configuration (kept there under camel-cased names). */
+const worldOptionsIn = (options: readonly { name: string; default: string }[], config: J): Record<string, string> =>
+  Object.fromEntries(options.map((o) => { const v = config[o.name.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase())]; return [o.name, v === undefined ? o.default : String(v)]; }));
+
 /** The brief the junior works under, word for word: the common prompt (persona, method, instruments, protocol) and its
     world's interface, as its run built them - without the shape of a proposal, which is the junior's to answer, not a
     reviewer's. Null when the journal's world is not known here. */
@@ -102,7 +106,8 @@ export function juniorBrief(journal: J): string | null {
   const config = (journal?.config ?? {}) as J;
   const tools = new Set((Array.isArray(config.tools) ? config.tools : []) as Tool[]);
   const prompt = isGameLab(lab) ? explorerSystem(tools as never)
-    : system2Prompt(lab.interface({ regression: config.regression !== false, ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) }), tools);
+    : system2Prompt(lab.interface({ regression: config.regression !== false, world: worldOptionsIn(lab.options, config),
+      ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) }), tools);
   const at = prompt.indexOf(ANSWER_SHAPE);
   return (at >= 0 ? prompt.slice(0, at) : prompt).trimEnd();
 }

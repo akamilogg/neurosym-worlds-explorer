@@ -429,3 +429,56 @@ recuperación y nada más cambia.
   - El cableado del panel tiene 204 conexiones, las mismas que se midieron en N0.
 
 **Siguiente:** N3 (nombres neutros), luego N4.
+
+## 13. N3 hecho (05/10/2026): nombres neutros
+
+`--names neutral` (por defecto `real`). El investigador nunca ve un nombre real: ni en el prompt, ni en un episodio, ni
+en la respuesta de un `act`, ni en el cableado.
+
+**Cómo se nombra.**
+
+- **Células:** las 28 del panel son `C01`…`C28`, con una permutación sorteada de la seed del run. Es la misma en todos los
+  lugares del run, y otra seed da otra. Los pares izquierda/derecha no se delatan por el nombre.
+- **Conexiones:** se nombran por sus células neutras (`C07-C19`, `C07-C19_GJ`).
+- **Transmisores:** en el cableado, `T1`…`T8`, también sorteados. El signo de cada uno lo averigua el investigador
+  (cambiando polaridades, por ejemplo).
+- **Señales:** `s1` (reorientación) y `s2` (giro). Así se llama también la respuesta: `{"s1": …, "s2": …}`.
+- **El cableado,** ordenado por nombre neutro: el orden de c302 delataría los nombres reales.
+
+**Dónde se traduce.** En la frontera del laboratorio (`namingOf` en `world.ts`, `realAct` en `lab.ts`).
+
+- El servicio sigue siendo genérico y recibe siempre nombres reales.
+- Un `act` que nombra algo que este run no tiene (un nombre real en modo neutro, por ejemplo) se rechaza sin decir por
+  qué, como cualquier otro rechazo.
+- Los parámetros del modelo (`param_overrides`) no se traducen: la interfaz no nombra ninguno, así que el investigador
+  sólo los conoce si los descubre o, en el asistido, por una fuente.
+
+**El operador.**
+
+- El glosario (qué es cada nombre neutro) queda en la parte oculta del journal.
+- Se da al calificador como `learner_names`, también al recalificar.
+- Para eso hay dos añadidos genéricos al arnés:
+  - `Lab.grading.glossary`;
+  - `Lab.interface` recibe las opciones del mundo (`world`), porque sus palabras dependen de ellas.
+
+  `orchestra/reader.ts` las reconstruye de la configuración del journal.
+
+**Lo que no se oculta, y es una decisión.** La interfaz sigue hablando de células, calcio, conexiones químicas y uniones
+gap, corrientes en pA y una red simulada. Se ocultan las identidades (qué célula es cuál, qué hace cada una en la
+literatura), no el tipo de sistema. Ocultar también eso exigiría otro vocabulario para el `act` y el cableado; queda como
+variante si N4 lo pide.
+
+**Comprobado** (`lib/test/c302nav-lab.test.ts`):
+
+- **La permutación:**
+  - es biyectiva;
+  - otra seed da otra;
+  - la traducción de conexiones va y vuelve;
+  - un nombre real no existe en modo neutro.
+- **Un episodio, un `act` y el cableado** no contienen ningún nombre real, ni el de un transmisor ni el de una señal.
+- **Al servicio** se le pide en nombres reales.
+- **Un run completo en modo neutro:** ningún mensaje enviado a System 2 contiene un nombre real. Un modelo escrito en sus
+  nombres (`s1`, `s2`, `C..`) se sostiene, y el glosario queda en el journal.
+
+**Siguiente:** N4 (condiciones, runs y la auditoría del método), con la lectura de EurekaBench del operador y el umbral
+calibrado (§12).

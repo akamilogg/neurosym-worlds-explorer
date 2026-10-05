@@ -151,8 +151,8 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   perceive(point: P): unknown;
   readonly perceptDoc: string;
   /** The interface to the common prompt: the objective's lines and the instruments' parameters (and, with a facet, what
-      counts). */
-  interface(options: { regression?: boolean; focus?: string | null }): WorldInterface;
+      counts). `world`: the run's world options, when its words depend on them (e.g. neutral names). */
+  interface(options: { regression?: boolean; focus?: string | null; world?: LabOptions }): WorldInterface;
   /** How a model's answer is read as what is compared with what happened (default: as given). */
   compare?(answer: unknown, state: P): unknown;
 
@@ -218,7 +218,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   baselines(spec: S): readonly { readonly name: string; readonly source: string }[];
   /** OPERATOR ONLY, with a `truth`: the grader's system prompt, the journal event its grade goes to, and what the
       learner's final model is called there. */
-  readonly grading?: { readonly system: string; readonly event?: string; readonly finalKey?: string };
+  readonly grading?: { readonly system: string; readonly event?: string; readonly finalKey?: string;
+    /** When the learner was given names of its own for the world's things: what each is (kept with the truth, and given
+        to the grader as `learner_names`). */
+    glossary?(spec: S, options: LabOptions): Readonly<Record<string, string>> };
   /** OPERATOR ONLY: measures of the laboratory's own, in place of or besides the common ones. */
   readonly operator?: {
     /** What the journal's hidden part and its start keep besides the common. */

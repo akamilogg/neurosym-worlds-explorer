@@ -54,7 +54,8 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   } else {
     if (!lab.grading) throw new LabError('grade: ' + lab.id + ' has no grader');
     system = lab.grading.system; type = lab.grading.event ?? 'operator_rule_recovery';
-    user = JSON.stringify({ true_statements: truth, learner: { [lab.grading.finalKey ?? 'final_model']: end.final ?? null, ...learner } });
+    const glossary = journal.hidden_from_the_learner?.glossary;
+    user = JSON.stringify({ true_statements: truth, ...(glossary ? { learner_names: glossary } : {}), learner: { [lab.grading.finalKey ?? 'final_model']: end.final ?? null, ...learner } });
   }
   let event: J;
   try {

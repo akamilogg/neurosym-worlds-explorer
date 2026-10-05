@@ -752,7 +752,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The facet in force (SPEC-INVESTIGADOR-ASISTIDO §6.2): set at the start, changed by the operator in an assisted run. */
   let focus: string | null = (worldOptions.__focus as string | undefined) || null;
   let task: string | null = (worldOptions.__task as string | undefined) || null;
-  const promptFor = (f: string | null) => system2Prompt(lab.interface({ regression: cfg.regression, ...(f ? { focus: f } : {}) }), tools);
+  const promptFor = (f: string | null) => system2Prompt(lab.interface({ regression: cfg.regression, world: worldOptions, ...(f ? { focus: f } : {}) }), tools);
   const SYSTEM_PROMPT = promptFor(focus);
 
   /* --- The world, as the operator knows it and as the learner perceives it ------------- */
@@ -779,7 +779,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
 
   /* A truth only where the world was written by someone (optional: nothing but the grade depends on it). */
   const truth = lab.truth?.(spec, worldOptions) ?? null;
-  Object.assign(journal.hidden_from_the_learner, { spec, ...(truth ? { truth } : {}), ...(lab.operator?.hidden?.(spec, ctx) ?? {}),
+  const glossary = lab.grading?.glossary?.(spec, worldOptions) ?? {};
+  Object.assign(journal.hidden_from_the_learner, { spec, ...(truth ? { truth } : {}), ...(Object.keys(glossary).length ? { glossary } : {}), ...(lab.operator?.hidden?.(spec, ctx) ?? {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, ...lab.placeInfo(p.spec) })) });
   /* --- The learner's episodes ------------------------------------------------------------ */
   interface StoredEpisode { readonly id: string; readonly place: string; readonly round: number; readonly by: string; readonly data: unknown }
@@ -1154,7 +1155,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     const brief = session.notebook.brief();
     const learned = { [lab.grading.finalKey ?? 'final_model']: final ? ownLaw(final) : null, beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: session.notebook.reflections };
     try {
-      const content = (await llm.complete({ system: lab.grading.system, user: JSON.stringify({ true_statements: truth, learner: learned }) })).content;
+      const content = (await llm.complete({ system: lab.grading.system, user: JSON.stringify({ true_statements: truth, ...(Object.keys(glossary).length ? { learner_names: glossary } : {}), learner: learned }) })).content;
       const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
