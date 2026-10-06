@@ -76,12 +76,26 @@ function episodeOf(naming: Naming, sim: { t: number[]; calcium: Record<string, n
     calcium: Object.fromEntries(Object.entries(sim.calcium).map(([c, x]) => [naming.cell(c), x.map((v) => round(v * UNIT))])), ...extra };
 }
 
+/** The physical experiment, canonical, in the real names (SPEC-PRUEBAS-PROPIAS §4.2): its stimuli (in any order, with their
+    defaults), what it changed of the network, and how long it lasted - never which cells were recorded. */
+export function experimentIdentity(stimuli: readonly Stimulus[], changes: NetworkChanges | undefined, durationMs: number): string {
+  const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+  const s = stimuli.map((x) => JSON.stringify({ cell: x.cell, kind: x.kind ?? 'pulse', delay_ms: r6(x.delay_ms), duration_ms: r6(x.duration_ms), amplitude_pa: r6(x.amplitude_pa),
+    ...(x.kind === 'sine' ? { period_ms: r6(x.period_ms!), phase_rad: r6(x.phase_rad ?? 0) } : {}) })).sort();
+  const sorted = <T>(o: Readonly<Record<string, T>> | undefined) => (o && Object.keys(o).length ? Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))) : null);
+  const c = changes ?? {};
+  const remove = c.remove_connections?.length ? [...new Set(c.remove_connections)].sort() : null;
+  const scale = sorted(c.connection_number_scaling), polarity = sorted(c.connection_polarity_override), parameters = sorted(c.param_overrides);
+  return JSON.stringify({ stimuli: s, ...(remove ? { remove } : {}), ...(scale ? { scale } : {}), ...(polarity ? { polarity } : {}), ...(parameters ? { parameters } : {}), duration_ms: r6(durationMs) });
+}
+
 /** An episode of the environment: a protocol of the place's family, from a seed. */
 async function drawn(spec: C302NavSpec, seed: number, ctx: LabContext | undefined): Promise<C302NavEpisode> {
   const p = protocolOf(spec.family, seed);
   const tr = tracesOf(p);
-  const sim = await simulate(ctx, stimuliOf(p), [], {});
-  return episodeOf(namingFor(spec), sim, { AWCL: tr.AWCL, AWCR: tr.AWCR }, { protocol: { family: p.family, seed } });
+  const stimuli = stimuliOf(p);
+  const sim = await simulate(ctx, stimuli, [], {});
+  return episodeOf(namingFor(spec), sim, { AWCL: tr.AWCL, AWCR: tr.AWCR }, { protocol: { family: p.family, seed }, identity: experimentIdentity(stimuli, undefined, DURATION_MS) });
 }
 
 /** An act in the learner's names, in the real ones; null when it names something this run does not have. */
@@ -199,7 +213,7 @@ const spreadOf = (x: readonly number[]): number => {
 };
 
 const pointAt = (e: C302NavEpisode, step: number): C302NavPoint => ({ step, t: e.t.slice(0, step + 1),
-  inputs: Object.fromEntries(Object.entries(e.inputs).map(([c, x]) => [c, x.slice(0, step + 1)])) });
+  inputs: Object.fromEntries(Object.entries(e.inputs).map(([c, x]) => [c, x.slice(0, step + 1)])), ...(e.changes ? { changes: changesInWords(e.changes) } : {}) });
 const signalsAt = (e: C302NavEpisode, step: number): Record<string, number> => Object.fromEntries(Object.entries(e.signals).map(([s, x]) => [s, x[step]]));
 
 export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavCase, C302NavAct> = {
@@ -254,7 +268,8 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
   cases: (_spec, id, e, every) => {
     if (!e.t.length) return [];
     const spread = Object.fromEntries(Object.entries(e.signals).map(([s, x]) => [s, spreadOf(x)]));
-    return e.t.map((_, k) => k).filter((k) => k % every === 0).map((k) => ({ point: id + '@' + k, state: pointAt(e, k), came: signalsAt(e, k), spread }));
+    const moves = Object.fromEntries(Object.entries(e.signals).map(([s, x]) => [s, x.some((v) => v !== x[0])]));
+    return e.t.map((_, k) => k).filter((k) => k % every === 0).map((k) => ({ point: id + '@' + k, state: pointAt(e, k), came: signalsAt(e, k), spread, moves }));
   },
   ownEvery: 20,
   trial: { points: (e) => (e.t.length ? [0, 200, 900, e.t.length - 1].filter((k) => k < e.t.length).map((k) => pointAt(e, k)) : []), answers: 4 },
@@ -289,7 +304,8 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
         const act = realAct(naming, asked);
         if (!act) return null;
         const sim = await simulate(ctx, act.stimuli ?? [], act.record ?? [], act.changes ?? {}, act.duration_ms ?? DURATION_MS);
-        return episodeOf(naming, sim, inputTraces(act.stimuli ?? [], sim.t), asked.changes ? { changes: asked.changes } : {});
+        return episodeOf(naming, sim, inputTraces(act.stimuli ?? [], sim.t), { ...(asked.changes ? { changes: asked.changes } : {}),
+          identity: experimentIdentity(act.stimuli ?? [], act.changes, act.duration_ms ?? DURATION_MS) });
       } catch (e) {
         /* The service refused it (a request it cannot simulate), or the simulation diverged (an extreme stimulus): the learner
            is told only that it was refused. */
@@ -313,7 +329,27 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
           parameters: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' }, duration_ms: 3000 },
         { wiring: true }
       ];
+    },
+    /* The experiment in the real names: the same in either naming. */
+    identity: (spec, a) => {
+      if (a.wiring) return 'wiring';
+      const real = realAct(namingFor(spec), a);
+      return real ? experimentIdentity(real.stimuli ?? [], real.changes, real.duration_ms ?? DURATION_MS) : null;
     }
+  },
+  episodeIdentity: (_spec, e) => (e.wiring ? 'wiring' : e.identity ?? null),
+  /* Simple explanations anyone would try first, in the run's names - no constant of the world in them: the signals are the
+     drive into the two odor cells now, or its mean over the last 500 ms (the total for the first signal, the difference for
+     the second). */
+  rivals: (spec) => {
+    const n = namingFor(spec), [a, b] = n.signals, L = JSON.stringify(n.cell('AWCL')), R = JSON.stringify(n.cell('AWCR'));
+    const at = 'const at = (c, k) => (p.inputs[c] ? p.inputs[c][k] || 0 : 0);';
+    return [
+      { name: 'drive-now', about: 'the first signal is the total current into ' + n.cell('AWCL') + ' and ' + n.cell('AWCR') + ' now, the second its difference (left minus right)',
+        source: '(p) => { ' + at + ' const l = at(' + L + ', p.step), r = at(' + R + ', p.step); return { ' + JSON.stringify(a) + ': l + r, ' + JSON.stringify(b) + ': l - r }; }' },
+      { name: 'drive-500ms', about: 'the same, averaged over the last 500 ms',
+        source: '(p) => { ' + at + ' let l = 0, r = 0, n = 0; for (let k = p.step; k >= 0 && p.t[p.step] - p.t[k] < 500; k--) { l += at(' + L + ', k); r += at(' + R + ', k); n++; } return { ' + JSON.stringify(a) + ': (l + r) / n, ' + JSON.stringify(b) + ': (l - r) / n }; }' }
+    ];
   },
 
   objective: (host, options) => c302NavObjective({ casesIn: host.casesIn, answer: (m, s) => host.answer(m, s), holdR2: holdR2Of(options),

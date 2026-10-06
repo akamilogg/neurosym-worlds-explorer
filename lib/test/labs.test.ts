@@ -12,6 +12,8 @@ import { labUsage } from '../src/runtime/lab-runner.ts';
 import { mulberry32 } from '../src/worlds/grid/gen.ts';
 import { departureAsNext } from '../src/worlds/orbit/predict.ts';
 import { toPercept } from '../src/worlds/orbit/world.ts';
+import { protocolOf, stimuliOf } from '../src/worlds/c302nav/stimuli.ts';
+import { c302NavObjective, FLAT_FRACTION, type C302NavCase } from '../src/worlds/c302nav/objective.ts';
 
 /* SPEC-OBJETIVO O9: a world connects as one declaration. What every declaration must keep consistent. */
 
@@ -237,4 +239,70 @@ test('c302nav I3a: an intervention in neutral names reaches the worker in the re
     assert.deepEqual(req.stimuli.map((s: { cell: string }) => s.cell), ['AWCR']);
     assert.ok(req.record.includes('AIYL'));
   } finally { await close(); }
+});
+
+/* --- SPEC-PRUEBAS-PROPIAS T1: what c302nav declares for tests of the learner's own ------------------------------------ */
+
+test('c302nav: an experiment\'s identity is the physical one - the same in any order, with defaults written out or other cells recorded, in either naming', async () => {
+  const lab = LABS.c302nav as LawLab;
+  const id = (names: string, raw: Record<string, unknown>) => {
+    const spec = lab.generate(1, { ...Object.fromEntries(lab.options.map((o) => [o.name, o.default])), names });
+    return lab.act!.identity!(spec, lab.act!.parse(raw));
+  };
+  const a = { stimuli: [{ cell: 'AWCL', delay_ms: 100, duration_ms: 200, amplitude_pa: 3 }, { cell: 'AWCR', delay_ms: 0, duration_ms: 50, amplitude_pa: 2 }], remove: ['AWCL-AIYL', 'AIYL-RIAL'] };
+  const same = { stimuli: [{ cell: 'AWCR', kind: 'pulse', delay_ms: 0, duration_ms: 50, amplitude_pa: 2 }, { cell: 'AWCL', delay_ms: 100, duration_ms: 200, amplitude_pa: 3 }],
+    remove: ['AIYL-RIAL', 'AWCL-AIYL'], record: ['AIYL'], duration_ms: 9000 };
+  assert.equal(id('real', a), id('real', same));
+  assert.notEqual(id('real', a), id('real', { ...a, stimuli: [a.stimuli[0]] }));
+  assert.notEqual(id('real', a), id('real', { ...a, remove: ['AWCL-AIYL'] }));
+  /* In neutral names, the same experiment written in the run's names. */
+  const spec = lab.generate(1, { ...Object.fromEntries(lab.options.map((o) => [o.name, o.default])), names: 'neutral' });
+  const ex = lab.act!.examples(spec).find((x) => 'remove' in x)!;
+  const realSpec = lab.generate(1, Object.fromEntries(lab.options.map((o) => [o.name, o.default])));
+  const exReal = lab.act!.examples(realSpec).find((x) => 'remove' in x)!;
+  assert.equal(lab.act!.identity!(spec, lab.act!.parse(ex)), lab.act!.identity!(realSpec, lab.act!.parse(exReal)));
+  /* The environment's episodes and the learner's acts are compared on the same identity. */
+  const options = Object.fromEntries(lab.options.map((o) => [o.name, o.default])) as Record<string, string>;
+  const { ctx, close } = await contractContext('c302nav', lab, options);
+  try {
+    const drawn = await lab.episode(realSpec, mulberry32(4), ctx);
+    const p = protocolOf(realSpec.family, drawn.protocol.seed);
+    assert.equal(lab.episodeIdentity!(realSpec, drawn), lab.act!.identity!(realSpec, lab.act!.parse({ stimuli: stimuliOf(p) })), 'its protocol, written as an act, is the same experiment');
+    const acted = await lab.act!.start(realSpec, lab.act!.parse(exReal), 'act1', ctx);
+    assert.equal(lab.episodeIdentity!(realSpec, acted), lab.act!.identity!(realSpec, lab.act!.parse(exReal)));
+    /* What the act changed is in its percept, in the interface's words; an episode that changed nothing has none. */
+    assert.deepEqual(lab.at(acted, 3)!.state.changes, { remove: ['AWCL-AIYL'], scale: { 'AWCR-AIYR': 2 }, polarity: { 'AIYL-RIAL': 'inh' }, parameters: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' } });
+    assert.equal('changes' in lab.at(drawn, 3)!.state, false);
+  } finally { await close(); }
+});
+
+test('c302nav: its public rivals are code the learner may name, in the run\'s names', () => {
+  const lab = LABS.c302nav as LawLab;
+  const spec = lab.generate(1, { ...Object.fromEntries(lab.options.map((o) => [o.name, o.default])), names: 'neutral' });
+  const rivals = lab.rivals!(spec);
+  assert.deepEqual(rivals.map((r) => r.name), ['drive-now', 'drive-500ms']);
+  const [L, R] = lab.act!.examples(spec).flatMap((x) => (x.stimuli as { cell: string }[] | undefined) ?? []).map((s) => s.cell);
+  const p = { step: 2, t: [0, 5, 10], inputs: { [L]: [0, 2, 4], [R]: [0, 0, 1] } };
+  assert.deepEqual(eval(rivals[0].source)(p), { s1: 5, s2: 3 });
+  assert.deepEqual(eval(rivals[1].source)(p), { s1: 7 / 3, s2: 5 / 3 });
+  assert.ok(!JSON.stringify(rivals).includes('AWC'), 'never a real name');
+});
+
+test('c302nav: a signal that does not move has no R² - the answers must be near it, within a tenth of the typical spread', async () => {
+  const signals = ['reorientation', 'steering'] as const;
+  const obj = c302NavObjective<number, { id: string; role: 'laboratory'; seen: boolean }>({ casesIn: () => [], answer: async (m) => ({ reorientation: m, steering: 0 }), holdR2: [0.5, 0.3], signals });
+  const place = { id: 'lab1', role: 'laboratory' as const, seen: true };
+  const point = (ep: string, k: number, came: number, spread: number, moves: boolean): C302NavCase =>
+    ({ point: ep + '@' + k, state: { step: k, t: [], inputs: {} }, came: { reorientation: came, steering: 0 }, spread: { reorientation: spread, steering: spread }, moves: { reorientation: moves, steering: moves } });
+  /* A moving episode first: its spread (20) is what is typical. */
+  await obj.run(0, [{ place, cases: [point('ep1', 0, 0, 20, true), point('ep1', 1, 40, 20, true)] }], { round: 1, attempt: 1, purpose: 'check' });
+  const still = [point('test1', 0, 5, 1, false), point('test1', 1, 5, 1, false)];
+  const near = await obj.run(5 + FLAT_FRACTION * 20 * 0.9, [{ place, cases: still }], { round: 1, attempt: 1, purpose: 'check' });
+  assert.equal(obj.holds(near.byPlace[0], { place }), true);
+  const far = await obj.run(5 + FLAT_FRACTION * 20 * 1.5, [{ place, cases: still }], { round: 1, attempt: 1, purpose: 'check' });
+  assert.equal(obj.holds(far.byPlace[0], { place }), false);
+  /* An answer of no form never holds; an episode with no points is no check at all. */
+  const bad = c302NavObjective<number, typeof place>({ casesIn: () => [], answer: async () => 'no', holdR2: [0.5, 0.3], signals });
+  assert.equal(bad.holds((await bad.run(0, [{ place, cases: still }], { round: 1, attempt: 1, purpose: 'check' })).byPlace[0], { place }), false);
+  assert.equal(obj.holds([], { place }), false);
 });

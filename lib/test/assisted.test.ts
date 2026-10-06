@@ -83,7 +83,7 @@ test('an assisted run: a message sent while it goes reaches the next question, a
   const r = await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--out', path.join(dir, 'run.json')], root: dir, llm, onJournal: (f) => { journal = f; },
     fetch: system2(asked, (n) => { if (n === 2) send(journal, { kind: 'message', text: 'look at step 0', by: 'operator' }); }) });
   assert.equal(r.researcherUsed, 'assisted');
-  assert.ok(asked.every((q) => q.system.includes(ASSISTED_SECTION) && q.system.endsWith(INSTRUMENT_SECTION)), 'its own prompt');
+  assert.ok(asked.every((q) => q.system.includes(ASSISTED_SECTION) && q.system.includes(INSTRUMENT_SECTION) && q.system.includes('TESTS OF YOUR OWN')), 'its own prompt');
   assert.equal(asked[0].user.operator_messages, undefined);
   const first = asked.findIndex((q) => q.user.operator_messages);
   assert.equal(first, 2, 'read before the third question, delivered with it');

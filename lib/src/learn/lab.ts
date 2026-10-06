@@ -201,6 +201,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
     /** What of the episode an act starts may differ between two runs of it, as its interface tells the learner, or null
         when nothing may (SPEC-CALIBRACION-INSTRUMENTOS I4; default: nothing). */
     varies?(act: A): string | null;
+    /** The physical experiment an act asks for, canonical (two acts that differ only in their JSON's order, the defaults
+        written out or the cells recorded are the same experiment), comparable with `episodeIdentity`; null when it names
+        what this run does not have (SPEC-PRUEBAS-PROPIAS §4.2). */
+    identity?(spec: S, act: A): string | null;
   };
   readonly simulate?: {
     /** Why a simulation cannot start at this point, or null. */
@@ -222,6 +226,12 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   readonly agreement: string;
   /** OPERATOR ONLY: models that know nothing, as output code. If one holds too, the check could not tell. */
   baselines(spec: S): readonly { readonly name: string; readonly source: string }[];
+  /** Explanations the LEARNER may see and name as a rival of its model in a test of its own (SPEC-PRUEBAS-PROPIAS §4.3):
+      simple, known ones, as output code - never the operator's baselines. */
+  rivals?(spec: S): readonly { readonly name: string; readonly about: string; readonly source: string }[];
+  /** The physical experiment an episode of the environment was (its stimuli, interventions and duration, canonical; not what
+      was observed of it), comparable with `act.identity`; null when it cannot be said (SPEC-PRUEBAS-PROPIAS §4.2). */
+  episodeIdentity?(spec: S, episode: E): string | null;
   /** OPERATOR ONLY, with a `truth`: the grader's system prompt, the journal event its grade goes to, and what the
       learner's final model is called there. */
   readonly grading?: { readonly system: string; readonly event?: string; readonly finalKey?: string;

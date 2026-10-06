@@ -13,7 +13,10 @@ import type { C302NavPoint } from './world.ts';
  *              (standard deviation) of that signal over the point's episode
  *   holds      in the place, for each signal, the R² of the answers against what came, pooled
  *              over the place's points, is at least the operator's threshold, and no point threw;
- *              with the paired regression, also on the previous check's points
+ *              with the paired regression, also on the previous check's points. A signal that does
+ *              not move in the place (an intervention may still it) has no R²: there the answers
+ *              must be within a tenth of the signal's typical spread (the median over the moving
+ *              episodes this objective has seen) at every point (SPEC-PRUEBAS-PROPIAS §4.1)
  * ========================================================================== */
 
 /** The two signals' names, as the learner is told them. */
@@ -34,9 +37,11 @@ export function c302NavVerdict(options: { regression?: boolean; signals?: Signal
 export interface C302NavCase {
   readonly point: string;
   readonly state: C302NavPoint;
-  /** What came there, per signal, and the spread of each over the point's episode. */
+  /** What came there, per signal, and the spread of each over the point's episode (1 when it does not move). */
   readonly came: Readonly<Record<string, number>>;
   readonly spread: Readonly<Record<string, number>>;
+  /** Per signal, whether it moves over the point's episode. */
+  readonly moves?: Readonly<Record<string, boolean>>;
 }
 
 export interface C302NavResult {
@@ -82,11 +87,27 @@ export function r2BySignal(results: readonly C302NavResult[], signals: SignalNam
 
 const round3 = (x: number | null) => (x === null ? null : Math.round(x * 1000) / 1000);
 
+/** Of a signal's typical spread, how far an answer may be from a signal that does not move. */
+export const FLAT_FRACTION = 0.1;
+const median = (x: readonly number[]): number | null => {
+  if (!x.length) return null;
+  const s = [...x].sort((a, b) => a - b), m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
 export function c302NavObjective<M, P extends Place>(host: C302NavObjectiveHost<M, P>): Objective<M, P, readonly C302NavCase[], C302NavResult> {
+  /* The spreads of the moving episodes seen, per signal: what "typical" means for a signal that does not move. */
+  const spreads: Record<string, number[]> = Object.fromEntries(host.signals.map((s) => [s, []]));
+  const seen = new Set<string>();
   const holdsOn = (rs: readonly C302NavResult[]) => {
     if (!rs.length || rs.some((r) => r.verdict === null)) return false;
     const by = r2BySignal(rs, host.signals);
-    return host.signals.every((s, i) => by[s] !== null && by[s]! >= host.holdR2[i]);
+    return host.signals.every((s, i) => {
+      if (by[s] !== null) return by[s]! >= host.holdR2[i];
+      const still = rs.every((r) => r.came[s] === rs[0].came[s]);
+      const typical = median(spreads[s]);
+      return still && typical !== null && rs.every((r) => Math.abs((answerPair(r.answer, host.signals)?.[s] ?? 0) - r.came[s]) <= FLAT_FRACTION * typical);
+    });
   };
   return {
     answer: c302NavAnswer(host.signals),
@@ -95,6 +116,12 @@ export function c302NavObjective<M, P extends Place>(host: C302NavObjectiveHost<
     async run(model, cases) {
       const byPlace: C302NavResult[][] = [];
       for (const { place, cases: points } of cases) {
+        for (const c of points) {
+          const episode = c.point.split('@')[0];
+          if (seen.has(place.id + '/' + episode)) continue;
+          seen.add(place.id + '/' + episode);
+          for (const s of host.signals) if (c.moves?.[s] ?? true) spreads[s].push(c.spread[s]);
+        }
         const rs: C302NavResult[] = [];
         for (const c of points) {
           try {

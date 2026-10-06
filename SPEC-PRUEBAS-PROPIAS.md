@@ -213,6 +213,48 @@ para concluir.
 - **T4.** La orden del senior para registrar una prueba. Las preguntas de la auditoría. Las medidas en el finding y en
   el informe del lote.
 
+**T1, implementado (06/10/2026):**
+- **Contrato del laboratorio** (`learn/lab.ts`): `act.identity(spec, act)`, `lab.episodeIdentity(spec, episode)` y
+  `lab.rivals(spec)`, opcionales.
+- **`c302nav`:**
+  - **identidad** (`experimentIdentity`): estímulos ordenados y con sus valores por defecto, cambios en la red y
+    duración, en nombres reales. Es la misma con nombres reales o neutros, y no incluye las células registradas. Cada
+    episodio la guarda, sea del entorno o de un `act`.
+  - **rivales públicos:** `drive-now` (la corriente ahora: el total y la diferencia) y `drive-500ms` (su media en los
+    últimos 500 ms), en los nombres del run. No llevan ninguna constante del mundo.
+  - **percepto:** `p.changes` en un episodio propio que cambió la red, en las palabras de la interfaz. Cambia el hash
+    congelado del percepto de `c302nav`, a propósito.
+  - **señal quieta** (§4.1): sin R², las respuestas deben quedar a menos de una décima de la dispersión típica (la
+    mediana de los episodios con movimiento que ha visto el objetivo) en todos los puntos.
+  - **Una respuesta inválida o una excepción** hacen que el modelo no se sostenga, y un episodio sin puntos tampoco
+    (pruebas en `test/labs.test.ts`).
+- **Los demás objetivos** no necesitan cambio: `orbit` y `particles3d` tienen suelo de ruido y de precisión, y
+  `cells`, `messages` y `tank` comparan exacto.
+
+**T2, implementado (06/10/2026), sólo informativo:**
+- **`learn/assisted/own-tests.ts`:** es un instrumento propio del investigador asistido, como sus fuentes o su
+  memoria. El parser compartido no cambia y el investigador puro sigue congelado.
+- **Dónde está:** en todo laboratorio con `act`. La sección del prompt (`ownTestsSection`) lista los rivales públicos.
+- **El registro comprueba:**
+  - la forma, con `act.parse`;
+  - que el lugar sea un laboratorio;
+  - el modelo y el rival, por ronda, borrador o `rival:<nombre>`, distintos entre sí;
+  - `new` o `replicate` por identidad. Sin identidad, sólo se admiten réplicas de los `act` propios;
+  - el presupuesto de `act`;
+  - la evidencia compartida (§5).
+
+  Cuesta un `act`. Eventos: `test_registered`, `test_result` y `counterexample_closed`.
+- **Desviación en §5:** sin una puntuación común a todos los objetivos, «no peor más allá de un margen» se aplica así:
+  el rival debe sostenerse en al menos tantos laboratorios como el modelo, sobre los puntos del último check de cada
+  uno.
+- **Ejecución:** después del check de la ronda. El episodio `test<n>` pasa a ser del investigador. El rival que no
+  responde en la forma pedida no hace severa la prueba. Los resultados y los contraejemplos abiertos van con el
+  siguiente check (`your_tests` y `open_counterexamples` en `last_check`).
+- **Contraejemplos:** se cierran por regresión, cuando un modelo posterior se sostiene en su episodio.
+- **Pendiente:**
+  - el cierre por creencia más prueba nueva (§6.2);
+  - las medidas en el finding (T4). Por ahora sólo hay un resumen, `own_tests`, en el `end`.
+
 ## 12. Revisión externa (06/10/2026): qué cambió
 
 - **Un modelo ajustado después ya no hereda las pruebas del anterior.** Se separan `passed_preregistered` y

@@ -265,3 +265,54 @@ test('a run with neutral names: nothing System 2 is ever sent names a real cell,
     assert.equal(journal.hidden_from_the_learner.glossary[l], 'AWCL', 'the operator keeps which name is which');
   } finally { await served.close(); }
 });
+
+/* SPEC-PRUEBAS-PROPIAS T2: tests of the assisted researcher's own - registered before anyone looks, run when the round
+   closes, answered with the next check; severe when its model holds and the rival does not; a failed one stays open as a
+   counterexample until a later model holds on its episode. */
+test('tests of its own: refused without shared evidence; a severe one; a failed one open, then closed by a later model', async () => {
+  const served = await serveC302({ worker, concurrency: 4 });
+  try {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'c302nav-tests-'));
+    /* The rival agrees with the model on what both have seen (small currents) and answers 0 for large ones. */
+    const rival = { observations: {}, rules: {}, weights: {}, output: HOLDING.output.replace('return {', 'if ([...L, ...R].some((v) => Math.abs(v) > 8)) return { reorientation: 0, steering: 0 }; return {') };
+    const big = { stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 3000, amplitude_pa: 20 }], duration_ms: 4000 };
+    const other = { stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 400, amplitude_pa: 2 }, { cell: 'AWCR', delay_ms: 500, duration_ms: 1000, amplitude_pa: 4 }], duration_ms: 3000 };
+    const asked: Record<string, any>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).startsWith(served.url)) return globalThis.fetch(url as string, init as RequestInit) as never;
+      const b = JSON.parse(String(init.body));
+      const sys = b.messages[0].content as string;
+      const user = JSON.parse(userOf(b));
+      if (!sys.startsWith('You grade') && !('task' in user)) asked.push({ system: sys, user });
+      const done = (user.investigation ?? []).length;
+      const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+        : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+        : user.round === 1 && done === 0 ? { investigate: [{ register_test: { protocol: big, model: { ...HOLDING, validate: undefined }, rival, claim: 'c', kind: 'new' } }] }
+        : user.round === 2 && done === 0 ? { investigate: [
+          { register_test: { protocol: big, model: 1, rival, claim: 'large currents still drive the signals', kind: 'new' } },
+          { register_test: { protocol: other, model: { observations: {}, rules: {}, weights: {}, output: '(p) => ({ reorientation: 0, steering: 0 })' }, rival: 'rival:drive-now', claim: 'nothing moves', kind: 'new' } },
+          { register_test: { protocol: other, model: 1, rival: 'rival:drive-now', claim: 'x', kind: 'replicate' } }] }
+        : { ...HOLDING, validate: false };
+      const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+      return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+    };
+    const out = path.join(work, 'run.json');
+    await runLaboratory(c302NavLab, { args: ['--seed', '1', '--attempts', '3', '--explore', '1', '--check-episodes', '1', '--family', '1', '--confirm-places', '1', '--flat', '--no-grade',
+      '--no-reflection', '--no-ablation', '--researcher', 'assisted', '--service', served.url, '--out', out], root: work, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
+    const events = JSON.parse(fs.readFileSync(out, 'utf8')).events as Record<string, any>[];
+    assert.match(asked[0].system, /TESTS OF YOUR OWN/);
+    assert.match(asked[0].system, /"rival:drive-now"/);
+    const results = events.filter((e) => e.type === 'investigation').flatMap((e) => e.results);
+    assert.match(results[0].error, /no shared evidence yet/);
+    assert.match(results.find((r: Record<string, unknown>) => r.register_test && r.registered === false && /replication/.test(String(r.error))).error, /you have not/);
+    assert.deepEqual(events.filter((e) => e.type === 'test_registered').map((e) => [e.test, e.kind, e.rival]), [['t1', 'new', events.find((e) => e.type === 'test_registered').rival], ['t2', 'new', 'rival:drive-now']]);
+    const [t1, t2] = events.filter((e) => e.type === 'test_result');
+    assert.deepEqual([t1.test, t1.valid, t1.model_holds, t1.rival_holds, t1.severe], ['t1', true, true, false, true], 'severe: the model holds there, the rival does not');
+    assert.deepEqual([t2.test, t2.model_holds, t2.counterexample], ['t2', false, true]);
+    assert.deepEqual(events.filter((e) => e.type === 'counterexample_closed').map((e) => [e.test, e.by]), [['t2', 'regression']]);
+    assert.match(JSON.stringify(asked.find((q) => q.user.round === 3)!.user), /"test":"t1"[^}]*"severe":true/, 'answered with the next check');
+    const end = events.find((e) => e.type === 'end')!;
+    assert.equal(end.own_tests.registered, 2);
+    assert.ok(end.episodes.some((e: { episode: string }) => e.episode === 'test1'), 'its episode is the learner\'s');
+  } finally { await served.close(); }
+});

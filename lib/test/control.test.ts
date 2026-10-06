@@ -24,14 +24,15 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
   /* The system prompt without and with the paired regression, and the percept, per world (the grid: its explorer's).
      Changed on purpose on 2026-10-01: the method's balance between the theory and small steps (prompt.ts, PRACTICE), and
      committing to hypotheses before believing them fully, facts recorded as facts (EVIDENCE); and an investigation
-     step comes back as a part of its own, and a round's conversation only grows, for a provider's cache, and the researcher may consolidate it (02/10/2026). */
+     step comes back as a part of its own, and a round's conversation only grows, for a provider's cache, and the researcher may consolidate it (02/10/2026);
+     c302nav's percept shows what an act of the learner changed in the network, `p.changes` (SPEC-PRUEBAS-PROPIAS §4.4, 06/10/2026). */
   const FROZEN: Record<string, readonly string[]> = {
     cells: ['aa29e39d1e566f7d', '694bc031bab66f5a', '050b7ce0a173f715'],
     messages: ['531031508dcc8352', 'edf3893d105bd83e', 'e7b3118baeb95c62'],
     orbit: ['61faed29dea5f3f0', '07a8934ed4dc5e94', 'fa67491c1a09af17'],
     tank: ['a371eba14ad4d18b', '5119d9e33629e659', '8a934b83bc5bb3a5'],
     particles3d: ['268b63917ce2663e', 'f21aea4aefef35aa', 'c82859a959caa037'],
-    c302nav: ['2ec794d2b3b97ce8', 'f020fd16447faf91', '55768e33a67bfef6'],
+    c302nav: ['2ec794d2b3b97ce8', 'f020fd16447faf91', '71f6699109c68c7e'],
     grid: ['655eb619829d609f']
   };
   for (const [name, lab] of Object.entries(LABS)) {

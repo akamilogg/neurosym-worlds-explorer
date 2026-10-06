@@ -133,6 +133,8 @@ export interface C302NavEpisode {
   readonly changes?: NetworkChanges;
   /** Operator only: the protocol drawn (family and seed), for an episode of the environment. */
   readonly protocol?: { readonly family: string; readonly seed: number };
+  /** The physical experiment it was, canonical (SPEC-PRUEBAS-PROPIAS §4.2). */
+  readonly identity?: string;
   readonly wiring?: unknown;
 }
 
@@ -141,11 +143,14 @@ export interface C302NavPoint {
   readonly step: number;
   readonly t: readonly number[];
   readonly inputs: Readonly<Record<string, readonly number[]>>;
+  /** What an act of the learner changed in the network, in the interface's words (SPEC-PRUEBAS-PROPIAS §4.4). */
+  readonly changes?: Readonly<Record<string, unknown>>;
 }
 
 export const C302NAV_PERCEPT_DOC = 'At a point of an episode your code receives p = { step, t, inputs }: `p.t` is the time of each step from the start '
   + 'up to this one (ms, every ' + SAVE_EVERY_MS + ' ms; `p.t[p.step]` is now), and `p.inputs` the current injected into each stimulated cell at each '
-  + 'of those steps (pA), by the name of the cell: `p.inputs[<cell>][p.step]` is the current into it now. Nothing after this step.';
+  + 'of those steps (pA), by the name of the cell: `p.inputs[<cell>][p.step]` is the current into it now. Nothing after this step. '
+  + 'In an episode of yours that changed the network, `p.changes` says what it changed as you wrote it (remove, scale, polarity, parameters); otherwise there is no `p.changes`.';
 
 export const perceiveC302Nav = (point: C302NavPoint): C302NavPoint => point;
 

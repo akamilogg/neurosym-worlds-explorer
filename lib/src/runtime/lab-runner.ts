@@ -11,7 +11,8 @@ import { nodeVmRunner } from './node-vm.ts';
 import { openAiChatClient } from '../learn/system2.ts';
 import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
-import { ownLaw, type LawRequest } from '../learn/law-explorer.ts';
+import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
+import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { LawSession, lawFingerprint } from '../learn/law-session.ts';
 import { Protocol } from '../learn/protocol.ts';
 import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
@@ -1156,6 +1157,75 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
      operator's messages with its questions; resuming, delivered again at the same questions). */
   const withMemory = cfg.memory === 'selective';
   const experience = (cfg as { __experience?: { mode: ExperienceMode; scope: ExperienceScope; reader: Experience } | null }).__experience ?? null;
+  /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2), where it may act: informative - they never change what is accepted. */
+  const actLab = journal.researcher === 'assisted' && lab.act && tools.has('act') ? lab.act : null;
+  const latestCheckCases = (): Map<string, Case[]> => {
+    const rounds = [...checkPoints.keys()];
+    const byPlace = new Map<string, Case[]>();
+    if (!rounds.length) return byPlace;
+    for (const c of checkPoints.get(Math.max(...rounds)) ?? []) {
+      const place = episodes.get(c.point.split('@')[0])?.place;
+      if (place && places.get(place)?.role === 'laboratory') byPlace.set(place, [...(byPlace.get(place) ?? []), c]);
+    }
+    return byPlace;
+  };
+  const holdsOn = async (law: Law, placeId: string, cases: readonly Case[], round: number) => {
+    const place = places.get(placeId)!;
+    const out = await objective.run(law, [{ place, cases: cases as never }], { round, attempt: 0, purpose: 'test' });
+    const results = out.byPlace[0] ?? [];
+    return { holds: objective.holds(results, { place }), view: objective.view(results, place) as Record<string, unknown> };
+  };
+  const codeLaw = (source: string): Law => ({ world: world.id, observations: {}, rules: {}, weights: {}, output: { kind: 'code', lang: 'js', source } });
+  const ownTests = actLab ? new OwnTests<Law, unknown, unknown>({
+    parseAct: (raw) => actLab.parse(raw),
+    asWritten: (a) => (actLab.asWritten ? actLab.asWritten(a) : a),
+    placeOf: (a) => actLab.place(a) ?? 'lab1',
+    laboratories: () => labs().map((l) => l.id),
+    identity: (place, a) => actLab.identity?.(specOf(place), a) ?? null,
+    identities: Boolean(actLab.identity && lab.episodeIdentity),
+    seen: () => {
+      const identities = new Map<string, string>(), acts = new Map<string, string>();
+      for (const e of episodes.values()) {
+        const id = lab.episodeIdentity?.(specOf(e.place), e.data);
+        if (id && !identities.has(id)) identities.set(id, e.id);
+        const asked = actAnswers.get(e.id) as { act?: unknown } | undefined;
+        if (asked) acts.set(JSON.stringify(asked.act), e.id);
+      }
+      return { identities, acts };
+    },
+    model: (ref) => {
+      if (Number.isInteger(ref)) return session.lawOfRound(ref as number) ?? 'you have no model of round ' + ref;
+      if (!ref || typeof ref !== 'object') return 'a round of yours, or a draft { observations, rules, weights, output }';
+      const built = buildLaw(ref as Record<string, unknown>, { world: world.id });
+      if (built.errors.length) return 'the draft was refused: ' + built.errors.slice(0, 4).join(' | ');
+      const f = failures(built.law);
+      return f.length ? 'the draft does not compute: ' + f.join(' | ') : built.law;
+    },
+    rival: (name) => { const r = lab.rivals?.(spec).find((x) => x.name === name); return r ? codeLaw(r.source) : null; },
+    rivalNames: () => (lab.rivals?.(spec) ?? []).map((r) => r.name),
+    fingerprint: (law) => lawFingerprint(law),
+    sharedHolds: async (law) => {
+      const byPlace = latestCheckCases();
+      if (!byPlace.size) return null;
+      let n = 0;
+      for (const [place, cases] of byPlace) if ((await holdsOn(law, place, cases, session.currentRound)).holds) n++;
+      return n;
+    },
+    start: async (place, a, id, round) => {
+      const data = await actLab.start(specOf(place), a, id, ctx);
+      if (data !== null) store(id, places.get(place)!, round, 'your test', data);
+      return data;
+    },
+    cases: (place, id, e) => lab.cases(specOf(place), id, e, cfg.every),
+    evaluate: (law, place, cases, round) => holdsOn(law, place, cases as Case[], round),
+    answers: async (law, cases) => {
+      for (const c of cases as Case[]) {
+        try { if (lab.answerIssue(await answerOf(law, c.state)) !== null) return false; } catch { return false; }
+      }
+      return true;
+    },
+    log
+  }) : null;
   const session: LawSession<unknown> = journal.researcher === 'assisted'
     ? assistedSession(sessionHost, {
       /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
@@ -1164,7 +1234,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
          the one its log answers, and the run would diverge. It goes with the first question asked live. */
       take: () => (helping && run.replay.pending() === 0 ? run.operator.take() : []), scheduled: deliveredMessages(previous),
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
-        + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : promptFor(focus)),
+        + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
+        + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity)) : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
@@ -1182,7 +1253,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       ...(experience ? { experience: experience.reader } : {}),
       /* Its team's board, when the team exchanges (SPEC-INVESTIGACION-PARALELA §5.2). */
       ...(exchange ? { board: { accepts: (q: Record<string, unknown>) => PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q),
-        run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {})
+        run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {}),
+      /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2). */
+      ...(ownTests ? { tests: { accepts: (q: Record<string, unknown>) => helping && OwnTests.accepts(q),
+        run: (q: Record<string, unknown>, round: number, budget: { acts: number }) => ownTests.register(q, round, budget) } } : {})
     })
     : new LawSession<unknown>(sessionHost);
 
@@ -1289,6 +1363,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       cases: checkPoints.get(outcome.reused ?? record.round) ?? [] }, operatorContext) ?? {};
     if (own.test) record.test = own.test;
     log('check', { ...outcome.journal, jev: { calls: judge.stats.calls, errors: judge.stats.errors }, ...(own.journal ?? {}) });
+    /* Its tests registered this round run now; their results, and its counterexamples still open, go with this check. */
+    if (ownTests) {
+      await ownTests.runPending(record.round);
+      await ownTests.closeBy(record.law, record.round);
+      const told = ownTests.view();
+      if (Object.keys(told).length) protocol.lastView = { ...(protocol.lastView ?? {}), ...told };
+    }
     if (own.say) say(own.say);
     if (outcome.accepted) say('  ACCEPTED');
     if (outcome.quickStop) {
@@ -1319,6 +1400,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },
     ...(reports.length ? { instrument: { reports, ...(held ? { acceptance_held: { round: held.round, reports: held.reports } } : {}) } } : {}),
+    ...(ownTests && (ownTests.summary().registered as number) > 0 ? { own_tests: ownTests.summary() } : {}),
     ...(lab.operator?.end?.(session.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, test: l.test })), operatorContext) ?? {}),
     /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
     operator_summary: operatorSummary(protocol.summary(), ablations)

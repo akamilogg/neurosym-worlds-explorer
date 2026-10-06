@@ -156,7 +156,7 @@ test("in a world of laws: the abridged notebook with the run's episodes and mode
   };
   const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--attempts', '2', '--flat', '--no-grade', '--researcher', 'assisted', '--memory', 'selective',
     '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
-  assert.ok(asked[0].system.endsWith(MEMORY_SECTION));
+  assert.ok(asked[0].system.includes(MEMORY_SECTION));
   const second = asked.filter((a) => a.user.round === 2);
   assert.equal(second[0].user.notebook.models.length, 1);
   assert.ok(second[0].user.notebook.models[0].model, 'the latest model whole');

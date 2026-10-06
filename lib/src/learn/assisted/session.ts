@@ -96,6 +96,9 @@ export interface OperatorChannel {
   /** Its team's board (SPEC-INVESTIGACION-PARALELA §5.2), when the team exchanges: which requests are the board's, and how
       they are answered. The prompt's section is the host's to add. */
   readonly board?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number): Promise<unknown> };
+  /** Its tests of its own (SPEC-PRUEBAS-PROPIAS T2): which requests register one, and how (one costs an act of the round's).
+      The prompt's section is the host's to add. */
+  readonly tests?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number, budget: { acts: number }): Promise<unknown> };
 }
 
 /** How many times a round the assisted researcher may ask to investigate with no steps left before it is a refusal. */
@@ -184,6 +187,8 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
   const remembers = (q: Record<string, unknown>): boolean => experience !== undefined && Experience.accepts(q);
   const board = channel.board;
   const posts = (q: Record<string, unknown>): boolean => board !== undefined && board.accepts(q);
+  const tests = channel.tests;
+  const registers = (q: Record<string, unknown>): boolean => tests !== undefined && tests.accepts(q);
   let session: LawSession<A> | null = null;
   const client = operatorClient(host.llm, { ...channel, round: () => session?.currentRound ?? 0 }, (t, d) => host.log(t, d));
   session = new LawSession<A>({
@@ -200,10 +205,10 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
     overreach: OVERREACH,
     /* Its own instruments - the sources once an origin is allowed (`list`, `open`, `find`) and its memory (`memory`) -
        answered here, never by the world. */
-    ...(sources || memory || experience || board ? {
-      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || reads(q),
+    ...(sources || memory || experience || board || tests ? {
+      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || registers(q) || reads(q),
       runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session!.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra)
-        : posts(r.extra) ? board!.run(r.extra, round) : sources!.run(r.extra))
+        : posts(r.extra) ? board!.run(r.extra, round) : registers(r.extra) ? tests!.run(r.extra, round, budget) : sources!.run(r.extra))
         : host.runRequest(r, budget, round))
     } : {}),
     /* Its episodes and models are kept by the host and the session, not in the notebook. */
