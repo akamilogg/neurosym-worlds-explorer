@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { INSTRUMENT_SECTION } from '../src/learn/instrument.ts';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,7 +21,8 @@ import { userOf } from './support.ts';
 test('its prompt is the common one and a section of its own; the unknown-world prompt is untouched', () => {
   const common = system2Prompt(cellsInterface(), new Set(cellsInterface().tools));
   assert.ok(assistedSystem(common).startsWith(common));
-  assert.ok(assistedSystem(common).endsWith(ASSISTED_SECTION));
+  assert.ok(assistedSystem(common).includes(ASSISTED_SECTION));
+  assert.ok(assistedSystem(common).endsWith(INSTRUMENT_SECTION), 'and the instrument it may report (SPEC-CALIBRACION-INSTRUMENTOS §4)');
   assert.ok(!common.includes('THE OPERATOR'));
   assert.match(ASSISTED_SECTION, /not evidence/);
 });
@@ -81,7 +83,7 @@ test('an assisted run: a message sent while it goes reaches the next question, a
   const r = await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--out', path.join(dir, 'run.json')], root: dir, llm, onJournal: (f) => { journal = f; },
     fetch: system2(asked, (n) => { if (n === 2) send(journal, { kind: 'message', text: 'look at step 0', by: 'operator' }); }) });
   assert.equal(r.researcherUsed, 'assisted');
-  assert.ok(asked.every((q) => q.system.endsWith(ASSISTED_SECTION)), 'its own prompt');
+  assert.ok(asked.every((q) => q.system.includes(ASSISTED_SECTION) && q.system.endsWith(INSTRUMENT_SECTION)), 'its own prompt');
   assert.equal(asked[0].user.operator_messages, undefined);
   const first = asked.findIndex((q) => q.user.operator_messages);
   assert.equal(first, 2, 'read before the third question, delivered with it');

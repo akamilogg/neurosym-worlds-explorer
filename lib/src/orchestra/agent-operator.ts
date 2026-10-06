@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseJsonLoose } from '../core/net.ts';
+import { instrumentReports, type InstrumentReport } from '../learn/instrument.ts';
 import type { ChatClient } from '../learn/system2.ts';
 import { orderOutcome, runStatus, send } from '../runtime/control.ts';
 import { researcherEvents, runDigest } from './view.ts';
@@ -50,7 +51,8 @@ export const SENIOR_ROLE = [
   'Finding a rule is not enough: a junior often states a rule its record supports and never builds it into its model, which keeps scoring on other features. So with a hypothesis, guide how its model would use it once confirmed, in the form the environment asks for - which points the rule makes worth the least or the most, what an observation would have to measure, what the model should stop relying on. And when its record already confirms a rule its model does not use, say so plainly and show how the model would use it. Never write the model\'s code: the junior builds it, and treats your guidance as a reference to test, like everything you say.',
   'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); ONE experiment with its instruments that would test it; and how its model would use the hypothesis once the experiment confirms it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. If you found nothing worth its attention, wait.',
   'YOUR MESSAGES ARE DIRECTIVES: the junior is told to carry each one out - run the experiment, build into its next model what you tell it to build, stop relying on what you tell it to drop - even where it disagrees. So write them as orders it can carry out and report: say plainly what to run, what its model must contain, and what it must stop doing. It reports back: each directive it carried out, and where it disagrees with you and why (`junior_reports`). Read its disagreements as a colleague\'s: when its evidence is better than yours, change your orders; you may be wrong.',
-  'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"} - or {"consolidate": {...}}; with "beliefs", "notes" and "methods" in any of them when you write in your notebook.'
+  'THE INSTRUMENT. The environment is an instrument people built, and it may fail: an act it accepted and did not apply, two different answers to the same request, a value no world could give, an answer that is not what its interface says. Reading the record, you may see what the junior did not. Say so in any of your answers: "instrument_report": {"what": "<what the environment did that does not fit what its interface says>", "evidence": ["<items of the record>"], "kind": "accepted_but_not_applied" | "inconsistent_answer" | "impossible_value" | "not_what_the_interface_says" | "other"}. The operator reads it. It is not a hypothesis about the environment, and no order of yours should rest on the episodes it names until the operator answers.',
+  'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"} - or {"consolidate": {...}}; with "beliefs", "notes" and "methods" in any of them when you write in your notebook, and "instrument_report" when you suspect the instrument.'
 ].join('\n');
 
 /** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), what the
@@ -90,6 +92,8 @@ export interface AgentDecision {
   /** The senior (§3.3.1): what it wrote in its notebook while deciding, and how many times it consolidated its conversation. */
   readonly wrote?: Readonly<Record<string, unknown>>;
   readonly consolidated?: number;
+  /** What it suspected of the instrument while deciding (SPEC-CALIBRACION-INSTRUMENTOS §4.3). */
+  readonly instrument_reports?: readonly InstrumentReport[];
 }
 
 /** What an agent cost over a run and the runs it was resumed from: its decisions' usage added up. */
@@ -303,6 +307,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const asked = () => read.map((r) => r.requests);
   const maxTokens = o.maxContextTokens ?? 150000;
   let reminded = 0, consolidated = 0, toldToConsolidate = 0, measured = 0;
+  const suspicions: InstrumentReport[] = [];
   /* How large its conversation is: the provider's count of its latest question when it gave one (an estimate from
      characters falls short of it: numbers and JSON take many tokens), else the estimate. */
   const sizeOf = (): number => Math.max(tokensOf(state.conversation, system), measured);
@@ -324,6 +329,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       measured = Number((answer.raw as { usage?: { prompt_tokens?: number } } | null)?.usage?.prompt_tokens) || measured;
       const parsed = (parseJsonLoose(answer.content) ?? {}) as Record<string, any>;
       const { wrote, warnings } = writeNotebook(nb, rounds, parsed);
+      suspicions.push(...instrumentReports(parsed));
       const written = { ...(Object.keys(wrote).length ? { you_wrote: wrote } : {}), ...(warnings.length ? { notebook_warnings: warnings } : {}) };
       if (parsed.consolidate && typeof parsed.consolidate === 'object' && consolidated < 2) {
         consolidated++;
@@ -358,12 +364,12 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       const d: AgentDecision = { at: at(), rounds, ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
         why: String(parsed.why ?? (Array.isArray(parsed.investigate) ? 'it kept asking to read after being reminded to decide' : '')), signals: signals.signs,
         read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}),
-        ...(consolidated ? { consolidated } : {}), ...(Object.keys(wrote).length ? { wrote } : {}), usage };
+        ...(consolidated ? { consolidated } : {}), ...(Object.keys(wrote).length ? { wrote } : {}), ...(suspicions.length ? { instrument_reports: suspicions } : {}), usage };
       /* What it decided stays in its conversation, as it was. */
       state.conversation.push({ your_decision: { n: call, decision, ...(d.text ? { text: d.text } : {}), ...(d.why ? { why: d.why } : {}) }, ...written });
       return done(d);
     }
-    const d: AgentDecision = { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked(), usage };
+    const d: AgentDecision = { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked(), ...(suspicions.length ? { instrument_reports: suspicions } : {}), usage };
     state.conversation.push({ your_decision: { n: call, decision: 'wait', why: d.why } });
     return done(d);
   } catch (e) {

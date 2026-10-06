@@ -30,6 +30,7 @@ export function researcherEvent(e: Json): Json | null {
     case 'investigation_refused': case 'proposal_refused': return { ...base, ...pick(e, ['requests', 'reason', 'errors']) };
     case 'proposal': case 'reflection': return { ...base, ...pick(e, ['rationale', 'beliefs', 'notes', 'law', 'formula', 'fingerprint', 'lessons', 'next_experiment']) };
     case 'methods': case 'consolidated': return { ...base, ...pick(e, ['methods', 'notes']) };
+    case 'instrument_report': return { ...base, ...pick(e, ['id', 'by', 'what', 'evidence', 'kind']) };
     case 'operator_message': return { ...base, messages: (e.messages ?? []).map((m: Json) => pick(m, ['id', 'text', 'by', 'at'])) };
     case 'exploration_game': return { ...base, ...pick(e, ['game', 'winner', 'plies']) };
     case 'exploration_episode': case 'exploration_launch': return { ...base, ...pick(e, ['episode', 'launch', 'place', 'setup']) };

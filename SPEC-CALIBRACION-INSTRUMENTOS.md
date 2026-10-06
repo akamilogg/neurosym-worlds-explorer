@@ -187,6 +187,16 @@ Un fallo confirmado no se arregla dentro del run: se arregla en el código, y el
 - **Pendiente:** la parte de I5 sobre campos no declarados por la interfaz. Hoy sólo se comprueba que todo número
   mostrado sea finito.
 
+**A3, implementado (06/10/2026):**
+- `learn/instrument.ts`: `INSTRUMENT_SECTION` y la lectura de `instrument_report`, uno o una lista. Un tipo desconocido
+  pasa a `other`; uno sin `what` se descarta.
+- **El junior:** su prompt (`assistedSystem`) termina con la sección. `operatorClient` registra cada informe como
+  `instrument_report` con `question`, `round`, `id` (`ir1`, `ir2`…) y `by: "junior"`.
+- **El senior:** `SENIOR_ROLE` le dice que puede informar en cualquier respuesta. Sus informes van en su decisión
+  (`instrument_reports`), en el registro del agente.
+- **La consola** pasa `instrument_report` también al perfil investigador. El aviso al operador es parte de A4.
+- Un run reanudado de antes de este cambio diverge en su primera pregunta, porque el prompt cambió, y sigue en vivo.
+
 **El orden:** A1 primero, porque es requisito de las pruebas propias. Después, A3 y A4, que hacen informativo el canal.
 A5, cuando aparezca el primer `bug` confirmado que lo necesite.
 

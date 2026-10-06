@@ -5,6 +5,7 @@ import { Sources, type LineSelector } from './sources.ts';
 import { JournalMemory } from './memory.ts';
 import { Experience } from './experience.ts';
 import { ownLaw } from '../law-explorer.ts';
+import { INSTRUMENT_SECTION, instrumentReports } from '../instrument.ts';
 
 /* ============================================================================
  * The ASSISTED researcher (SPEC-INVESTIGADOR-ASISTIDO §6, A4): the one the operator may help.
@@ -68,8 +69,9 @@ export const SOURCES_SECTION = [
   'When a source does not fit what you observe, refute it: the environment\'s answers weigh more than any text. Keep in your notes what you took from each source, and which sources (or parts) you refuted and why. When a belief rests on a source, cite it in that belief\'s evidence as "src:<document>#L<from>-<to>", next to the points of your episodes that support it.'
 ].join('\n');
 
-/** The assisted researcher's system prompt: the common one (as the unknown-world researcher's), then its own section. */
-export const assistedSystem = (common: string): string => common + '\n\n' + ASSISTED_SECTION;
+/** The assisted researcher's system prompt: the common one (as the unknown-world researcher's), then its own sections: the
+    operator, and the instrument it may report (SPEC-CALIBRACION-INSTRUMENTOS §4). */
+export const assistedSystem = (common: string): string => common + '\n\n' + ASSISTED_SECTION + '\n\n' + INSTRUMENT_SECTION;
 
 export interface OperatorChannel {
   /** Messages the operator sent that have not been delivered yet (taken: they will be). */
@@ -112,12 +114,14 @@ export type OperatorClient = ChatClient & { openDirectives(): readonly (Operator
 /** System 2's client for the assisted researcher: each question carries the operator's messages, the new ones and the earlier.
     Once a directive of its senior has reached it, its prompt says what one is; what it reports in its answers - each directive
     carried out (`directives`), its disagreement (`to_senior`) - is logged for its senior to read (`directive_report`,
-    `junior_report`), and a directive reported is no longer open. */
+    `junior_report`), and a directive reported is no longer open. What it suspects of the instrument (`instrument_report`)
+    is logged for the operator, numbered in the run (`ir1`, `ir2`...). */
 export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (type: string, data?: Record<string, unknown>) => void): OperatorClient {
   let question = 0;
   const earlier: OperatorMessage[] = [];
   const open = new Map<string, OperatorMessage & { round?: number }>();
   let directed = false;
+  let reported = 0;
   /* With a question in parts (a round's growing conversation): the messages stay where they arrived, never rewritten - the
      earlier ones after the round's first part, a new one after the parts it arrived with. A new round starts afresh. */
   let roundKey = '';
@@ -157,6 +161,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       const said = parseJsonLoose(answer.content) as Record<string, unknown> | null;
       if (said && typeof said === 'object') {
         if (typeof said.to_senior === 'string' && said.to_senior.trim()) log('junior_report', { question, text: said.to_senior.trim() });
+        for (const r of instrumentReports(said)) log('instrument_report', { question, ...(channel.round ? { round: channel.round() } : {}), id: 'ir' + (++reported), by: 'junior', ...r });
         for (const d of (Array.isArray(said.directives) ? said.directives : []) as Record<string, unknown>[]) {
           const id = typeof d?.id === 'string' ? d.id : '';
           if (!id) continue;
