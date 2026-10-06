@@ -14,6 +14,8 @@ import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/promp
 import { ownLaw, type LawRequest } from '../learn/law-explorer.ts';
 import { LawSession, lawFingerprint } from '../learn/law-session.ts';
 import { Protocol } from '../learn/protocol.ts';
+import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
+import { instrumentReports } from '../learn/instrument.ts';
 import { formOf, operatorSummary, tokensOf, type AblationRecord } from '../learn/operator.ts';
 import type { Place } from '../learn/objective.ts';
 import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
@@ -511,6 +513,8 @@ interface OpenRun {
   finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): LabResult;
   /** Settles with the run's result when a resumed run diverges (the run ends there). */
   readonly diverged: Promise<LabResult>;
+  /** The operator's verdicts on reports of the instrument taken by this round (SPEC-CALIBRACION-INSTRUMENTOS §5.2). */
+  verdicts(round: number): readonly VerdictRecord[];
 }
 
 function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string[]; previous: Record<string, any> | null; resumeFrom: string | null;
@@ -617,6 +621,15 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       try { order = JSON.parse(line); } catch { log('operator_command_refused', { reason: 'not an order (not JSON)' }); continue; }
       const who = { id: order.id ?? null, kind: order.kind ?? null, ...(order.by ? { by: order.by } : {}) };
       const agent = typeof order.by === 'string' && order.by.startsWith('agent:') ? order.by.slice(6) : null;
+      /* A report of the instrument (a senior's, SPEC-CALIBRACION-INSTRUMENTOS §4.3): not help and not control - logged for
+         the operator, from any agent, whatever the run's policy. */
+      if (order.kind === 'instrument_report') {
+        const o = order as Record<string, unknown>;
+        const [r] = instrumentReports({ instrument_report: { what: o.what, evidence: o.evidence, kind: o.report_kind } });
+        if (!r) log('operator_command_refused', { ...who, reason: 'a report of the instrument says "what"' });
+        else log('instrument_report', { round: lastRound(), id: 'ir-' + (agent ?? 'operator') + '-' + (++othersReports), by: agent ?? String(order.by ?? 'operator'), ...r });
+        continue;
+      }
       if (agent !== null && !agentPolicy.get(agent)?.has(String(order.kind))) {
         log('operator_command_refused', { ...who, reason: 'agent ' + agent + ' may not send ' + order.kind + ' to this run'
           + (agentPolicy.size ? ' (agents: ' + [...agentPolicy].map(([id, k]) => id + '=' + [...k].join(',')).join('; ') + ')' : ' (no agent may: --agents)') });
@@ -662,7 +675,49 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       } else log('operator_command_refused', { ...who, reason: 'unknown order ' + JSON.stringify(order.kind) });
     }
   }
-  const heartbeat = setInterval(() => { pollInbox(); writeStatus(); }, 2000);
+  /* --- The operator's verdicts on reports of the instrument (SPEC-CALIBRACION-INSTRUMENTOS §5.2), next to the journal:
+     taken as they come, logged (`anomaly_verdict`), and told to the assisted researcher - only whether the instrument
+     failed, never how the world is. A resumed run applies those of the history it resumes from the round they were taken
+     in (their messages went with that history), and those written after it ended from the start. */
+  let othersReports = 0;
+  let verdictLines = 0;
+  const taken: VerdictRecord[] = [];
+  const fromHistory = ((previous?.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'anomaly_verdict' || e.type === 'anomaly_verdict_refused');
+  const scheduled: (VerdictRecord & { round: number; applied?: boolean })[] = previous ? [
+    ...fromHistory.filter((e) => e.type === 'anomaly_verdict').map((e) => ({ report: String(e.report), verdict: e.verdict, ...(e.text ? { text: e.text } : {}), round: typeof e.round === 'number' ? e.round : 0 })),
+    ...readVerdicts(resumeFrom!).slice(fromHistory.length).map((v) => ({ ...v, round: 0 }))
+  ] : [];
+  function pollVerdicts(): void {
+    if (closed) return;
+    let text = '';
+    try { text = fs.readFileSync(anomalyFile(outFile), 'utf8'); } catch { return; }
+    for (const line of text.split('\n').slice(0, -1).slice(verdictLines)) {
+      verdictLines++;
+      if (!line.trim()) continue;
+      let v: VerdictRecord | string;
+      try { v = parseVerdict(JSON.parse(line)); } catch { v = 'not a verdict (not JSON)'; }
+      if (typeof v === 'string') { log('anomaly_verdict_refused', { reason: v }); continue; }
+      const report = reportsOf(journal.events).find((r) => r.id === (v as VerdictRecord).report);
+      if (!report) { log('anomaly_verdict_refused', { report: v.report, reason: 'no report ' + v.report + ' in this run' }); continue; }
+      taken.push(v);
+      log('anomaly_verdict', { round: lastRound(), ...v, ...(v.verdict === 'bug' ? { invalidated: report.evidence } : {}) });
+      say('the operator\'s verdict on ' + v.report + ': ' + v.verdict);
+      if (researcher === 'assisted' && v.verdict !== 'unclear') waiting.push({ id: 'verdict-' + v.report + '-' + verdictLines, by: 'operator', at: new Date().toISOString(),
+        text: v.verdict === 'world' ? 'The operator examined your report ' + v.report + ' of the instrument: it is not a fault of the instrument.'
+          : 'The operator examined your report ' + v.report + ' of the instrument: it was a fault of the instrument. What you observed in ' + (report.evidence.join(', ') || 'what it names') + ' is not evidence about the environment.' });
+    }
+  }
+  function verdicts(round: number): readonly VerdictRecord[] {
+    pollVerdicts();
+    for (const s of scheduled) if (!s.applied && s.round <= round) {
+      s.applied = true;
+      const { applied: _a, ...v } = s;
+      taken.push(v);
+      log('anomaly_verdict', { ...v, from_history: true });
+    }
+    return taken;
+  }
+  const heartbeat = setInterval(() => { pollInbox(); pollVerdicts(); writeStatus(); }, 2000);
   heartbeat.unref?.();
   const print = options.print ?? (() => {});
   const say = (text: string): void => { if (!closed) print('[' + Math.round((Date.now() - started.getTime()) / 1000) + 's] ' + text); };
@@ -678,7 +733,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     settleDiverged(result);
   };
   /* Stopping: the caller's signal (Ctrl+C on the command line) and the budgets are asked before each question to System 2. */
-  const halt = (): string | null => (pollInbox(), options.signal?.aborted || stopRequested) ? 'cancelled'
+  const halt = (): string | null => (pollInbox(), pollVerdicts(), options.signal?.aborted || stopRequested) ? 'cancelled'
     : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
     : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
 
@@ -733,7 +788,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       if (replay.pending() && stop.stoppedBy !== 'diverged') say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
       return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding, researcherFile, researcher: researcherView, researcherUsed: researcher };
   }
-  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged,
+  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged, verdicts,
     operator: { take: () => waiting.splice(0, waiting.length) },
     sourceFetch: replay.wrap('source', sourceFetch(network)) };
 }
@@ -796,6 +851,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   let counter = 0;
   const store = (id: string, place: LabPlace, round: number, by: string, data: unknown) => { const e = { id, place: place.id, round, by, data }; episodes.set(id, e); return e; };
   const episodeIndex = () => [...episodes.values()].map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, ...(lab.indexInfo?.(e.data) ?? {}), steps: lab.steps(e.data) }));
+  /** The place an episode cited by a report ran in, or the place it names. */
+  const placeOfRef = (ref: string): string | null => episodes.get(ref)?.place ?? (places.has(ref) ? ref : null);
 
   /** "ep3@5": the point at step 5 of ep3, with what is shown there. */
   const resolve = (ref: string): { state: Point; shown: Record<string, unknown> } | null => {
@@ -865,6 +922,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       .map((p) => ({ ...p, role: 'confirmation' as const, seen: false })),
     ...(team ? { confirm: (c: { round: number }) => team.board.confirm(team.member, 'c' + (++confirmations), c.round) } : {}),
     fingerprint: (law) => lawFingerprint(law),
+    /* SPEC-CALIBRACION-INSTRUMENTOS §5.1: an acceptance through a place a report of the instrument questions waits. */
+    hold: (through) => holding(reportStates(reportsOf(journal.events), run.verdicts(session.currentRound)), through, placeOfRef),
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
     ...(lab.roleWords ? { roleWords: lab.roleWords } : {}),
@@ -1180,6 +1239,28 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   await explore();
   let accepted: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
+  /* An acceptance waiting for the operator's verdict (SPEC-CALIBRACION-INSTRUMENTOS §5.1): granted, as of its round, once
+     every report it waits for is found to be the world; void once one is found a fault of the instrument. */
+  const settleWaiting = (): { law: Law; round: number } | null => {
+    const w = protocol.waiting;
+    if (!w) return null;
+    const states = reportStates(reportsOf(journal.events), run.verdicts(session.currentRound)).filter((r) => w.reports.includes(r.id));
+    const bugs = states.filter((r) => r.state === 'bug').map((r) => r.id);
+    if (bugs.length) {
+      protocol.release(false);
+      log('acceptance_void', { round: w.round, reports: w.reports, faults: bugs });
+      say('  the acceptance of round ' + w.round + ' is void: ' + bugs.join(', ') + ' found a fault of the instrument');
+      return null;
+    }
+    if (states.length < w.reports.length || !states.every((r) => r.state === 'world')) return null;
+    const r = protocol.release(true)!;
+    const record = session.laws.find((l) => l.round === r.round);
+    if (!record) return null;
+    record.accepted = true;
+    log('accepted', { round: r.round, released_by: w.reports });
+    say('  ACCEPTED (round ' + r.round + '): the operator found no fault of the instrument in ' + w.reports.join(', '));
+    return { law: record.law, round: r.round };
+  };
   if (endings.length) journal.continuations = [...endings];
   for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
     /* Where the run's history had an ending (it used up its rounds and was given more): that ending, as it was. */
@@ -1197,6 +1278,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         say('from here on, the assisted researcher: the operator may help');
       }
     }
+    accepted = settleWaiting();
+    if (accepted) break;
     const record = await session.consult('propose');
     if (!record) { if (session.fatal) break; continue; }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });
@@ -1217,6 +1300,12 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     if ((cfg.ablation || lab.operator?.ablates?.(worldOptions)) && outcome.reused === null) await ablate(record.law, record.round, detail);
     if (outcome.accepted) { accepted = { law: record.law, round: record.round }; log('accepted', { round: record.round }); break; }
   }
+  if (!accepted && !satisfied) accepted = settleWaiting();
+  /* What the instrument was suspected of, and what the operator found (SPEC-CALIBRACION-INSTRUMENTOS §5): an acceptance still
+     waiting at the end is not one - the run ends not accepted, and says why. */
+  const reports = reportStates(reportsOf(journal.events), run.verdicts(session.currentRound));
+  const held = protocol.waiting;
+  if (held) say('not accepted: the model of round ' + held.round + ' was confirmed, but the operator never answered ' + held.reports.join(', '));
   if (cfg.reflection && !session.fatal && !session.halted) {
     say('reflection round: the model is final; System 2 looks back');
     await session.consult('reflect', reflectionTask(investigative));
@@ -1229,6 +1318,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },
+    ...(reports.length ? { instrument: { reports, ...(held ? { acceptance_held: { round: held.round, reports: held.reports } } : {}) } } : {}),
     ...(lab.operator?.end?.(session.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, test: l.test })), operatorContext) ?? {}),
     /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
     operator_summary: operatorSummary(protocol.summary(), ablations)

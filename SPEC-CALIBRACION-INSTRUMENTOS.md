@@ -197,6 +197,33 @@ Un fallo confirmado no se arregla dentro del run: se arregla en el código, y el
 - **La consola** pasa `instrument_report` también al perfil investigador. El aviso al operador es parte de A4.
 - Un run reanudado de antes de este cambio diverge en su primera pregunta, porque el prompt cambió, y sigue en vivo.
 
+**A4, implementado (06/10/2026):**
+- **Qué se cuestiona** (`learn/anomalies.ts`): los lugares de los episodios que cita un informe, o los lugares que
+  nombra. Un informe que no cita ninguno cuestiona el instrumento entero, es decir, todos los lugares. La granularidad
+  es el lugar: si el instrumento falla en un lugar, todo lo que ocurre ahí es sospechoso.
+- **La aceptación que espera:**
+  - La opción `hold` del protocolo comprueba los lugares por los que pasa la aceptación: laboratorios, familia y
+    lugares ciegos. Si alguno está cuestionado, o tiene un `bug` sin resolver, no acepta: la ronda queda en
+    `protocol.waiting`, el check registra `acceptance_held_for` y el investigador lee `acceptance_waits`.
+  - Al empezar cada ronda, `settleWaiting` resuelve la espera. Si todos sus informes son `world`, se acepta con la ronda
+    original (`accepted` con `released_by`). Con un `bug`, la aceptación se anula (`acceptance_void`).
+  - Con un `bug`, nada que pase por su lugar se vuelve a aceptar en ese run: el arreglo es una rama (§6).
+  - Si nadie responde, el run termina sin aceptar, con `instrument.acceptance_held` en el `end` y «NOT ACCEPTED» en el
+    finding.
+- **El veredicto** se escribe junto al journal (`<run>.anomalies.jsonl`), con `lab anomaly <run> <id>
+  bug|world|unclear [nota]` o con los botones de la consola. `lab anomaly <run>` lista los informes y su estado.
+  - El run en marcha recoge el veredicto con su latido y antes de cada pregunta, y lo registra (`anomaly_verdict`, con
+    `invalidated` si es `bug`).
+  - Al investigador asistido sólo se le dice si el instrumento falló; nunca la nota del operador.
+  - Un run reanudado aplica los veredictos de su historia desde la ronda en que se tomaron, y los escritos después de
+    que terminara, desde el principio.
+- **Los informes del senior** llegan al run por su buzón (`kind: "instrument_report"`), desde cualquier agente y sea
+  cual sea la política, y se registran con id `ir-<agente>-<n>`.
+- **La consola** muestra en cada run sus informes pendientes o `unclear`, con un aviso y botones de veredicto.
+- **Pendiente:**
+  - `grid` registra los informes, pero su bucle no retiene la aceptación;
+  - contar el veredicto `bug` a favor del método en la auditoría (§5.2).
+
 **El orden:** A1 primero, porque es requisito de las pruebas propias. Después, A3 y A4, que hacen informativo el canal.
 A5, cuando aparezca el primer `bug` confirmado que lo necesite.
 

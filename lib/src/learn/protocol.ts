@@ -43,6 +43,9 @@ export interface ProtocolOptions<M, P extends Place> {
   /** Asked when a model held in every family place, before the blind sets: null spends one confirmation, a reason refuses
       it (a team's confirmations are counted: SPEC-INVESTIGACION-PARALELA §5.4). Default: always allowed. */
   readonly confirm?: (context: { round: number; attempt: number }) => string | null;
+  /** The reports of the instrument an acceptance through these places must wait for (SPEC-CALIBRACION-INSTRUMENTOS §5.1):
+      none, it is accepted; some, it waits for the operator's verdict on them (`release`). Default: none. */
+  readonly hold?: (places: readonly string[]) => readonly string[];
   /** Operator only: models that know nothing (e.g. "the same row again"), run on the same cases as every check. A place
       where one of them holds too is one whose check cannot tell a model from knowing nothing: journalled, never shown. */
   readonly baselines?: readonly { readonly name: string; readonly model: M }[];
@@ -278,6 +281,17 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       }
       if (refused) this.say('  validation refused: ' + refused);
     }
+    /* An acceptance through a questioned place waits for the operator's verdict: the model is kept, the run goes on. */
+    let heldFor: readonly string[] = [];
+    if (accepted && this.options.hold && validation) {
+      const through = [...laboratories, ...validation.places, ...(validation.blind ?? []).flatMap((b) => b.places)].map((o) => o.place.id);
+      heldFor = this.options.hold([...new Set(through)]);
+      if (heldFor.length) {
+        accepted = false;
+        this.waiting = { round, attempt, reports: heldFor, cost: diff(this.cost(), this.costAtStart), trivially: this.options.baselines?.length ? trivial(validation.places) && (validation.blind ?? []).every((b) => trivial(b.places)) : null };
+        this.say('  confirmed, but it rests on places a report of the instrument questions (' + heldFor.join(', ') + '): the acceptance waits for the operator\'s verdict');
+      }
+    }
     const costNow = this.cost();
     if (accepted && !this.milestones.accepted) {
       this.milestones.accepted = { round, attempt };
@@ -293,6 +307,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
         ...(validation.confirmationRefused !== undefined ? { no_blind_confirmation: validation.confirmationRefused } : {}) } }
         : refused ? { validation: { refused } } : {}),
       accepted,
+      ...(heldFor.length ? { acceptance_waits: 'your model was confirmed, but on places where a report of the instrument (' + heldFor.join(', ') + ') is still open: it is accepted only if the operator finds the instrument did not fail' } : {}),
       validations_left: this.validationsLeft
     };
     this.lastView = view;
@@ -308,10 +323,26 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
         ...(validation.confirmationRefused !== undefined ? { confirmation_refused: validation.confirmationRefused } : {}),
         ...(validation.blind ? { blind_confirmation: { confirmed: accepted, sets: validation.blind.map((b) => ({ ok: b.ok, places: b.places.map((o) => this.placeJournal(o)), ...(b.operator ? { operator: b.operator } : {}) })) } } : {})
       } } : refused ? { validation: { refused } } : {}),
-      accepted, validations_left: this.validationsLeft, cost
+      accepted, ...(heldFor.length ? { acceptance_held_for: heldFor } : {}), validations_left: this.validationsLeft, cost
     };
     return { round, attempt, laboratories, reused: reused ? reused.round : null, held, askedToValidate: context.validate, validation, refused, accepted, quickStop,
       ...(operator ? { operator } : {}), cost, view, journal };
+  }
+
+  /** An acceptance waiting for the operator's verdict on reports of the instrument: its round, and the reports. */
+  waiting: { readonly round: number; readonly attempt: number; readonly reports: readonly string[]; readonly cost: Record<string, number>; readonly trivially: boolean | null } | null = null;
+
+  /** The verdicts came: the waiting acceptance is granted (`accept`), as of its round, or void (none of it stands). */
+  release(accept: boolean): { round: number; attempt: number } | null {
+    const w = this.waiting;
+    this.waiting = null;
+    if (!w || !accept) return null;
+    if (!this.milestones.accepted) {
+      this.milestones.accepted = { round: w.round, attempt: w.attempt };
+      this.milestones.costAtAcceptance = w.cost;
+      this.milestones.acceptedTrivially = w.trivially;
+    }
+    return { round: w.round, attempt: w.attempt };
   }
 
   /** Operator only: the run's milestones and cost (SPEC-OBJETIVO O4). */

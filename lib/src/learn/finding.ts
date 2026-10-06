@@ -101,6 +101,9 @@ export interface Finding {
     /** The method audit of the run (SPEC-AUDITORIA-METODO), when there is one: its file and its measures, beside the outcome. */
     readonly method_audit?: { readonly file: string; readonly judge: string | null; readonly measures: unknown } };
   readonly cost: { readonly total?: Facts; readonly to_acceptance?: Facts };
+  /** What the instrument was suspected of, and what the operator found (SPEC-CALIBRACION-INSTRUMENTOS §5): each report with
+      its state, and an acceptance that waited and was never answered. Provenance: both views keep it. */
+  readonly instrument?: { readonly reports: readonly Facts[]; readonly acceptance_held?: Facts };
   readonly reproduce: { readonly experiment: string; readonly started?: string; readonly config?: unknown; readonly journal?: string; readonly commit?: string };
 }
 
@@ -123,7 +126,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
   const checks = events.filter((e) => e.type === 'check');
   const summary: J = end.operator_summary ?? {};
   const acceptedRound: number | null = summary.accepted?.round ?? events.find((e) => e.type === 'accepted')?.round ?? null;
-  const acceptance = acceptedRound !== null ? [...checks].reverse().find((c) => c.round === acceptedRound && c.accepted) : undefined;
+  /* An acceptance that waited for the operator's verdict is its check's, granted later. */
+  const acceptance = acceptedRound !== null ? [...checks].reverse().find((c) => c.round === acceptedRound && (c.accepted || c.acceptance_held_for)) : undefined;
 
   /* The final model: the lab runner writes the model itself; orbit wraps it as { round, fingerprint, test, law }. */
   const final: J | null = end.final ?? null;
@@ -248,6 +252,7 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
       ...(meta.method ? { method_audit: meta.method } : {})
     },
     cost: { ...(summary.cost ? { total: summary.cost } : {}), ...(summary.cost_per_acceptance ? { to_acceptance: summary.cost_per_acceptance } : {}) },
+    ...(end.instrument ? { instrument: { reports: end.instrument.reports ?? [], ...(end.instrument.acceptance_held ? { acceptance_held: end.instrument.acceptance_held } : {}) } } : {}),
     reproduce: { experiment: String(journal.experiment ?? ''), ...(journal.started ? { started: journal.started } : {}), ...(journal.config ? { config: journal.config } : {}),
       ...(meta.journal ? { journal: meta.journal } : {}), ...(commit ? { commit } : {}) }
   };
@@ -297,6 +302,8 @@ export function findingText(f: Finding): string {
   for (const c of f.counterexamples) lines.push('  counterexample: round ' + c.round + ', ' + c.where + ' ' + c.place);
   for (const t of f.limitations.tolerated_misses) lines.push('  tolerated: ' + t.missed + ' of ' + t.points + ' missed in ' + t.place);
   if (f.limitations.accepted_trivially) lines.push('  WARNING: a model that knows nothing passed the accepting check too');
+  for (const r of f.instrument?.reports ?? []) lines.push('  report of the instrument ' + r.id + ' [' + r.state + '] by ' + r.by + ': ' + r.what);
+  if (f.instrument?.acceptance_held) lines.push('  NOT ACCEPTED: the model of round ' + f.instrument.acceptance_held.round + ' was confirmed on places the reports ' + (f.instrument.acceptance_held.reports as string[]).join(', ') + ' question, and the operator never answered');
   if (f.limitations.learner?.next_experiment) lines.push('  open (the learner): ' + f.limitations.learner.next_experiment);
   if (f.operator?.rule_recovery) lines.push('  operator: rule recovery ' + String(f.operator.rule_recovery.score) + ' (' + String(f.operator.rule_recovery.form ?? '') + ')');
   if (f.cost.total) lines.push('  cost: ' + Object.entries(f.cost.total).map(([k, v]) => k + ' ' + String(v)).join(', '));

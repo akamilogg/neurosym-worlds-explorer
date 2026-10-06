@@ -140,3 +140,16 @@ test('a workspace has a single console writer and releases its lease on close', 
   finally { await c.close(); }
   const again = await serveConsole({ root: dir, port: 0, env: {} }); await again.close();
 });
+test('a report of the instrument is shown on its run with its state, and the console writes the operator\'s verdict next to it', () => {
+  const dir = root(), { file, j } = fixture(dir), store = new ResearchStore(dir), analysts = new Analysts(store, {}), actions = new Actions(store, analysts, {});
+  write(file, { ...j, events: [...j.events, { type: 'instrument_report', round: 2, id: 'ir1', by: 'junior', what: 'the cut was not applied', evidence: ['act1'], kind: 'accepted_but_not_applied' }] });
+  assert.deepEqual(store.catalogue()[0].anomalies, [{ id: 'ir1', by: 'junior', state: 'pending', kind: 'accepted_but_not_applied', what: 'the cut was not applied' }]);
+  assert.match(RESEARCH_PAGE, /kind:'verdict'/);
+  assert.throws(() => actions.send({ key: 'v0', kind: 'verdict', entity: 'a', report: 'ir9', verdict: 'bug' }), /No report/);
+  assert.throws(() => actions.send({ key: 'v1', kind: 'verdict', entity: 'a', report: 'ir1', verdict: 'maybe' }), /A verdict is/);
+  assert.equal(actions.send({ key: 'v2', kind: 'verdict', entity: 'a', report: 'ir1', verdict: 'bug' }).targets[0].state, 'written');
+  assert.equal(store.catalogue()[0].anomalies![0].state, 'bug');
+  const researcherView = store.capture(['a'], 'researcher');
+  assert.ok(researcherView.events.some((e) => e.type === 'instrument_report'), 'its own report is the researcher\'s to read');
+  analysts.close();
+});

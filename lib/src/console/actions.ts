@@ -4,6 +4,7 @@ import { ResearchStore, assertId, read, write, hash, type Json } from './store.t
 import { orderOutcome, runFiles, runStatus, startRun, resumeRun, type RunOrder } from '../runtime/control.ts';
 import type { Analysts } from './analyst.ts';
 import { LABS } from '../worlds/labs.ts';
+import { VERDICTS, runAnomalies, writeVerdict, type Verdict } from '../learn/anomalies.ts';
 
 /** Durable outbox. Message writes can be reconciled; ambiguous process launches are never repeated. */
 export class Actions {
@@ -19,7 +20,7 @@ export class Actions {
   get(id: string): Json {
     const v = read(this.file(id)); if (!v) throw new Error('Order not found');
     for (const target of v.targets ?? []) {
-      if (target.error) continue;
+      if (target.error || v.input.kind === 'verdict') continue;
       try {
         const s = this.store.source(target.entity), journal = s.journal;
         const delivered = (journal.events ?? []).find((e: Json) => e.type === 'operator_message' && (e.messages ?? []).some((m: Json) => m.id === target.id));
@@ -39,7 +40,7 @@ export class Actions {
     if (was && was.fingerprint !== hash(input)) throw new Error('Idempotency key already used for a different action');
     if (was?.state === 'dispatched') return this.get(id);
     if (was && ['start', 'resume', 'branch'].includes(input.kind)) throw new Error('Launch outcome is uncertain; inspect the catalogue before creating another run');
-    const kinds = ['message', 'stop', 'focus', 'source', 'start', 'resume', 'branch'];
+    const kinds = ['message', 'stop', 'focus', 'source', 'start', 'resume', 'branch', 'verdict'];
     if (!kinds.includes(input.kind)) throw new Error('Unknown control action');
     if (input.analysis) {
       const a = this.analysts.get(String(input.analysis));
@@ -50,7 +51,15 @@ export class Actions {
     }
     const v: Json = was ?? { id, at: new Date().toISOString(), fingerprint: hash(input), input, state: 'prepared', targets: [] };
     if (!was) write(this.file(id), v);
-    if (input.kind === 'start') {
+    if (input.kind === 'verdict') {
+      /* The operator's verdict on a report of the instrument (SPEC-CALIBRACION-INSTRUMENTOS §5.2): written next to the run;
+         a run that goes takes it before its next question. Not an order of its inbox. */
+      const s = this.store.source(String(input.entity));
+      if (!(VERDICTS as readonly string[]).includes(String(input.verdict))) throw new Error('A verdict is ' + VERDICTS.join(', '));
+      if (!runAnomalies(s.file).some(r => r.id === input.report)) throw new Error('No report ' + input.report + ' in this run');
+      writeVerdict(s.file, { report: String(input.report), verdict: input.verdict as Verdict, ...(String(input.text ?? '').trim() ? { text: String(input.text).trim() } : {}) });
+      v.targets = [{ entity: input.entity, report: input.report, state: 'written' }];
+    } else if (input.kind === 'start') {
       if (!LABS[input.lab]) throw new Error('Unknown lab');
       const args: string[] = [];
       for (const [key, flag] of [['seed', '--seed'], ['attempts', '--attempts'], ['budget', '--max-tokens']]) {

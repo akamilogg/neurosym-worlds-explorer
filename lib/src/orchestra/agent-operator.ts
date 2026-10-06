@@ -230,6 +230,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       } catch (e) {
         d = { at: new Date().toISOString(), rounds, decision: 'error', why: String((e as Error)?.message ?? e) };
       }
+      /* What it suspects of the instrument goes to the run, logged there for the operator (SPEC-CALIBRACION-INSTRUMENTOS §4.3):
+         it is not an order, and spends none. */
+      for (const r of d?.instrument_reports ?? []) send(o.journal, { kind: 'instrument_report', what: r.what, evidence: r.evidence, report_kind: r.kind, by: 'agent:' + o.id });
       if (d && (d.decision === 'message' || d.decision === 'stop')) {
         /* A senior's message is a directive: an order the junior carries out and reports (SPEC-ORQUESTADOR §3.3.3). */
         const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id, ...(role === 'senior' ? { directive: true } : {}) } : { kind: 'stop', by: 'agent:' + o.id });

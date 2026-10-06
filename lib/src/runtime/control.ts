@@ -42,7 +42,9 @@ export type RunOrder =
   | { readonly kind: 'stop'; readonly by?: string }
   | { readonly kind: 'message'; readonly text: string; readonly by?: string; /** A senior's: an order, not a suggestion (SPEC-ORQUESTADOR §3.3.3). */ readonly directive?: boolean }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
-  | { readonly kind: 'source'; readonly source: string; readonly by?: string };
+  | { readonly kind: 'source'; readonly source: string; readonly by?: string }
+  /** A senior's suspicion of the instrument (SPEC-CALIBRACION-INSTRUMENTOS §4.3): logged by the run, never delivered. */
+  | { readonly kind: 'instrument_report'; readonly what: string; readonly evidence: readonly string[]; readonly report_kind: string; readonly by?: string };
 
 /** The files of a run, from its journal. */
 export function runFiles(journal: string): { journal: string; status: string; inbox: string; replay: string; finding: string; researcherFinding: string; log: string } {

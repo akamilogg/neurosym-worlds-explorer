@@ -3,6 +3,7 @@ import path from 'node:path';
 import { findingText } from '../learn/finding.ts';
 import { LabError } from './lab-runner.ts';
 import { LABS } from '../worlds/labs.ts';
+import { VERDICTS, runAnomalies, writeVerdict, type Verdict } from '../learn/anomalies.ts';
 import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, watch, type RunInfo, type RunOrder } from './control.ts';
 
 /* ============================================================================
@@ -20,6 +21,7 @@ import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, 
  *   lab stop <run>
  *   lab resume <run> [--max-tokens N] [--max-minutes N] [--policy P]
  *   lab finding <run> [--view researcher]
+ *   lab anomaly <run> [<report> bug|world|unclear [note]]
  *
  * The keys never pass through here: a run started or resumed takes them from this process's
  * environment (LLM_URL, LLM_MODEL, LLM_KEY; JEV_URL, JEV_KEY).
@@ -47,6 +49,7 @@ export const CLI_USAGE = [
   'lab stop <run>                                            stop it before its next question to System 2',
   'lab resume <run> [--max-tokens N] [--max-minutes N]       resume it as a run derived from it',
   'lab finding <run> [--view researcher]                     its finding (the operator\'s view by default)',
+  'lab anomaly <run> [<report> bug|world|unclear [note]]     its reports of the instrument and their state; or the operator\'s verdict on one',
   '',
   'The orchestra (SPEC-ORQUESTADOR):',
   'lab agent <run> [--id coach] [--max-orders N]             an agent operator follows the run (it needs --agents coach=message on the run)',
@@ -93,7 +96,11 @@ export function describeEvent(e: Record<string, any>): string {
     case 'check': return at + r + 'check: ' + (e.laboratories ?? []).map((p: { place: string; holds: boolean }) => p.place + (p.holds ? ' holds' : ' does not hold')).join(', ')
       + (e.validation?.family?.length ? '; validation: ' + e.validation.family.map((p: { place: string; holds: boolean }) => p.place + (p.holds ? ' holds' : ' not')).join(', ') : '')
       + (e.validation?.blind_confirmation ? '; blind: ' + (e.validation.blind_confirmation.confirmed ? 'confirmed' : 'not confirmed') : '') + (e.accepted ? '  ACCEPTED' : '');
-    case 'accepted': return at + r + 'accepted';
+    case 'accepted': return at + r + 'accepted' + (e.released_by ? ' (it waited for ' + e.released_by.join(', ') + ': no fault of the instrument)' : '');
+    case 'instrument_report': return at + r + 'REPORT OF THE INSTRUMENT ' + e.id + ' by ' + e.by + ' (' + e.kind + '): ' + short(e.what) + ' - lab anomaly <run> ' + e.id + ' bug|world|unclear';
+    case 'anomaly_verdict': return at + 'the operator\'s verdict on ' + e.report + ': ' + e.verdict + (e.from_history ? ' (from the run it resumes)' : '');
+    case 'anomaly_verdict_refused': return at + 'a verdict refused: ' + e.reason;
+    case 'acceptance_void': return at + 'the acceptance of round ' + e.round + ' is void: ' + (e.faults ?? []).join(', ') + ' found a fault of the instrument';
     case 'reflection': return at + r + 'reflects: ' + short(e.rationale);
     case 'halted': return at + r + 'stopped before asking System 2 again (' + e.reason + ')';
     case 'operator_command': return at + 'the operator\'s ' + e.kind + (e.by ? ' (' + e.by + ')' : '') + ': accepted';
@@ -216,6 +223,26 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const r = resumeRun(journal, { args, ...(policy ? { policy } : {}), ...(ctx.env ? { env: ctx.env } : {}) });
         out('resumed as ' + path.basename(r.journal, '.json') + ' (pid ' + r.pid + '); the run it resumes is left as it was');
         out('journal ' + r.journal);
+        return 0;
+      }
+      case 'anomaly': {
+        /* SPEC-CALIBRACION-INSTRUMENTOS §5.2: the reports of the instrument, and the operator's verdict on one - written next
+           to the journal; a run that goes takes it before its next question (and with its heartbeat). */
+        const journal = resolveRun(ctx.root, args[0]);
+        const [report, verdict, ...note] = args.slice(1);
+        const states = runAnomalies(journal);
+        if (!report) {
+          if (!states.length) out('no reports of the instrument in ' + path.basename(journal, '.json'));
+          for (const r of states) out(r.id + ' [' + r.state + '] by ' + r.by + (r.round !== undefined ? ', round ' + r.round : '') + ' (' + r.kind + '): ' + r.what
+            + (r.evidence.length ? ' - evidence ' + r.evidence.join(', ') : '') + (r.text ? ' - note: ' + r.text : ''));
+          return 0;
+        }
+        if (!(VERDICTS as readonly string[]).includes(String(verdict))) { out('lab anomaly <run> <report> ' + VERDICTS.join('|') + ' [note]'); return 2; }
+        if (!states.some((r) => r.id === report)) { out('no report ' + report + ' in this run' + (states.length ? ' (its reports: ' + states.map((r) => r.id).join(', ') + ')' : '')); return 1; }
+        writeVerdict(journal, { report, verdict: verdict as Verdict, ...(note.length ? { text: note.join(' ') } : {}) });
+        const s = runStatus(journal).state;
+        out(report + ': ' + verdict + (s === 'running' || s === 'stopping' ? ' - the run takes it before its next question' : ' - kept next to the run (it is ' + s + '): its finding and the console read it'
+          + (s === 'interrupted' ? '; a resumed run applies it from the start' : '')));
         return 0;
       }
       case 'finding': {

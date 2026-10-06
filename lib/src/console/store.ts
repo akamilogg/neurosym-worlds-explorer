@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { runAnomalies } from '../learn/anomalies.ts';
 
 export type Json = Record<string, any>;
 export type Profile = 'researcher' | 'operator';
@@ -50,6 +51,8 @@ export interface Entity {
   parent: string | null; state: string; round: number | null; heartbeat: string | null; stale: boolean;
   revision: string; started: string | null; cost: Json | null; task: string | null; path: string;
   capabilities: { message: boolean; stop: boolean; resume: boolean; branch: boolean };
+  /** Its reports of the instrument and their state (SPEC-CALIBRACION-INSTRUMENTOS §5): what the operator must answer. */
+  anomalies?: { id: string; by: string; state: string; kind: string; what: string }[];
 }
 export interface Snapshot {
   format: 'research_snapshot@1'; id: string; created: string; profile: Profile; entities: Entity[]; events: Entry[];
@@ -123,7 +126,8 @@ export class ResearchStore {
         stale: s.stale, revision: hash(j), started: j.started ?? null, cost: st?.cost ?? j.spent ?? j.usage ?? null,
         task: j.goal?.question ?? j.config?.task ?? null, path: id,
         capabilities: { message: live && j.researcher === 'assisted', stop: live, resume: run && ['ended', 'interrupted'].includes(state),
-          branch: run && state === 'ended' && events.at(-1)?.stoppedBy === 'budget' } } as Entity;
+          branch: run && state === 'ended' && events.at(-1)?.stoppedBy === 'budget' },
+        ...(run ? { anomalies: runAnomalies(s.file).map(r => ({ id: r.id, by: r.by, state: r.state, kind: r.kind, what: r.what.slice(0, 300) })) } : {}) } as Entity;
     }).sort((a, b) => (b.started ?? '').localeCompare(a.started ?? ''));
   }
   capture(ids: string[], profile: Profile, positions: Record<string, number> = {}, save = true): Snapshot {
