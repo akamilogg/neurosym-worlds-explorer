@@ -172,6 +172,21 @@ Un fallo confirmado no se arregla dentro del run: se arregla en el código, y el
 - **A5.** La rama tras un arreglo (§6): versión del instrumento, punto de corte y exclusión de lo dependiente. La
   contaminación demostrada y la posible en el finding.
 
+**A1, implementado (06/10/2026):**
+- Cada laboratorio con `act` declara `act.examples(spec)` y rechaza los campos que no conoce con `unknownFields`
+  (`learn/lab.ts`), también dentro de sus listas: los estímulos de `c302nav` y los lanzamientos de `particles3d`.
+- El `act` de `grid` (`{act, from, to}`) hace lo mismo.
+- `test/labs.test.ts` comprueba I1, I2, I4 e I5 en `cells`, `orbit`, `tank`, `particles3d` y `c302nav`. Los externos
+  usan un sustituto:
+  - el servicio de c302 con un trabajador que anota lo que recibe;
+  - el servicio de `tank`, en proceso;
+  - un Blender que deja quietas las partículas.
+- I3a: una intervención con nombres neutros llega al trabajador con los nombres reales y en la forma del servicio.
+- **Ruido declarado (I4):** `act.varies(act)` dice qué puede cambiar entre dos ejecuciones del mismo `act`, como lo
+  dice su interfaz. En `tank`, el nivel inicial cuando el `act` no da `start`.
+- **Pendiente:** la parte de I5 sobre campos no declarados por la interfaz. Hoy sólo se comprueba que todo número
+  mostrado sea finito.
+
 **El orden:** A1 primero, porque es requisito de las pruebas propias. Después, A3 y A4, que hacen informativo el canal.
 A5, cuando aparezca el primer `bug` confirmado que lo necesite.
 

@@ -3,7 +3,7 @@ import type { Law } from '../../core/predict.ts';
 import { GRADING_STRUCTURE } from '../../learn/operator.ts';
 import type { Lab, LabContext, LabOptions } from '../../learn/lab.ts';
 import { mulberry32 } from '../grid/gen.ts';
-import { describeSceneTruth, fromPercept, generateScene, insideReach, placeScene, randomStarts, serviceScene, tooClose, velocityFromPercept, type Condition, type SceneSpec, type Start, type Vec3 } from './scene.ts';
+import { describeSceneTruth, fromPercept, toPercept, generateScene, insideReach, placeScene, randomStarts, serviceScene, tooClose, velocityFromPercept, type Condition, type SceneSpec, type Start, type Vec3 } from './scene.ts';
 import { P3_PERCEPT_DOC, observedNoiseVariance, p3PointWorld, perceiveEpisode, perceiveP3, pointAt, tableText, type P3Episode, type P3Point } from './world.ts';
 import { HORIZONS, appendRow, p3Objective, readAnswer, type P3Case } from './objective.ts';
 import { p3Interface, parseP3Act, type P3Act } from './interface.ts';
@@ -194,7 +194,12 @@ export const particles3dLab: Lab<SceneSpec, P3Point, P3Episode, P3Case, P3Act> =
       return perceiveEpisode(spec, starts, rows, optionsOf(ctx.options).noise, rnd, act.launch);
     },
     shown: (e) => ({ rows_in_table: e.rows.length, table: tableText(e, 0, 60), ...(e.rows.length > 61 ? { more: 'view it for the rest' } : {}) }),
-    asWritten: (act) => act
+    asWritten: (act) => act,
+    /* One particle, then every particle, from where the environment's own episodes start. */
+    examples: (spec) => {
+      const launch = randomStarts(spec, mulberry32(1)).map((s) => { const [x, y, z] = toPercept(spec.frame, s.location); return { name: s.name, x, y, z }; });
+      return [{ launch: launch.slice(0, 1) }, { launch }];
+    }
   },
   simulate: {
     from: (point) => (point.rows.length < 2 ? 'no such point (it needs a row with a row before it)' : null),

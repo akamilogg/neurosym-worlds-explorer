@@ -170,6 +170,10 @@ test('try: a change named in picture coordinates maps back to the board under ev
   assert.equal(seen.size, 8, 'all eight orientations were exercised');
   const t = parseExplorerTurn(JSON.stringify({ investigate: [{ try: 'g1@0', from: [0, 4], to: [1, 4] }, { try: 'g1@0', from: [0] }] }), { world: world.id, senses: SENSES });
   assert.ok(t.kind === 'investigate' && t.requests.length === 1 && t.warnings.length === 1);
+  /* SPEC-CALIBRACION-INSTRUMENTOS I2: a field the act does not know is refused, never ignored. */
+  const u = parseExplorerTurn(JSON.stringify({ investigate: [{ act: 'g1@0', from: [0, 4], to: [1, 4], promote: 'queen' }] }), { world: world.id, senses: SENSES });
+  assert.ok(u.kind === 'investigate' && u.requests.length === 0);
+  assert.match(u.warnings[0], /no field "promote"/);
 });
 
 test('a probe question that cites something not measured is refused at once, with the reason', () => {

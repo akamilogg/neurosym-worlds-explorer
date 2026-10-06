@@ -1,4 +1,4 @@
-import { ruleGradingSystem, type Lab, type LabContext } from '../../learn/lab.ts';
+import { ruleGradingSystem, unknownFields, type Lab, type LabContext } from '../../learn/lab.ts';
 import { TANK_PERCEPT_DOC, perceiveTank, tankPointWorld, type TankEpisode, type TankPoint, type TankSpec } from './world.ts';
 import { offBy, tankObjective, type TankCase } from './objective.ts';
 import { tankInterface } from './interface.ts';
@@ -86,6 +86,8 @@ export const tankLab: Lab<TankSpec, TankPoint, TankEpisode, TankCase, TankAct> =
 
   act: {
     parse: (raw) => {
+      const unknown = unknownFields(raw, ['inputs', 'start', 'place']);
+      if (unknown) return unknown;
       const inputs = Array.isArray(raw.inputs) ? raw.inputs : null;
       if (!inputs || !inputs.length || inputs.length > STEPS || !inputs.every((x) => typeof x === 'number')) return 'act needs "inputs": a list of 1 to ' + STEPS + ' numbers';
       return { inputs: inputs as number[], ...(typeof raw.start === 'number' ? { start: raw.start } : {}), ...(typeof raw.place === 'string' ? { place: raw.place } : {}) };
@@ -93,7 +95,10 @@ export const tankLab: Lab<TankSpec, TankPoint, TankEpisode, TankCase, TankAct> =
     place: (act) => act.place,
     /* The service answers only whether it accepted: never why not. */
     start: (spec, act, _id, ctx) => runEpisode(spec, ctx, act.inputs, act.start),
-    shown: (e) => ({ rows: e.rows })
+    shown: (e) => ({ rows: e.rows }),
+    examples: () => [{ inputs: [1, 2, 3] }, { inputs: [9, 9], start: 50 }],
+    /* Its interface says so: without "start", the environment chooses where the tank starts. */
+    varies: (act) => (act.start === undefined ? 'the level it starts at' : null)
   },
 
   objective: (host) => tankObjective(host),

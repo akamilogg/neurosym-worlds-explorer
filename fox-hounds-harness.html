@@ -3808,6 +3808,16 @@ var Neurosym = (() => {
   // src/learn/objective.ts
   var objectiveLines = (o) => [...o.answer.form, ...o.verdictForm];
 
+  // src/learn/operator.ts
+  var GRADING_RIGOR = `A statement of NOT KNOWING is not knowing: when the learner says it has not identified, cannot tell, leaves open or does not establish what a true statement says, that statement is "absent" - a disclaimer, a caveat, a limitation or an open question never makes a grade "exact" or "partial", however well it names what is missing. Grade "partial" only for a claim the learner positively makes that holds part of the true statement. "false_beliefs" are the learner's claims that a TRUE statement CONTRADICTS. A claim is never false merely because no true statement mentions it: the true statements are not everything true of the environment, and what the learner observed beyond them is not false for that.`;
+  var GRADING_STRUCTURE = GRADING_RIGOR + ` Separate PREDICTING from UNDERSTANDING: a lookup table, a list of cases or a fit that merely agrees with a true statement shows its outputs, not its structure. For a statement about the structure of the law (what it depends on, a symmetry, a count, a threshold, a compact form), grade "exact" only when the learner states that structure or its code computes it as such; a table or case list that happens to agree with it is "partial", and say so in the evidence. Also say how the learner's final model expresses the law: "compact" (it computes the structure), "table" (it enumerates cases or outputs) or "mixed", in a field "form" with a one-line "form_evidence".`;
+
+  // src/learn/lab.ts
+  function unknownFields(raw, fields, what = "act") {
+    const unknown = Object.keys(raw).filter((k) => !fields.includes(k));
+    return unknown.length ? what + " has no field " + unknown.map((k) => '"' + k + '"').join(", ") + ": its fields are " + fields.join(", ") : null;
+  }
+
   // src/worlds/grid/objective.ts
   var GRID_ANSWER = {
     form: ["YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines."],
@@ -3933,6 +3943,11 @@ var Neurosym = (() => {
           const from = cell(q.from), to = cell(q.to);
           if (!from || !to) {
             warnings.push("request #" + i + ': act needs "from" and "to" as [row, col]');
+            continue;
+          }
+          const unknown = unknownFields(q, [q.act !== void 0 ? "act" : "try", "from", "to"]);
+          if (unknown) {
+            warnings.push("request #" + i + ": " + unknown);
             continue;
           }
           requests.push({ act: q.act ?? q.try, from, to });

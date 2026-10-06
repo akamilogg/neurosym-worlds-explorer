@@ -1,5 +1,6 @@
 import { INVESTIGATION_TOOLS as INVESTIGATION, type WorldInterface } from '../../learn/prompt.ts';
 import { objectiveLines } from '../../learn/objective.ts';
+import { unknownFields } from '../../learn/lab.ts';
 import { P3_ANSWER, p3Verdict } from './objective.ts';
 
 /** particles3d@1's interface to the common prompt: its objective's lines, then the parameters of its instruments.
@@ -28,11 +29,15 @@ export interface P3Act { readonly launch: readonly P3Launch[]; readonly place?: 
 export function parseP3Act(raw: Record<string, unknown>): P3Act | string {
   const list = Array.isArray(raw.launch) ? raw.launch : null;
   const usage = 'act needs "launch": a list of {"name", "x", "y", "z", "vx", "vy", "vz"} (numbers), each name at most once';
+  const unknown = unknownFields(raw, ['launch', 'place']);
+  if (unknown) return unknown;
   if (!list || !list.length || list.length > 12) return usage;
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const launch: P3Launch[] = [];
   for (const l of list) {
     const o = (l && typeof l === 'object' ? l : {}) as Record<string, unknown>;
+    const unknownHere = unknownFields(o, ['name', 'x', 'y', 'z', 'vx', 'vy', 'vz'], 'a launch');
+    if (unknownHere) return unknownHere;
     const vals = ['x', 'y', 'z', 'vx', 'vy', 'vz'].map((k) => num(o[k] ?? (k.startsWith('v') ? 0 : undefined)));
     if (typeof o.name !== 'string' || vals.some((v) => v === null) || launch.some((x) => x.name === o.name)) return usage;
     const [x, y, z, vx, vy, vz] = vals as number[];

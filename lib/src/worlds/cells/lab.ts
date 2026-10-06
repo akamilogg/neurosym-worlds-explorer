@@ -1,4 +1,4 @@
-import { ruleGradingSystem, type Lab } from '../../learn/lab.ts';
+import { ruleGradingSystem, unknownFields, type Lab } from '../../learn/lab.ts';
 import { CELLS_PERCEPT_DOC, cellsPointWorld, describeCellsTruth, generateCells, perceiveCells, placeOf, readRow, runEpisode, type CellsPoint, type CellsSpec } from './world.ts';
 import { CELLS_FACETS, cellsObjective, differences, type CellsCase } from './objective.ts';
 import { cellsInterface } from './interface.ts';
@@ -47,6 +47,8 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
 
   act: {
     parse: (raw) => {
+      const unknown = unknownFields(raw, ['row', 'rows', 'place']);
+      if (unknown) return unknown;
       const rows = typeof raw.row === 'string' ? [raw.row]
         : Array.isArray(raw.rows) && raw.rows.length && raw.rows.length <= 4 && raw.rows.every((r) => typeof r === 'string') ? raw.rows as string[] : null;
       return rows ? { rows, ...(typeof raw.place === 'string' ? { place: raw.place } : {}) } : 'act needs "row" (a string) or "rows" (a list of strings)';
@@ -56,7 +58,8 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
       const rows = act.rows.map((r) => readRow(spec, r));
       return rows.some((r) => !r) ? null : runEpisode(spec, rows as number[][]);
     },
-    shown: (rows) => ({ rows })
+    shown: (rows) => ({ rows }),
+    examples: (spec) => [{ row: spec.glyphs[0].repeat(spec.width) }, { rows: [spec.glyphs[0].repeat(spec.width), spec.glyphs[spec.glyphs.length - 1].repeat(spec.width)] }]
   },
   simulate: {
     step: (state, answer, rows, step) => (typeof answer === 'string'

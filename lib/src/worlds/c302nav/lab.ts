@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ruleGradingSystem, type Lab, type LabContext, type LabOptions } from '../../learn/lab.ts';
+import { ruleGradingSystem, unknownFields, type Lab, type LabContext, type LabOptions } from '../../learn/lab.ts';
 import { mulberry32 } from '../grid/gen.ts';
 import { DURATION_MS, SAVE_EVERY_MS, protocolOf, stimuliOf, tracesOf, type Family } from './stimuli.ts';
 import { C302NAV_PERCEPT_DOC, NEUTRAL_CELLS, PANEL, READOUT_CELLS, UNIT, c302NavPointWorld, inputTraces, namingOf, perceiveC302Nav, signalsOf,
@@ -134,6 +134,7 @@ const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinit
 
 /** The fields an act may carry, as the interface names them. */
 const ACT_FIELDS = ['stimuli', 'record', 'remove', 'scale', 'polarity', 'parameters', 'duration_ms', 'place', 'wiring'] as const;
+const STIMULUS_FIELDS = ['cell', 'kind', 'delay_ms', 'duration_ms', 'amplitude_pa', 'period_ms', 'phase_rad'] as const;
 
 /** What an act asked of the network, in the interface's words (how the learner is shown it, and writes it). */
 export const changesInWords = (c: NetworkChanges): Record<string, unknown> => ({
@@ -146,14 +147,16 @@ export const changesInWords = (c: NetworkChanges): Record<string, unknown> => ({
 /** An act's parameters, or why they cannot be read (the form only: the service may still refuse it). A field it does not
     know is a form error, said: accepted and ignored, the learner would believe it changed what was never changed. */
 export function parseC302NavAct(raw: Record<string, unknown>): C302NavAct | string {
-  const unknown = Object.keys(raw).filter((k) => !(ACT_FIELDS as readonly string[]).includes(k));
-  if (unknown.length) return 'act has no field ' + unknown.map((k) => '"' + k + '"').join(', ') + ': its fields are ' + ACT_FIELDS.join(', ');
+  const unknown = unknownFields(raw, ACT_FIELDS);
+  if (unknown) return unknown;
   const place = typeof raw.place === 'string' ? { place: raw.place } : {};
   if (raw.wiring === true) return { wiring: true, ...place };
   const stimuli: Stimulus[] = [];
   if (!Array.isArray(raw.stimuli) || raw.stimuli.length > MAX_STIMULI) return 'act needs "stimuli": a list of at most ' + MAX_STIMULI + ' stimuli (it may be empty), or "wiring": true';
   for (const s of raw.stimuli as Record<string, unknown>[]) {
     if (!s || typeof s.cell !== 'string' || !CELL.has(s.cell)) return 'a stimulus needs "cell": one of the cells';
+    const unknownHere = unknownFields(s, STIMULUS_FIELDS, 'a stimulus');
+    if (unknownHere) return unknownHere;
     if (!num(s.delay_ms) || !num(s.duration_ms) || !num(s.amplitude_pa) || s.delay_ms < 0 || s.duration_ms <= 0) return 'a stimulus needs numbers "delay_ms" (>= 0), "duration_ms" (> 0) and "amplitude_pa"';
     const kind = s.kind ?? 'pulse';
     if (kind !== 'pulse' && kind !== 'sine') return 'a stimulus is a "pulse" or a "sine"';
@@ -299,7 +302,18 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
     /* Echoed as the interface writes it: shown the service's own names, the learner would write them back. */
     asWritten: (a) => (a.wiring ? { wiring: true, ...(a.place ? { place: a.place } : {}) } : {
       stimuli: a.stimuli ?? [], ...(a.record?.length ? { record: a.record } : {}), ...(a.changes ? changesInWords(a.changes) : {}),
-      ...(a.duration_ms !== undefined ? { duration_ms: a.duration_ms } : {}), ...(a.place ? { place: a.place } : {}) })
+      ...(a.duration_ms !== undefined ? { duration_ms: a.duration_ms } : {}), ...(a.place ? { place: a.place } : {}) }),
+    /* In the run's names: a pulse, every intervention with a sine and a cell recorded, and the wiring. */
+    examples: (spec) => {
+      const n = namingFor(spec);
+      return [
+        { stimuli: [{ cell: n.cell('AWCL'), delay_ms: 1000, duration_ms: 2000, amplitude_pa: 4 }] },
+        { stimuli: [{ cell: n.cell('AWCR'), kind: 'sine', delay_ms: 0, duration_ms: 3000, amplitude_pa: 3, period_ms: 800 }], record: [n.cell('AIYL')],
+          remove: [n.connection('AWCL-AIYL')], scale: { [n.connection('AWCR-AIYR')]: 2 }, polarity: { [n.connection('AIYL-RIAL')]: 'inh' },
+          parameters: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' }, duration_ms: 3000 },
+        { wiring: true }
+      ];
+    }
   },
 
   objective: (host, options) => c302NavObjective({ casesIn: host.casesIn, answer: (m, s) => host.answer(m, s), holdR2: holdR2Of(options),

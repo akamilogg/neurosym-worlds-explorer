@@ -1,5 +1,6 @@
 import { INVESTIGATION_TOOLS as INVESTIGATION, system2Prompt, type WorldInterface } from '../../learn/prompt.ts';
 import { objectiveLines } from '../../learn/objective.ts';
+import { unknownFields } from '../../learn/lab.ts';
 import { ORBIT_ANSWER, orbitVerdict } from './objective.ts';
 
 /* orbit@1's side of the law explorer (learn/law-explorer.ts): its interface to the common prompt, its instruments, and
@@ -41,6 +42,8 @@ export interface OrbitAct { readonly x: number; readonly y: number; readonly vx:
 
 /** orbit@1's act parameters, or why they cannot be read. */
 export function parseOrbitAct(l: Record<string, unknown>): OrbitAct | string {
+  const unknown = unknownFields(l, ['x', 'y', 'vx', 'vy', 'm', 'place', 'setup']);
+  if (unknown) return unknown;
   const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const [x, y, vx, vy] = [num(l.x), num(l.y), num(l.vx), num(l.vy)];
   const m = l.m === undefined ? 1 : num(l.m);

@@ -5,6 +5,7 @@ import { describeTest, type Probe, type ProbeResult } from './experiments.ts';
 import { STANCES, type BeliefStance, type NoteOp, type Stance } from './notebook.ts';
 import { INVESTIGATION_TOOLS as COMMON_INVESTIGATION, system2Prompt, type WorldInterface } from './prompt.ts';
 import { objectiveLines } from './objective.ts';
+import { unknownFields } from './lab.ts';
 import { GRID_ANSWER, GRID_VERDICT } from '../worlds/grid/objective.ts';
 
 /* ============================================================================
@@ -211,6 +212,8 @@ export function parseExplorerTurn(content: string, context: Parameters<typeof pa
         const cell = (v: unknown) => Array.isArray(v) && v.length === 2 && v.every((n) => Number.isInteger(n)) ? [v[0] as number, v[1] as number] as const : null;
         const from = cell(q.from), to = cell(q.to);
         if (!from || !to) { warnings.push('request #' + i + ': act needs "from" and "to" as [row, col]'); continue; }
+        const unknown = unknownFields(q, [q.act !== undefined ? 'act' : 'try', 'from', 'to']);
+        if (unknown) { warnings.push('request #' + i + ': ' + unknown); continue; }
         requests.push({ act: (q.act ?? q.try) as string, from, to });
       } else if (q.table && typeof q.table === 'object') {
         const code = codeRequest(q.table, 'table');

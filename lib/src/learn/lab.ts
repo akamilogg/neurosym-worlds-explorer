@@ -195,6 +195,12 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
     shown(episode: E): Record<string, unknown>;
     /** How an act is echoed back in the prompt's words (default: as parsed). */
     asWritten?(act: A): unknown;
+    /** Acts of the interface's form the environment accepts in `spec`, one for each kind it has (an intervention among
+        them, where there is one): what the instrument's contract runs (SPEC-CALIBRACION-INSTRUMENTOS §3). */
+    examples(spec: S): readonly Record<string, unknown>[];
+    /** What of the episode an act starts may differ between two runs of it, as its interface tells the learner, or null
+        when nothing may (SPEC-CALIBRACION-INSTRUMENTOS I4; default: nothing). */
+    varies?(act: A): string | null;
   };
   readonly simulate?: {
     /** Why a simulation cannot start at this point, or null. */
@@ -322,6 +328,13 @@ export interface GameLab {
   readonly teams?: boolean;
   runName(seed: number, options: LabOptions): string;
   run(services: LabServices): Promise<LabRunEnd>;
+}
+
+/** Why an act carrying a field its world does not know is not read (SPEC-CALIBRACION-INSTRUMENTOS I2), or null: accepted
+    and ignored, the learner would believe it changed what was never changed. `what` names the object (e.g. "a stimulus"). */
+export function unknownFields(raw: Readonly<Record<string, unknown>>, fields: readonly string[], what = 'act'): string | null {
+  const unknown = Object.keys(raw).filter((k) => !fields.includes(k));
+  return unknown.length ? what + ' has no field ' + unknown.map((k) => '"' + k + '"').join(', ') + ': its fields are ' + fields.join(', ') : null;
 }
 
 /** Any laboratory, for code that runs one without knowing its types. */

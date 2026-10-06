@@ -4,6 +4,7 @@ import type { Lab, LabContext, LabOperatorContext, LabOptions } from '../../lear
 import { GRADING_STRUCTURE, type AblationRecord } from '../../learn/operator.ts';
 import { delegatedLaw, fitLawCodeOnly } from '../../learn/law-ablation.ts';
 import { generateOrbit, launchNear } from './gen.ts';
+import { mulberry32 } from '../grid/gen.ts';
 import { fromPercept, launchable, simulate, toPercept, type OrbitSpec, type Trajectory } from './world.ts';
 import { ORBIT_PERCEPT_DOC, readTable, tableSense } from './sense.ts';
 import { answerable, answerAsDeparture, departureAsNext, observedNoiseVariance, orbitPointWorld, perceivePoint, predictionSamples, trialLaunches, type OrbitPoint } from './predict.ts';
@@ -226,7 +227,14 @@ export const orbitLab: Lab<OrbitSpec, OrbitPoint, OrbitEpisode, OrbitCase, Orbit
       return { rows_in_table: lines.length - 1, table: lines.slice(0, 61).join('\n'), ...(lines.length > 61 ? { more: 'view it for the rest' } : {}) };
     },
     /* Echoed in the prompt's words: "place", not the host's name for it. */
-    asWritten: ({ setup, ...rest }) => ({ ...rest, ...(setup ? { place: setup } : {}) })
+    asWritten: ({ setup, ...rest }) => ({ ...rest, ...(setup ? { place: setup } : {}) }),
+    /* A start the environment accepts: where its own episodes are launched from. */
+    examples: (spec) => [1, 2].map((seed) => {
+      const rnd = mulberry32(seed);
+      const launch = launchNear(spec, rnd, 2 * spec.collide + rnd() * (spec.window - 2 * spec.collide), 1);
+      const [x, y] = toPercept.pos(spec.frame, launch.pos), [vx, vy] = toPercept.vel(spec.frame, launch.vel);
+      return { x, y, vx, vy, m: 1 };
+    })
   },
   simulate: {
     from: (point) => (point.row < 1 ? 'no such point (it needs a step with a step before it)' : null),
