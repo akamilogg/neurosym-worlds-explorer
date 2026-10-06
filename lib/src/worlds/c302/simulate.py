@@ -123,6 +123,10 @@ def simulate(req):
         t = (np.asarray(res["t"], dtype=float) * 1000.0)[::step]
         calcium = {k.split("/")[0]: np.asarray(v, dtype=float)[::step] for k, v in res.items() if k.endswith("/caConc")}
         record = req.get("record") or sorted(calcium)
+        # Any cell whose calcium ran off to infinity (or NaN), recorded or not, is a diverged integration: the same answer as one
+        # that did not complete.
+        if any(not np.all(np.isfinite(x)) for x in calcium.values()):
+            return {"error": "the simulation diverged (non-finite calcium)", "bad_request": False, "unstable": True}
         return {"t": [round(float(x), 6) for x in t], "calcium": {c: [float("%.9g" % x) for x in calcium[c]] for c in record if c in calcium},
                 "cells": sorted(calcium), "n_connections": n_connections, "seconds": round(time.time() - t0, 1)}
     finally:
@@ -137,5 +141,9 @@ if __name__ == "__main__":
         answer = {"error": str(e), "bad_request": True}
     except Exception as e:  # anything else is the service's, not the request's
         answer = {"error": "%s: %s" % (type(e).__name__, e), "bad_request": False}
-    sys.stdout.write("\n@@C302@@" + json.dumps(answer))
+    try:
+        text = json.dumps(answer, allow_nan=False)  # only what JSON allows: a reader in another language must parse it
+    except ValueError:
+        text = json.dumps({"error": "the simulation diverged (non-finite values)", "bad_request": False, "unstable": True})
+    sys.stdout.write("\n@@C302@@" + text)
     sys.stdout.flush()
