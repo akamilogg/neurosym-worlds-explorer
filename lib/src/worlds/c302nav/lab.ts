@@ -295,7 +295,11 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
         throw e;
       }
     },
-    shown: (e) => (e.wiring ? { wiring: e.wiring } : { steps: e.t.length - 1, stimulated: Object.keys(e.inputs), recorded: Object.keys(e.calcium) })
+    shown: (e) => (e.wiring ? { wiring: e.wiring } : { steps: e.t.length - 1, stimulated: Object.keys(e.inputs), recorded: Object.keys(e.calcium) }),
+    /* Echoed as the interface writes it: shown the service's own names, the learner would write them back. */
+    asWritten: (a) => (a.wiring ? { wiring: true, ...(a.place ? { place: a.place } : {}) } : {
+      stimuli: a.stimuli ?? [], ...(a.record?.length ? { record: a.record } : {}), ...(a.changes ? changesInWords(a.changes) : {}),
+      ...(a.duration_ms !== undefined ? { duration_ms: a.duration_ms } : {}), ...(a.place ? { place: a.place } : {}) })
   },
 
   objective: (host, options) => c302NavObjective({ casesIn: host.casesIn, answer: (m, s) => host.answer(m, s), holdR2: holdR2Of(options),

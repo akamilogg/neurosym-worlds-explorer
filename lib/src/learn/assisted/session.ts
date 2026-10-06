@@ -89,6 +89,8 @@ export interface OperatorChannel {
   readonly memory?: { readonly selector?: LineSelector; onSelect?(record: Record<string, unknown>): void };
   /** The records of earlier runs it may read (§12). The prompt's section is the host's to add. */
   readonly experience?: Experience;
+  /** The round in course, when the host knows it: a directive keeps the round it reached the researcher in. */
+  round?(): number;
   /** Its team's board (SPEC-INVESTIGACION-PARALELA §5.2), when the team exchanges: which requests are the board's, and how
       they are answered. The prompt's section is the host's to add. */
   readonly board?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number): Promise<unknown> };
@@ -105,7 +107,7 @@ export function deliveredMessages(journal: { events?: readonly Record<string, an
 }
 
 /** System 2's client for the assisted researcher, and the directives of its senior still open (SPEC-ORQUESTADOR §3.3.3). */
-export type OperatorClient = ChatClient & { openDirectives(): readonly OperatorMessage[] };
+export type OperatorClient = ChatClient & { openDirectives(): readonly (OperatorMessage & { readonly round?: number })[] };
 
 /** System 2's client for the assisted researcher: each question carries the operator's messages, the new ones and the earlier.
     Once a directive of its senior has reached it, its prompt says what one is; what it reports in its answers - each directive
@@ -114,7 +116,7 @@ export type OperatorClient = ChatClient & { openDirectives(): readonly OperatorM
 export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (type: string, data?: Record<string, unknown>) => void): OperatorClient {
   let question = 0;
   const earlier: OperatorMessage[] = [];
-  const open = new Map<string, OperatorMessage>();
+  const open = new Map<string, OperatorMessage & { round?: number }>();
   let directed = false;
   /* With a question in parts (a round's growing conversation): the messages stay where they arrived, never rewritten - the
      earlier ones after the round's first part, a new one after the parts it arrived with. A new round starts afresh. */
@@ -147,7 +149,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
         user = Object.keys(extra).length ? { ...(request.user as Record<string, unknown>), ...extra } : request.user;
       }
       earlier.push(...fresh);
-      for (const m of fresh) if (m.directive) { open.set(m.id, m); directed = true; }
+      for (const m of fresh) if (m.directive) { open.set(m.id, { ...m, ...(channel.round ? { round: channel.round() } : {}) }); directed = true; }
       const base = channel.system ? channel.system() : request.system;
       const system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '');
       const answer = await llm.complete({ ...request, system, user });
@@ -177,12 +179,15 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
   const remembers = (q: Record<string, unknown>): boolean => experience !== undefined && Experience.accepts(q);
   const board = channel.board;
   const posts = (q: Record<string, unknown>): boolean => board !== undefined && board.accepts(q);
-  const client = operatorClient(host.llm, channel, (t, d) => host.log(t, d));
-  const session: LawSession<A> = new LawSession<A>({
+  let session: LawSession<A> | null = null;
+  const client = operatorClient(host.llm, { ...channel, round: () => session?.currentRound ?? 0 }, (t, d) => host.log(t, d));
+  session = new LawSession<A>({
     ...host, system: assistedSystem(host.system), llm: client,
-    /* A proposal made while a directive of its senior is open is returned once (SPEC-ORQUESTADOR §3.3.3). */
-    vet: () => {
-      const open = client.openDirectives();
+    /* A proposal made while a directive of its senior is open is returned once (SPEC-ORQUESTADOR §3.3.3) - only for a directive
+       that reached it in an earlier round: one that came this round may have come with no steps or acts left to carry it out,
+       and stays open for the next. */
+    vet: (round: number) => {
+      const open = client.openDirectives().filter((m) => m.round === undefined || m.round < round);
       return open.length ? ['your senior\'s directives are still open: ' + open.map((m) => m.id + ' ("' + (m.text.length > 140 ? m.text.slice(0, 139) + '…' : m.text) + '")').join('; ')
         + ' - carry each out, report it in "directives": [{"id": "<id>", "done": "what you did"}], and say in "to_senior" where you disagree'] : [];
     },
@@ -192,7 +197,7 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
        answered here, never by the world. */
     ...(sources || memory || experience || board ? {
       extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || reads(q),
-      runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra)
+      runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session!.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra)
         : posts(r.extra) ? board!.run(r.extra, round) : sources!.run(r.extra))
         : host.runRequest(r, budget, round))
     } : {}),
@@ -204,5 +209,5 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
         models: () => s.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })) })
     } : {})
   });
-  return session;
+  return session!;
 }

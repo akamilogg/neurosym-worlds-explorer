@@ -302,22 +302,26 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const at = () => new Date().toISOString();
   const asked = () => read.map((r) => r.requests);
   const maxTokens = o.maxContextTokens ?? 150000;
-  let reminded = 0, consolidated = 0, toldToConsolidate = 0;
+  let reminded = 0, consolidated = 0, toldToConsolidate = 0, measured = 0;
+  /* How large its conversation is: the provider's count of its latest question when it gave one (an estimate from
+     characters falls short of it: numbers and JSON take many tokens), else the estimate. */
+  const sizeOf = (): number => Math.max(tokensOf(state.conversation, system), measured);
   const done = (d: AgentDecision): AgentDecision => { keepNotebook(state, nb); return d; };
   try {
     for (let turn = 0; turn <= limit + 7; turn++) {
       /* Too long: it is asked to consolidate; asked twice and it did not, its conversation restarts from its notebook. */
-      if (tokensOf(state.conversation, system) > maxTokens) {
+      if (sizeOf() > maxTokens) {
         if (toldToConsolidate >= 2) {
           state.conversation = [opening(), { restarted: 'your conversation outgrew ' + maxTokens + ' tokens and you did not consolidate it: it goes on from your notebook' }, callPart()];
           state.consolidations++;
         } else {
           toldToConsolidate++;
-          state.conversation.push({ context_tokens: tokensOf(state.conversation, system), reminder: 'Your conversation is too long: consolidate it now, before anything else ({"consolidate": {...}}), after writing in your notebook what you want to keep.' });
+          state.conversation.push({ context_tokens: sizeOf(), reminder: 'Your conversation is too long: consolidate it now, before anything else ({"consolidate": {...}}), after writing in your notebook what you want to keep.' });
         }
       }
       const answer = await o.llm.complete({ system, user: new UserParts([...state.conversation]) });
       addUsage(usage, answer.raw);
+      measured = Number((answer.raw as { usage?: { prompt_tokens?: number } } | null)?.usage?.prompt_tokens) || measured;
       const parsed = (parseJsonLoose(answer.content) ?? {}) as Record<string, any>;
       const { wrote, warnings } = writeNotebook(nb, rounds, parsed);
       const written = { ...(Object.keys(wrote).length ? { you_wrote: wrote } : {}), ...(warnings.length ? { notebook_warnings: warnings } : {}) };

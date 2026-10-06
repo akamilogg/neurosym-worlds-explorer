@@ -445,6 +445,16 @@ pero las cumple.
 - **Pruebas:** `lib/test/orchestra-directives.test.ts`.
 
 **Pendiente:**
+- **Ajustes tras el run `c302nav-n2-task12-4`** (06/10/2026). Aceptado en la ronda 14, con 8 órdenes, 12 informes y
+  7 discrepancias. Las 3 propuestas devueltas lo fueron porque la orden llegó sin pasos ni `act` en la ronda.
+  - **La propuesta sólo se devuelve por una orden recibida en una ronda anterior.** Una que llegó en la ronda en curso
+    queda abierta para la siguiente: el cliente anota la ronda de entrega de cada orden.
+  - **`c302nav` devuelve cada `act` en las palabras de la interfaz** (`act.asWritten`), también en su respuesta
+    (aceptado o rechazado). El investigador ya no ve los nombres internos del servicio (`changes`,
+    `remove_connections`), que copiaba después.
+  - **El tamaño de la conversación del senior** es el mayor entre la estimación y el recuento del proveedor
+    (`prompt_tokens`). En ese run la estimación se quedaba corta, y el senior llegó a unos 300k tokens por llamada sin
+    que se le pidiera consolidar.
 - **El grid** recibe la sección y registra los informes, pero aún no devuelve la propuesta con una orden abierta: su
   bucle es propio.
 - **Medir la adopción** (opción 4): qué órdenes acaban en el modelo y en cuánto tiempo.

@@ -154,3 +154,22 @@ test('what the senior understood is graded from its own notebook, into its recor
   assert.deepEqual(row.agent, { id: 'senior', decisions: 2, calls: 4, tokens_in: 40000, cached_share: 0.6, cost: 0.07 });
   assert.match(batchText({ format: 'batch@1', id: 'b', definition: { id: 'b', runs: [] }, dir, started: 'x', runs: [row], table: [], audit: [] } as never), /agent:senior 2 decisions, 4 calls, 40k tokens in \(60% cached\), \$0\.07/);
 });
+
+test('how large its conversation is: the provider\'s own count, when it gives one, over an estimate that falls short', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-mem-'));
+  const out = journal(dir, 'run', [check(1), check(2), check(3)]);
+  const calls: UserParts[] = [];
+  const llm: ChatClient = { complete: async (r) => {
+    calls.push(r.user as UserParts);
+    const content = calls.length === 1 ? { investigate: [{ memory: 'list', of: 'checks' }] } : { decision: 'wait', why: 'w' };
+    /* The provider counts far more than the characters suggest. */
+    return { content: JSON.stringify(content), latencyMs: 0, raw: { usage: { prompt_tokens: 400000, completion_tokens: 5 } } };
+  } };
+  const controller = new AbortController();
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm, pollMs: 10, signal: controller.signal, maxContextTokens: 300000 });
+  await until(() => calls.length >= 2);
+  controller.abort();
+  await agent;
+  assert.doesNotMatch(JSON.stringify(calls[0].parts), /consolidate it now/, 'by the estimate alone it was small');
+  assert.match(JSON.stringify(calls[1].parts.at(-1)), /consolidate it now/, 'by the provider\'s count it was too long');
+});

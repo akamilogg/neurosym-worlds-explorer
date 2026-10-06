@@ -61,6 +61,9 @@ test('the act: stimuli into any cell of the panel, cells recorded, connections a
   assert.deepEqual((a as { changes: unknown }).changes, { remove_connections: ['AIYL-RIAL_GJ'], connection_number_scaling: { 'AWCL-AIYL': 2 },
     connection_polarity_override: { 'AIYL-RIAL': 'inh' }, param_overrides: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' } });
   assert.deepEqual(parseC302NavAct({ wiring: true }), { wiring: true });
+  /* Echoed as the interface writes it, never with the service's names. */
+  const written = { stimuli: [{ cell: 'AWCL', delay_ms: 100, duration_ms: 200, amplitude_pa: 3 }], remove: ['AWCL-AIYL'], parameters: { ca_conc_decay_time: '100 ms' }, duration_ms: 1000 };
+  assert.deepEqual(c302NavLab.act!.asWritten!(parseC302NavAct(written) as never), written);
   /* A field it does not know is refused, said: the service's own names (`changes`, `param_overrides`) are not the act's. */
   assert.match(parseC302NavAct({ stimuli: [], changes: { param_overrides: { ca_conc_decay_time: '100 ms' } } }) as string, /act has no field "changes": its fields are stimuli, record, remove, scale, polarity, parameters/);
   assert.match(parseC302NavAct({ stimuli: [], param_overrides: {} }) as string, /"param_overrides"/);

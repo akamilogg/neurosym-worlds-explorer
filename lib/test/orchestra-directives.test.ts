@@ -55,22 +55,23 @@ function junior(asked: Record<string, any>[]): FetchLike {
   };
 }
 
-test('an assisted run: a proposal made while a directive is open is returned once; reported, it is taken', async () => {
+test('an assisted run: a directive that came in this round leaves the proposal alone; in a later round, a proposal with it open is returned once; reported, it is taken', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'directive-'));
   const out = path.join(dir, 'run.json');
   send(out, { kind: 'message', text: 'Directive: test whether the row repeats.', by: 'agent:senior', directive: true });
   const asked: Record<string, any>[] = [];
-  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--attempts', '1', '--no-reflection', '--no-grade',
+  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--attempts', '2', '--no-reflection', '--no-grade',
     '--agents', 'senior=message', '--out', out], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior(asked) });
   const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
   const delivered = events.find((e) => e.type === 'operator_message')!;
   assert.equal(delivered.messages[0].directive, true, 'delivered as a directive');
   const returned = events.find((e) => e.type === 'proposal_refused' && e.returned);
-  assert.ok(returned, 'its first proposal was returned');
+  assert.ok(returned, 'a proposal was returned');
+  assert.equal(returned!.round, 2, 'not in the round the directive came in (it may have come with nothing left to carry it out), but in the next');
   assert.match(returned!.errors[0], /directives are still open/);
   assert.ok(events.some((e) => e.type === 'directive_report' && e.done === 'tested it'));
   assert.ok(events.some((e) => e.type === 'junior_report' && e.text === 'it did not hold'));
-  assert.equal(events.filter((e) => e.type === 'proposal').length, 1, 'then its proposal was taken');
+  assert.equal(events.filter((e) => e.type === 'proposal').length, 2, 'round 1 taken as it was; round 2 taken once reported');
   assert.ok(asked.some((q) => q.system.includes('YOUR SENIOR.')), 'its prompt says what a directive is');
 });
 

@@ -908,11 +908,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const id = 'act' + (counter + 1);
       const data = await lab.act.start(place.spec, req.act, id, ctx);
       /* The environment answers only whether it accepted: never why not. */
-      if (data === null) return { act: req.act, accepted: false };
+      /* The act as the interface writes it (`asWritten`), never as the laboratory holds it. */
+      const written = lab.act.asWritten ? lab.act.asWritten(req.act) : req.act;
+      if (data === null) return { act: written, accepted: false };
       budget.acts--;
       counter++;
       const e = store(id, place, session.currentRound, 'you', data);
-      const answer = { act: req.act, accepted: true, name: e.id, ...lab.act.shown(e.data) };
+      const answer = { act: written, accepted: true, name: e.id, ...lab.act.shown(e.data) };
       actAnswers.set(e.id, answer);
       if (team) {
         const key = 'act|' + place.id + '|' + JSON.stringify(lab.act.asWritten ? lab.act.asWritten(req.act) : req.act);
