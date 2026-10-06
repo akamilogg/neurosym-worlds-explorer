@@ -60,7 +60,7 @@ Antes de cualquier run, NEURON frente a jNeuroML en lazo abierto, con **toleranc
 - **Tiempos de transición:** el instante del primer salto del calcio tras un pulso (el suceso por umbral que vimos),
   con una diferencia máxima en milisegundos.
 - **Casos:** los 10 protocolos de N0, más intervenciones representativas (cortar una conexión, escalar otra, cambiar un
-  parámetro) y el caso de calibración de I3b de SPEC-ANOMALIAS-INSTRUMENTO.
+  parámetro) y el caso de calibración de I3b de SPEC-CALIBRACION-INSTRUMENTOS.
 - **Pasos:** varios pasos de integración neuronal (0,05 y 0,025 ms) y de control (5 y 2,5 ms). Las señales no deben
   depender del paso de control más allá de la tolerancia.
 - **Lectura incremental:** las señales calculadas paso a paso coinciden con las calculadas sobre la traza completa.
@@ -209,7 +209,7 @@ Antes de atribuir nada al circuito, con "circuitos" sintéticos en lugar de c302
   - `POST /closed-loop`, con idempotencia, 422 si diverge y JSON válido;
   - el laboratorio con las dos facetas, la condición determinista y los `act` (propio, con cuerpo bloqueado y con
     corriente reproducida);
-  - el contrato de SPEC-ANOMALIAS-INSTRUMENTO desde el principio.
+  - el contrato de SPEC-CALIBRACION-INSTRUMENTOS desde el principio.
 - **L3. Runs:** la condición N2 con junior y senior, en cuerpo determinista. Medidas en las dos lecturas (§11), y runs
   emparejados con `c302nav` sobre NEURON. La condición aleatoria, después.
 

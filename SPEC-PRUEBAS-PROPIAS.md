@@ -200,7 +200,7 @@ para concluir.
 - evaluar dos modelos en sus puntos (llamadas a Jev sólo si tienen reglas);
 - comprobar el rival en la evidencia compartida, sin simular.
 
-**Plan.** Empieza después del contrato de los instrumentos (SPEC-ANOMALIAS-INSTRUMENTO A1):
+**Plan.** Empieza después del contrato de los instrumentos (SPEC-CALIBRACION-INSTRUMENTOS A1):
 - **T1.** Lo que declara el laboratorio:
   - el veredicto en casos degenerados (§4.1) en `c302nav` y en los demás objetivos;
   - `act.identity` y `episodeIdentity` (§4.2);

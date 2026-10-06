@@ -1,6 +1,8 @@
-# SPEC · Anomalías del instrumento: cuando la realidad puede ser un bug
+# SPEC · Calibración e integridad de instrumentos: cuando la realidad puede ser un bug
 
 Estado: propuesta (06/10/2026), revisada con una revisión externa el mismo día (§10). Nada implementado.
+
+Cubre las tres fases: calibrar el instrumento antes de investigar (§3), detectar sus fallos durante el run (§4–§5) y recuperarse de la contaminación que dejen (§6). Antes se llamaba «Anomalías del instrumento».
 
 ## 1. De dónde sale
 
