@@ -335,6 +335,57 @@ aunque no actúe sobre el mundo, y puede tener su propio cuaderno, anotar insigh
   - el estado sobrevive a una reanudación;
   - la calificación del senior y el informe del lote.
 
+### 3.3.2 Investigación pendiente: junior y senior del mismo modelo, pensamiento rápido y lento (idea del autor, 06/10/2026)
+
+**La idea.** El senior y el junior son el **mismo modelo** con distinto esfuerzo de razonamiento. Por ejemplo, dos Luna:
+- **el junior, con esfuerzo bajo:** el pensamiento operativo y rápido, que actúa sobre el mundo, experimenta y propone
+  modelos;
+- **el senior, con esfuerzo alto:** el pensamiento estratégico y lento, que no actúa, relee el registro, mantiene su
+  cuaderno y propone hipótesis cuando el junior se atasca.
+
+La intuición del autor: esa combinación supera a un solo junior con esfuerzo alto. La razón sería que separa los dos
+modos de pensar en dos papeles con memoria propia, en vez de pedirle a un solo agente que haga las dos cosas a la vez.
+
+**De dónde sale.** El arnés ha encontrado soluciones en dominios muy distintos (juegos, leyes físicas, biología). En
+`navigation-goals` (`c302nav`), el senior (§3.3.1) aportó las tres ideas que acabaron en el modelo aceptado, y el
+junior hizo el trabajo voluminoso (§3.3.1, run N2). Falta saber cuánto de esa ventaja viene de un modelo más capaz y
+cuánto de **la división en dos papeles**. Con el mismo modelo en ambos, la diferencia sólo puede venir de la división.
+
+**Diseño propuesto.** Condiciones con el mismo mundo, las mismas seeds, la misma tarea y las mismas herramientas:
+
+| | junior | senior |
+|---|---|---|
+| A | Luna, esfuerzo bajo | — |
+| B | Luna, esfuerzo alto | — |
+| C | Luna, esfuerzo bajo | Luna, esfuerzo alto (con memoria, §3.3.1) |
+| D | Luna, esfuerzo alto | Luna, esfuerzo alto |
+| E (referencia) | Luna, esfuerzo bajo | Sol |
+
+- **La hipótesis principal es C > B a igual coste.** C gasta más que A, así que la comparación justa es frente a B con el
+  mismo presupuesto de tokens o de dinero. Si C sólo gana porque gasta más, no hay efecto de la división.
+- **La comparación C frente a E** dice cuánto aporta un modelo más capaz por encima de la división en papeles.
+- **Mundos:**
+  - `c302nav` en la condición N2, que es difícil y donde ya sabemos que el senior aporta;
+  - el grid, seed 22, con historial de senior;
+  - `particles3d`.
+
+  Varias seeds por condición.
+
+**Medidas:**
+- **El resultado:** si se acepta, en qué ronda y la recuperación de insights.
+- **El método:** la auditoría.
+- **Lo que entendió cada uno:** el senior con `lab grade --senior` y el junior con su propia calificación.
+- **El coste y la caché**, de cada uno.
+- **Si el junior aprende o sólo obedece** (§3.3).
+
+**Lo que falta para poder hacerlo:**
+- **Fijar el esfuerzo de razonamiento del senior.** Hoy el junior puede fijarlo con `LLM_EXTRA_BODY` (el parámetro del
+  proveedor, por ejemplo `{"reasoning": {"effort": "low"}}`). El senior no tiene su equivalente: hay que añadir
+  `AGENT_LLM_EXTRA_BODY` y, en un lote, la opción de darlo por agente.
+- **Registrar en el registro del senior su modelo y sus parámetros,** que hoy no se guardan, para que cada condición
+  quede declarada.
+- **Presupuestos comparables:** el lote ya fija tokens por run; habría que poder fijarlos sumando los del agente.
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la
