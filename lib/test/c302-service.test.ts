@@ -19,6 +19,7 @@ process.stdin.on('end', async () => {
   process.stdout.write('cect >>> chatter on stdout first\\n');
   const answer = req.crash ? { error: 'boom', bad_request: false }
     : (req.cells ?? []).includes('NOPE') ? { error: 'unknown cells: NOPE', bad_request: true }
+    : req.diverge ? { error: 'the simulation did not complete', bad_request: false, unstable: true }
     : { t: [0, 5, 10], calcium: { AVAL: [0, 1e-7, 2e-7] }, cells: ['AVAL'], n_connections: 3, seconds: 0.1 };
   process.stdout.write('\\n@@C302@@' + JSON.stringify(answer));
 });
@@ -51,6 +52,12 @@ test('at most `concurrency` simulations at once; a bad request is said (and kept
   assert.equal(s.stats().simulations, 4 + 1 + 2, 'the failure was simulated again, the bad request was not');
   assert.equal((await s.handle('POST', '/simulate', {}, null)).status, 400, 'a duration is needed');
   assert.equal((await s.handle('POST', '/wiring', { cells: ['AVAL'] }, null)).status, 200, 'the wiring needs no duration');
+  /* A simulation that diverged is an answer of the model, not a failure of the service: 422, and kept. */
+  const before = s.stats().simulations;
+  const diverged = await s.handle('POST', '/simulate', { duration_ms: 10, diverge: true }, 'div');
+  assert.deepEqual([diverged.status, (diverged.body as { unstable?: boolean }).unstable], [422, true]);
+  await s.handle('POST', '/simulate', { duration_ms: 10, diverge: true }, 'div');
+  assert.equal(s.stats().simulations, before + 1, 'asked again, it is not simulated again');
 });
 
 test('over HTTP, on 127.0.0.1', async () => {

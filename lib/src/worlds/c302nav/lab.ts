@@ -288,8 +288,10 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
         const sim = await simulate(ctx, act.stimuli ?? [], act.record ?? [], act.changes ?? {}, act.duration_ms ?? DURATION_MS);
         return episodeOf(naming, sim, inputTraces(act.stimuli ?? [], sim.t), asked.changes ? { changes: asked.changes } : {});
       } catch (e) {
-        /* The service refused it (a request it cannot simulate): the learner is told only that it was refused. */
-        if ((e as { details?: { status?: number } })?.details?.status === 400) return null;
+        /* The service refused it (a request it cannot simulate), or the simulation diverged (an extreme stimulus): the learner
+           is told only that it was refused. */
+        const status = (e as { details?: { status?: number } })?.details?.status;
+        if (status === 400 || status === 422) return null;
         throw e;
       }
     },

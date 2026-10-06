@@ -694,8 +694,15 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     effects = {
       async request(route, body) {
         const key = lineage + '#' + (++sequence);
-        return (await fetchJson(external.replace(/\/$/, '') + route, { method: 'POST', body, headers: { 'Idempotency-Key': key }, fetch: envFetch,
-          timeoutMs: (lab as LawLab).external?.timeoutMs ?? 15000, retries: 3, retryNetwork: true })).data;
+        try {
+          return (await fetchJson(external.replace(/\/$/, '') + route, { method: 'POST', body, headers: { 'Idempotency-Key': key }, fetch: envFetch,
+            timeoutMs: (lab as LawLab).external?.timeoutMs ?? 15000, retries: 3, retryNetwork: true })).data;
+        } catch (e) {
+          /* What the environment said of its failure travels with it (an error is otherwise only its status). */
+          const said = (e as { details?: { body?: string } })?.details?.body;
+          if (said && e instanceof Error && !e.message.includes(said)) e.message += ' - the environment said: ' + said.slice(0, 300);
+          throw e;
+        }
       }
     };
   }

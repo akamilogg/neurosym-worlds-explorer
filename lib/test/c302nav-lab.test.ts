@@ -28,6 +28,7 @@ process.stdin.on('end', () => {
   const req = JSON.parse(raw);
   const out = (a) => process.stdout.write('\\n@@C302@@' + JSON.stringify(a));
   if ((req.cells ?? []).includes('NOPE') || (req.stimuli ?? []).some((s) => s.amplitude_pa > 500)) return out({ error: 'refused', bad_request: true });
+  if ((req.stimuli ?? []).some((s) => s.amplitude_pa > 50)) return out({ error: 'the simulation did not complete', bad_request: false, unstable: true });
   if (req.wiring) return out({ cells: req.cells, connections: [{ name: 'AWCL-AIYL', pre: 'AWCL', post: 'AIYL', kind: 'chemical', neurotransmitter: 'Glutamate', number: 3 }] });
   const n = Math.floor(req.duration_ms / req.save_every_ms) + 1;
   const t = Array.from({ length: n }, (_, k) => k * req.save_every_ms);
@@ -114,6 +115,7 @@ test('the laboratory learns the world only by asking the service: episodes of ei
     assert.equal(c302NavLab.steps(wiring!), 0);
     assert.deepEqual(c302NavLab.cases(spec, 'act2', wiring!, 20), []);
     assert.equal(await c302NavLab.act!.start(spec, { stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 10, amplitude_pa: 900 }] }, 'act3', ctx), null, 'refused, never saying why');
+    assert.equal(await c302NavLab.act!.start(spec, { stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 10, amplitude_pa: 100 }] }, 'act4', ctx), null, 'a simulation that diverged is refused too: the run goes on');
   } finally { await served.close(); }
 });
 

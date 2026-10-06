@@ -35,7 +35,9 @@ export interface C302Request {
   readonly param_overrides?: Readonly<Record<string, string>>;
 }
 
-export interface C302Answer { readonly t?: number[]; readonly calcium?: Record<string, number[]>; readonly cells?: string[]; readonly n_connections?: number; readonly seconds?: number; readonly error?: string; readonly bad_request?: boolean }
+export interface C302Answer { readonly t?: number[]; readonly calcium?: Record<string, number[]>; readonly cells?: string[]; readonly n_connections?: number; readonly seconds?: number; readonly error?: string; readonly bad_request?: boolean;
+  /** The integration diverged: the simulation of that request does not complete (an answer of the model, not a failure of the service). */
+  readonly unstable?: boolean }
 
 export interface C302Service {
   handle(method: string, route: string, body: Record<string, unknown>, key: string | null): Promise<{ status: number; body: unknown }>;
@@ -83,7 +85,9 @@ export function createC302Service(options: { worker: readonly string[]; concurre
     try {
       simulations++;
       const a = await runWorker(options.worker, body, timeoutMs);
-      return a.error ? { status: a.bad_request ? 400 : 500, body: { error: a.error } } : { status: 200, body: a };
+      /* 400: the request cannot be simulated; 422: it was, and the integration diverged (deterministic: kept like an answer);
+         500: the service failed (not kept: asked again, it is tried again). */
+      return a.error ? { status: a.bad_request ? 400 : a.unstable ? 422 : 500, body: { error: a.error, ...(a.unstable ? { unstable: true } : {}) } } : { status: 200, body: a };
     } finally { free(); }
   };
   return {

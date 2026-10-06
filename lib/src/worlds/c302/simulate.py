@@ -8,7 +8,7 @@ It reads one request as JSON on stdin and writes one answer as JSON on stdout:
             "remove_connections": [...], "connection_number_scaling": {...}, "connection_polarity_override": {...},
             "param_overrides": {...}}
   answer   {"t": [...ms], "calcium": {cell: [...mM]}, "cells": [...], "n_connections": n, "seconds": s}
-           or {"error": "...", "bad_request": true|false}
+           or {"error": "...", "bad_request": true|false, "unstable": true when the integration diverged}
 
 A stimulus is a square pulse {"cell", "delay_ms", "duration_ms", "amplitude_pa"} or a sine {"kind": "sine", ...,
 "period_ms", "phase_rad"}. Nothing here belongs to any one problem: which cells, which stimuli and what is read from the
@@ -118,7 +118,7 @@ def simulate(req):
         res = pynml.run_lems_with_jneuroml("LEMS_net.xml", exec_in_dir=str(work), max_memory="4G", nogui=True,
                                            load_saved_data=True, verbose=False, exit_on_fail=False)
         if not isinstance(res, dict):
-            return {"error": "the simulation did not complete (an unstable integration: a smaller dt_ms often helps)", "bad_request": False}
+            return {"error": "the simulation did not complete (an unstable integration: a smaller dt_ms often helps)", "bad_request": False, "unstable": True}
         step = max(int(round(float(req.get("save_every_ms", 5.0)) / dt)), 1)
         t = (np.asarray(res["t"], dtype=float) * 1000.0)[::step]
         calcium = {k.split("/")[0]: np.asarray(v, dtype=float)[::step] for k, v in res.items() if k.endswith("/caConc")}
