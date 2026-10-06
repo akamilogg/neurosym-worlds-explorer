@@ -78,7 +78,7 @@ export const GRID_GRADING_SYSTEM = 'You grade how well a learner recovered the h
     + '"partial" (the right idea but incomplete, too broad or too narrow), "wrong" (it states something that contradicts the rule), or "absent" (it says nothing about it). '
     + 'Judge what the learner holds, not what it dropped, unless it holds nothing on that rule. Quote the learner briefly as evidence. '
     + GRADING_STRUCTURE + ' '
-    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [learner claims about the rules that no true rule supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
+    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims of the learner about the rules that a true rule contradicts], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
 
 /** What the assisted researcher is told when it has exploration boards (SPEC-INVESTIGACION-PARALELA §4): interface words
     only, never how to use them. */

@@ -12,10 +12,18 @@ import type { ProtocolSummary } from './protocol.ts';
  *                against the same observations with no Judge
  * ========================================================================== */
 
+/** What a grade may rest on (06/10/2026, after a grader read a learner's disclaimers - "the observations do not identify a
+    pathway" - as the true statement itself, and called the learner's measured observations false because no true statement
+    mentioned them). Shared by every grader. */
+export const GRADING_RIGOR = 'A statement of NOT KNOWING is not knowing: when the learner says it has not identified, cannot tell, leaves open or does not establish what a true statement says, that statement is "absent" - a disclaimer, a caveat, a limitation or an open question never makes a grade "exact" or "partial", however well it names what is missing. '
+  + 'Grade "partial" only for a claim the learner positively makes that holds part of the true statement. '
+  + '"false_beliefs" are the learner\'s claims that a TRUE statement CONTRADICTS. A claim is never false merely because no true statement mentions it: the true statements are not everything true of the environment, and what the learner observed beyond them is not false for that.';
+
 /** For the operator's grader: a model that reproduces a law is not a statement of its structure. A lookup table (or a
     fit over cases) that agrees with the law shows its OUTPUTS; a statement about its STRUCTURE - what it depends on, a
     symmetry, a count, a threshold - is exact only when the learner states or computes that structure. */
-export const GRADING_STRUCTURE = 'Separate PREDICTING from UNDERSTANDING: a lookup table, a list of cases or a fit that merely agrees with a true statement shows its outputs, not its structure. '
+export const GRADING_STRUCTURE = GRADING_RIGOR + ' '
+  + 'Separate PREDICTING from UNDERSTANDING: a lookup table, a list of cases or a fit that merely agrees with a true statement shows its outputs, not its structure. '
   + 'For a statement about the structure of the law (what it depends on, a symmetry, a count, a threshold, a compact form), grade "exact" only when the learner states that structure or its code computes it as such; '
   + 'a table or case list that happens to agree with it is "partial", and say so in the evidence. '
   + 'Also say how the learner\'s final model expresses the law: "compact" (it computes the structure), "table" (it enumerates cases or outputs) or "mixed", in a field "form" with a one-line "form_evidence".';

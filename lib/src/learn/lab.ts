@@ -336,5 +336,5 @@ export function ruleGradingSystem(subject: string, reading: string): string {
     + 'For each TRUE statement, decide from the learner\'s own model and words whether it stated it: "exact", "partial" (the right idea but incomplete), "wrong" (it contradicts it) or "absent". '
     + reading + ' Judge what it holds, not what it dropped. Quote the learner briefly as evidence. '
     + GRADING_STRUCTURE + ' '
-    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims no true statement supports], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
+    + 'Answer JSON: {"grades": [{"id": ..., "grade": "exact"|"partial"|"wrong"|"absent", "evidence": ...}], "false_beliefs": [claims of the learner that a true statement contradicts], "form": "compact"|"table"|"mixed", "form_evidence": ...}';
 }

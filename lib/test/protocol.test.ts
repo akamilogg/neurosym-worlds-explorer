@@ -155,6 +155,13 @@ test('operator baselines: a model that knows nothing run on the same cases; a ch
 test('the grader separates predicting from understanding: a table that agrees is partial; the form is read back', async () => {
   const { GRADING_STRUCTURE, formOf } = await import('../src/learn/operator.ts');
   assert.match(GRADING_STRUCTURE, /lookup table/);
+  /* A disclaimer is not knowing; false is only what a true statement contradicts (every grader shares it). */
+  assert.match(GRADING_STRUCTURE, /A statement of NOT KNOWING is not knowing/);
+  assert.match(GRADING_STRUCTURE, /never false merely because no true statement mentions it/);
+  const { ruleGradingSystem } = await import('../src/learn/lab.ts');
+  assert.match(ruleGradingSystem('x', 'y'), /"false_beliefs": \[claims of the learner that a true statement contradicts\]/);
+  const { GRID_GRADING_SYSTEM } = await import('../src/worlds/grid/lab.ts');
+  assert.match(GRID_GRADING_SYSTEM, /NOT KNOWING/);
   assert.match(GRADING_STRUCTURE, /"partial"/);
   assert.deepEqual(formOf({ form: 'table', form_evidence: 'a 32-entry lookup' }), { form: 'table', form_evidence: 'a 32-entry lookup' });
   assert.deepEqual(formOf({ form: 'nonsense' }), { form: null, form_evidence: null });
