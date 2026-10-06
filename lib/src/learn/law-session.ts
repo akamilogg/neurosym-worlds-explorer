@@ -54,6 +54,9 @@ export interface LawSessionHost<A> {
   runRequest(request: LawRequest<A>, budget: { acts: number }, round: number): Promise<unknown>;
   /** Whether a reference names an episode or a point of the learner's. */
   known(ref: string): boolean;
+  /** Optional: why a proposal is returned once to the researcher before it is taken (the assisted one: its senior's open
+      directives). The unknown-world researcher has none. */
+  vet?(round: number): string[];
   /** A law must compute on points of the learner's own episodes before anything uses it: why it does not. */
   failures(law: Law): string[];
   /** The index of episodes, as the notebook shows it. */
@@ -128,7 +131,7 @@ export class LawSession<A> {
     const b = this.latest();
     let refused: string[] = [];
     const investigation: unknown[] = [];
-    let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0;
+    let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0, vetted = false;
     const budget = { acts: h.acts ?? 0 };
     const memory = this.memory;
     /* The verdicts it was given on its latest model, kept in its memory by that model's round. */
@@ -251,6 +254,14 @@ export class LawSession<A> {
         refused = parsed.errors; refusals++;
         h.log('proposal_refused', { round, errors: parsed.errors, content });
         h.say('  refused: ' + parsed.errors.slice(0, 3).join(' | '));
+        continue;
+      }
+      /* Returned once, when the host says why (a directive still open). */
+      const returned = !vetted && h.vet ? h.vet(round) : [];
+      if (returned.length) {
+        vetted = true; refused = returned; refusals++;
+        h.log('proposal_refused', { round, errors: returned, content, returned: true });
+        h.say('  returned: ' + returned[0].slice(0, 200));
         continue;
       }
       const failures = h.failures(parsed.proposal.law);

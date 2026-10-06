@@ -1,4 +1,5 @@
 import { UserParts, type ChatClient } from '../system2.ts';
+import { parseJsonLoose } from '../../core/net.ts';
 import { LawSession, type LawSessionHost } from '../law-session.ts';
 import { Sources, type LineSelector } from './sources.ts';
 import { JournalMemory } from './memory.ts';
@@ -38,7 +39,17 @@ export interface OperatorMessage {
   readonly focus?: { readonly facet: string; readonly task?: string };
   /** An origin of sources the operator allows (a directory, a URL prefix, a domain), from when the message is delivered. */
   readonly source?: string;
+  /** A senior's message (SPEC-ORQUESTADOR §3.3.3): an ORDER the researcher carries out and reports, not a suggestion. */
+  readonly directive?: boolean;
 }
+
+/** What it is told once a directive has reached it: what an order of its senior is, how it reports it, how it disagrees. */
+export const DIRECTIVES_SECTION = [
+  'YOUR SENIOR. Messages marked "directive": true come from the senior researcher who reviews your work. They are ORDERS, not suggestions: carry each one out - run the experiment it asks for, build into your next model what it tells you to build, and stop relying on what it tells you to drop.',
+  'If you disagree with its hypothesis or its method, carry it out anyway, and say why: in your notebook, and to your senior with "to_senior": "<what you disagree with, and your evidence>" in any of your answers. Your senior reads it, and may change its orders.',
+  'Report each directive once you have carried it out, in any of your answers: "directives": [{"id": "<the message id>", "done": "what you did, and where - points, rounds, your model"}]. A proposal made while one of its directives is still open is returned to you once.',
+  'A directive is not evidence about the environment: the checks decide whether a model holds. A model that carries out a directive and fails also teaches - and tells your senior something.'
+].join('\n');
 
 /** What only the assisted researcher is told: that a person may write to it, and what that is worth. */
 export const ASSISTED_SECTION = [
@@ -93,16 +104,25 @@ export function deliveredMessages(journal: { events?: readonly Record<string, an
   return out;
 }
 
-/** System 2's client for the assisted researcher: each question carries the operator's messages, the new ones and the earlier. */
-export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (type: string, data?: Record<string, unknown>) => void): ChatClient {
+/** System 2's client for the assisted researcher, and the directives of its senior still open (SPEC-ORQUESTADOR §3.3.3). */
+export type OperatorClient = ChatClient & { openDirectives(): readonly OperatorMessage[] };
+
+/** System 2's client for the assisted researcher: each question carries the operator's messages, the new ones and the earlier.
+    Once a directive of its senior has reached it, its prompt says what one is; what it reports in its answers - each directive
+    carried out (`directives`), its disagreement (`to_senior`) - is logged for its senior to read (`directive_report`,
+    `junior_report`), and a directive reported is no longer open. */
+export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (type: string, data?: Record<string, unknown>) => void): OperatorClient {
   let question = 0;
   const earlier: OperatorMessage[] = [];
+  const open = new Map<string, OperatorMessage>();
+  let directed = false;
   /* With a question in parts (a round's growing conversation): the messages stay where they arrived, never rewritten - the
      earlier ones after the round's first part, a new one after the parts it arrived with. A new round starts afresh. */
   let roundKey = '';
   let placed: { after: number; part: Record<string, unknown> }[] = [];
   const lastScheduled = Math.max(0, ...(channel.scheduled ? [...channel.scheduled.keys()] : []));
   return {
+    openDirectives: () => [...open.values()],
     async complete(request) {
       question++;
       /* Resuming, up to where the run it resumes went: exactly what it delivered, at the same questions. Then, live. */
@@ -127,8 +147,22 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
         user = Object.keys(extra).length ? { ...(request.user as Record<string, unknown>), ...extra } : request.user;
       }
       earlier.push(...fresh);
-      const system = channel.system ? channel.system() : request.system;
-      return llm.complete({ ...request, system: origins.length ? system + '\n\n' + SOURCES_SECTION : system, user });
+      for (const m of fresh) if (m.directive) { open.set(m.id, m); directed = true; }
+      const base = channel.system ? channel.system() : request.system;
+      const system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '');
+      const answer = await llm.complete({ ...request, system, user });
+      /* What it reports to its senior, in any answer: kept for the senior, and a directive carried out is closed. */
+      const said = parseJsonLoose(answer.content) as Record<string, unknown> | null;
+      if (said && typeof said === 'object') {
+        if (typeof said.to_senior === 'string' && said.to_senior.trim()) log('junior_report', { question, text: said.to_senior.trim() });
+        for (const d of (Array.isArray(said.directives) ? said.directives : []) as Record<string, unknown>[]) {
+          const id = typeof d?.id === 'string' ? d.id : '';
+          if (!id) continue;
+          log('directive_report', { question, id, ...(typeof d.done === 'string' ? { done: d.done } : {}), ...(open.has(id) ? {} : { not_open: true }) });
+          open.delete(id);
+        }
+      }
+      return answer;
     }
   };
 }
@@ -143,8 +177,15 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
   const remembers = (q: Record<string, unknown>): boolean => experience !== undefined && Experience.accepts(q);
   const board = channel.board;
   const posts = (q: Record<string, unknown>): boolean => board !== undefined && board.accepts(q);
+  const client = operatorClient(host.llm, channel, (t, d) => host.log(t, d));
   const session: LawSession<A> = new LawSession<A>({
-    ...host, system: assistedSystem(host.system), llm: operatorClient(host.llm, channel, (t, d) => host.log(t, d)),
+    ...host, system: assistedSystem(host.system), llm: client,
+    /* A proposal made while a directive of its senior is open is returned once (SPEC-ORQUESTADOR §3.3.3). */
+    vet: () => {
+      const open = client.openDirectives();
+      return open.length ? ['your senior\'s directives are still open: ' + open.map((m) => m.id + ' ("' + (m.text.length > 140 ? m.text.slice(0, 139) + '…' : m.text) + '")').join('; ')
+        + ' - carry each out, report it in "directives": [{"id": "<id>", "done": "what you did"}], and say in "to_senior" where you disagree'] : [];
+    },
     /* It may insist on investigating with no steps left a few times before it is a refusal (logged). */
     overreach: OVERREACH,
     /* Its own instruments - the sources once an origin is allowed (`list`, `open`, `find`) and its memory (`memory`) -

@@ -48,7 +48,8 @@ export const SENIOR_ROLE = [
   'You may be called at the end of one of its rounds, or during a round (`during_round`), when it keeps looking without testing anything or keeps asking to investigate with no steps left: your message then reaches it within that round, before it answers again. Then help it commit: point to the hypothesis its own record supports best and tell it to propose a model that tests it now - a model that fails also teaches.',
   'You may also be called to FOLLOW UP (`follow_up`): after your last message the junior ran an experiment; `follow_up` holds your message and that experiment as its record keeps it - what it asked and what it was answered. Read it there: a follow-up allows you one reading of the record at most, since the experiment is already in front of you. If the junior\'s own results confirm the hypothesis, with no counterexample in its record, tell it plainly: its data confirm it (cite them); adopt it as a working rule in its beliefs, and propose now a model built on it. If they refute it, say so, so that it drops it. If they are inconclusive, wait. A follow-up that would only propose another small adjustment of the junior\'s model is rarely worth a message: look instead for what the record still says about the environment.',
   'Finding a rule is not enough: a junior often states a rule its record supports and never builds it into its model, which keeps scoring on other features. So with a hypothesis, guide how its model would use it once confirmed, in the form the environment asks for - which points the rule makes worth the least or the most, what an observation would have to measure, what the model should stop relying on. And when its record already confirms a rule its model does not use, say so plainly and show how the model would use it. Never write the model\'s code: the junior builds it, and treats your guidance as a reference to test, like everything you say.',
-  'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); ONE experiment with its instruments that would test it; and how its model would use the hypothesis once the experiment confirms it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. Your message is a colleague\'s suggestion, and it may be wrong. If you found nothing worth its attention, wait.',
+  'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); ONE experiment with its instruments that would test it; and how its model would use the hypothesis once the experiment confirms it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. If you found nothing worth its attention, wait.',
+  'YOUR MESSAGES ARE DIRECTIVES: the junior is told to carry each one out - run the experiment, build into its next model what you tell it to build, stop relying on what you tell it to drop - even where it disagrees. So write them as orders it can carry out and report: say plainly what to run, what its model must contain, and what it must stop doing. It reports back: each directive it carried out, and where it disagrees with you and why (`junior_reports`). Read its disagreements as a colleague\'s: when its evidence is better than yours, change your orders; you may be wrong.',
   'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"} - or {"consolidate": {...}}; with "beliefs", "notes" and "methods" in any of them when you write in your notebook.'
 ].join('\n');
 
@@ -226,7 +227,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
         d = { at: new Date().toISOString(), rounds, decision: 'error', why: String((e as Error)?.message ?? e) };
       }
       if (d && (d.decision === 'message' || d.decision === 'stop')) {
-        const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id } : { kind: 'stop', by: 'agent:' + o.id });
+        /* A senior's message is a directive: an order the junior carries out and reports (SPEC-ORQUESTADOR §3.3.3). */
+        const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id, ...(role === 'senior' ? { directive: true } : {}) } : { kind: 'stop', by: 'agent:' + o.id });
         (d as { order?: string }).order = id;
         orders++;
         say('agent:' + o.id + ' after ' + rounds + ' rounds: ' + d.decision + (d.text ? ' - ' + d.text.slice(0, 120) : ''));
@@ -287,7 +289,12 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     state.since = Math.max(state.since, latestRound());
   }
   const limit = followUp ? 1 : o.readSteps ?? 4;
+  /* What the junior reported since its latest call: the directives it carried out, and where it disagrees. */
+  const reports = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'directive_report' || e.type === 'junior_report');
+  const freshReports = reports.slice(state.reports_seen ?? 0).map((e) => (e.type === 'junior_report' ? { the_junior_says: e.text } : { directive: e.id, done: e.done ?? null }));
+  state.reports_seen = reports.length;
   const callPart = (): Record<string, unknown> => ({ call: { n: call, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}),
+    ...(freshReports.length ? { junior_reports: freshReports } : {}),
     ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
     orders_left: ordersLeft, memory: memory.counts(), steps_left: limit } });
   state.conversation.push(callPart());

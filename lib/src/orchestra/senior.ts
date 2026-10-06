@@ -32,6 +32,8 @@ export interface SeniorState {
   /** Its messages already followed up (by their place among its messages), and rounds it was called during. */
   followed_up: number[];
   called_in_round: number[];
+  /** The junior's reports (directives carried out, disagreements) already given to it. */
+  reports_seen?: number;
 }
 
 export const emptySeniorState = (): SeniorState => ({ notebook: { beliefs: [], notes: [], methods: [] }, conversation: [], since: 0, consolidations: 0, followed_up: [], called_in_round: [] });

@@ -60,6 +60,9 @@ test('the act: stimuli into any cell of the panel, cells recorded, connections a
   assert.deepEqual((a as { changes: unknown }).changes, { remove_connections: ['AIYL-RIAL_GJ'], connection_number_scaling: { 'AWCL-AIYL': 2 },
     connection_polarity_override: { 'AIYL-RIAL': 'inh' }, param_overrides: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' } });
   assert.deepEqual(parseC302NavAct({ wiring: true }), { wiring: true });
+  /* A field it does not know is refused, said: the service's own names (`changes`, `param_overrides`) are not the act's. */
+  assert.match(parseC302NavAct({ stimuli: [], changes: { param_overrides: { ca_conc_decay_time: '100 ms' } } }) as string, /act has no field "changes": its fields are stimuli, record, remove, scale, polarity, parameters/);
+  assert.match(parseC302NavAct({ stimuli: [], param_overrides: {} }) as string, /"param_overrides"/);
   for (const bad of [{}, { stimuli: [{ cell: 'XYZ', delay_ms: 0, duration_ms: 1, amplitude_pa: 1 }] }, { stimuli: [], record: ['XYZ'] }, { stimuli: [], remove: ['nope'] },
     { stimuli: [], polarity: { 'AWCL-AIYL': 'both' } }, { stimuli: [], parameters: { x: 1 } }, { stimuli: [], duration_ms: 20000 },
     { stimuli: [{ cell: 'AWCL', kind: 'sine', delay_ms: 0, duration_ms: 1, amplitude_pa: 1 }] }]) assert.equal(typeof parseC302NavAct(bad), 'string', JSON.stringify(bad));
@@ -102,6 +105,8 @@ test('the laboratory learns the world only by asking the service: episodes of ei
 
     const acted = await c302NavLab.act!.start(spec, parseC302NavAct({ stimuli: [{ cell: 'AWCL', delay_ms: 100, duration_ms: 200, amplitude_pa: 4 }], record: ['AIYL'], duration_ms: 1000 }) as never, 'act1', ctx);
     assert.equal(c302NavLab.steps(acted!), 200);
+    const changed = await c302NavLab.act!.start(spec, parseC302NavAct({ stimuli: [], remove: ['AWCL-AIYL'], parameters: { ca_conc_decay_time: '100 ms' }, duration_ms: 100 }) as never, 'act9', ctx);
+    assert.deepEqual(c302NavLab.indexInfo!(changed!).changes, { remove: ['AWCL-AIYL'], parameters: { ca_conc_decay_time: '100 ms' } }, 'the index shows it in the words of the interface');
     assert.deepEqual(c302NavLab.act!.shown(acted!), { steps: 200, stimulated: ['AWCL'], recorded: ['AVAL', 'AVAR', 'AVBL', 'AVBR', 'RIAL', 'RIAR', 'AIYL'] });
     assert.equal(acted!.calcium.AIYL[30], 8, 'the calcium of a cell recorded, in units of 1e-8 mM');
     const wiring = await c302NavLab.act!.start(spec, { wiring: true }, 'act2', ctx);

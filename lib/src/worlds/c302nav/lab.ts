@@ -132,8 +132,22 @@ const CELL = new Set<string>([...PANEL, ...NEUTRAL_CELLS]);
 const CONNECTION = /^[A-Z0-9]+-[A-Z0-9]+(_GJ)?$/;
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** An act's parameters, or why they cannot be read (the form only: the service may still refuse it). */
+/** The fields an act may carry, as the interface names them. */
+const ACT_FIELDS = ['stimuli', 'record', 'remove', 'scale', 'polarity', 'parameters', 'duration_ms', 'place', 'wiring'] as const;
+
+/** What an act asked of the network, in the interface's words (how the learner is shown it, and writes it). */
+export const changesInWords = (c: NetworkChanges): Record<string, unknown> => ({
+  ...(c.remove_connections ? { remove: c.remove_connections } : {}),
+  ...(c.connection_number_scaling ? { scale: c.connection_number_scaling } : {}),
+  ...(c.connection_polarity_override ? { polarity: c.connection_polarity_override } : {}),
+  ...(c.param_overrides ? { parameters: c.param_overrides } : {})
+});
+
+/** An act's parameters, or why they cannot be read (the form only: the service may still refuse it). A field it does not
+    know is a form error, said: accepted and ignored, the learner would believe it changed what was never changed. */
 export function parseC302NavAct(raw: Record<string, unknown>): C302NavAct | string {
+  const unknown = Object.keys(raw).filter((k) => !(ACT_FIELDS as readonly string[]).includes(k));
+  if (unknown.length) return 'act has no field ' + unknown.map((k) => '"' + k + '"').join(', ') + ': its fields are ' + ACT_FIELDS.join(', ');
   const place = typeof raw.place === 'string' ? { place: raw.place } : {};
   if (raw.wiring === true) return { wiring: true, ...place };
   const stimuli: Stimulus[] = [];
@@ -231,7 +245,7 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
     return Promise.all(seeds.map((s) => drawn(spec, s, ctx)));
   },
   steps: (e) => Math.max(0, e.t.length - 1),
-  indexInfo: (e) => (e.wiring ? { wiring: true } : { stimulated: Object.keys(e.inputs), recorded: Object.keys(e.calcium), ...(e.changes ? { changes: e.changes } : {}) }),
+  indexInfo: (e) => (e.wiring ? { wiring: true } : { stimulated: Object.keys(e.inputs), recorded: Object.keys(e.calcium), ...(e.changes ? { changes: changesInWords(e.changes) } : {}) }),
   explored: (e, place) => ({ place, protocol: e.protocol, steps: e.t.length - 1 }),
   at: (e, step) => (step >= 0 && step < e.t.length ? { state: pointAt(e, step), shown: { the_signals_were: signalsAt(e, step) } } : null),
   cases: (_spec, id, e, every) => {

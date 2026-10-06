@@ -386,6 +386,69 @@ cuánto de **la división en dos papeles**. Con el mismo modelo en ambos, la dif
   quede declarada.
 - **Presupuestos comparables:** el lote ya fija tokens por run; habría que poder fijarlos sumando los del agente.
 
+### 3.3.3 Las órdenes del senior: equilibrar el escepticismo del junior (implementado, 06/10/2026)
+
+**Lo observado.** Run `runs/batches/c302nav-n2-task12-2` (condición N2, senior con memoria):
+- **El senior, desde la ronda 5,** le pidió cuatro veces que construyera el modelo sobre un estado persistente **en
+  código**. Las dos últimas, con la medida exacta del decaimiento confirmada con un control emparejado (≈ 0,9785 por
+  paso de 5 ms, en AWCL y en AWCR).
+- **El junior** hizo los experimentos que le pedía y anotó los hallazgos, pero en 12 rondas no escribió ni una
+  observación numérica: siguió con termómetros de Jev, de 2 a 38 reglas.
+
+**El criterio del autor.** El escepticismo es bueno, pero a estas alturas el junior está en total insubordinación: el
+senior le ha indicado explícitamente que plantee observaciones en código y no lo ha hecho. Hay que equilibrarlo.
+
+**De dónde puede venir.** Su prompt le pide leer los mensajes «como sugerencias de un colega, que pueden ser
+erróneas», y que no son evidencia. Es correcto para no obedecer a ciegas. Pero no le pide **responder** a una
+sugerencia: puede no seguirla nunca sin decir por qué, y nada en el registro lo hace visible.
+
+**Opciones, sin decidir.** Ninguna da al junior análisis hechos ni le dice cómo es el mundo:
+1. **Rendir cuentas, no obedecer.** Igual que con sus creencias, el junior toma postura ante cada mensaje: lo adopta y
+   lo prueba, o lo rechaza con evidencia de su registro. Si lo deja sin postura, se le señala, como ya se hace con las
+   creencias sin postura. Su respuesta queda en el journal.
+2. **El modelo como experimento.** Cuando un mensaje propone un cambio de **forma** del modelo apoyado en datos que el
+   propio junior confirmó, se espera que lo pruebe al menos una vez como propuesta («un modelo que falla también
+   enseña», ya en su método), y luego decida con el veredicto.
+3. **Escalado del senior.** Si su indicación lleva ignorada varias decisiones, el senior lo ve en su memoria y puede
+   plantearla como experimento de una ronda, no como sugerencia general.
+4. **Medirlo:**
+   - qué fracción de los cambios que propone el senior aparece en los modelos siguientes;
+   - cuánto tarda en aparecer;
+   - si llega con evidencia propia del junior (si aprende o sólo obedece, §3.3).
+
+La 1 y la 4 cambian poco y hacen el comportamiento visible sin forzarlo. La 2 toca el prompt común del investigador
+asistido: es un cambio deliberado del método que hay que decidir. El investigador puro queda congelado.
+
+**Decisión del autor (06/10/2026).** Los mensajes del senior son siempre **órdenes** del senior al junior. El junior
+puede informar al senior, o anotar en su cuaderno, cualquier discrepancia con la hipótesis o el método propuestos,
+pero las cumple.
+
+**Implementado:**
+- **El senior envía órdenes.** Sus mensajes llevan `directive: true` (`RunOrder`), y el runner conserva la marca al
+  entregarlos.
+- **El prompt del junior.** Su cliente (`operatorClient`, el mismo para los mundos de leyes y el grid) añade al prompt
+  del investigador asistido, desde que le llega la primera orden, la sección `DIRECTIVES_SECTION`. Le dice que:
+  - las órdenes se cumplen: hacer el experimento, llevar al siguiente modelo lo que se le indica y dejar lo que se le
+    dice que deje;
+  - si discrepa, la cumple igualmente y dice por qué, en su cuaderno y al senior con `"to_senior": "..."`;
+  - informa de cada orden cumplida con `"directives": [{"id", "done"}]`, en cualquier respuesta.
+  
+  Sin órdenes, su prompt y sus preguntas no cambian.
+- **Lo que informa, al registro.** Lo que el junior informa se registra (`directive_report`, `junior_report`), y una
+  orden informada se cierra.
+- **La propuesta se devuelve una vez.** En los mundos de leyes, una propuesta hecha con una orden abierta se le devuelve
+  **una vez** (`proposal_refused` con `returned: true`), mediante el gancho opcional `vet` de `LawSession`. El
+  investigador puro no lo tiene.
+- **El senior lee los informes.** Cada llamada le trae los informes nuevos (`junior_reports`: órdenes cumplidas y
+  discrepancias, `reports_seen` en su estado). Su papel dice que sus mensajes son órdenes: que las escriba para que se
+  puedan cumplir y que cambie las suyas cuando la evidencia del junior sea mejor.
+- **Pruebas:** `lib/test/orchestra-directives.test.ts`.
+
+**Pendiente:**
+- **El grid** recibe la sección y registra los informes, pero aún no devuelve la propuesta con una orden abierta: su
+  bucle es propio.
+- **Medir la adopción** (opción 4): qué órdenes acaban en el modelo y en cuánto tiempo.
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la

@@ -40,7 +40,7 @@ export interface RunInfo {
 /** An order to a run. `stop` is obeyed by any researcher; the others are help, which only the assisted one takes. */
 export type RunOrder =
   | { readonly kind: 'stop'; readonly by?: string }
-  | { readonly kind: 'message'; readonly text: string; readonly by?: string }
+  | { readonly kind: 'message'; readonly text: string; readonly by?: string; /** A senior's: an order, not a suggestion (SPEC-ORQUESTADOR §3.3.3). */ readonly directive?: boolean }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string };
 

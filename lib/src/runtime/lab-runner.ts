@@ -633,7 +633,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         say('the operator asks to stop: stopping before the next question to System 2');
       } else if (researcher === 'assisted' && order.kind === 'message' && typeof (order as { text?: unknown }).text === 'string' && (order as { text: string }).text.trim()) {
         /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
-        waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}), at: new Date().toISOString() });
+        waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}),
+          ...((order as { directive?: unknown }).directive === true ? { directive: true } : {}), at: new Date().toISOString() });
         log('operator_command', { ...who, accepted: true }); helpUsed++;
       } else if (researcher === 'assisted' && order.kind === 'focus') {
         const facet = String((order as { facet?: unknown }).facet ?? '');
