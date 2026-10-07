@@ -298,7 +298,7 @@ const BODY_WORDS = 'THE WORM (the apparatus; it is not what you investigate). It
   + '(each 60 to 400 ms long, 100 to 900 ms apart): each pulse brings into the two odor cells a current fixed when it starts - the more odor at the nose then, the more current in all '
   + '(from 2.5 to 6 pA), shared between the two sides as the head is swung then - and held until it ends; between pulses, none. The first signal is a rate of sharp turns '
   + '(none below ' + C302_BODY.rate.r0 + '; a turn of ' + C302_BODY.turn.angle + ' rad, to alternating sides, each time the rate accumulates to 1); the second bends the course gradually '
-  + '(' + C302_BODY.steer.gain + ' rad/s per unit, at most ' + C302_BODY.steer.maxRate + ' rad/s; positive turns left). The signals at the end of a step move the worm over the next one.';
+  + '(' + C302_BODY.steer.gain + ' rad/s per unit of the signal; the worm turns at most ' + C302_BODY.steer.maxRate + ' rad/s however large the signal is - the cap is the body\'s, the signal has none; positive turns left). The signals at the end of a step move the worm over the next one.';
 
 export function closedInterface(options: { regression?: boolean; names?: NamesMode; focus?: string | null } = {}): WorldInterface {
   const naming = namingOf(options.names ?? 'real', 0);

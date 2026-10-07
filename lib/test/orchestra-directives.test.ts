@@ -148,3 +148,14 @@ test('the senior reads the junior\'s whole model and its methods in each round: 
   assert.deepEqual(r.methods, [{ id: 'pairs', do: 'write', text: 'compare matched pairs' }]);
   assert.match(SENIOR_ROLE, /REVIEW ITS WORK FIRST/);
 });
+
+test('the senior is told the junior\'s own instruments: its sources (with their origins) and its selective memory', async () => {
+  const { juniorInstruments } = await import('../src/orchestra/reader.ts');
+  const { seniorSystem } = await import('../src/orchestra/agent-operator.ts');
+  const s = juniorInstruments({ researcher: 'assisted', config: { sources_allow: 'D:/docs', memory: 'selective' }, events: [{ type: 'sources_allowed', origin: 'example.org' }] })!;
+  assert.match(s, /SOURCES/);
+  assert.match(s, /Its origins: D:\/docs, example\.org\./);
+  assert.match(s, /MEMORY/);
+  assert.equal(juniorInstruments({ researcher: 'unknown-world', config: { sources_allow: 'D:/docs' }, events: [] }), null);
+  assert.match(seniorSystem(null, null, null, s), /THE JUNIOR'S OWN INSTRUMENTS/);
+});

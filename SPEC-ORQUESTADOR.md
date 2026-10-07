@@ -480,6 +480,13 @@ check se sostuvo. El senior no lo corrigió por dos razones:
 
   Una cantidad o una dinámica establecida pertenece al código; si se delega en Jev o se pierde, ordena el cambio primero.
   Es método de revisión, sin pistas del entorno.
+- **Los instrumentos propios del junior** (`juniorInstruments`): el prompt del senior incluye ahora las secciones de
+  fuentes y de memoria tal como las recibe el junior, con sus orígenes.
+  - **Por qué:** en el mismo run, el senior abrió un informe del instrumento (`ir-senior-1`) porque una petición `list`
+    del junior le devolvía rutas de archivos. No sabía que eran las fuentes que el junior tiene permitidas.
+- **El run del que salió todo esto** terminó sin aceptar, por presupuesto. El dato más revelador: en las rondas 14 y 15,
+  y sólo en ellas, el junior propuso modelos sólo de código, y en la 15 obtuvo el mejor R² del run, 0,67 en la
+  reorientación. En la 16 volvió a las reglas de Jev y cayó a 0,05.
 
 ### 3.3.4 La primera hipótesis la da el senior (idea del autor, implementado, 07/10/2026)
 

@@ -5,7 +5,7 @@ import { instrumentReports, type InstrumentReport } from '../learn/instrument.ts
 import type { ChatClient } from '../learn/system2.ts';
 import { orderOutcome, runStatus, send } from '../runtime/control.ts';
 import { researcherEvents, runDigest } from './view.ts';
-import { followUpDue, journalReader, juniorBrief, juniorPercept, juniorTests, stuckSignals, type StuckSignals } from './reader.ts';
+import { followUpDue, journalReader, juniorBrief, juniorInstruments, juniorPercept, juniorTests, stuckSignals, type StuckSignals } from './reader.ts';
 import { UserParts } from '../learn/system2.ts';
 import { emptySeniorState, keepNotebook, notebookBrief, seniorMemory, seniorNotebook, tokensOf, writeNotebook, type SeniorState } from './senior.ts';
 
@@ -60,11 +60,12 @@ export const SENIOR_ROLE = [
 /** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), what the
     junior's code receives at a point (its `percept`, which reaches the junior with every round rather than in its brief:
     without it the senior may advise reading what the junior's code cannot see), its instructions. */
-export const seniorSystem = (brief: string | null, percept: string | null = null, tests: string | null = null): string =>
+export const seniorSystem = (brief: string | null, percept: string | null = null, tests: string | null = null, instruments: string | null = null): string =>
   SENIOR_HEAD + '\n\n'
   + (brief ? '=== THE JUNIOR\'S BRIEF ===\n\n' + brief + '\n\n=== END OF THE JUNIOR\'S BRIEF ===\n\n' : '')
   + (percept ? '=== WHAT THE JUNIOR\'S CODE RECEIVES AT A POINT (its `percept`, given to it with every round) ===\n\n' + percept
     + '\n\nIts observations and output can read these fields and nothing else; what its views and tables show besides them is for the junior to read, not for its code.\n\n=== END ===\n\n' : '')
+  + (instruments ? '=== THE JUNIOR\'S OWN INSTRUMENTS (as it is told; they read its sources and its own record, never the environment) ===\n\n' + instruments + '\n\n=== END ===\n\n' : '')
   + (tests ? '=== HOW THE JUNIOR MAY TEST ITS MODEL (as it is told) ===\n\n' + tests + '\n\n=== END ===\n\n' + SENIOR_TESTS + '\n\n' : '')
   + SENIOR_ROLE;
 
@@ -288,7 +289,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   if (!isOpening && !followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const nb = seniorNotebook(state);
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
-  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal));
+  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal));
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
   const call = decisions.length + 1;
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */

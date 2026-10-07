@@ -87,3 +87,19 @@ test('the command line refuses what it cannot do, and says why', async () => {
   assert.equal(describeEvent({ t: 3, type: 'operator_command_refused', kind: 'message', reason: 'no' }), "[3s] the operator's message: refused - no");
   assert.equal(describeEvent({ t: 4, type: 'operator_message', question: 3, messages: [{ text: 'look at step 0' }] }), '[4s] with question 3, System 2 is given the operator\'s message: "look at step 0"');
 });
+
+test('a run of a batch is named by its own name, or <batch>/<run> when several batches have one', async () => {
+  const { resolveRun } = await import('../src/runtime/cli.ts');
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-'));
+  const put = (dir: string, name: string, started: string) => {
+    fs.mkdirSync(path.join(root, dir), { recursive: true });
+    fs.writeFileSync(path.join(root, dir, name + '.json'), JSON.stringify({ experiment: 'cells@1', researcher: 'assisted', started, events: [] }));
+  };
+  put('runs/batches/b1', 'r-only', '2026-10-07T10:00:00Z');
+  put('runs/batches/b1', 'twice', '2026-10-07T11:00:00Z');
+  put('runs/batches/b2', 'twice', '2026-10-07T12:00:00Z');
+  assert.match(resolveRun(root, 'r-only').split(path.sep).join('/'), /b1\/r-only\.json$/);
+  assert.throws(() => resolveRun(root, 'twice'), /several batches have a run named twice/);
+  assert.match(resolveRun(root, 'b2/twice').split(path.sep).join('/'), /b2\/twice\.json$/);
+});

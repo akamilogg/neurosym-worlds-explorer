@@ -73,8 +73,17 @@ export const CLI_USAGE = [
 export function resolveRun(root: string, name: string | undefined): string {
   if (!name) throw new Error('name a run (lab list shows them)');
   if (fs.existsSync(name) && name.endsWith('.json')) return path.resolve(name);
-  const runs = listRuns(path.join(root, 'runs'));
+  /* The runs of runs/, and of its batches and teams (runs/batches/<batch>/<run>): a batch's run is named by its own name,
+     or <batch>/<run> when several batches have one of that name. */
+  const runs = [...listRuns(path.join(root, 'runs')), ...['batches', 'teams'].flatMap((d) => {
+    const dir = path.join(root, 'runs', d);
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((b) => fs.statSync(path.join(dir, b)).isDirectory())
+      .flatMap((b) => listRuns(path.join(dir, b)).map((r) => ({ ...r, run: b + '/' + r.run, short: r.run }))) : [];
+  })].sort((a, b) => (b.started ?? '').localeCompare(a.started ?? '')) as (RunInfo & { short?: string })[];
   if (name === 'last') { if (!runs.length) throw new Error('there are no runs yet'); return runs[0].journal; }
+  const byShort = runs.filter((r) => r.short === name || r.short + '.json' === name);
+  if (byShort.length === 1) return byShort[0].journal;
+  if (byShort.length > 1) throw new Error('several batches have a run named ' + name + ': ' + byShort.map((r) => r.run).join(', ') + ' - name it <batch>/<run>');
   const exact = runs.find((r) => r.run === name || r.run + '.json' === name);
   if (exact) return exact.journal;
   const prefixed = runs.filter((r) => r.run.startsWith(name));

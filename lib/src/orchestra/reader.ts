@@ -5,6 +5,8 @@ import { isGameLab } from '../learn/lab.ts';
 import { LABS } from '../worlds/labs.ts';
 import { GRID_PERCEPT_DOC } from '../worlds/grid/sense.ts';
 import { ownTestsSection } from '../learn/assisted/own-tests.ts';
+import { SOURCES_SECTION } from '../learn/assisted/session.ts';
+import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 
 /* ============================================================================
  * A researcher's RECORD as another agent reads it (SPEC-ORQUESTADOR §3.3): the senior who
@@ -112,6 +114,19 @@ export function juniorBrief(journal: J): string | null {
       ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) }), tools);
   const at = prompt.indexOf(ANSWER_SHAPE);
   return (at >= 0 ? prompt.slice(0, at) : prompt).trimEnd();
+}
+
+/** The junior's own instruments, as it is told them (SPEC-INVESTIGADOR-ASISTIDO §6.3, §13): its sources - list, open,
+    find over the origins it may read - and its selective memory. Without them a reviewer takes the junior reading its
+    sources for the environment answering what its interface does not offer. Null when it has none. */
+export function juniorInstruments(journal: J): string | null {
+  if (journal?.researcher !== 'assisted') return null;
+  const config = (journal?.config ?? {}) as J;
+  const events = (journal?.events ?? []) as J[];
+  const origins = [...String(config.sources_allow ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+    ...events.filter((e) => e.type === 'sources_allowed').map((e) => String(e.origin))];
+  const parts = [...(origins.length ? [SOURCES_SECTION + '\nIts origins: ' + [...new Set(origins)].join(', ') + '.'] : []), ...(config.memory === 'selective' ? [MEMORY_SECTION] : [])];
+  return parts.length ? parts.join('\n\n') : null;
 }
 
 /** How the junior may test its model with tests of its own (SPEC-PRUEBAS-PROPIAS T2), as it is told; null when it cannot
