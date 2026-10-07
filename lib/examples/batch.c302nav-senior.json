@@ -1,11 +1,11 @@
 {
   "format": "batch@1",
-  "id": "c302nav-senior",
+  "id": "c302nav-senior-4",
   "concurrency": 1,
-  "budget": { "tokens_per_run": 1500000 },
+  "budget": { "tokens_per_run": 2500000 },
   "runs": [
     { "id": "senior-real-s1", "lab": "c302nav", "condition": "assisted + senior, real names", "researcher": "assisted",
-      "args": ["--seed", "1", "--attempts", "8", "--names", "real", "--memory", "selective", "--help-budget", "4", "--max-minutes", "150", "--eureka", "D:/OctaneDoc/OctLocalServer/EurekaBench"],
-      "agent": { "id": "senior", "role": "senior", "max_orders": 4, "patience": 2 } }
+      "args": ["--seed", "1", "--attempts", "8", "--names", "real", "--memory", "selective", "--help-budget", "16", "--max-minutes", "150", "--eureka", "D:/OctaneDoc/OctLocalServer/EurekaBench"],
+      "agent": { "id": "senior", "role": "senior", "max_orders": 16, "patience": 2 } }
   ]
 }
