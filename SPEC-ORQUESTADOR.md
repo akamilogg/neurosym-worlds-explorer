@@ -512,7 +512,16 @@ desarrollar.
     - el método que las distinguiría con los instrumentos del junior: experimentos controlados, qué variar y qué
       mantener fijo, intervenciones, qué medir;
     - qué resultado refutaría cada una;
-    - y cómo debe ser el primer modelo para probar la hipótesis de partida.
+    - y cómo debe ser el primer modelo para probar la hipótesis de partida;
+    - **la forma técnica del modelo, como parte del método** (añadido el mismo día, a petición del autor). Debe decir
+      qué cantidades calculan las observaciones en código (a partir de qué del percepto y con qué tipo de cálculo), si
+      usa reglas de Jev y, si las usa, para qué juicios que el código no puede hacer y por qué, y cómo las combina la
+      salida.
+      - **El criterio que se le da:** una cantidad o una dinámica que hay que estimar (un nivel, un retardo, una forma
+        temporal, un umbral) se calcula en código, donde se puede medir, ajustar y corregir; una regla que pide a Jev
+        estimar la respuesta a partir de un resumen oculta justo lo que la investigación debería fijar.
+      - **Por qué:** en el run `c302closed-n2-3` la apertura dio buen método experimental y ninguna pauta técnica, y el
+        junior delegó la predicción en Jev durante 13 de sus 16 rondas.
 
     Puede refutarse después: un plan refutado también enseña. Es guía de método del propio senior, sin pistas del
     entorno.

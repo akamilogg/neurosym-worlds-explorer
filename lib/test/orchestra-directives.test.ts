@@ -159,3 +159,9 @@ test('the senior is told the junior\'s own instruments: its sources (with their 
   assert.equal(juniorInstruments({ researcher: 'unknown-world', config: { sources_allow: 'D:/docs' }, events: [] }), null);
   assert.match(seniorSystem(null, null, null, s), /THE JUNIOR'S OWN INSTRUMENTS/);
 });
+
+test('the senior\'s opening asks for the technical form of the model too: what code computes, whether and for what the Judge', async () => {
+  const { SENIOR_ROLE } = await import('../src/orchestra/agent-operator.ts');
+  assert.match(SENIOR_ROLE, /TECHNICAL FORM of its model/);
+  assert.match(SENIOR_ROLE, /whether it uses the Judge's rules at all/);
+});
