@@ -58,8 +58,9 @@ validador o un supervisor leería, trazable y versionada.
 ### 1.3 Lo que los experimentos añaden a la disciplina
 
 - **La discrepancia entre predicción y mecanismo.** En `c302nav`, el protocolo aceptó un modelo que pasaba el check, la
-  familia y la confirmación a ciegas, y recuperaba 0,11 de los hallazgos del mecanismo. El modelo es adecuado para
-  anticipar señales e insuficiente para diseñar intervenciones. La evidencia debe separar esas dos cosas (§6).
+  familia y la confirmación a ciegas, y recuperaba 0,11 de los hallazgos del mecanismo según la rúbrica y el
+  calificador usados. Hay evidencia favorable para usarlo al anticipar las señales en las condiciones evaluadas, y
+  evidencia insuficiente para justificar su uso al diseñar intervenciones. La evidencia debe separar esas dos cosas (§6).
 - **El instrumento que miente:** tres fallos del simulador se convirtieron en «leyes» para el investigador. La
   verificación del proceso debe cubrir el instrumento (SPEC-CALIBRACION-INSTRUMENTOS).
 - **Lo que se aprobó debe poder reconstruirse.** Un lote conservaba una recuperación de 0,25 mientras el finding
@@ -89,6 +90,9 @@ validador o un supervisor leería, trazable y versionada.
   recuperación mecanística son dimensiones distintas (§6). Ninguna se llama «correcto».
 - **R7. Cada prueba con su nombre.** Reproducir un registro, reejecutar el instrumento, reevaluar con episodios
   sintéticos y monitorizar observaciones reales son evidencias distintas, y el informe las llama así (§6.3, §9).
+- **R8. El artefacto y su generador se evalúan por separado.** La robustez de un modelo se mide con ese mismo modelo
+  congelado en condiciones distintas. Que investigaciones independientes produzcan modelos buenos habla del proceso que
+  los genera, no de ninguno de ellos (§6.5, §6.8).
 
 ## 4. Qué es un modelo aquí: tres capas
 
@@ -134,8 +138,10 @@ finding, la auditoría y los lotes. Cada línea lleva su fuente (R1).
      corrección general.
    - **Adecuación al contexto de uso:** si cumple los criterios declarados para ese uso, que pueden pedir sólo
      predicción o también acierto bajo intervención.
-   - **Recuperación mecanística**, donde hay verdad: la calificación con el calificador endurecido. Una recuperación
-     baja no convierte la aceptación en falsa; dice que el modelo es fenomenológico.
+   - **Recuperación mecanística**, donde hay verdad: la calificación con el calificador endurecido, con la rúbrica y el
+     calificador usados. Una recuperación baja no convierte la aceptación en falsa, y sólo establece eso: una
+     recuperación baja según esa rúbrica y ese calificador. Puede deberse a una explicación incompleta, a un desajuste
+     de la rúbrica o a un error de evaluación.
 3. **Verificación del proceso**, con cada prueba por su nombre (R7):
    - el contrato del instrumento (I1–I6) en la versión del run;
    - la **consistencia de reproducción**: un run reanudado que no diverge. Acredita el registro, no que el instrumento
@@ -144,8 +150,10 @@ finding, la auditoría y los lotes. Cada línea lleva su fuente (R1).
      grabado;
    - los informes del instrumento con su veredicto.
 4. **Referencias:** las líneas base del operador y los rivales públicos.
-5. **Robustez:** la variación entre semillas y familias del mismo contexto de uso, de los lotes, como estadística
-   descriptiva con su incertidumbre (SPEC-CONTROL-ARNES §6). Y los nombres neutros frente a los reales, donde aplica.
+5. **Robustez del artefacto** (R8): el mismo modelo, con sus dependencias congeladas, evaluado en episodios nuevos,
+   otras familias del contexto de uso e intervenciones, mediante la reevaluación sintética (§9). Y los nombres neutros
+   frente a los reales, donde aplica. **No** se toma de la variación entre semillas de los lotes: cada run produce su
+   propio modelo, y esa variación caracteriza al generador (punto 8), no a este artefacto.
 6. **Registro de limitaciones:**
    - contraejemplos abiertos;
    - informes del instrumento pendientes o con veredicto `bug`;
@@ -155,8 +163,11 @@ finding, la auditoría y los lotes. Cada línea lleva su fuente (R1).
    - hallazgos no recuperados;
    - y la distancia entre la adecuación declarada y la recuperación mecanística.
 7. **Independencia** en sus tres dimensiones (§7).
-8. **Configuración generadora:** su caracterización en el momento del run (§8.2).
-9. **Conclusión propuesta** (borrador) y **conclusiones firmadas**, cada una vinculada a una revisión (§7.4).
+8. **Configuración generadora:** su caracterización en el momento del run (§8.2), incluida la **variabilidad del
+   generador**: qué producen investigaciones independientes con la misma configuración (SPEC-CONTROL-ARNES §6). Es
+   contexto sobre el proceso, no evidencia sobre este artefacto.
+9. **Conclusión propuesta**, como borrador. Las conclusiones firmadas no van dentro del informe: son archivos aparte
+   que remiten al manifiesto (§7.4).
 
 ## 7. Roles, independencia y aprobación
 
@@ -190,18 +201,41 @@ fecha y nota.
 
 ### 7.4 Evidencia inmutable
 
-- **Una revisión de evidencia** es un manifiesto con los hashes de:
-  - el informe;
-  - el artefacto;
-  - el contexto de uso y sus criterios;
-  - el diario, el finding y la auditoría;
-  - las calificaciones;
-  - los informes de lote de los que salieron las estadísticas.
-- **La aprobación remite al hash del manifiesto.**
-- **Recalcular cualquier cosa crea una revisión nueva**, se trate de una recalificación con otro calificador, un lote
-  recalculado o un veredicto nuevo sobre un informe del instrumento. Lo firmado no se modifica, y el inventario muestra
-  que hay una revisión más reciente sin firmar.
-- **El historial de estados** (§5) enlaza cada cambio con su revisión.
+**Tres piezas, físicamente separadas, en este orden:**
+1. **El informe cerrado.** Una vez cerrado no cambia; ninguna firma se escribe dentro de él.
+2. **El manifiesto.** Contiene los hashes de:
+   - el informe cerrado;
+   - el artefacto;
+   - el contexto de uso y sus criterios;
+   - el diario, el finding y la auditoría;
+   - las calificaciones;
+   - los informes de lote de los que salieron las estadísticas.
+3. **La aprobación.** Un archivo propio que remite al hash del manifiesto, con la identidad del aprobador, la fecha, la
+   conclusión y su nota.
+
+Así una firma nunca cambia el hash de lo firmado.
+
+**Almacén de copias inmutables.** Un hash detecta un cambio, pero no permite reconstruir lo que cambió. Por eso cada
+contenido citado en un manifiesto se copia, al cerrar la revisión, a un almacén por contenido
+(`runs/models/evidence/<hash>`), de sólo lectura. Si después el finding se recalifica y se sobrescribe, lo aprobado sigue
+ahí tal como era.
+
+**Verificación al abrir.** Abrir una revisión (consola o `lab model show`) recalcula los hashes de sus copias y los
+compara con el manifiesto. Una discrepancia se muestra como error de integridad y bloquea cualquier firma sobre esa
+revisión.
+
+**Revisiones nuevas:**
+- **Recalcular cualquier cosa crea una revisión nueva,** se trate de una recalificación con otro calificador, un lote
+  recalculado o un veredicto nuevo sobre un informe del instrumento. Lo firmado no se toca.
+- **Si la revisión nueva contradice los criterios aprobados,** es decir, si algún resultado de §6.2 que la aprobación
+  daba por cumplido ya no se cumple, o aparece una limitación nueva que afecta al contexto de uso, la aprobación anterior
+  **se suspende**: el modelo pasa a `revalidar` y deja de estar vigente hasta que se firme una revisión.
+- **Si la revisión nueva no contradice nada,** la aprobación anterior sigue vigente, con una nota que remite a la
+  revisión más reciente sin firmar.
+- La comparación entre revisiones la hace el arnés y queda en el historial. Que contradiga o no lo decide la regla de
+  arriba, no una persona.
+
+**El historial de estados** (§5) enlaza cada cambio con su revisión y, si lo hubo, con la contradicción que lo motivó.
 
 ## 8. Cambios y caracterización de la configuración generadora
 
@@ -327,3 +361,19 @@ En el orden que propone la auditoría:
   observaciones reales, se habla de «reevaluación sintética».
 - **El plan se reordena:** primero el informe trazable, las revisiones y las métricas descriptivas; los perfiles
   normativos, al final.
+
+## 14. Segunda auditoría (07/10/2026): qué cambió
+
+- **La robustez del artefacto se separa de la variabilidad del generador** (R8, §6.5, §6.8). La robustez es la del mismo
+  modelo congelado en episodios, familias e intervenciones distintos. La variación entre semillas de los lotes describe
+  el proceso que genera modelos, y no se hereda en la ficha de un modelo concreto.
+- **La evidencia inmutable conserva contenidos, no sólo hashes** (§7.4):
+  - almacén de copias por contenido, de sólo lectura, con verificación de integridad al abrir;
+  - separación física entre el informe cerrado, el manifiesto y la aprobación, para que ninguna firma cambie el hash
+    de lo firmado;
+  - una revisión nueva que contradice los criterios aprobados suspende la aprobación anterior y pasa el modelo a
+    `revalidar`.
+- **Inferencias más prudentes:**
+  - una recuperación baja sólo establece eso, según esa rúbrica y ese calificador (§6.2);
+  - de `c302nav` hay evidencia favorable para anticipar señales en las condiciones evaluadas, y evidencia insuficiente
+    para justificar su uso al diseñar intervenciones (§1.3).

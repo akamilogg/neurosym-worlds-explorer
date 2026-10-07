@@ -42,9 +42,11 @@ investiga.
 
 - **Muestran una discrepancia entre el objetivo predictivo y la ambición mecanística.** En `c302nav`, los controles
   llevaron al investigador a un modelo que predice las señales: pasa el check, la familia y la confirmación a ciegas.
-  Ese modelo recupera 0,11 de los hallazgos del mecanismo. La señal de control (la R² en la familia) no distinguía un
-  modelo fenomenológico de uno mecanístico. Las pruebas propias con intervención funcionan como un **sensor nuevo**, que
-  hace observable esa diferencia.
+  Ese modelo recupera 0,11 de los hallazgos del mecanismo, según la rúbrica y el calificador usados. Hay evidencia
+  favorable para usarlo al anticipar las señales en las condiciones evaluadas, y evidencia insuficiente para justificar
+  su uso al diseñar intervenciones. La señal de control (la R² en la familia) no distinguía entre esos dos usos. Las
+  pruebas propias pueden funcionar como un **sensor nuevo** que haga observable la diferencia, cuando la intervención
+  hace que el modelo y su rival predigan distinto.
 - **Todavía no muestran que el proceso sea predecible de un run a otro.** Hay pocos runs comparables por condición.
   Medirlo es el objeto de esta spec.
 
@@ -78,7 +80,8 @@ Con los mismos nombres que el informe de validación (SPEC-RIESGO-MODELOS R6):
 - **O1. Aceptación predictiva:** sí o no.
 - **O2. Evidencia discriminante prerregistrada:** número de pruebas severas superadas como prerregistradas por el
   modelo final, con la respuesta del Judge sobre si cada rival era genuino.
-- **O3. Adecuación al contexto de uso:** sí, no o no evaluable, según criterios declarados **antes** del lote.
+- **O3. Adecuación al contexto de uso:** sí, no o no evaluable, según criterios declarados **antes** del lote. Los «no
+  evaluable» nunca se cuentan como fallos ni se descartan sin decirlo: se informan aparte, con la cobertura (§6.2).
 - **O4. Recuperación mecanística**, donde hay verdad: la calificación del modelo final, con la versión del calificador.
   Es continua: no se convierte en «falso» por debajo de un umbral.
 
@@ -88,7 +91,14 @@ hecho descriptivo, no como aceptación falsa.
 ### 4.2 Coste y eficiencia
 
 - **Coste total** de una condición: la suma de **todas** sus ejecuciones, incluidos los runs que no aceptan, el senior,
-  la auditoría y los experimentos. Se da por separado en **tokens, dinero y tiempo de reloj**.
+  la auditoría y los experimentos. Se da por separado en tokens, dinero y tiempo.
+- **El tiempo tiene tres medidas distintas**, porque los runs de un lote corren en paralelo y sumar sus duraciones no da
+  el tiempo de reloj:
+  - **duración del lote:** de su comienzo a su final, en reloj;
+  - **tiempo hasta un resultado:** del comienzo del lote al primer run que cumple el criterio declarado;
+  - **recursos acumulados:** la suma de las duraciones de los runs, con los tokens y el dinero.
+- **Un coste desconocido es desconocido,** nunca cero. Pasa, por ejemplo, con un proveedor que no informa de uso: la
+  consola ya lo marca como `usage_unknown`. El total se da como cota inferior, con la parte desconocida dicha.
 - **Eficiencia bajo un criterio declarado:** runs que cumplen ese criterio (por ejemplo O1, u O1 y O3) divididos por el
   coste total. Siempre se dice qué criterio es.
 
@@ -100,9 +110,9 @@ Se informan como descripción del proceso, nunca como «pérdidas» o «rendimie
 - propuestas devueltas;
 - órdenes del senior y lo que el junior hizo con ellas: aplicarlas, discrepar, rechazarlas con razón.
 
-El **efecto** del senior o de su hipótesis inicial sólo se atribuye mediante **comparaciones controladas**: lotes
-emparejados con y sin senior, y con y sin apertura, con las mismas semillas, versión y presupuesto. Contar órdenes
-adoptadas no basta: una orden adoptada puede empeorar el modelo.
+El **efecto** del senior o de su hipótesis inicial sólo se atribuye mediante **comparaciones controladas** (§6.2.1):
+lotes emparejados por semilla, con y sin senior, y con y sin apertura, con la misma versión y presupuesto y un margen
+relevante declarado antes. Contar órdenes adoptadas no basta: una orden adoptada puede empeorar el modelo.
 
 ## 5. La matriz de observabilidad
 
@@ -113,7 +123,7 @@ porque no lo ve.
 |---|---|---|---|---|---|---|
 | no predice | sí | sí | sí | — | — | sí |
 | sobreajuste al laboratorio | parcial | sí | sí | — | — | sí |
-| **modelo fenomenológico donde el uso pide mecanismo** | **no** | **no** | **sí, si el rival es genuino y la prueba interviene** | — | — | sí |
+| **modelo fenomenológico donde el uso pide mecanismo** | **no** | **no** | **puede, con una prueba discriminante adecuada:** una intervención en la que el modelo y un rival genuino predicen distinto | — | — | parcial (según la rúbrica) |
 | instrumento que miente | no | no | no | sí (lo previsto) | sí (lo imprevisto) | parcial |
 | el junior ignora las órdenes | — | — | — | — | — | la ven el senior y la auditoría |
 | consumo del presupuesto sin avance | — | — | — | — | — | trazas de §4.3 |
@@ -122,6 +132,10 @@ La matriz se revisa cada vez que aparece un modo de fallo nuevo. Cada fila sin s
 una spec nueva, como lo fueron las pruebas propias y la calibración.
 
 ## 6. Estabilidad entre runs
+
+**Lo que se mide aquí es el generador, no un artefacto.** Cada run produce su propio modelo, así que la variación
+entre runs caracteriza el proceso que genera modelos. La robustez de un modelo concreto se mide aparte, con ese modelo
+congelado en condiciones distintas (SPEC-RIESGO-MODELOS R8, §6.5).
 
 ### 6.1 Grupos comparables
 
@@ -134,11 +148,33 @@ no completan la base de `c302nav`: son otra población, y se informan por separa
 ### 6.2 Lo que se informa con pocos runs
 
 Cada resultado y coste por grupo, como estadística descriptiva con su incertidumbre:
-- **proporciones** (O1, O3): el recuento y el intervalo de Wilson, con el tamaño del grupo;
-- **recuentos y valores continuos** (O2, O4, coste): mediana, cuartiles e intervalo por bootstrap;
-- **ningún rótulo de «en control»** ni de «fuera de control».
+- **Proporciones, con su denominador declarado:**
+  - **O1:** el recuento sobre los runs del grupo, con el intervalo de Wilson y el tamaño del grupo. Un run aporta
+    **una** observación binaria.
+  - **O3:** la proporción se calcula **sobre los casos evaluables**, y se informan aparte el número de evaluables, el de
+    no evaluables y la cobertura (evaluables entre el total).
+- **Recuentos y valores continuos** (O2, O4, coste): mediana, cuartiles e intervalo por bootstrap.
+- **Evidencia insuficiente.** Con menos de 3 observaciones, o cuando todas son iguales, no se da intervalo por bootstrap:
+  sus remuestras serían idénticas y el intervalo, de anchura cero, parecería certeza absoluta. Se informan los valores
+  observados y la etiqueta «evidencia insuficiente».
+- **Ningún rótulo de «en control»** ni de «fuera de control».
 
-Un run aporta **una** observación binaria de O1. Una proporción sólo existe sobre un grupo de tamaño declarado.
+### 6.2.1 Comparaciones: versión nueva frente a referencia, senior frente a sin senior
+
+Los intervalos de cada condición por separado no definen una comparación. Una comparación se especifica así:
+- **Emparejada por semilla:** las dos condiciones se ejecutan con las mismas semillas, versión y presupuesto, y el
+  efecto se calcula semilla a semilla.
+  - **Resultados continuos:** la diferencia de O4 o de coste en cada semilla; se informa la mediana de las diferencias
+    con su intervalo por bootstrap sobre las semillas.
+  - **Resultados binarios:** los pares discordantes (aceptó con una condición y no con la otra), con su recuento en
+    cada sentido.
+- **Margen relevante declarado antes:** la mejora mínima que importaría, por ejemplo +0,1 de recuperación o −20 % de
+  coste.
+- **Cuatro conclusiones posibles:**
+  - **mejora:** el intervalo del efecto queda entero por encima del margen;
+  - **empeora:** el intervalo queda entero por debajo de cero, o por debajo del margen en el sentido contrario;
+  - **no se distingue:** el intervalo cruza cero y es más estrecho que el margen;
+  - **evidencia insuficiente:** cualquier otro caso, o menos de 3 semillas emparejadas.
 
 ### 6.3 Control estadístico, cuando los datos lo permitan
 
@@ -151,8 +187,8 @@ especial que hay que investigar**, no como diagnóstico.
 
 - **Una referencia** es la distribución de un grupo en una versión dada, congelada con el hash de sus runs.
 - **Al cambiar de versión, no se borra la referencia anterior.** Primero se compara la versión nueva contra ella con la
-  misma estadística de §6.2, para ver si empeora, mejora o no se distingue. Sólo después una persona decide establecer
-  una referencia nueva.
+  comparación emparejada de §6.2.1, con las mismas semillas y un margen declarado. Sólo después una persona decide
+  establecer una referencia nueva.
 - Así un cambio que empeora el proceso no se normaliza en silencio.
 
 ## 7. Variedad requerida: diseñar lotes que cubran las perturbaciones
@@ -215,3 +251,21 @@ En el orden que propone la auditoría:
   es una hipótesis por comprobar: `c302nav` muestra una discrepancia entre predicción y mecanismo, no la
   predictibilidad del proceso (§1.2, §1.3).
 - **El plan se reordena:** primero resultados, coste y estadística descriptiva; el control estadístico, al final.
+
+## 11. Segunda auditoría (07/10/2026): qué cambió
+
+- **Generador frente a artefacto** (§6): las estadísticas entre runs caracterizan el proceso que genera modelos. La
+  robustez de un modelo concreto se mide aparte (SPEC-RIESGO-MODELOS R8).
+- **Denominadores y muestras pequeñas** (§6.2):
+  - O3 se calcula sobre los casos evaluables, con los no evaluables y la cobertura aparte;
+  - con menos de 3 observaciones o todas iguales, «evidencia insuficiente», sin intervalo por bootstrap.
+- **Comparaciones especificadas** (§6.2.1): efecto emparejado por semilla con su incertidumbre, un margen relevante
+  declarado antes y cuatro conclusiones posibles (mejora, empeora, no se distingue, evidencia insuficiente). La usan las
+  referencias congeladas (§6.4) y el efecto del senior y de la apertura (§4.3).
+- **Tiempo en tres medidas** (§4.2): duración del lote, tiempo hasta un resultado y recursos acumulados. Un coste
+  desconocido se marca como desconocido y el total se da como cota inferior.
+- **Inferencias más prudentes:**
+  - las pruebas propias **pueden** distinguir un modelo fenomenológico, con una prueba discriminante adecuada en la que
+    el modelo y un rival genuino predigan distinto (§5);
+  - de `c302nav` hay evidencia favorable para anticipar señales en las condiciones evaluadas, e insuficiente para
+    diseñar intervenciones (§1.3).
