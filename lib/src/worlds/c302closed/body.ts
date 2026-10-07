@@ -122,26 +122,35 @@ export interface Step {
   readonly signals: Signals;
   /** A sharp turn made during the step's motion (its angle, rad). */
   readonly turn?: number;
+  /** The deterministic body's state at the start of the step: the turn rate accumulated, the turns made. */
+  readonly accumulated: number;
+  readonly turns: number;
 }
 
 export interface Episode {
   readonly steps: readonly Step[];
   readonly end: { readonly t: number; readonly pose: Pose; readonly reached: boolean };
+  /** The deterministic body's state at the end: what a rollout from here goes on with. */
+  readonly accumulated?: number;
+  readonly turns?: number;
 }
 
 /** One episode in closed loop: the body in the field, driven by the circuit, step by step in the order of §5. `blocked`: the
     circuit still smells and acts, the body does not move (§9's act with the body blocked). `rnd`: the stochastic body's draws. */
-export function runEpisode(o: { field: FieldSpec; body: BodySpec; circuit: Circuit; start: Pose; durationMs: number; dtMs: number; rnd?: () => number; blocked?: boolean }): Episode {
+export function runEpisode(o: { field: FieldSpec; body: BodySpec; circuit: Circuit; start: Pose; durationMs: number; dtMs: number; rnd?: () => number; blocked?: boolean;
+  /** Where in time it starts (ms): a rollout from a point of an episode keeps the head's swing in phase. */
+  t0Ms?: number;
+  /** The turn rate accumulated so far (the deterministic body), and how many turns it made (their sides alternate). */
+  accumulated?: number; turns?: number }): Episode {
   const { field, body, circuit, dtMs } = o;
-  const chi = body.chirality ?? 1;
-  let pose = o.start, signals = circuit.initial, accumulated = 0, turns = 0;
+  let pose = o.start, signals = circuit.initial, accumulated = o.accumulated ?? 0, turns = o.turns ?? 0;
   const steps: Step[] = [];
   const n = Math.round(o.durationMs / dtMs);
   const arrived = (p: Pose) => !field.uniform && Math.hypot(p.x - field.source[0], p.y - field.source[1]) <= body.arrival;
   for (let k = 0; k < n; k++) {
-    const t = k * dtMs;
-    if (arrived(pose)) return { steps, end: { t, pose, reached: true } };
-    const before = pose;
+    const t = (o.t0Ms ?? 0) + k * dtMs;
+    if (arrived(pose)) return { steps, end: { t, pose, reached: true }, accumulated, turns };
+    const before = pose, accBefore = accumulated, turnsBefore = turns;
     /* (1) observed at t_k; (2) the current over the step, from the concentration at the nose now. */
     const c = concentration(field, noseAt(body, pose, t));
     const { left, right } = sense(body, c, t);
@@ -150,23 +159,36 @@ export function runEpisode(o: { field: FieldSpec; body: BodySpec; circuit: Circu
     /* (4) the body moves over the step by the signals at t_k. */
     let turn: number | undefined;
     if (!o.blocked) {
-      const rate = turnRate(body, signals.reorientation);
-      const dt = dtMs / 1000;
-      if (body.mode === 'deterministic') {
-        accumulated += rate * dt;
-        if (accumulated >= body.threshold) { accumulated -= body.threshold; turn = chi * (turns++ % 2 === 0 ? 1 : -1) * body.turn.angle; }
-      } else if (rate > 0 && (o.rnd ?? Math.random)() < 1 - Math.exp(-rate * dt)) {
-        const r = o.rnd ?? Math.random;
-        turn = (r() < 0.5 ? 1 : -1) * (body.turn.min + (body.turn.max - body.turn.min) * r());
-      }
-      const omega = Math.max(-body.steer.maxRate, Math.min(body.steer.maxRate, body.steer.gain * signals.steering));
-      const heading = pose.heading + (turn ?? 0) + omega * dt;
-      pose = reflect(field.arena, { x: pose.x + body.speed * dt * Math.cos(heading), y: pose.y + body.speed * dt * Math.sin(heading), heading });
+      const moved = move(body, field, { pose, accumulated, turns }, signals, dtMs, o.rnd ?? Math.random);
+      ({ pose, accumulated, turns } = moved);
+      turn = moved.turn;
     }
-    steps.push({ t, pose: before, c, left, right, signals: next, ...(turn !== undefined ? { turn } : {}) });
+    steps.push({ t, pose: before, c, left, right, signals: next, accumulated: accBefore, turns: turnsBefore, ...(turn !== undefined ? { turn } : {}) });
     signals = next;
   }
-  return { steps, end: { t: n * dtMs, pose, reached: arrived(pose) } };
+  return { steps, end: { t: (o.t0Ms ?? 0) + n * dtMs, pose, reached: arrived(pose) }, accumulated, turns };
+}
+
+/** The body's state between steps: where it is, and (the deterministic body) the turn rate accumulated and the turns made. */
+export interface BodyState { readonly pose: Pose; readonly accumulated: number; readonly turns: number }
+
+/** One step of the body's motion (§5, 4): from its state, by the signals at the start of the step. */
+export function move(body: BodySpec, field: FieldSpec, state: BodyState, signals: Signals, dtMs: number, rnd: () => number): BodyState & { readonly turn?: number } {
+  const chi = body.chirality ?? 1;
+  let { accumulated, turns } = state;
+  let turn: number | undefined;
+  const rate = turnRate(body, signals.reorientation);
+  const dt = dtMs / 1000;
+  if (body.mode === 'deterministic') {
+    accumulated += rate * dt;
+    if (accumulated >= body.threshold) { accumulated -= body.threshold; turn = chi * (turns++ % 2 === 0 ? 1 : -1) * body.turn.angle; }
+  } else if (rate > 0 && rnd() < 1 - Math.exp(-rate * dt)) {
+    turn = (rnd() < 0.5 ? 1 : -1) * (body.turn.min + (body.turn.max - body.turn.min) * rnd());
+  }
+  const omega = Math.max(-body.steer.maxRate, Math.min(body.steer.maxRate, body.steer.gain * signals.steering));
+  const heading = state.pose.heading + (turn ?? 0) + omega * dt;
+  const pose = reflect(field.arena, { x: state.pose.x + body.speed * dt * Math.cos(heading), y: state.pose.y + body.speed * dt * Math.sin(heading), heading });
+  return { pose, accumulated, turns, ...(turn !== undefined ? { turn } : {}) };
 }
 
 /** A pose kept inside the square arena: a wall it crossed sends it back, its heading mirrored. */

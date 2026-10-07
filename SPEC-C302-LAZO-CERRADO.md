@@ -1,6 +1,6 @@
 # SPEC · `c302nav` en lazo cerrado: un gusano que se mueve en un campo de olor
 
-Estado: propuesta (06/10/2026), revisada con una auditoría externa el mismo día (§13). L1 implementado (07/10/2026); L0 espera a NEURON. Antes de lanzar investigadores deben estar cerrados los tres contratos de §5, §6 y §7.
+Estado: propuesta (06/10/2026), revisada con una auditoría externa el mismo día (§13). L1 y los tres contratos (§5, §6, §7) implementados (07/10/2026); L0 espera a NEURON.
 con L0 y L1; antes de lanzar investigadores deben estar cerrados los tres contratos de §5, §6 y §7.
 
 ## 1. De dónde sale
@@ -246,6 +246,34 @@ Antes de atribuir nada al circuito, con "circuitos" sintéticos en lugar de c302
   ganancia, que viene del retardo de un paso de §5. Está medido, y la prueba lo acota.
 - **Lectura incremental** (`readout.ts`): el doble filtro paso a paso, con su estado, coincide exactamente con
   `signalsOf` de `c302nav` sobre la traza completa. Es la referencia para la lectura del servicio en L2.
+
+**La puerta antes de L2: los tres contratos, cerrados (07/10/2026)** en `lib/src/worlds/c302closed/navigation.ts`, con
+pruebas en `lib/test/c302closed-contracts.test.ts`:
+- **§5, el percepto.** `signalsPoint` da el de la faceta de señales: tiempo, corrientes y cambios del `act`, nada del
+  cuerpo y nada posterior al paso.
+  - Se indexa como en `c302nav`: la corriente que se muestra en t_k es la que actuó en (t_{k−1}, t_k], y las señales en
+    t_k son su resultado.
+  - El orden del paso ya está en `runEpisode` y en `move`, compartido por el episodio y la simulación.
+- **§7, la navegación.** El modelo del investigador es un modelo del **circuito**, con la misma respuesta que la faceta
+  de señales. Para evaluar la navegación, el arnés lo pone en el lazo:
+  - desde el estado real en un punto, el cuerpo declarado lo mueven las señales del propio modelo, sin volver a ver el
+    cuerpo real, durante 50 ms, 500 ms y 2 s (`rollout`);
+  - las tres referencias (`baselines`) se simulan igual: seguir recto, mantener la velocidad angular de los últimos
+    500 ms, y girar con la tasa media del episodio hasta ese punto;
+  - el modelo se sostiene si en **todos** los horizontes su mediana es menor que la de **cada** referencia;
+  - alrededor de los giros: si la simulación giró cuando giró el gusano, y la distancia en el tiempo entre los dos giros;
+  - bajo intervención, el `act` lleva sus cambios en el percepto (`changes`), y la simulación se hace sobre ese episodio.
+- **§6, el azar.** En el cuerpo aleatorio, el modelo y las referencias se simulan en varias réplicas (8 por defecto),
+  cada una con sus propios sorteos, y se puntúan con el *energy score*. Con una réplica es la distancia, así que el mismo
+  criterio vale para el cuerpo determinista. Se eligió la vía de las réplicas de §6; no hay que pedir probabilidades al
+  modelo.
+- **Comprobado:**
+  - con el propio circuito como modelo, en el cuerpo determinista, el error es cero en todos los horizontes, acierta los
+    giros con distancia 0 y gana a las tres referencias;
+  - un modelo que no sabe nada, o que no responde, no se sostiene;
+  - el *energy score* premia una dispersión que cubre lo ocurrido frente a un fallo seguro de sí mismo.
+- **Coste:** cada paso de cada simulación es una respuesta del modelo. Las simulaciones a 2 s son 400 respuestas por
+  punto y réplica, así que en L2 los puntos de navegación serán pocos por episodio, y el operador elige cuántos.
 
 **Preguntas abiertas:**
 - **¿Cómo se huele exactamente?** AWC en el gusano real responde sobre todo a que el olor baje. Propuesta: una función
