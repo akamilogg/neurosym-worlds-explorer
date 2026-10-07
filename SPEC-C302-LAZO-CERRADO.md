@@ -1,6 +1,6 @@
 # SPEC · `c302nav` en lazo cerrado: un gusano que se mueve en un campo de olor
 
-Estado: propuesta (06/10/2026), revisada con una auditoría externa el mismo día (§13). Nada implementado. Se avanza
+Estado: propuesta (06/10/2026), revisada con una auditoría externa el mismo día (§13). L1 implementado (07/10/2026); L0 espera a NEURON. Antes de lanzar investigadores deben estar cerrados los tres contratos de §5, §6 y §7.
 con L0 y L1; antes de lanzar investigadores deben estar cerrados los tres contratos de §5, §6 y §7.
 
 ## 1. De dónde sale
@@ -212,6 +212,40 @@ Antes de atribuir nada al circuito, con "circuitos" sintéticos en lugar de c302
   - el contrato de SPEC-CALIBRACION-INSTRUMENTOS desde el principio.
 - **L3. Runs:** la condición N2 con junior y senior, en cuerpo determinista. Medidas en las dos lecturas (§11), y runs
   emparejados con `c302nav` sobre NEURON. La condición aleatoria, después.
+
+**L1, implementado (07/10/2026)** en `lib/src/worlds/c302closed/`:
+- **Implementación de referencia en TypeScript** (`body.ts`): campo, olfato, actuación, llegada y paredes, con funciones
+  puras y el orden de §5 en `runEpisode`. En L2 el servicio en Python implementará las mismas funciones, y una prueba de
+  paridad entre los dos (las mismas señales dan la misma trayectoria) entrará en el contrato del instrumento.
+- **Valores por defecto** (`DEFAULT_BODY`), en unidades sintéticas: las ganancias se calibran contra c302 en L2.
+  - velocidad 0,2 mm/s; cabeza a 0,5 Hz y ±0,6 rad; nariz a 0,5 mm;
+  - corriente total 2,5 + 3,5·c/(c + 0,5) pA, repartida según la fase con una profundidad de 0,5;
+  - tasa de giros min(2, max(0, r)); umbral determinista 1; giro de 2 rad a lados alternos, o entre 1,5 y 2,6 rad en la
+    condición aleatoria;
+  - giro gradual de 1·s rad/s, con un máximo de 1 rad/s; llegada a 0,5 mm.
+- **Circuitos sintéticos** (`circuits.ts`):
+  - de señales constantes;
+  - uno que sólo sigue el reparto entre lados;
+  - uno desacoplado del olor, con un calendario propio a partir de una semilla;
+  - uno de juguete que navega: gira bruscamente cuando la media lenta de la corriente baja, y se dobla hacia el lado en
+    que la cabeza encuentra más.
+- **Verificaciones de §8.2** (`lib/test/c302closed-body.test.ts`):
+  - el orden de §5;
+  - señales constantes: recto, círculo completo, un giro por segundo a lados alternos;
+  - la frecuencia de giros del cuerpo aleatorio;
+  - el campo uniforme;
+  - rotación y reflexión de la escena, con la imagen especular del cuerpo (`chirality: -1`);
+  - con el circuito desacoplado, la trayectoria no depende de dónde esté la fuente, y llega como mucho en 2 de 12
+    arranques (llegó en 0);
+  - el circuito de juguete llega en al menos 10 de 12 (llegó en los 12, en unos 45 a 58 s);
+  - las paredes;
+  - el cuerpo bloqueado.
+- **Corrección hecha** tras medir el campo uniforme: con el balanceo empezando en la fase 0, el reparto entre lados no
+  produce deriva acumulada, pero sí un **sesgo constante** del rumbo de 0,08 rad por unidad de ganancia (9,5 mm de
+  desvío lateral en 120 mm). Ahora el balanceo empieza en un extremo (−π/2). Queda un resto de −0,0013 rad por unidad de
+  ganancia, que viene del retardo de un paso de §5. Está medido, y la prueba lo acota.
+- **Lectura incremental** (`readout.ts`): el doble filtro paso a paso, con su estado, coincide exactamente con
+  `signalsOf` de `c302nav` sobre la traza completa. Es la referencia para la lectura del servicio en L2.
 
 **Preguntas abiertas:**
 - **¿Cómo se huele exactamente?** AWC en el gusano real responde sobre todo a que el olor baje. Propuesta: una función
