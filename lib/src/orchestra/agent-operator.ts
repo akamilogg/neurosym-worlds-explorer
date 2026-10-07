@@ -5,7 +5,7 @@ import { instrumentReports, type InstrumentReport } from '../learn/instrument.ts
 import type { ChatClient } from '../learn/system2.ts';
 import { orderOutcome, runStatus, send } from '../runtime/control.ts';
 import { researcherEvents, runDigest } from './view.ts';
-import { followUpDue, journalReader, juniorBrief, juniorPercept, stuckSignals, type StuckSignals } from './reader.ts';
+import { followUpDue, journalReader, juniorBrief, juniorPercept, juniorTests, stuckSignals, type StuckSignals } from './reader.ts';
 import { UserParts } from '../learn/system2.ts';
 import { emptySeniorState, keepNotebook, notebookBrief, seniorMemory, seniorNotebook, tokensOf, writeNotebook, type SeniorState } from './senior.ts';
 
@@ -58,12 +58,16 @@ export const SENIOR_ROLE = [
 /** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), what the
     junior's code receives at a point (its `percept`, which reaches the junior with every round rather than in its brief:
     without it the senior may advise reading what the junior's code cannot see), its instructions. */
-export const seniorSystem = (brief: string | null, percept: string | null = null): string =>
+export const seniorSystem = (brief: string | null, percept: string | null = null, tests: string | null = null): string =>
   SENIOR_HEAD + '\n\n'
   + (brief ? '=== THE JUNIOR\'S BRIEF ===\n\n' + brief + '\n\n=== END OF THE JUNIOR\'S BRIEF ===\n\n' : '')
   + (percept ? '=== WHAT THE JUNIOR\'S CODE RECEIVES AT A POINT (its `percept`, given to it with every round) ===\n\n' + percept
     + '\n\nIts observations and output can read these fields and nothing else; what its views and tables show besides them is for the junior to read, not for its code.\n\n=== END ===\n\n' : '')
+  + (tests ? '=== HOW THE JUNIOR MAY TEST ITS MODEL (as it is told) ===\n\n' + tests + '\n\n=== END ===\n\n' + SENIOR_TESTS + '\n\n' : '')
   + SENIOR_ROLE;
+
+/** The senior's part in the junior's tests (SPEC-PRUEBAS-PROPIAS §8): it orders the test most likely to refute its model. */
+export const SENIOR_TESTS = 'YOU MAY ORDER A TEST. A reviewer asks for the experiment that would most likely refute the work. With a message, you may add to your decision "test": {"protocol": { ...an act... }, "rival": <a round of the junior\'s, a draft, or "rival:<name>">, "claim": "what the junior\'s model predicts there that the rival does not", "kind": "new" | "replicate"} - the junior registers it with its current model, as an order. Look for where its model and a rival that explains what it has seen as well would part: that is where a shadow of the mechanism fails. Its results come back in the junior\'s checks (`your_tests`), which you can read.';
 
 export type AgentRole = 'coach' | 'senior';
 
@@ -92,6 +96,8 @@ export interface AgentDecision {
   /** The senior (§3.3.1): what it wrote in its notebook while deciding, and how many times it consolidated its conversation. */
   readonly wrote?: Readonly<Record<string, unknown>>;
   readonly consolidated?: number;
+  /** A test it orders the junior to register with its message (SPEC-PRUEBAS-PROPIAS §8). */
+  readonly test?: Readonly<Record<string, unknown>>;
   /** What it suspected of the instrument while deciding (SPEC-CALIBRACION-INSTRUMENTOS §4.3). */
   readonly instrument_reports?: readonly InstrumentReport[];
 }
@@ -235,7 +241,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       for (const r of d?.instrument_reports ?? []) send(o.journal, { kind: 'instrument_report', what: r.what, evidence: r.evidence, report_kind: r.kind, by: 'agent:' + o.id });
       if (d && (d.decision === 'message' || d.decision === 'stop')) {
         /* A senior's message is a directive: an order the junior carries out and reports (SPEC-ORQUESTADOR §3.3.3). */
-        const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id, ...(role === 'senior' ? { directive: true } : {}) } : { kind: 'stop', by: 'agent:' + o.id });
+        const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id, ...(role === 'senior' ? { directive: true } : {}), ...(role === 'senior' && d.test ? { test: d.test } : {}) } : { kind: 'stop', by: 'agent:' + o.id });
         (d as { order?: string }).order = id;
         orders++;
         say('agent:' + o.id + ' after ' + rounds + ' rounds: ' + d.decision + (d.text ? ' - ' + d.text.slice(0, 120) : ''));
@@ -275,7 +281,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   if (!followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const nb = seniorNotebook(state);
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
-  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal));
+  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal));
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
   const call = decisions.length + 1;
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
@@ -367,6 +373,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       const d: AgentDecision = { at: at(), rounds, ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
         why: String(parsed.why ?? (Array.isArray(parsed.investigate) ? 'it kept asking to read after being reminded to decide' : '')), signals: signals.signs,
         read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}),
+        ...(decision === 'message' && parsed.test && typeof parsed.test === 'object' && !Array.isArray(parsed.test) ? { test: parsed.test } : {}),
         ...(consolidated ? { consolidated } : {}), ...(Object.keys(wrote).length ? { wrote } : {}), ...(suspicions.length ? { instrument_reports: suspicions } : {}), usage };
       /* What it decided stays in its conversation, as it was. */
       state.conversation.push({ your_decision: { n: call, decision, ...(d.text ? { text: d.text } : {}), ...(d.why ? { why: d.why } : {}) }, ...written });

@@ -255,6 +255,42 @@ para concluir.
   - el cierre por creencia más prueba nueva (§6.2);
   - las medidas en el finding (T4). Por ahora sólo hay un resumen, `own_tests`, en el `end`.
 
+**T3, implementado (07/10/2026):**
+- **`--own-tests N`:** opción del experimento, que se repite al reanudar. Sólo vale con el investigador asistido en un
+  laboratorio con `act`; si no, el run no arranca y dice por qué.
+- **Dónde se comprueba:** en la opción `gate` del protocolo, después de la familia y antes de gastar una confirmación
+  ciega. Se consulta antes que el `confirm` de los equipos, así que no gasta confirmaciones del equipo.
+  - Si no se cumple, la validación se detiene sin confirmación ciega (`confirmation_refused`), y el investigador lee el
+    motivo.
+- **`OwnTests.standing(model)`:**
+  - `passed_preregistered`: pruebas severas registradas con esa misma huella;
+  - `passed_regression`: pruebas de otros modelos en cuyo episodio también se sostiene;
+  - `failing`: pruebas en las que no se sostiene y cuyo contraejemplo sigue abierto.
+- **El requisito:** al menos N pruebas `passed_preregistered` y ninguna en `failing`.
+- **El prompt** dice cuándo cuentan («IN THIS RUN THEY COUNT»).
+- **El `end`** registra en `own_tests` lo exigido (`required`) y el balance del modelo final (`final_model`).
+- **Probado con `c302nav`:**
+  - la primera validación se detiene, y tras la prueba severa del modelo la siguiente se confirma;
+  - una prueba registrada con un borrador de otra huella cuenta sólo como regresión y nunca permite aceptar.
+
+**T4, implementado (07/10/2026):**
+- **La orden del senior** (§8):
+  - si el junior es asistido en un laboratorio con `act`, el prompt del senior incluye cómo prueba el junior su modelo,
+    con los rivales públicos y el requisito si lo hay (`juniorTests`), y una instrucción para ordenar la prueba que más
+    puede refutarlo (`SENIOR_TESTS`);
+  - su decisión puede llevar `"test"`, que viaja con el mensaje directiva (`test` en el buzón y en el mensaje entregado);
+  - `DIRECTIVES_SECTION` le dice al junior que la registre tal cual, con su modelo actual y `"directive": "<id>"`, o que
+    explique en `to_senior` por qué no. Queda registrada con `by: "senior"` y el id de la directiva.
+- **La auditoría:**
+  - `test_registered` guarda el código del modelo y del rival (`model_law`, `rival_law`);
+  - el Judge responde `TEST_QUESTIONS` sobre cada prueba: si el rival es `genuine` o `straw_man`, y si el `claim` es lo
+    que el protocolo distingue (`matches`, `overstates` o `unrelated`). Ve lo registrado, nunca el resultado;
+  - las respuestas van en `measures.judged.test_rival` y `test_claim`. Sólo informan.
+- **Las medidas** (`ownTestsOf`): registradas, válidas y severas; quién las diseñó (junior o senior); nuevas frente a
+  réplicas; contraejemplos encontrados y cerrados, con las rondas que estuvieron abiertos; y el balance del modelo
+  final. Aparecen en el finding (las dos vistas), en la auditoría y en el informe del lote: por run, y por condición la
+  mediana de pruebas severas y de contraejemplos.
+
 ## 12. Revisión externa (06/10/2026): qué cambió
 
 - **Un modelo ajustado después ya no hereda las pruebas del anterior.** Se separan `passed_preregistered` y

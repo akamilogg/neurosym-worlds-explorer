@@ -104,6 +104,9 @@ export interface Finding {
   /** What the instrument was suspected of, and what the operator found (SPEC-CALIBRACION-INSTRUMENTOS §5): each report with
       its state, and an acceptance that waited and was never answered. Provenance: both views keep it. */
   readonly instrument?: { readonly reports: readonly Facts[]; readonly acceptance_held?: Facts };
+  /** The tests of its own the researcher registered (SPEC-PRUEBAS-PROPIAS §9): how many, of what kind, by whom, how they came
+      out, the counterexamples and how long they stayed open, and where the final model stands. Provenance: both views. */
+  readonly own_tests?: OwnTestsMeasures;
   readonly reproduce: { readonly experiment: string; readonly started?: string; readonly config?: unknown; readonly journal?: string; readonly commit?: string };
 }
 
@@ -252,7 +255,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
       ...(meta.method ? { method_audit: meta.method } : {})
     },
     cost: { ...(summary.cost ? { total: summary.cost } : {}), ...(summary.cost_per_acceptance ? { to_acceptance: summary.cost_per_acceptance } : {}) },
-    ...(end.instrument ? { instrument: { reports: end.instrument.reports ?? [], ...(end.instrument.acceptance_held ? { acceptance_held: end.instrument.acceptance_held } : {}) } } : {}),
+    ...(ownTestsOf(events, end) ? { own_tests: ownTestsOf(events, end)! } : {}),
+    ...(end.instrument ? { instrument:{ reports: end.instrument.reports ?? [], ...(end.instrument.acceptance_held ? { acceptance_held: end.instrument.acceptance_held } : {}) } } : {}),
     reproduce: { experiment: String(journal.experiment ?? ''), ...(journal.started ? { started: journal.started } : {}), ...(journal.config ? { config: journal.config } : {}),
       ...(meta.journal ? { journal: meta.journal } : {}), ...(commit ? { commit } : {}) }
   };
@@ -302,10 +306,47 @@ export function findingText(f: Finding): string {
   for (const c of f.counterexamples) lines.push('  counterexample: round ' + c.round + ', ' + c.where + ' ' + c.place);
   for (const t of f.limitations.tolerated_misses) lines.push('  tolerated: ' + t.missed + ' of ' + t.points + ' missed in ' + t.place);
   if (f.limitations.accepted_trivially) lines.push('  WARNING: a model that knows nothing passed the accepting check too');
+  const t = f.own_tests;
+  if (t) lines.push('  tests of its own: ' + t.registered + ' registered (' + t.by.junior + ' by the junior, ' + t.by.senior + ' ordered by its senior; ' + t.kinds.new + ' new, ' + t.kinds.replicate + ' replications), '
+    + t.valid + ' valid, ' + t.severe + ' severe; ' + t.counterexamples.found + ' counterexample(s), ' + t.counterexamples.closed + ' closed'
+    + (t.final_model ? '; the final model: ' + t.final_model.passed_preregistered.length + ' passed as registered with it, ' + t.final_model.passed_regression.length + ' on regression' : '')
+    + (t.required ? ' (' + t.required + ' required)' : ''));
   for (const r of f.instrument?.reports ?? []) lines.push('  report of the instrument ' + r.id + ' [' + r.state + '] by ' + r.by + ': ' + r.what);
   if (f.instrument?.acceptance_held) lines.push('  NOT ACCEPTED: the model of round ' + f.instrument.acceptance_held.round + ' was confirmed on places the reports ' + (f.instrument.acceptance_held.reports as string[]).join(', ') + ' question, and the operator never answered');
   if (f.limitations.learner?.next_experiment) lines.push('  open (the learner): ' + f.limitations.learner.next_experiment);
   if (f.operator?.rule_recovery) lines.push('  operator: rule recovery ' + String(f.operator.rule_recovery.score) + ' (' + String(f.operator.rule_recovery.form ?? '') + ')');
   if (f.cost.total) lines.push('  cost: ' + Object.entries(f.cost.total).map(([k, v]) => k + ' ' + String(v)).join(', '));
   return lines.join('\n');
+}
+
+export interface OwnTestsMeasures {
+  readonly registered: number;
+  readonly valid: number;
+  readonly severe: number;
+  readonly by: { readonly junior: number; readonly senior: number };
+  readonly kinds: { readonly new: number; readonly replicate: number };
+  readonly counterexamples: { readonly found: number; readonly closed: number; readonly rounds_open: readonly number[] };
+  readonly required?: number;
+  readonly final_model?: { readonly passed_preregistered: readonly string[]; readonly passed_regression: readonly string[]; readonly failing: readonly string[] };
+}
+
+/** The measures of the tests of its own a run registered (SPEC-PRUEBAS-PROPIAS §9), from its events; null with none. */
+export function ownTestsOf(events: readonly J[], end: J = {}): OwnTestsMeasures | null {
+  const registered = events.filter((e) => e.type === 'test_registered');
+  if (!registered.length) return null;
+  const results = events.filter((e) => e.type === 'test_result');
+  const failed = results.filter((r) => r.valid && r.model_holds === false);
+  const closed = events.filter((e) => e.type === 'counterexample_closed');
+  const roundOf = (test: string): number | null => results.find((r) => r.test === test)?.round ?? null;
+  return {
+    registered: registered.length,
+    valid: results.filter((r) => r.valid).length,
+    severe: results.filter((r) => r.severe).length,
+    by: { junior: registered.filter((e) => e.by !== 'senior').length, senior: registered.filter((e) => e.by === 'senior').length },
+    kinds: { new: registered.filter((e) => e.kind === 'new').length, replicate: registered.filter((e) => e.kind === 'replicate').length },
+    counterexamples: { found: failed.length, closed: closed.length,
+      rounds_open: closed.map((c) => { const r = roundOf(c.test); return r === null ? null : c.round - r; }).filter((n): n is number => n !== null) },
+    ...(end.own_tests?.required ? { required: end.own_tests.required } : {}),
+    ...(end.own_tests?.final_model ? { final_model: end.own_tests.final_model } : {})
+  };
 }

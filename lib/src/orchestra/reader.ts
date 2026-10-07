@@ -4,6 +4,7 @@ import { system2Prompt, type Tool } from '../learn/prompt.ts';
 import { isGameLab } from '../learn/lab.ts';
 import { LABS } from '../worlds/labs.ts';
 import { GRID_PERCEPT_DOC } from '../worlds/grid/sense.ts';
+import { ownTestsSection } from '../learn/assisted/own-tests.ts';
 
 /* ============================================================================
  * A researcher's RECORD as another agent reads it (SPEC-ORQUESTADOR §3.3): the senior who
@@ -111,6 +112,17 @@ export function juniorBrief(journal: J): string | null {
       ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) }), tools);
   const at = prompt.indexOf(ANSWER_SHAPE);
   return (at >= 0 ? prompt.slice(0, at) : prompt).trimEnd();
+}
+
+/** How the junior may test its model with tests of its own (SPEC-PRUEBAS-PROPIAS T2), as it is told; null when it cannot
+    (not the assisted researcher, or a laboratory where it does not act). */
+export function juniorTests(journal: J): string | null {
+  const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
+  if (!lab || isGameLab(lab) || !lab.act || journal?.researcher !== 'assisted') return null;
+  const config = (journal?.config ?? {}) as J;
+  if (Array.isArray(config.tools) && !config.tools.includes('act')) return null;
+  const spec = lab.generate(Number(config.seed) || 1, worldOptionsIn(lab.options, config));
+  return ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act.identity && lab.episodeIdentity), Number(config.ownTests) || 0);
 }
 
 /** What the junior's code receives at a point (its `percept`, given in every round's message, not in its brief): the

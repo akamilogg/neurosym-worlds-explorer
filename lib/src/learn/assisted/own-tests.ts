@@ -13,13 +13,14 @@
  * ========================================================================== */
 
 /** What the assisted researcher is told of its tests, with the public rivals of its laboratory. */
-export function ownTestsSection(rivals: readonly { readonly name: string; readonly about: string }[], identities: boolean): string {
+export function ownTestsSection(rivals: readonly { readonly name: string; readonly about: string }[], identities: boolean, need = 0): string {
   return [
     'TESTS OF YOUR OWN. Before you trust a model, you may design the test that would refute it, as an investigation request: {"register_test": {"protocol": { ...an act... }, "model": <a round of yours, or a draft>, "rival": <another round or draft' + (rivals.length ? ', or "rival:<name>"' : '') + '>, "claim": "what your model predicts there that the rival does not, and why", "kind": "new" | "replicate", "place": "<one of your laboratories>"}}.',
     'It is registered before anyone looks: the model and the rival are frozen as they are then, and the test is a prediction of that model only. ' + (identities ? '"new" must be an experiment you have not seen (what is stimulated or changed and for how long - not what you record); "replicate", one you have seen.' : 'This environment cannot tell new experiments: only "replicate" one of your own acts.'),
     'The rival must explain what both models have already seen as well as yours does: it must hold in at least as many of your laboratories, on the points of your latest checks there. A test costs one act.',
     'When the round closes the environment runs the protocol (an episode "test<n>", yours to study) and answers with your next check, in `your_tests`: whether your model holds there, whether the rival does, and whether the test was severe - yours holds and the rival does not. A rival that cannot answer there makes no test severe.',
     'A valid test your model fails stays open, in `open_counterexamples`, until a later model of yours holds on its episode.'
+    + (need > 0 ? '\nIN THIS RUN THEY COUNT: a model of yours is confirmed in the places nobody has seen only once it has passed ' + need + ' severe test' + (need > 1 ? 's' : '') + ' registered with that very model (a test registered with another model never counts as its prediction), holds on the episodes of your other tests or has their counterexamples closed, and has no counterexample of its own open. Until then a validation stops after your family places.' : '')
     + (rivals.length ? '\nRivals you may name: ' + rivals.map((r) => '"rival:' + r.name + '" (' + r.about + ')').join('; ') + '.' : '')
   ].join('\n');
 }
@@ -41,6 +42,8 @@ export interface OwnTestsHost<L, A, E> {
   rival(name: string): L | null;
   rivalNames(): readonly string[];
   fingerprint(law: L): string;
+  /** OPERATOR ONLY: a model as the journal keeps it (for the audit's questions on the test). */
+  describe?(law: L): unknown;
   /** In how many of the learner's laboratories the model holds on the points of its latest check there; null with none. */
   sharedHolds(law: L): Promise<number | null>;
   /** The protocol run as an episode of the learner's (named `id`), or null when the environment refuses it. */
@@ -76,6 +79,8 @@ export class OwnTests<L, A, E> {
   private pending: Registered<L, A>[] = [];
   private results: Record<string, unknown>[] = [];
   private open: Counterexample[] = [];
+  /** Every valid test run: of which model, on which episode, and how it came out. */
+  private valid: { readonly test: string; readonly model: string; readonly episode: string; readonly place: string; readonly cases: readonly unknown[]; readonly holds: boolean; readonly severe: boolean }[] = [];
 
   constructor(host: OwnTestsHost<L, A, E>) { this.host = host; }
 
@@ -122,10 +127,13 @@ export class OwnTests<L, A, E> {
     if (m === null || r === null) return refuse('there is no shared evidence yet: register a test after a check');
     if (r < m) return refuse('the rival does not explain what both have seen: it holds in ' + r + ' of your laboratories, your model in ' + m);
     budget.acts--;
+    const directive = typeof rt.directive === 'string' && rt.directive ? rt.directive : null;
+    if (directive) by = 'senior';
     const t: Registered<L, A> = { id: 't' + (++this.n), round, by, act, place, kind, identity, model, rival, rivalName, claim: typeof rt.claim === 'string' ? rt.claim : '' };
     this.pending.push(t);
-    h.log('test_registered', { test: t.id, round, by, protocol: h.asWritten(act), place, kind, identity, model: h.fingerprint(model),
-      rival: rivalName ? 'rival:' + rivalName : h.fingerprint(rival), claim: t.claim, shared: { model_holds_in: m, rival_holds_in: r } });
+    h.log('test_registered', { test: t.id, round, by, ...(directive ? { directive } : {}), protocol: h.asWritten(act), place, kind, identity, model: h.fingerprint(model),
+      rival: rivalName ? 'rival:' + rivalName : h.fingerprint(rival), claim: t.claim, shared: { model_holds_in: m, rival_holds_in: r },
+      ...(h.describe ? { model_law: h.describe(model), rival_law: h.describe(rival) } : {}) });
     return { register_test: t.id, registered: true, runs: 'when this round closes; its result comes with your next check, in your_tests' };
   }
 
@@ -143,6 +151,7 @@ export class OwnTests<L, A, E> {
       const rival = rivalAnswers ? await h.evaluate(t.rival, t.place, cases, round) : null;
       const severe = model.holds && rival !== null && !rival.holds;
       if (!model.holds) this.open.push({ test: t.id, model: h.fingerprint(t.model), episode, place: t.place, cases, round });
+      this.valid.push({ test: t.id, model: h.fingerprint(t.model), episode, place: t.place, cases, holds: model.holds, severe });
       this.answer(t, { episode, valid: true, model_holds: model.holds, rival_holds: rival ? rival.holds : null, ...(rival ? {} : { rival_could_not_answer: true }), severe,
         ...(model.holds ? {} : { counterexample: true }), verdicts: model.view });
     }
@@ -167,9 +176,36 @@ export class OwnTests<L, A, E> {
     return out;
   }
 
+  /** Of a model (SPEC-PRUEBAS-PROPIAS §7): the severe tests it passed as registered with it - its predictions - and the tests
+      registered with other models it holds on too, their episodes answered again (a regression, never a prediction); and
+      the valid tests it neither holds on nor has a closed counterexample for. */
+  async standing(law: L, round: number): Promise<{ preregistered: string[]; regression: string[]; failing: string[] }> {
+    const h = this.host, fp = h.fingerprint(law);
+    const out = { preregistered: [] as string[], regression: [] as string[], failing: [] as string[] };
+    for (const v of this.valid) {
+      if (v.model === fp) {
+        if (v.severe) out.preregistered.push(v.test);
+        if (!v.holds && this.open.some((c) => c.test === v.test)) out.failing.push(v.test);
+        continue;
+      }
+      if ((await h.evaluate(law, v.place, v.cases, round)).holds) out.regression.push(v.test);
+      else if (this.open.some((c) => c.test === v.test)) out.failing.push(v.test);
+    }
+    return out;
+  }
+
+  /** `--own-tests N`, before a blind confirmation is spent: why this model may not be confirmed yet, or null. */
+  async requirement(law: L, need: number, round: number): Promise<string | null> {
+    const s = await this.standing(law, round);
+    if (s.preregistered.length < need) return 'your model has passed ' + s.preregistered.length + ' of the ' + need + ' severe tests of your own it needs - tests registered with this very model, before they ran';
+    if (s.failing.length) return 'your model does not hold on the episodes of your tests ' + s.failing.join(', ') + ', whose counterexamples are open';
+    return null;
+  }
+
   /** The operator's count (the finding's). */
   summary(): Record<string, unknown> {
-    return { registered: this.n, open_counterexamples: this.open.map((c) => c.test) };
+    return { registered: this.n, valid: this.valid.length, severe: this.valid.filter((v) => v.severe).length,
+      counterexamples: this.valid.filter((v) => !v.holds).length, open_counterexamples: this.open.map((c) => c.test) };
   }
 
   private answer(t: Registered<L, A>, r: Record<string, unknown>): void {

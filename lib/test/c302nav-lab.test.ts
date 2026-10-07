@@ -305,7 +305,7 @@ test('tests of its own: refused without shared evidence; a severe one; a failed 
     const results = events.filter((e) => e.type === 'investigation').flatMap((e) => e.results);
     assert.match(results[0].error, /no shared evidence yet/);
     assert.match(results.find((r: Record<string, unknown>) => r.register_test && r.registered === false && /replication/.test(String(r.error))).error, /you have not/);
-    assert.deepEqual(events.filter((e) => e.type === 'test_registered').map((e) => [e.test, e.kind, e.rival]), [['t1', 'new', events.find((e) => e.type === 'test_registered').rival], ['t2', 'new', 'rival:drive-now']]);
+    assert.deepEqual(events.filter((e) => e.type === 'test_registered').map((e) => [e.test, e.kind, e.rival]), [['t1', 'new', events.find((e) => e.type === 'test_registered')!.rival], ['t2', 'new', 'rival:drive-now']]);
     const [t1, t2] = events.filter((e) => e.type === 'test_result');
     assert.deepEqual([t1.test, t1.valid, t1.model_holds, t1.rival_holds, t1.severe], ['t1', true, true, false, true], 'severe: the model holds there, the rival does not');
     assert.deepEqual([t2.test, t2.model_holds, t2.counterexample], ['t2', false, true]);
@@ -315,4 +315,60 @@ test('tests of its own: refused without shared evidence; a severe one; a failed 
     assert.equal(end.own_tests.registered, 2);
     assert.ok(end.episodes.some((e: { episode: string }) => e.episode === 'test1'), 'its episode is the learner\'s');
   } finally { await served.close(); }
+});
+
+/* SPEC-PRUEBAS-PROPIAS T3: --own-tests N - a model is confirmed blind only after N severe tests registered with it; a test
+   registered with another model is a regression, never its prediction. */
+async function ownTestsRun(served: { url: string }, extra: string[], investigations: Record<number, unknown[]>): Promise<Record<string, any>[]> {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'c302nav-own-'));
+  const fetch: FetchLike = async (url, init) => {
+    if (String(url).startsWith(served.url)) return globalThis.fetch(url as string, init as RequestInit) as never;
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string;
+    const user = JSON.parse(userOf(b));
+    const done = (user.investigation ?? []).length;
+    const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : done === 0 && investigations[user.round] ? { investigate: investigations[user.round] } : HOLDING;
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const out = path.join(work, 'run.json');
+  await runLaboratory(c302NavLab, { args: ['--seed', '1', '--attempts', '3', '--explore', '1', '--check-episodes', '1', '--family', '1', '--confirm-places', '1', '--flat', '--no-grade',
+    '--no-reflection', '--no-ablation', '--researcher', 'assisted', '--service', served.url, ...extra, '--out', out], root: work, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
+  return JSON.parse(fs.readFileSync(out, 'utf8')).events;
+}
+const RIVAL = { observations: {}, rules: {}, weights: {}, output: HOLDING.output.replace('return {', 'if ([...L, ...R].some((v) => Math.abs(v) > 8)) return { reorientation: 0, steering: 0 }; return {') };
+const BIG = { stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 3000, amplitude_pa: 20 }], duration_ms: 4000 };
+
+test('--own-tests 1: the blind confirmation waits for a severe test of the model itself; then it is accepted', async () => {
+  const served = await serveC302({ worker, concurrency: 4 });
+  try {
+    const events = await ownTestsRun(served, ['--own-tests', '1'], { 2: [{ register_test: { protocol: BIG, model: 1, rival: RIVAL, claim: 'large currents drive it too', kind: 'new' } }] });
+    const checks = events.filter((e) => e.type === 'check');
+    assert.match(checks[0].validation.confirmation_refused, /passed 0 of the 1 severe tests/);
+    assert.equal(checks[0].accepted, false);
+    assert.equal(events.find((e) => e.type === 'test_result')!.severe, true);
+    const end = events.find((e) => e.type === 'end')!;
+    assert.equal(end.stoppedBy, 'accepted');
+    assert.equal(events.find((e) => e.type === 'accepted')!.round, 3, 'once its test ran (with the check of round 2), the validation of round 3 is confirmed');
+    assert.deepEqual([end.own_tests.required, end.own_tests.final_model.passed_preregistered], [1, ['t1']]);
+  } finally { await served.close(); }
+});
+
+test('--own-tests 1: a test registered with another model counts for this one only as a regression - never accepted on it', async () => {
+  const served = await serveC302({ worker, concurrency: 4 });
+  try {
+    const other = { ...HOLDING, output: HOLDING.output.replace('(p) => {', '(p) => { const unused = 0;') };
+    const events = await ownTestsRun(served, ['--own-tests', '1'], { 2: [{ register_test: { protocol: BIG, model: other, rival: RIVAL, claim: 'c', kind: 'new' } }] });
+    const end = events.find((e) => e.type === 'end')!;
+    assert.notEqual(end.stoppedBy, 'accepted');
+    assert.deepEqual([end.own_tests.final_model.passed_preregistered, end.own_tests.final_model.passed_regression], [[], ['t1']]);
+  } finally { await served.close(); }
+});
+
+test('--own-tests needs the assisted researcher', async () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'c302nav-own-'));
+  await assert.rejects(runLaboratory(c302NavLab, { args: ['--seed', '1', '--attempts', '1', '--flat', '--own-tests', '1', '--service', 'http://127.0.0.1:1', '--out', path.join(work, 'r.json')],
+    root: work, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: async () => { throw new Error('no network'); } }), /--own-tests needs the assisted researcher/);
 });

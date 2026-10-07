@@ -40,7 +40,8 @@ export interface RunInfo {
 /** An order to a run. `stop` is obeyed by any researcher; the others are help, which only the assisted one takes. */
 export type RunOrder =
   | { readonly kind: 'stop'; readonly by?: string }
-  | { readonly kind: 'message'; readonly text: string; readonly by?: string; /** A senior's: an order, not a suggestion (SPEC-ORQUESTADOR §3.3.3). */ readonly directive?: boolean }
+  | { readonly kind: 'message'; readonly text: string; readonly by?: string; /** A senior's: an order, not a suggestion (SPEC-ORQUESTADOR §3.3.3). */ readonly directive?: boolean;
+      /** A senior's order to register a test of the junior's own, with its message (SPEC-PRUEBAS-PROPIAS §8). */ readonly test?: Readonly<Record<string, unknown>> }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string }
   /** A senior's suspicion of the instrument (SPEC-CALIBRACION-INSTRUMENTOS §4.3): logged by the run, never delivered. */

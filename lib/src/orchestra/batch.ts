@@ -74,6 +74,8 @@ export interface BatchRunRow {
   readonly tokens_total: number | null;
   readonly tokens_to_acceptance: number | null;
   readonly help: number;
+  /** Its tests of its own (SPEC-PRUEBAS-PROPIAS §9), when it registered any. */
+  readonly own_tests?: { readonly registered: number; readonly severe: number; readonly by_senior: number; readonly counterexamples: number; readonly closed: number; readonly preregistered_final: number | null };
   /** Its agent operator, when it had one: what it cost over the run (and the runs it resumed), and how much of its input the
       provider took from its cache. */
   readonly agent?: { readonly id: string; readonly decisions: number; readonly calls: number; readonly tokens_in: number; readonly cached_share: number | null; readonly cost: number };
@@ -89,6 +91,9 @@ export interface ConditionRow {
   readonly tokens_to_acceptance: Spread;
   readonly tokens_total: Spread;
   readonly help: Spread;
+  /** Per run: severe tests of its own, and counterexamples found (SPEC-PRUEBAS-PROPIAS §10). */
+  readonly severe_tests: Spread;
+  readonly counterexamples: Spread;
 }
 
 export interface BatchReport {
@@ -121,7 +126,9 @@ export function rowOf(def: BatchRun, journal: string | null, f: Finding | null, 
   return { id: def.id, condition: def.condition, lab: def.lab, researcher: f?.researcher ?? def.researcher ?? (def.fork ? 'assisted' : 'unknown-world'), journal,
     status: error ? 'error' : f?.outcome.status ?? 'not run', accepted, round: accepted ? f!.outcome.round : null,
     tokens_total: typeof cost.llm_tokens === 'number' ? cost.llm_tokens : null, tokens_to_acceptance: accepted && typeof toAcc.llm_tokens === 'number' ? toAcc.llm_tokens : null,
-    help: f?.assistance?.messages.length ?? 0, ...(agentRow(def, journal)), ...(error ? { error } : {}) };
+    help: f?.assistance?.messages.length ?? 0, ...(f?.own_tests ? { own_tests: { registered: f.own_tests.registered, severe: f.own_tests.severe, by_senior: f.own_tests.by.senior,
+      counterexamples: f.own_tests.counterexamples.found, closed: f.own_tests.counterexamples.closed, preregistered_final: f.own_tests.final_model?.passed_preregistered.length ?? null } } : {}),
+    ...(agentRow(def, journal)), ...(error ? { error } : {}) };
 }
 
 /** What a run's agent operator cost, from its record next to the run's journal. */
@@ -140,7 +147,8 @@ export function batchTable(rows: readonly BatchRunRow[]): ConditionRow[] {
     const rs = rows.filter((r) => r.condition === condition && r.status !== 'error' && r.status !== 'not run');
     return { condition, runs: rs.length, accepted: rs.filter((r) => r.accepted).length,
       acceptance_round: spread(rs.map((r) => r.round)), tokens_to_acceptance: spread(rs.map((r) => r.tokens_to_acceptance)),
-      tokens_total: spread(rs.map((r) => r.tokens_total)), help: spread(rs.map((r) => r.help)) };
+      tokens_total: spread(rs.map((r) => r.tokens_total)), help: spread(rs.map((r) => r.help)),
+      severe_tests: spread(rs.map((r) => r.own_tests?.severe ?? 0)), counterexamples: spread(rs.map((r) => r.own_tests?.counterexamples ?? 0)) };
   });
 }
 
@@ -151,8 +159,10 @@ const ended = (journal: string): boolean => { if (!fs.existsSync(journal)) retur
 export function batchText(report: BatchReport): string {
   const s = (x: Spread) => (x.median === null ? '-' : x.median + (x.q1 !== x.q3 ? ' [' + x.q1 + '–' + x.q3 + ']' : ''));
   return ['batch ' + report.id + (report.ended ? ' (ended ' + report.ended + ')' : ' (running)'),
-    ...report.table.map((c) => '  ' + c.condition + ': ' + c.accepted + '/' + c.runs + ' accepted; round ' + s(c.acceptance_round) + '; tokens to acceptance ' + s(c.tokens_to_acceptance) + '; tokens ' + s(c.tokens_total) + '; help ' + s(c.help)),
+    ...report.table.map((c) => '  ' + c.condition + ': ' + c.accepted + '/' + c.runs + ' accepted; round ' + s(c.acceptance_round) + '; tokens to acceptance ' + s(c.tokens_to_acceptance) + '; tokens ' + s(c.tokens_total) + '; help ' + s(c.help)
+      + (c.severe_tests.median || c.counterexamples.median ? '; severe tests ' + s(c.severe_tests) + '; counterexamples ' + s(c.counterexamples) : '')),
     ...report.runs.map((r) => '    ' + r.id + ' [' + r.condition + ']: ' + r.status + (r.round !== null ? ' in round ' + r.round : '') + (r.error ? ' - ' + r.error : '')
+      + (r.own_tests ? '; tests ' + r.own_tests.registered + ' (' + r.own_tests.severe + ' severe, ' + r.own_tests.by_senior + ' by the senior), counterexamples ' + r.own_tests.counterexamples + ' (' + r.own_tests.closed + ' closed)' : '')
       + (r.agent ? '; agent:' + r.agent.id + ' ' + r.agent.decisions + ' decisions, ' + r.agent.calls + ' calls, ' + Math.round(r.agent.tokens_in / 1000) + 'k tokens in'
         + (r.agent.cached_share !== null ? ' (' + Math.round(r.agent.cached_share * 100) + '% cached)' : '') + ', $' + r.agent.cost : '')),
     ...(report.audit.length ? ['  AUDIT (operator only): ' + report.audit.map((a) => a.condition + ' recovery ' + s(a.rule_recovery)).join('; ')] : [])].join('\n');

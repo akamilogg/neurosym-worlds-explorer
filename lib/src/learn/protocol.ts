@@ -43,6 +43,9 @@ export interface ProtocolOptions<M, P extends Place> {
   /** Asked when a model held in every family place, before the blind sets: null spends one confirmation, a reason refuses
       it (a team's confirmations are counted: SPEC-INVESTIGACION-PARALELA §5.4). Default: always allowed. */
   readonly confirm?: (context: { round: number; attempt: number }) => string | null;
+  /** Asked before `confirm`, with the model: a reason refuses the blind confirmation before any is spent (the tests of the
+      researcher's own it must have passed: SPEC-PRUEBAS-PROPIAS §7). Default: none. */
+  readonly gate?: (context: { round: number; attempt: number; model: M }) => string | null | Promise<string | null>;
   /** The reports of the instrument an acceptance through these places must wait for (SPEC-CALIBRACION-INSTRUMENTOS §5.1):
       none, it is accepted; some, it waits for the operator's verdict on them (`release`). Default: none. */
   readonly hold?: (places: readonly string[]) => readonly string[];
@@ -259,7 +262,8 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
         const becameLaboratories = fam.outcomes.filter((o) => !o.holds).map((o) => { o.place.role = 'laboratory'; return o.place.id; });
         /* 3. It holds everywhere: places nobody has seen decide - if a confirmation may be spent. */
         let blind: BlindSet<P, R>[] | null = null;
-        const confirmationRefused = becameLaboratories.length ? null : this.options.confirm?.({ round, attempt }) ?? null;
+        const gated = becameLaboratories.length ? null : (await this.options.gate?.({ round, attempt, model })) ?? null;
+        const confirmationRefused = becameLaboratories.length ? null : gated ?? this.options.confirm?.({ round, attempt }) ?? null;
         if (!becameLaboratories.length && confirmationRefused === null) {
           blind = [];
           for (let set = 0; set < (this.options.confirmSets ?? 2); set++) {

@@ -54,6 +54,7 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'every', default: '3', help: 'take every N-th step of an episode as a point of a check' },
   { name: 'family', default: '3', help: 'places of the family to validate on' },
   { name: 'validations', default: '3', help: 'how many times System 2 may validate' },
+  { name: 'own-tests', default: '0', help: 'N > 0: a model is confirmed blind only after N severe tests of the assisted researcher\'s own, registered with it (SPEC-PRUEBAS-PROPIAS §7)' },
   { name: 'confirm-places', default: '2', help: 'places per blind confirmation set, two sets' },
   { name: 'tools', default: 'all', help: 'the instruments, a,b,... ("all" or "none")' },
   { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
@@ -316,6 +317,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     every: Math.max(1, Number(arg('every'))),
     family: Math.max(1, Number(arg('family'))),
     validations: Math.max(1, Number(arg('validations'))),
+    ...(Number(arg('own-tests')) > 0 ? { ownTests: Math.floor(Number(arg('own-tests'))) } : {}),
     confirmPlaces: Math.max(1, Number(arg('confirm-places'))),
     regression: lab.regressionByDefault === false ? flag('regression') : !flag('no-regression'),
     tools: parseTools(arg('tools')),
@@ -648,7 +650,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       } else if (researcher === 'assisted' && order.kind === 'message' && typeof (order as { text?: unknown }).text === 'string' && (order as { text: string }).text.trim()) {
         /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
         waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}),
-          ...((order as { directive?: unknown }).directive === true ? { directive: true } : {}), at: new Date().toISOString() });
+          ...((order as { directive?: unknown }).directive === true ? { directive: true } : {}),
+          ...((order as { test?: unknown }).test && typeof (order as { test?: unknown }).test === 'object' ? { test: (order as { test: Record<string, unknown> }).test } : {}), at: new Date().toISOString() });
         log('operator_command', { ...who, accepted: true }); helpUsed++;
       } else if (researcher === 'assisted' && order.kind === 'focus') {
         const facet = String((order as { facet?: unknown }).facet ?? '');
@@ -925,6 +928,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     fingerprint: (law) => lawFingerprint(law),
     /* SPEC-CALIBRACION-INSTRUMENTOS §5.1: an acceptance through a place a report of the instrument questions waits. */
     hold: (through) => holding(reportStates(reportsOf(journal.events), run.verdicts(session.currentRound)), through, placeOfRef),
+    /* --own-tests N (SPEC-PRUEBAS-PROPIAS §7): before a blind confirmation is spent, the model must have passed N severe tests
+       of its own as registered with it, hold on the episodes of the others or have their counterexamples closed. */
+    ...(cfg.ownTests ? { gate: ({ round, model }: { round: number; model: Law }) => ownTests!.requirement(model, cfg.ownTests as number, round) } : {}),
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
     ...(lab.roleWords ? { roleWords: lab.roleWords } : {}),
@@ -1176,6 +1182,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     return { holds: objective.holds(results, { place }), view: objective.view(results, place) as Record<string, unknown> };
   };
   const codeLaw = (source: string): Law => ({ world: world.id, observations: {}, rules: {}, weights: {}, output: { kind: 'code', lang: 'js', source } });
+  if (cfg.ownTests && !actLab) throw new LabError('--own-tests needs the assisted researcher in a laboratory where it acts (' + lab.id + (lab.act ? ', with act among its tools' : ' has no act') + ')');
   const ownTests = actLab ? new OwnTests<Law, unknown, unknown>({
     parseAct: (raw) => actLab.parse(raw),
     asWritten: (a) => (actLab.asWritten ? actLab.asWritten(a) : a),
@@ -1204,6 +1211,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     rival: (name) => { const r = lab.rivals?.(spec).find((x) => x.name === name); return r ? codeLaw(r.source) : null; },
     rivalNames: () => (lab.rivals?.(spec) ?? []).map((r) => r.name),
     fingerprint: (law) => lawFingerprint(law),
+    describe: (law) => ownLaw(law),
     sharedHolds: async (law) => {
       const byPlace = latestCheckCases();
       if (!byPlace.size) return null;
@@ -1235,7 +1243,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       take: () => (helping && run.replay.pending() === 0 ? run.operator.take() : []), scheduled: deliveredMessages(previous),
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
-        + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity)) : '') : promptFor(focus)),
+        + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), (cfg.ownTests as number | undefined) ?? 0) : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
@@ -1392,6 +1400,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     await session.consult('reflect', reflectionTask(investigative));
   }
   const final = accepted?.law ?? session.latest()?.law ?? null;
+  /* Of the final model, its tests: what it predicted (as registered with it) and what it holds on again (SPEC-PRUEBAS-PROPIAS §7). */
+  const finalTests = ownTests && final && (ownTests.summary().registered as number) > 0 ? await ownTests.standing(final, session.currentRound) : null;
   if (cfg.grade && !session.fatal && !session.halted) await gradeRecovery(final);
   const result = run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
@@ -1400,7 +1410,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },
     ...(reports.length ? { instrument: { reports, ...(held ? { acceptance_held: { round: held.round, reports: held.reports } } : {}) } } : {}),
-    ...(ownTests && (ownTests.summary().registered as number) > 0 ? { own_tests: ownTests.summary() } : {}),
+    ...(ownTests && (ownTests.summary().registered as number) > 0 ? { own_tests: { ...ownTests.summary(), ...(cfg.ownTests ? { required: cfg.ownTests } : {}),
+      ...(finalTests ? { final_model: { passed_preregistered: finalTests.preregistered, passed_regression: finalTests.regression, failing: finalTests.failing } } : {}) } } : {}),
     ...(lab.operator?.end?.(session.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, test: l.test })), operatorContext) ?? {}),
     /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
     operator_summary: operatorSummary(protocol.summary(), ablations)

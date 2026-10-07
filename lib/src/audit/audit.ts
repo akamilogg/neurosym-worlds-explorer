@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Judge } from '../core/types.ts';
 import { linksOf, type LinkRecord } from './links.ts';
 import { judgeMethod, type Judgements, type Verdict } from './judge.ts';
-import { findingOf } from '../learn/finding.ts';
+import { findingOf, ownTestsOf, type OwnTestsMeasures } from '../learn/finding.ts';
 import type { ChatClient } from '../learn/system2.ts';
 import { extractClaims, factMeasures, type Source } from './extract.ts';
 
@@ -44,6 +44,8 @@ export interface Measures {
   readonly orphan_steps: { readonly count: number; readonly share: number | null };
   readonly controls: { readonly groups: number; readonly used: number; readonly paired: number; readonly replicated: number; readonly against_recorded: number };
   readonly beliefs: { readonly count: number; readonly revised: number; readonly dropped: number };
+  /** The tests of its own it registered (SPEC-PRUEBAS-PROPIAS §9); absent with none. */
+  readonly own_tests?: OwnTestsMeasures;
   /** The claims the extractor structured, by kind, and the facts among them checked (MA2, O6); absent without extraction. */
   readonly claims?: Record<string, any>;
   /** From the Judge (null without it): shares of the experiment links (or rounds) by answer. */
@@ -58,6 +60,9 @@ export interface Measures {
     readonly observation_scope: Readonly<Record<string, number>>;
     readonly refutation: Readonly<Record<string, number>>;
     readonly control: Readonly<Record<string, number>>;
+    /** About its tests of its own: whether each rival was genuine, and each claim what its protocol tells apart. */
+    readonly test_rival?: Readonly<Record<string, number>>;
+    readonly test_claim?: Readonly<Record<string, number>>;
   };
 }
 
@@ -94,7 +99,8 @@ export function measuresOf(record: LinkRecord, judged: Judgements | null): Measu
       complete_chains: share(complete, links.length),
       purpose: split(links, 'purpose'), discrimination: split(links, 'discrimination'), reading: split(links, 'reading'), scope: split(links, 'scope'),
       observation_reading: split(looks, 'reading'), observation_scope: split(looks, 'scope'),
-      refutation: split(rounds, 'refutation'), control: split(rounds, 'control')
+      refutation: split(rounds, 'refutation'), control: split(rounds, 'control'),
+      ...(judged.tests ? { test_rival: split(Object.values(judged.tests), 'rival'), test_claim: split(Object.values(judged.tests), 'claim') } : {})
     } } : {})
   };
 }
@@ -118,14 +124,16 @@ export async function auditMethod(journalFile: string, judge: (Judge & { readonl
   const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')) as J;
   if (!(journal.events ?? []).some((e: J) => e.type === 'end')) throw new Error('audit: the run has not ended (M1: the audit is of a finished run)');
   const record = linksOf(journal);
-  const judged = judge ? await judgeMethod(record, judge) : null;
+  const events: J[] = journal.events ?? [];
+  const judged = judge ? await judgeMethod(record, judge, events.filter((e) => e.type === 'test_registered')) : null;
+  const ownTests = ownTestsOf(events, [...events].reverse().find((e) => e.type === 'end') ?? {});
   const sources = extractor ? await extractClaims(journal, record, extractor.llm, judge) : null;
   const { links, rounds: _rounds, ...rest } = record;
   const audit: MethodAudit = {
     format: 'method_audit@1', run: path.basename(journalFile), audited: new Date().toISOString(),
     researcher: String(journal.researcher ?? 'unknown-world'), model: journal.config?.llm_model ?? null,
     judge: judge ? judge.id : null,
-    measures: { ...measuresOf(record, judged), ...(sources ? { claims: factMeasures(sources) } : {}) },
+    measures: { ...measuresOf(record, judged), ...(ownTests ? { own_tests: ownTests } : {}), ...(sources ? { claims: factMeasures(sources) } : {}) },
     outcome: outcomeOf(journal),
     observed: { ...rest, links: links.map((l) => ({ id: l.id, kind: l.kind, instruments: l.instruments, refused: l.refused, made: l.made, cited_by: l.after?.cites_this ?? [] })) },
     judged,

@@ -72,6 +72,31 @@ export const ROUND_QUESTIONS: Readonly<Record<string, Rule>> = {
   })
 };
 
+/** About each test of its own the researcher registered (SPEC-PRUEBAS-PROPIAS §9): informative only - never a criterion of
+    the test's verdict, which the environment gives. The Judge sees what was registered, not how the test came out. */
+export const TEST_QUESTIONS: Readonly<Record<string, Rule>> = {
+  rival: choice('Read model, rival and shared (in how many of the researcher\'s laboratories each held on what both had already seen). Is the rival a genuine alternative explanation of what both had seen, or one made to lose?', {
+    genuine: 'a genuine alternative: it explains what was seen in its own way, and could have won the test',
+    straw_man: 'made to lose: it differs from the model only where nothing was seen, or in a way no one would hold',
+    cannot_tell: 'what is shown here is not enough to tell'
+  }),
+  claim: choice('Read protocol, claim, model and rival. Does the claim say what this protocol can tell apart between the two models?', {
+    matches: 'yes: the protocol puts the two models where the claim says they part',
+    overstates: 'the claim says more than the protocol can tell apart',
+    unrelated: 'the protocol does not bear on what the claim says',
+    cannot_tell: 'what is shown here is not enough to tell'
+  })
+};
+
+/** The texts the Judge is shown of a registered test. */
+export function testTexts(e: Record<string, unknown>): Record<string, string> {
+  return {
+    protocol: text(e.protocol, 2000), claim: text(e.claim || '(no claim)', 1000),
+    model: text(e.model_law ?? e.model, 3000), rival: text(e.rival_law ?? e.rival, 3000),
+    shared: text(e.shared ?? '(not recorded)', 300)
+  };
+}
+
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 const text = (v: unknown, n: number): string => clip(typeof v === 'string' ? v : JSON.stringify(v), n);
 
@@ -145,12 +170,14 @@ export interface Judgements {
   /** J3-J4 of the observations a later text cites. */
   readonly observations: Readonly<Record<string, Record<string, Verdict | null>>>;
   readonly rounds: Readonly<Record<string, Record<string, Verdict | null>>>;
+  /** About each registered test of its own: its rival and its claim. */
+  readonly tests?: Readonly<Record<string, Record<string, Verdict | null>>>;
   readonly calls: number;
   readonly errors: readonly string[];
 }
 
 /** J1-J4 for each experiment link, J3-J4 for each cited observation, J5-J6 for each stretch something closed. */
-export async function judgeMethod(record: LinkRecord, judge: Judge): Promise<Judgements> {
+export async function judgeMethod(record: LinkRecord, judge: Judge, tests: readonly Record<string, unknown>[] = []): Promise<Judgements> {
   const links: Record<string, Record<string, Verdict | null>> = {};
   const observations: Record<string, Record<string, Verdict | null>> = {};
   const rounds: Record<string, Record<string, Verdict | null>> = {};
@@ -174,5 +201,10 @@ export async function judgeMethod(record: LinkRecord, judge: Judge): Promise<Jud
     const v = await ask(roundTexts(r, record), ROUND_QUESTIONS, r.id);
     if (v) rounds[r.id] = v;
   }));
-  return { links, observations, rounds, calls, errors };
+  const judgedTests: Record<string, Record<string, Verdict | null>> = {};
+  await Promise.all(tests.map(async (t) => {
+    const v = await ask(testTexts(t), TEST_QUESTIONS, String(t.test));
+    if (v) judgedTests[String(t.test)] = v;
+  }));
+  return { links, observations, rounds, ...(tests.length ? { tests: judgedTests } : {}), calls, errors };
 }

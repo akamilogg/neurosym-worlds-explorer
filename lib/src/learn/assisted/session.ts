@@ -42,6 +42,8 @@ export interface OperatorMessage {
   readonly source?: string;
   /** A senior's message (SPEC-ORQUESTADOR §3.3.3): an ORDER the researcher carries out and reports, not a suggestion. */
   readonly directive?: boolean;
+  /** A test the senior orders it to register (SPEC-PRUEBAS-PROPIAS §8). */
+  readonly test?: Readonly<Record<string, unknown>>;
 }
 
 /** What it is told once a directive has reached it: what an order of its senior is, how it reports it, how it disagrees. */
@@ -49,6 +51,7 @@ export const DIRECTIVES_SECTION = [
   'YOUR SENIOR. Messages marked "directive": true come from the senior researcher who reviews your work. They are ORDERS, not suggestions: carry each one out - run the experiment it asks for, build into your next model what it tells you to build, and stop relying on what it tells you to drop.',
   'If you disagree with its hypothesis or its method, carry it out anyway, and say why: in your notebook, and to your senior with "to_senior": "<what you disagree with, and your evidence>" in any of your answers. Your senior reads it, and may change its orders.',
   'Report each directive once you have carried it out, in any of your answers: "directives": [{"id": "<the message id>", "done": "what you did, and where - points, rounds, your model"}]. A proposal made while one of its directives is still open is returned to you once.',
+  'A directive may carry a "test": register it as it is written, with your current model - {"register_test": { ...the test..., "model": <your latest round>, "directive": "<the message id>"}} - or say in "to_senior" why you do not.',
   'A directive is not evidence about the environment: the checks decide whether a model holds. A model that carries out a directive and fails also teaches - and tells your senior something.'
 ].join('\n');
 
