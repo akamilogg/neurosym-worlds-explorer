@@ -81,40 +81,50 @@ def wiring(req):
     return {"cells": sorted(inside), "connections": out}
 
 
-def simulate(req):
+def generate_network(req, work):
+    """The network a request asks for, written in `work` as c302 writes it (net.net.nml and LEMS_net.xml): its cells, its
+    changes and its stimuli. The same for every engine that simulates it (jNeuroML here, NEURON in closed loop). Returns
+    the number of its connections."""
     import c302
-    import numpy as np
     import neuroml.writers as writers
     from neuroml import SineGenerator
-    from pyneuroml import pynml
 
     known, _ = c302.get_cell_names_and_connection(c302.DEFAULT_DATA_READER)
     check(req, known)
     params = importlib.import_module("c302.parameters_" + str(req.get("parameter_set", "C1"))).ParameterisedModel()
     dt, duration = float(req.get("dt_ms", 0.05)), float(req["duration_ms"])
+    doc = c302.generate(
+        "net", params, cells=req.get("cells"), cells_to_stimulate=[], muscles_to_include=[],
+        conns_to_exclude=list(req.get("remove_connections") or []),
+        conn_number_scaling={k: float(v) for k, v in (req.get("connection_number_scaling") or {}).items()} or None,
+        conn_polarity_override=req.get("connection_polarity_override") or None,
+        param_overrides=req.get("param_overrides") or {},
+        duration=duration, dt=dt, target_directory=str(work), verbose=False)
+    net = doc.networks[0]
+    n_connections = len(net.projections) + len(net.electrical_projections) + len(net.continuous_projections)
+    for s in req.get("stimuli") or []:
+        delay, length, amp = "%gms" % float(s["delay_ms"]), "%gms" % float(s["duration_ms"]), "%gpA" % float(s["amplitude_pa"])
+        if s.get("kind", "pulse") == "pulse":
+            c302.add_new_input(doc, s["cell"], delay, length, amp, params)
+        else:
+            k = 1 + sum(1 for g in doc.sine_generators if g.id.startswith("sine_%s_" % s["cell"]))
+            gen = SineGenerator(id="sine_%s_%d" % (s["cell"], k), delay=delay, duration=length, amplitude=amp,
+                                period="%gms" % float(s["period_ms"]), phase=str(float(s.get("phase_rad", 0.0))))
+            doc.sine_generators.append(gen)
+            c302.append_input_to_nml_input_list(gen, doc, s["cell"], params)
+    writers.NeuroMLWriter.write(doc, str(work / "net.net.nml"))
+    return n_connections
+
+
+def simulate(req):
+    import numpy as np
+    from pyneuroml import pynml
+
+    dt = float(req.get("dt_ms", 0.05))
     work = Path(tempfile.mkdtemp(prefix="c302svc_"))
     try:
         t0 = time.time()
-        doc = c302.generate(
-            "net", params, cells=req.get("cells"), cells_to_stimulate=[], muscles_to_include=[],
-            conns_to_exclude=list(req.get("remove_connections") or []),
-            conn_number_scaling={k: float(v) for k, v in (req.get("connection_number_scaling") or {}).items()} or None,
-            conn_polarity_override=req.get("connection_polarity_override") or None,
-            param_overrides=req.get("param_overrides") or {},
-            duration=duration, dt=dt, target_directory=str(work), verbose=False)
-        net = doc.networks[0]
-        n_connections = len(net.projections) + len(net.electrical_projections) + len(net.continuous_projections)
-        for s in req.get("stimuli") or []:
-            delay, length, amp = "%gms" % float(s["delay_ms"]), "%gms" % float(s["duration_ms"]), "%gpA" % float(s["amplitude_pa"])
-            if s.get("kind", "pulse") == "pulse":
-                c302.add_new_input(doc, s["cell"], delay, length, amp, params)
-            else:
-                k = 1 + sum(1 for g in doc.sine_generators if g.id.startswith("sine_%s_" % s["cell"]))
-                gen = SineGenerator(id="sine_%s_%d" % (s["cell"], k), delay=delay, duration=length, amplitude=amp,
-                                    period="%gms" % float(s["period_ms"]), phase=str(float(s.get("phase_rad", 0.0))))
-                doc.sine_generators.append(gen)
-                c302.append_input_to_nml_input_list(gen, doc, s["cell"], params)
-        writers.NeuroMLWriter.write(doc, str(work / "net.net.nml"))
+        n_connections = generate_network(req, work)
         res = pynml.run_lems_with_jneuroml("LEMS_net.xml", exec_in_dir=str(work), max_memory="4G", nogui=True,
                                            load_saved_data=True, verbose=False, exit_on_fail=False)
         if not isinstance(res, dict):
@@ -136,7 +146,12 @@ def simulate(req):
 if __name__ == "__main__":
     try:
         request = json.loads(sys.stdin.read())
-        answer = wiring(request) if request.get("wiring") else simulate(request)
+        if request.get("closed_loop"):
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import closed_loop
+            answer = closed_loop.run(request)
+        else:
+            answer = wiring(request) if request.get("wiring") else simulate(request)
     except BadRequest as e:
         answer = {"error": str(e), "bad_request": True}
     except Exception as e:  # anything else is the service's, not the request's

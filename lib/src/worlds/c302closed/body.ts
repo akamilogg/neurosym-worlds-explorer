@@ -1,3 +1,6 @@
+import { mulberry32 } from '../grid/gen.ts';
+import { STEPS } from '../c302nav/stimuli.ts';
+
 /* ============================================================================
  * The body and the field of c302nav in closed loop (SPEC-C302-LAZO-CERRADO §8, L1): ours, not
  * c302's, so they are declared here and verified by themselves - with synthetic circuits in place
@@ -64,6 +67,56 @@ export interface BodySpec {
   readonly arrival: number;
   /** 1, or −1 for the mirror image of the body (its swing and its turns go the other way): §8.2's reflection. */
   readonly chirality?: 1 | -1;
+  /** How it smells: continuously (absent), or in PULSES as c302nav's drive comes - c302 answers a current that rises past its
+      threshold, not a level (L2, 07/10/2026). */
+  readonly sensing?: PulseSensing;
+}
+
+/** Smelling in pulses: their times come from a seed (the first among `first`, then a width and a gap at a time, drawn among
+    those given - c302nav's family of steps); what each pulse carries is fixed when it starts, from the odor at the nose
+    and the side the head is on then, and held until it ends. Between pulses, no current. */
+export interface PulseSensing {
+  readonly kind: 'pulses';
+  readonly seed: number;
+  readonly first: readonly number[];
+  readonly width: readonly number[];
+  readonly gap: readonly number[];
+}
+
+/** The pulses' windows [start, end) up to a time (ms). */
+export function pulseWindows(s: PulseSensing, untilMs: number): [number, number][] {
+  const rnd = mulberry32(s.seed);
+  const pick = (xs: readonly number[]) => xs[Math.floor(rnd() * xs.length)];
+  const out: [number, number][] = [];
+  for (let t = pick(s.first); t < untilMs;) { const w = pick(s.width); out.push([t, t + w]); t += w + pick(s.gap); }
+  return out;
+}
+
+/** What comes into the two sides at a step: continuous, or the pulse in course (held from its start). */
+export class Sensor {
+  private readonly windows: [number, number][] | null;
+  private index = 0;
+  private held: { left: number; right: number } | null;
+  private heldFrom: number | null = null;
+  private readonly body: BodySpec;
+
+  /** `held`: in a rollout started at `t0` inside a pulse, what that pulse carries. */
+  constructor(body: BodySpec, untilMs: number, held?: { left: number; right: number }, t0 = 0) {
+    this.body = body;
+    this.windows = body.sensing ? pulseWindows(body.sensing, untilMs) : null;
+    this.held = held ?? null;
+    if (held) this.heldFrom = t0;
+  }
+
+  current(field: FieldSpec, pose: Pose, tMs: number): { left: number; right: number } {
+    const smelled = () => sense(this.body, concentration(field, noseAt(this.body, pose, tMs)), tMs);
+    if (!this.windows) return smelled();
+    while (this.index < this.windows.length && this.windows[this.index][1] <= tMs) this.index++;
+    const w = this.windows[this.index];
+    if (!w || tMs < w[0]) return { left: 0, right: 0 };
+    if (this.heldFrom === null || this.heldFrom < w[0]) { this.held = smelled(); this.heldFrom = tMs; }
+    return this.held!;
+  }
 }
 
 export const DEFAULT_BODY: BodySpec = {
@@ -141,9 +194,12 @@ export function runEpisode(o: { field: FieldSpec; body: BodySpec; circuit: Circu
   /** Where in time it starts (ms): a rollout from a point of an episode keeps the head's swing in phase. */
   t0Ms?: number;
   /** The turn rate accumulated so far (the deterministic body), and how many turns it made (their sides alternate). */
-  accumulated?: number; turns?: number }): Episode {
+  accumulated?: number; turns?: number;
+  /** Started inside a pulse (smelling in pulses): what it carries. */
+  held?: { left: number; right: number } }): Episode {
   const { field, body, circuit, dtMs } = o;
   let pose = o.start, signals = circuit.initial, accumulated = o.accumulated ?? 0, turns = o.turns ?? 0;
+  const sensor = new Sensor(body, (o.t0Ms ?? 0) + o.durationMs, o.held, o.t0Ms ?? 0);
   const steps: Step[] = [];
   const n = Math.round(o.durationMs / dtMs);
   const arrived = (p: Pose) => !field.uniform && Math.hypot(p.x - field.source[0], p.y - field.source[1]) <= body.arrival;
@@ -153,7 +209,7 @@ export function runEpisode(o: { field: FieldSpec; body: BodySpec; circuit: Circu
     const before = pose, accBefore = accumulated, turnsBefore = turns;
     /* (1) observed at t_k; (2) the current over the step, from the concentration at the nose now. */
     const c = concentration(field, noseAt(body, pose, t));
-    const { left, right } = sense(body, c, t);
+    const { left, right } = sensor.current(field, pose, t);
     /* (3) the circuit advances over the step: its signals at t_{k+1}. */
     const next = circuit.step(left, right, dtMs);
     /* (4) the body moves over the step by the signals at t_k. */
@@ -198,3 +254,13 @@ export function reflect(a: number, p: Pose): Pose {
   if (y > a) { y = 2 * a - y; heading = -heading; } else if (y < -a) { y = -2 * a - y; heading = -heading; }
   return { x, y, heading };
 }
+
+/** The body for c302 (L2): smelling in pulses as c302nav's family of steps comes - its first times, widths and gaps - so
+    that the open and the closed loop drive the network alike. Its gains are PROVISIONAL until calibrated against c302's
+    signals in the loop (a pulse past the threshold gives about 4 of reorientation and 2 of steering for about a second). */
+export const C302_BODY: BodySpec = {
+  ...DEFAULT_BODY,
+  sensing: { kind: 'pulses', seed: 1, first: STEPS.first, width: STEPS.width, gap: STEPS.gap },
+  rate: { gain: 0.5, r0: 0.5, max: 2 },
+  steer: { gain: 0.5, maxRate: 1 }
+};

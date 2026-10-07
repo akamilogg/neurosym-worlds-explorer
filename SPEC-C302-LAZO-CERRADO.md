@@ -247,6 +247,80 @@ Antes de atribuir nada al circuito, con "circuitos" sintéticos en lugar de c302
 - **Lectura incremental** (`readout.ts`): el doble filtro paso a paso, con su estado, coincide exactamente con
   `signalsOf` de `c302nav` sobre la traza completa. Es la referencia para la lectura del servicio en L2.
 
+**L0, primeras medidas (07/10/2026).** NEURON 9.0.2 está instalado en el venv de EurekaBench, con el instalador de
+Windows, porque PyPI no tiene paquete para Windows.
+- **Ruta de exportación:**
+  - `pynml.run_lems_with_jneuroml_neuron(..., only_generate_scripts=True, compile_mods=False)` genera el script de
+    NEURON y los `.mod`;
+  - se compilan con `nrnivmodl.bat` de la instalación, que deja `nrnmech.dll`.
+
+  jNeuroML no sabe compilar ni ejecutar con NEURON 9 en Windows, porque busca `C:\nrnXXX\bin\neuron.exe`.
+- **Fidelidad, para un caso: el panel con un pulso de 4 pA en AWCL entre 0,5 y 1,5 s, durante 3 s.**
+
+  | | `dt` 0,05 ms | `dt` 0,025 ms |
+  |---|---|---|
+  | R² de la reorientación | 0,99979 | 0,99988 |
+  | R² del giro | 0,99061 | 0,99905 |
+  | primera semisubida del calcio tras el pulso (AIYL, RIAL, AVAL) | NEURON 0,55 a 1,05 ms antes | 0,27 a 0,53 ms antes |
+  | error relativo máximo del calcio | 4 a 13 % | 2 a 7 % |
+
+  Al reducir el paso a la mitad, todas las diferencias se reducen a la mitad: los dos integradores de primer orden
+  (Euler explícito en jNeuroML, implícito en NEURON) convergen a la misma solución. La diferencia es de discretización,
+  no del modelo. El error máximo del calcio es grande porque una subida brusca desplazada medio milisegundo da un error
+  puntual grande; las señales filtradas apenas lo notan.
+- **La corriente cambiada paso a paso** (la pieza del lazo cerrado):
+  - la misma red, sin estímulo, con un `IClamp` en AWCL cuya amplitud se fija cada 5 ms (`continuerun` en cada paso
+    de control), reproduce el pulso simulado de una vez con una diferencia relativa de 5·10⁻⁸ a 3·10⁻⁷ en el calcio de
+    las células de lectura;
+  - tarda lo mismo: 9,3 s para 3 s simulados, frente a unos 32 s con jNeuroML, que incluye arrancar Java.
+- **Pendiente de L0:**
+  - los 10 protocolos de N0, las intervenciones y el caso de calibración;
+  - los pasos de control de 2,5 ms;
+  - el coste de 60 s;
+  - fijar las tolerancias: se propone `dt` 0,025 ms en lazo cerrado, R² ≥ 0,99 por señal, y una diferencia en las
+    transiciones de 1 ms como máximo.
+
+**L2, primeras piezas (07/10/2026):**
+- **El servicio** tiene `POST /closed-loop`, con la misma idempotencia y los mismos códigos (400, 422 y 500). El
+  trabajador lo despacha a `closed_loop.py`, y la generación de la red, `generate_network`, es la misma de `/simulate`.
+  - La red compilada para NEURON se guarda por lo que es (células, cambios, conjunto de parámetros y `dt`), así que
+    cada red se compila una sola vez.
+  - Se quitan los grabadores del script generado: sólo se lee el calcio en cada paso de control.
+  - El episodio lleva `IClamp` en AWCL y AWCR, el cuerpo de `closed_body.py` y la lectura incremental.
+  - Admite el cuerpo bloqueado y `replay`, una corriente dada paso a paso en lazo abierto, que es el control de
+    consistencia de §9.
+- **El cuerpo en Python** (`closed_body.py`, sólo la biblioteca estándar) es el de la referencia en TypeScript. La
+  paridad está en `test/c302closed-parity.test.ts`:
+  - con las mismas señales, la misma trayectoria, las mismas corrientes y los mismos giros, con una diferencia menor de
+    1e-9;
+  - en el cuerpo determinista, en el aleatorio y en el que huele en pulsos;
+  - y el mismo generador aleatorio.
+- **Lo que enseñó c302 (responde a «¿cómo se huele?»):**
+  - **dispara con las subidas, no con el nivel.** Cuando la corriente de una AWC sube por encima de unos 2,9 pA, las dos
+    señales dan un pulso de unos 1,5 s (reorientación de unos 4 y giro de unos −2, con el máximo hacia los 250 ms) y
+    vuelven a cero aunque la corriente siga;
+  - por debajo del umbral, con corriente sostenida (2,5 o 2,75 pA en cada lado), no hay respuesta;
+  - si la corriente baja y vuelve a subir, dispara otra vez;
+  - con entrada simétrica el giro sale negativo: es una asimetría del propio c302.
+
+  Con el sensor continuo de L1, que reparte de 2,5 a 6 pA entre los dos lados, c302 no respondía nada.
+- **Decisión del autor:** se huele **en pulsos, como `c302nav`** (`sensing: pulses`, `Sensor`, `pulseWindows`).
+  - Los tiempos salen de una semilla, con los primeros instantes, anchos y pausas de la familia `steps`.
+  - Cada pulso lleva el total y el reparto de lo que olía la nariz al empezar, y lo mantiene hasta que acaba. Entre
+    pulsos no hay corriente.
+  - La entrada tiene la misma estadística que en el lazo abierto, así que la comparación de §11 es limpia.
+  - Lo usan el episodio, las simulaciones de evaluación (dentro de un pulso, continúan con lo que lleva) y el cuerpo en
+    Python. El perfil es `C302_BODY`.
+- **Primer episodio real** (20 s, cuerpo en pulsos): 13 sucesos de reorientación y 13 giros bruscos; reorientación de
+  hasta 5,8 y giro entre −3,2 y 0,3; 72 s de cálculo.
+  - Dispara con pulsos de unos 2,6 pA por lado, por debajo del umbral medido con corriente sostenida: con pulsos
+    repetidos, el umbral efectivo es menor.
+- **Pendiente de L2:**
+  - **calibrar las ganancias** de `C302_BODY`, que son provisionales: la tasa de giros, el giro gradual y en qué
+    concentraciones pasan los pulsos el umbral;
+  - el laboratorio `c302-navigation-closed@1`, con sus dos facetas y sus `act`;
+  - el contrato del instrumento.
+
 **La puerta antes de L2: los tres contratos, cerrados (07/10/2026)** en `lib/src/worlds/c302closed/navigation.ts`, con
 pruebas en `lib/test/c302closed-contracts.test.ts`:
 - **§5, el percepto.** `signalsPoint` da el de la faceta de señales: tiempo, corrientes y cambios del `act`, nada del

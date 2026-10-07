@@ -14,6 +14,10 @@ import { fileURLToPath } from 'node:url';
  *                    again while it is still running, it waits for the same simulation.
  *   POST /wiring     the connections among the cells of a network (chemical with their transmitter, gap
  *                    junctions, and the number of contacts of each).
+ *   POST /closed-loop one episode in CLOSED LOOP (SPEC-C302-LAZO-CERRADO §3): the network simulated by
+ *                    NEURON step by step, its two signals moving a body in an odor field, the current
+ *                    into AWCL and AWCR coming from what the body smells (closed_loop.py); or a
+ *                    current replayed in open loop on the same engine. The same keys and answers.
  *   GET  /stats      simulations run, answered again, running and waiting.
  *
  * It belongs to no problem: which cells, which stimuli and what is read from the calcium are the
@@ -93,8 +97,9 @@ export function createC302Service(options: { worker: readonly string[]; concurre
   return {
     async handle(method, route, body, key) {
       if (method === 'GET' && route === '/stats') return { status: 200, body: this.stats() };
-      if (method !== 'POST' || (route !== '/simulate' && route !== '/wiring')) return { status: 404, body: { error: 'POST /simulate, POST /wiring, GET /stats' } };
+      if (method !== 'POST' || (route !== '/simulate' && route !== '/wiring' && route !== '/closed-loop')) return { status: 404, body: { error: 'POST /simulate, POST /wiring, POST /closed-loop, GET /stats' } };
       if (route === '/wiring') body = { ...body, wiring: true };
+      if (route === '/closed-loop') body = { ...body, closed_loop: true };
       if (key && done.has(key)) { again++; return done.get(key)!; }
       if (key && inFlight.has(key)) { again++; return inFlight.get(key)!; }
       const p = simulate(body);

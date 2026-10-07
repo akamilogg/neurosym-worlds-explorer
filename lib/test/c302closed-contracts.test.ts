@@ -70,3 +70,10 @@ test('§6: in the stochastic body the model and the baselines are rolled out in 
   assert.equal(r.horizons.length, 1);
   assert.ok(r.horizons[0].model !== null && Number.isFinite(r.horizons[0].model));
 });
+
+test('§7 with the body for c302 (smelling in pulses): the circuit itself is still exact in the loop, rollouts started inside pulses too', async () => {
+  const { C302_BODY } = await import('../src/worlds/c302closed/body.ts');
+  const e = runEpisode({ field: FIELD, body: C302_BODY, circuit: toyCircuit(), start: { x: 8, y: 1, heading: 2.5 }, durationMs: 20000, dtMs: DT });
+  const r = await navigationCheck({ ...ctx, body: C302_BODY }, e, toyCircuit().initial, [399, 1601, 2603], oracle);
+  for (const h of r.horizons) assert.ok(h.model !== null && h.model < 1e-9, h.horizon + ' ms: ' + h.model);
+});

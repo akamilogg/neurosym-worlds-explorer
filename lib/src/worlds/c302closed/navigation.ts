@@ -1,4 +1,4 @@
-import { concentration, move, noseAt, sense, type BodySpec, type BodyState, type Episode, type FieldSpec, type Pose, type Signals } from './body.ts';
+import { Sensor, move, type BodySpec, type BodyState, type Episode, type FieldSpec, type Pose, type Signals } from './body.ts';
 import { mulberry32 } from '../grid/gen.ts';
 
 /* ============================================================================
@@ -66,12 +66,13 @@ export async function rollout(ctx: RolloutContext, e: Episode, k: number, horizo
   const start = e.steps[k];
   let state: BodyState = { pose: start.pose, accumulated: start.accumulated, turns: start.turns };
   let signals = now;
+  /* The same sensor: inside a pulse, what that pulse carries. */
+  const sensor = new Sensor(ctx.body, start.t + horizonMs, ctx.body.sensing ? { left: start.left, right: start.right } : undefined, start.t);
   const base = signalsPoint(e, k, ctx.names, ctx.dtMs, ctx.changes);
   const t = [...base.t], left = [...base.inputs[ctx.names.left]], right = [...base.inputs[ctx.names.right]];
   for (let j = 0; j < Math.round(horizonMs / ctx.dtMs); j++) {
     const tj = start.t + j * ctx.dtMs;
-    const c = concentration(ctx.field, noseAt(ctx.body, state.pose, tj));
-    const current = sense(ctx.body, c, tj);
+    const current = sensor.current(ctx.field, state.pose, tj);
     state = move(ctx.body, ctx.field, state, signals, ctx.dtMs, rnd);
     t.push(tj + ctx.dtMs); left.push(current.left); right.push(current.right);
     const s = await next({ step: k + j + 1, t, inputs: { [ctx.names.left]: left, [ctx.names.right]: right }, ...(ctx.changes ? { changes: ctx.changes } : {}) });
@@ -171,11 +172,12 @@ async function firstTurnOf(ctx: RolloutContext, e: Episode, k: number, horizonMs
   let state: BodyState = { pose: start.pose, accumulated: start.accumulated, turns: start.turns };
   let signals = now;
   const rnd = mulberry32(k * 31 + 7919);
+  const sensor = new Sensor(ctx.body, start.t + horizonMs, ctx.body.sensing ? { left: start.left, right: start.right } : undefined, start.t);
   const base = signalsPoint(e, k, ctx.names, ctx.dtMs, ctx.changes);
   const t = [...base.t], left = [...base.inputs[ctx.names.left]], right = [...base.inputs[ctx.names.right]];
   for (let j = 0; j < Math.round(horizonMs / ctx.dtMs); j++) {
     const tj = start.t + j * ctx.dtMs;
-    const current = sense(ctx.body, concentration(ctx.field, noseAt(ctx.body, state.pose, tj)), tj);
+    const current = sensor.current(ctx.field, state.pose, tj);
     const moved = move(ctx.body, ctx.field, state, signals, ctx.dtMs, rnd);
     if (moved.turn !== undefined) return j;
     state = moved;

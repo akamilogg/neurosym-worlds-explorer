@@ -22,7 +22,7 @@ export type Family = 'steps' | 'rotating';
 export interface Pulse { readonly start_ms: number; readonly width_ms: number; readonly total_pa: number; readonly split: number }
 export interface Protocol { readonly family: Family; readonly seed: number; readonly pulses: readonly Pulse[] }
 
-const STEPS = {
+export const STEPS = {
   first: [200, 350, 500],
   width: [60, 120, 200, 320, 400],
   gap: [100, 200, 400, 700, 900],

@@ -126,3 +126,23 @@ test('the incremental readout: step by step, keeping its filters\' state, exactl
     assert.equal(s.steering, whole.steering[k], 'steering at ' + k);
   }
 });
+
+test('smelling in pulses: none between pulses; a pulse carries what was smelled at its start, held; the windows come from the seed', async () => {
+  const { C302_BODY, pulseWindows, Sensor } = await import('../src/worlds/c302closed/body.ts');
+  const { STEPS } = await import('../src/worlds/c302nav/stimuli.ts');
+  const windows = pulseWindows(C302_BODY.sensing!, 20000);
+  assert.ok(STEPS.first.includes(windows[0][0]));
+  assert.ok(windows.every(([a, b]) => STEPS.width.includes(b - a)));
+  assert.ok(windows.slice(1).every(([a], i) => STEPS.gap.includes(a - windows[i][1])));
+  assert.deepEqual(pulseWindows(C302_BODY.sensing!, 20000), windows, 'the same seed, the same windows');
+  const e = runEpisode({ field: FIELD, body: C302_BODY, circuit: toyCircuit(), start: { x: 8, y: 1, heading: 2.5 }, durationMs: 20000, dtMs: 5 });
+  for (const s of e.steps) {
+    const w = windows.find(([a, b]) => a <= s.t && s.t < b);
+    if (!w) { assert.deepEqual([s.left, s.right], [0, 0], 'nothing between pulses at ' + s.t); continue; }
+    const first = e.steps.find((x) => x.t === w[0])!;
+    assert.deepEqual([s.left, s.right], [first.left, first.right], 'held through the pulse at ' + s.t);
+  }
+  const inside = windows[2];
+  const fresh = new Sensor(C302_BODY, 20000, { left: 1, right: 2 }, inside[0] + 10);
+  assert.deepEqual(fresh.current(FIELD, { x: 0, y: 0, heading: 0 }, inside[0] + 10), { left: 1, right: 2 }, 'a rollout started inside a pulse goes on with what it carries');
+});

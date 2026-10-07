@@ -40,7 +40,7 @@ export function toyCircuit(o: { tauMs?: number; steer?: number; turn?: number } 
   return {
     initial: { reorientation: 0, steering: 0 },
     step: (l, r, dtMs) => {
-      const total = l + r, side = (l - r) / total;
+      const total = l + r, side = total > 0 ? (l - r) / total : 0;
       const was = mean;
       mean = mean === null ? total : mean + (total - mean) * (1 - Math.exp(-dtMs / tau));
       /* The slow trend (the mean's), not the swing's: a turn when the odor falls as the worm goes, not as its head sways. */
