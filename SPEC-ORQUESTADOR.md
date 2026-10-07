@@ -459,6 +459,35 @@ pero las cumple.
   bucle es propio.
 - **Medir la adopción** (opción 4): qué órdenes acaban en el modelo y en cuánto tiempo.
 
+### 3.3.4 La primera hipótesis la da el senior (idea del autor, implementado, 07/10/2026)
+
+**El problema.** El junior empezaba con una hipótesis propia, y casi siempre el senior tenía que reencarrilarlo después
+de varias rondas, gastadas en vías poco coherentes desde el principio. De los errores se aprende, pero mejor no
+equivocarse en vano. A partir de ahora, junto con la tarea, el junior recibe del senior una primera hipótesis que
+desarrollar.
+
+**Cómo funciona:**
+- **El run espera.** Con `--opening <agente>`, después de los primeros episodios el run registra `awaiting_opening` y
+  espera una orden de ese agente antes de la primera pregunta al junior. El límite es `--opening-minutes`, 15 por
+  defecto.
+  - Si llega la orden, se registra `opening_received` y va con la primera pregunta como directiva (§3.3.3).
+  - Si no llega, se registra `opening_missing` y el junior empieza solo.
+  - Un run reanudado no espera: su historia ya la tiene.
+- **El senior abre.** Cuando ve `awaiting_opening` con su id, se le llama aunque no haya señales de atasco, con la
+  llamada marcada como `opening`.
+  - **Qué pide su papel:** una hipótesis sobre el mecanismo que pide la tarea, no una descripción de los episodios; qué
+    la sugiere en los episodios o en la tarea, con las citas; el primer experimento que la pondría a prueba; y cómo la
+    usaría su primer modelo.
+  - Si decide esperar, se le recuerda que sin su hipótesis el junior no tiene de dónde partir, hasta dos veces.
+  - La decisión queda marcada con `opening: true`.
+- **En los lotes** es lo predeterminado: un run nuevo con senior lleva `--opening <id>`; `"opening": false` en el
+  agente lo desactiva.
+- **Cuenta como ayuda:** es una orden de mensaje, así que gasta una del `--help-budget`.
+- **Pruebas:** `lib/test/orchestra-directives.test.ts`. La primera pregunta del junior ya lleva la directiva; sin
+  senior, el run espera lo indicado y sigue.
+
+**Pendiente:** el grid no espera la apertura, porque su bucle es propio.
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la

@@ -30,7 +30,10 @@ export interface BatchRun {
   readonly condition: string;
   /** An agent operator that follows it (an assisted run): its id and how many orders it may send. */
   /** An agent operator that follows the run: a coach (default) or a senior (SPEC-ORQUESTADOR §3.3). */
-  readonly agent?: { readonly id: string; readonly max_orders?: number; readonly role?: 'coach' | 'senior'; readonly patience?: number };
+  readonly agent?: { readonly id: string; readonly max_orders?: number; readonly role?: 'coach' | 'senior'; readonly patience?: number;
+    /** A senior gives the junior its first hypothesis before it asks anything (SPEC-ORQUESTADOR §3.3.4): the default; false,
+        the junior starts on its own. */
+    readonly opening?: boolean };
   /** A BRANCH (SPEC-ORQUESTADOR §5.5): another run's history, continued with more rounds and handed to the assisted
       researcher, with a first message that states the alternative to explore. */
   readonly fork?: { readonly journal: string; readonly attempts: number; readonly message?: string };
@@ -208,9 +211,11 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     const budget = perRun ? ['--max-tokens', String(perRun)] : [];
     const agents = [...(r.agent ? [r.agent.id + '=message'] : []), ...(r.fork?.message ? ['planner=message'] : [])];
     const control = [...budget, ...(agents.length ? ['--agents', agents.join(';')] : [])];
+    /* A fresh run followed by a senior starts from its first hypothesis; a resumed one has it in its history. */
+    const opening = r.agent?.role === 'senior' && r.agent.opening !== false ? ['--opening', r.agent.id] : [];
     const args = known ? ['--resume', known, ...control, '--out', out]
       : r.fork ? ['--resume', r.fork.journal, '--attempts', String(r.fork.attempts), '--researcher', 'assisted', ...control, '--out', out]
-        : [...(r.args ?? []), ...(r.researcher ? ['--researcher', r.researcher] : []), ...control, '--out', out];
+        : [...(r.args ?? []), ...(r.researcher ? ['--researcher', r.researcher] : []), ...control, ...opening, '--out', out];
     /* A branch's first message waits in its inbox for its first new round. */
     if (!known && r.fork?.message) send(out, { kind: 'message', text: r.fork.message, by: 'agent:planner' });
     latest.set(r.id, out);

@@ -97,3 +97,40 @@ test('the senior writes directives, and reads what the junior reported since its
   assert.equal(inbox[0].directive, true, 'its message is a directive');
   assert.equal(JSON.parse(fs.readFileSync(agentFile(out, 'senior'), 'utf8')).senior.reports_seen, 2);
 });
+
+/* SPEC-ORQUESTADOR §3.3.4: the junior does not start from a hypothesis of its own - after the first episodes the run waits for
+   its senior's first hypothesis, which goes with the junior's first question as a directive. */
+test('the opening: the run waits for its senior, whose first hypothesis goes with the junior\'s very first question', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opening-'));
+  const out = path.join(dir, 'run.json');
+  const asked: Record<string, any>[] = [];
+  const seniorAsked: any[] = [];
+  const llm: ChatClient = { complete: async (q) => { seniorAsked.push((q.user as { parts: unknown[] }).parts);
+    return { content: JSON.stringify({ decision: 'message', text: 'Start from this: each cell copies its left neighbour. Test it on ep1.', why: 'w', evidence: ['episode:ep1'] }), latencyMs: 0, raw: null }; } };
+  const controller = new AbortController();
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm, pollMs: 20, maxOrders: 3, signal: controller.signal });
+  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--attempts', '1', '--flat', '--no-grade', '--no-reflection', '--researcher', 'assisted',
+    '--agents', 'senior=message', '--opening', 'senior', '--out', out], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior(asked) });
+  controller.abort();
+  await agent;
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  const types = events.map((e) => e.type);
+  assert.ok(types.indexOf('awaiting_opening') > types.lastIndexOf('exploration_episode'), 'after the first episodes');
+  assert.ok(types.indexOf('opening_received') < types.indexOf('operator_message'));
+  const first = asked[0].user;
+  assert.equal(first.operator_messages.new[0].directive, true, 'its very first question carries it, as an order');
+  assert.match(first.operator_messages.new[0].text, /copies its left neighbour/);
+  assert.match(JSON.stringify(seniorAsked[0]), /"opening"/, 'the senior is told it opens');
+  const record = JSON.parse(fs.readFileSync(agentFile(out, 'senior'), 'utf8'));
+  assert.equal(record.decisions[0].opening, true);
+});
+
+test('the opening never comes: the run waits as long as it was told, then the junior starts on its own', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opening-'));
+  const asked: Record<string, any>[] = [];
+  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--attempts', '1', '--flat', '--no-grade', '--no-reflection', '--researcher', 'assisted',
+    '--agents', 'senior=message', '--opening', 'senior', '--opening-minutes', '0.005', '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior(asked) });
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  assert.ok(events.some((e) => e.type === 'opening_missing'));
+  assert.equal(asked[0].user.operator_messages, undefined);
+});

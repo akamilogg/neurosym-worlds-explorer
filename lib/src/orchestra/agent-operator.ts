@@ -51,6 +51,7 @@ export const SENIOR_ROLE = [
   'Finding a rule is not enough: a junior often states a rule its record supports and never builds it into its model, which keeps scoring on other features. So with a hypothesis, guide how its model would use it once confirmed, in the form the environment asks for - which points the rule makes worth the least or the most, what an observation would have to measure, what the model should stop relying on. And when its record already confirms a rule its model does not use, say so plainly and show how the model would use it. Never write the model\'s code: the junior builds it, and treats your guidance as a reference to test, like everything you say.',
   'Then decide. If you found something, write to the junior: ONE hypothesis to explore, stated as a hypothesis; the evidence in its own record that suggests it (cite items and points, e.g. "investigation:r4.2", "g26@4"); ONE experiment with its instruments that would test it; and how its model would use the hypothesis once the experiment confirms it. Never state as a fact anything its record does not show, and never hand it a complete solution: it must test the idea and build the model itself. If you found nothing worth its attention, wait.',
   'YOUR MESSAGES ARE DIRECTIVES: the junior is told to carry each one out - run the experiment, build into its next model what you tell it to build, stop relying on what you tell it to drop - even where it disagrees. So write them as orders it can carry out and report: say plainly what to run, what its model must contain, and what it must stop doing. It reports back: each directive it carried out, and where it disagrees with you and why (`junior_reports`). Read its disagreements as a colleague\'s: when its evidence is better than yours, change your orders; you may be wrong.',
+  'YOUR OPENING. You may be called before the junior has asked anything (`opening`): it has its task and the environment\'s first episodes, and it waits for you. Read those episodes and the task, and give it the first hypothesis to develop - as a directive: ONE hypothesis, what in the episodes or the task suggests it (cite them), the first experiment that would test it, and how its first model would use it. Prefer the hypothesis about the mechanism the task asks for over a description of the episodes: a wrong start costs the junior rounds. Its reports will tell you when it does not hold.',
   'THE INSTRUMENT. The environment is an instrument people built, and it may fail: an act it accepted and did not apply, two different answers to the same request, a value no world could give, an answer that is not what its interface says. Reading the record, you may see what the junior did not. Say so in any of your answers: "instrument_report": {"what": "<what the environment did that does not fit what its interface says>", "evidence": ["<items of the record>"], "kind": "accepted_but_not_applied" | "inconsistent_answer" | "impossible_value" | "not_what_the_interface_says" | "other"}. The operator reads it. It is not a hypothesis about the environment, and no order of yours should rest on the episodes it names until the operator answers.',
   'Answer ONE JSON object: {"investigate": [ ...requests ]} while you read, then {"decision": "wait" | "message", "text": "<the message, for message>", "evidence": ["<the items you rely on>"], "why": "<your reason, for the record>"} - or {"consolidate": {...}}; with "beliefs", "notes" and "methods" in any of them when you write in your notebook, and "instrument_report" when you suspect the instrument.'
 ].join('\n');
@@ -96,6 +97,8 @@ export interface AgentDecision {
   /** The senior (§3.3.1): what it wrote in its notebook while deciding, and how many times it consolidated its conversation. */
   readonly wrote?: Readonly<Record<string, unknown>>;
   readonly consolidated?: number;
+  /** Its opening (§3.3.4): the first hypothesis the junior starts from. */
+  readonly opening?: boolean;
   /** A test it orders the junior to register with its message (SPEC-PRUEBAS-PROPIAS §8). */
   readonly test?: Readonly<Record<string, unknown>>;
   /** What it suspected of the instrument while deciding (SPEC-CALIBRACION-INSTRUMENTOS §4.3). */
@@ -172,7 +175,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   if (role === 'senior') record.senior = emptySeniorState();
   save();
   const say = o.say ?? (() => {});
-  let seenRounds = -1, orders = 0, loaded = false;
+  let seenRounds = -1, orders = 0, loaded = false, opened = false;
   /* The senior is also called during a round, once per round, when a sign is about the round in course. */
   const calledInRound = new Set<number>();
   /* Each of its messages is followed up once: when the junior, having got it, runs an experiment. */
@@ -215,8 +218,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     /* The senior, following up its message: the junior got it and has run an experiment since. */
     const due = role === 'senior' && journal ? followUpDue(journal, o.id) : null;
     const followUp = due && !followedUp.has(due.message) ? due : null;
+    /* The senior's opening (§3.3.4): the run waits for its first hypothesis before the junior's first question. */
+    const opening = role === 'senior' && journal && !opened && awaitsOpening(journal, o.id);
+    if (opening) opened = true;
     /* A round completed since it last decided, or (the senior) a sign within the round (and the run still going): decide. */
-    if (digest && ((rounds > seenRounds && rounds > 0) || duringRound || followUp) && !over && orders < maxOrders) {
+    if (digest && ((rounds > seenRounds && rounds > 0) || duringRound || followUp || opening) && !over && orders < maxOrders) {
       if (followUp) followedUp.add(followUp.message);
       else if (duringRound) calledInRound.add(now!.current_round);
       /* A round completed (not the run's start, before any round): otherwise it is called during the round in course. */
@@ -224,7 +230,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       seenRounds = Math.max(seenRounds, rounds);
       let d: AgentDecision | null;
       if (role === 'senior') {
-        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!);
+        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening));
         record.senior!.followed_up = [...followedUp];
         record.senior!.called_in_round = [...calledInRound];
       }
@@ -274,11 +280,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     message); then it reads the junior's record and decides. Null: it was not called (nothing is recorded). Its conversation
     is the state's: it only grows (SPEC-ORQUESTADOR §3.3.1), and what it writes in its notebook is kept there. */
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
-  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState): Promise<AgentDecision | null> {
+  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
      to have had time with its last message. */
-  if (!followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
+  if (!isOpening && !followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const nb = seniorNotebook(state);
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
   const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal));
@@ -308,6 +314,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   state.reports_seen = reports.length;
   const callPart = (): Record<string, unknown> => ({ call: { n: call, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}),
     ...(freshReports.length ? { junior_reports: freshReports } : {}),
+    ...(isOpening ? { opening: 'the junior has its task and the environment\'s first episodes, and has not asked anything yet: it waits for the first hypothesis it will develop' } : {}),
     ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
     orders_left: ordersLeft, memory: memory.counts(), steps_left: limit } });
   state.conversation.push(callPart());
@@ -364,13 +371,19 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
         state.conversation.push({ steps_left: 0, ...written, reminder: 'You have no readings left. Your part is not to do the junior\'s work: decide now. Write to the junior the hypothesis it should go on with, or the task it should carry on (with the evidence in its record and one experiment), or wait if there is nothing worth its attention.' });
         continue;
       }
+      /* At the opening a wait leaves the junior with nothing: it is asked once more for the first hypothesis. */
+      if (isOpening && parsed.decision !== 'message' && !Array.isArray(parsed.investigate) && reminded < 2 && turn < limit + 6) {
+        reminded++;
+        state.conversation.push({ ...written, reminder: 'This is the opening: the junior starts from your hypothesis. Write it now as a message: ONE hypothesis, what in the first episodes or the task suggests it, the first experiment to test it, and how its first model would use it.' });
+        continue;
+      }
       if (!parsed.decision && Object.keys(wrote).length && turn < limit + 6) {
         /* It only wrote in its notebook: taken, and it is asked for its decision. */
         state.conversation.push({ ...written, reminder: 'Noted in your notebook. Now decide: {"decision": "wait" | "message", ...}.' });
         continue;
       }
       const decision = parsed.decision === 'message' && parsed.text?.trim() ? 'message' : 'wait';
-      const d: AgentDecision = { at: at(), rounds, ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
+      const d: AgentDecision = { at: at(), rounds, ...(isOpening ? { opening: true } : {}), ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
         why: String(parsed.why ?? (Array.isArray(parsed.investigate) ? 'it kept asking to read after being reminded to decide' : '')), signals: signals.signs,
         read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}),
         ...(decision === 'message' && parsed.test && typeof parsed.test === 'object' && !Array.isArray(parsed.test) ? { test: parsed.test } : {}),
@@ -399,4 +412,10 @@ export function waitingOnMessage(journal: Record<string, any>, id: string, coold
   if (!delivered.length) return false;
   const at = delivered[delivered.length - 1].i;
   return events.slice(at + 1).filter((e) => e.type === 'check').length < cooldown;
+}
+
+/** Whether the run waits for this agent's first hypothesis (SPEC-ORQUESTADOR §3.3.4): it said so, and has not had it yet. */
+export function awaitsOpening(journal: Record<string, any>, id: string): boolean {
+  const events = (journal.events ?? []) as Record<string, any>[];
+  return events.some((e) => e.type === 'awaiting_opening' && e.agent === id) && !events.some((e) => (e.type === 'opening_received' || e.type === 'opening_missing') && e.agent === id);
 }
