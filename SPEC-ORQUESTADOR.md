@@ -475,9 +475,18 @@ desarrollar.
   - Un run reanudado no espera: su historia ya la tiene.
 - **El senior abre.** Cuando ve `awaiting_opening` con su id, se le llama aunque no haya señales de atasco, con la
   llamada marcada como `opening`.
-  - **Qué pide su papel:** una hipótesis sobre el mecanismo que pide la tarea, no una descripción de los episodios; qué
-    la sugiere en los episodios o en la tarea, con las citas; el primer experimento que la pondría a prueba; y cómo la
-    usaría su primer modelo.
+  - **Qué pide su papel: un enfoque de investigación** (endurecido el 07/10/2026, a petición del autor, tras el primer
+    run en lazo cerrado):
+    - el senior había abierto con la relación obvia entre entradas y salidas («la suma mueve la reorientación, la
+      diferencia el giro»), casi la línea base, que no es una hipótesis sobre el mecanismo;
+    - ahora se le piden dos o más hipótesis rivales sobre el mecanismo, qué sugiere cada una y de cuál partir;
+    - el método que las distinguiría con los instrumentos del junior: experimentos controlados, qué variar y qué
+      mantener fijo, intervenciones, qué medir;
+    - qué resultado refutaría cada una;
+    - y cómo debe ser el primer modelo para probar la hipótesis de partida.
+
+    Puede refutarse después: un plan refutado también enseña. Es guía de método del propio senior, sin pistas del
+    entorno.
   - Si decide esperar, se le recuerda que sin su hipótesis el junior no tiene de dónde partir, hasta dos veces.
   - La decisión queda marcada con `opening: true`.
 - **En los lotes** es lo predeterminado: un run nuevo con senior lleva `--opening <id>`; `"opening": false` en el
