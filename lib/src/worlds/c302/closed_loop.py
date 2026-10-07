@@ -9,7 +9,8 @@ engine (§9's control of the instrument's consistency).
            or the same with "replay": {"left": [...pA], "right": [...pA]} (one value per control step) instead of a body
   answer   {"t": [...ms], "x", "y", "heading", "c", "left", "right" (pA), "reorientation", "steering" (per control step:
             at its start for the body, at its end for the signals), "turns": [[k, angle]], "calcium": {cell: [...mM]} at
-            the control steps' ends, "end": {...}, "seconds", "compiled": bool}
+            the control steps' ends, "accumulated", "turns_made" (the deterministic body's state at each step's start),
+            "end": {...}, "seconds", "compiled": bool}
            or {"error", "bad_request" | "unstable"}
 
 The network is generated as /simulate's (`generate_network`), exported by jNeuroML to NEURON without its recorders (an
@@ -186,7 +187,9 @@ def run(req):
                         "heading": col(lambda s: s["pose"]["heading"]), "c": col(lambda s: s["c"]), "left": col(lambda s: s["left"]), "right": col(lambda s: s["right"]),
                         "reorientation": [circuit.initial["reorientation"]] + col(lambda s: s["signals"]["reorientation"]),
                         "steering": [circuit.initial["steering"]] + col(lambda s: s["signals"]["steering"]),
-                        "turns": [[k, s["turn"]] for k, s in enumerate(steps) if "turn" in s], "end": ep["end"]})
+                        "turns": [[k, s["turn"]] for k, s in enumerate(steps) if "turn" in s], "end": ep["end"],
+                        # The deterministic body's state at the start of each step: what a rollout from there goes on with.
+                        "accumulated": col(lambda s: s["accumulated"]), "turns_made": col(lambda s: s["turns"])})
     except FloatingPointError:
         return {"error": "the simulation diverged (non-finite calcium)", "bad_request": False, "unstable": True}
     out["calcium"] = {c: [float("%.9g" % v) for v in vs] for c, vs in circuit.calcium.items()}

@@ -126,6 +126,11 @@ fs.writeFileSync(c302Worker, [
   "  fs.appendFileSync(process.argv[2], JSON.stringify(req) + '\\n');",
   "  const out = (a) => process.stdout.write('\\n@@C302@@' + JSON.stringify(a));",
   "  if (req.wiring) return out({ cells: req.cells, connections: [{ name: 'AWCL-AIYL', pre: 'AWCL', post: 'AIYL', kind: 'chemical', neurotransmitter: 'Glutamate', number: 3 }] });",
+  /* In closed loop: a worm that stays where it starts, a quiet network (the contract asks of the laboratory, not of c302). */
+  "  if (req.closed_loop) { const n = req.replay ? req.replay.left.length : Math.round(req.duration_ms / req.control_ms); const z = (m) => Array.from({ length: m }, () => 0); const p = req.start || { x: 0, y: 0, heading: 0 };",
+  "    return out({ t: Array.from({ length: n }, (_, k) => k * req.control_ms), x: z(n).map(() => p.x), y: z(n).map(() => p.y), heading: z(n).map(() => p.heading), c: z(n),",
+  "      left: req.replay ? req.replay.left : z(n).map((_, k) => (k % 50 < 10 ? 3 : 0)), right: req.replay ? req.replay.right : z(n), reorientation: z(n + 1).map((_, k) => k % 7), steering: z(n + 1).map((_, k) => -(k % 5)), turns: [],",
+  "      accumulated: z(n), turns_made: z(n), calcium: Object.fromEntries((req.record || []).map((c) => [c, z(n)])), end: { t: n * req.control_ms, pose: p, reached: false }, seconds: 0, compiled: false }); }",
   "  const n = Math.floor(req.duration_ms / req.save_every_ms) + 1;",
   "  const t = Array.from({ length: n }, (_, k) => k * req.save_every_ms);",
   "  const on = (cell) => t.map((tk) => (req.stimuli ?? []).filter((s) => s.cell === cell && tk > s.delay_ms && tk <= s.delay_ms + s.duration_ms).reduce((a, s) => a + s.amplitude_pa, 0) * 1e-8);",
@@ -139,7 +144,7 @@ async function contractContext(name: string, lab: LawLab, options: Record<string
   if (!lab.external) return { ctx: { ...base, options }, close: async () => {} };
   let key = 0;
   const over = (url: string) => ({ request: async (route: string, body: unknown) => (await fetchJson(url + route, { body, headers: { 'Idempotency-Key': name + '#' + (++key) }, timeoutMs: 30_000 })).data });
-  if (name === 'c302nav') {
+  if (name === 'c302nav' || name === 'c302closed') {
     const served = await serveC302({ port: 0, worker: [process.execPath, c302Worker, c302Asked], concurrency: 2 });
     return { ctx: { ...base, options: { ...options, service: served.url }, effects: over(served.url) }, close: () => served.close() };
   }
@@ -171,7 +176,7 @@ const echoed = (lab: LawLab, act: unknown): Record<string, unknown> => JSON.pars
 const ACT_LABS = Object.entries(LABS).filter(([, l]) => !isGameLab(l) && (l as LawLab).act) as [string, LawLab][];
 
 test('every laboratory that acts is in the contract', () => {
-  assert.deepEqual(ACT_LABS.map(([n]) => n).sort(), ['c302nav', 'cells', 'orbit', 'particles3d', 'tank']);
+  assert.deepEqual(ACT_LABS.map(([n]) => n).sort(), ['c302closed', 'c302nav', 'cells', 'orbit', 'particles3d', 'tank']);
 });
 
 for (const [name, lab] of ACT_LABS) {

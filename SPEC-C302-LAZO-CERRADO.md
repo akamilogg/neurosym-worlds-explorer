@@ -273,8 +273,20 @@ Windows, porque PyPI no tiene paquete para Windows.
     de control), reproduce el pulso simulado de una vez con una diferencia relativa de 5·10⁻⁸ a 3·10⁻⁷ en el calcio de
     las células de lectura;
   - tarda lo mismo: 9,3 s para 3 s simulados, frente a unos 32 s con jNeuroML, que incluye arrancar Java.
+- **La batería de L0** (`lib/src/worlds/c302/l0_suite.py`): 10 protocolos de 9 s (5 de `steps` y 5 de `rotating`) y 3
+  intervenciones sobre el primero (quitar AWCL-AIYL, escalar AWCR-AIYR por 2 y cambiar
+  `neuron_to_neuron_chem_exc_syn_gbase`):
+  - **a `dt` 0,05 ms,** en los 13 casos, el R² de la reorientación va de 0,9993 a 0,9996 y el del giro de 0,995 a
+    0,9999. NEURON adelanta las transiciones entre 0,5 y 1,25 ms;
+  - **a `dt` 0,025 ms,** en los 3 primeros casos, el R² es de 0,9998 en las dos señales y la diferencia baja a 0,3–0,6 ms;
+  - **tiempo:** NEURON tarda unos 35 s por cada 9 s simulados, frente a 90–140 s de jNeuroML.
+  - **Tolerancias adoptadas:** R² ≥ 0,99 por señal y transiciones a menos de 1,5 ms con `dt` 0,05; se cumplen en todos
+    los casos.
+  - **Alarma:** el caso `gbase 1nS` da exactamente los mismos números que el caso sin cambios. Probablemente ese cambio
+    de parámetro **no se aplica**. Pendiente de comprobar con el caso de calibración I3b
+    (SPEC-CALIBRACION-INSTRUMENTOS), también en `/simulate`.
 - **Pendiente de L0:**
-  - los 10 protocolos de N0, las intervenciones y el caso de calibración;
+  - el caso de calibración y la alarma del parámetro;
   - los pasos de control de 2,5 ms;
   - el coste de 60 s;
   - fijar las tolerancias: se propone `dt` 0,025 ms en lazo cerrado, R² ≥ 0,99 por señal, y una diferencia en las
@@ -315,11 +327,45 @@ Windows, porque PyPI no tiene paquete para Windows.
   hasta 5,8 y giro entre −3,2 y 0,3; 72 s de cálculo.
   - Dispara con pulsos de unos 2,6 pA por lado, por debajo del umbral medido con corriente sostenida: con pulsos
     repetidos, el umbral efectivo es menor.
+- **El giro de c302 según el lado del pulso** (120 ms; giro acumulado del suceso):
+
+  | pulso | reorientación máxima | giro acumulado |
+  |---|---|---|
+  | sólo izquierda, 4 pA | 4,0 | −0,6 |
+  | izquierda 3, derecha 1,5 | 4,0 | −0,8 |
+  | los dos lados, 3,2 pA | 4,1 | −1,2 |
+  | izquierda 1,5, derecha 3 | 4,1 | −1,5 |
+  | sólo derecha, 4 pA | 4,1 | −1,7 |
+
+  El signo es fijo, pero el lado deja una huella de unos ±0,5 alrededor de un sesgo de −1,2. Hay información de lado
+  para orientarse, montada sobre una tendencia a girar siempre hacia el mismo lado.
+  - **No se corrige en el cuerpo:** según C2, el circuito es el que es. El sesgo es una propiedad de c302 que el
+    investigador puede descubrir y explicar.
+  - **Calibración inicial** de `C302_BODY` con esta escala: una tasa de giros de 0,5·max(0, r − 0,5), que da alrededor
+    de un giro brusco por suceso, y un giro gradual de 0,5·s rad/s, que da entre 0,3 y 0,85 rad por suceso según el
+    lado.
 - **Pendiente de L2:**
-  - **calibrar las ganancias** de `C302_BODY`, que son provisionales: la tasa de giros, el giro gradual y en qué
+  - **ajustar las ganancias** de `C302_BODY` si los episodios largos lo piden: la tasa de giros, el giro gradual y en qué
     concentraciones pasan los pulsos el umbral;
-  - el laboratorio `c302-navigation-closed@1`, con sus dos facetas y sus `act`;
-  - el contrato del instrumento.
+- **El laboratorio `c302-navigation-closed@1`** (`lib/src/worlds/c302closed/lab.ts`, `c302closed` en `LABS`):
+  - **lugares:** una fuente en el centro de una arena de ±15 mm. El laboratorio tiene un campo exponencial de 5 mm; la
+    familia tiene otras longitudes (3, 4, 6 y 8 mm) y formas gaussianas;
+  - **episodios:** 20 s (`--duration`), desde un arranque a 6–9 mm de la fuente, con los tiempos de los pulsos según la
+    semilla del episodio;
+  - **la faceta de señales** (por defecto) usa el objetivo de `c302nav` sobre el percepto sin cuerpo;
+  - **la faceta de navegación** (`--focus navigation`) usa `navigationCheck` en `--nav-points` puntos por episodio. Al
+    investigador se le dice, por horizonte, si su modelo superó a cada referencia, y los giros bruscos;
+  - **`act`:** arranque, posición de la fuente, longitud, duración, semilla, cuerpo bloqueado, células registradas y
+    cambios de la red; o `replay` de un episodio propio en lazo abierto. Para eso hace falta `ctx.episodeOf`, nuevo en
+    `LabContext`;
+  - **la interfaz** describe el cuerpo como el aparato (no es lo que se investiga) y nunca da una estrategia de
+    navegación (C5);
+  - pasa el contrato del instrumento (I1, I2, I4 e I5) con el trabajador sustituto;
+  - un run de prueba en cada faceta (`test/c302closed-lab.test.ts`).
+- **Pendiente de L2:**
+  - el primer run con NEURON real, tras reiniciar el servicio con la ruta nueva;
+  - la condición aleatoria;
+  - los episodios largos para I17.
 
 **La puerta antes de L2: los tres contratos, cerrados (07/10/2026)** en `lib/src/worlds/c302closed/navigation.ts`, con
 pruebas en `lib/test/c302closed-contracts.test.ts`:

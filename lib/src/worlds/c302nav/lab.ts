@@ -99,7 +99,7 @@ async function drawn(spec: C302NavSpec, seed: number, ctx: LabContext | undefine
 }
 
 /** An act in the learner's names, in the real ones; null when it names something this run does not have. */
-function realAct(naming: Naming, act: C302NavAct): C302NavAct | null {
+export function realAct(naming: Naming, act: C302NavAct): C302NavAct | null {
   const stimuli = (act.stimuli ?? []).map((x) => ({ ...x, cell: naming.real(x.cell) }));
   const record = (act.record ?? []).map((c) => naming.real(c));
   const ch = act.changes ?? {};

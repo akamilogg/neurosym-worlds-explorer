@@ -64,6 +64,8 @@ export interface LabContext {
       the environment answers again without acting - and what it answered is logged, so a resumed run replays it instead of
       acting again (SPEC-OBJETIVO O12). */
   readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
+  /** An episode of the learner's by its name (an act that builds on an earlier one, e.g. replaying its current), or undefined. */
+  readonly episodeOf?: (id: string) => unknown;
 }
 
 /** One point of a check: its name, the state perceived there, and what happened next (the laboratory's). */

@@ -837,7 +837,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
-  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}) };
+  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), episodeOf: (id: string) => episodes.get(id)?.data };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
   if (assistedAfter !== null) journal.assisted_after_attempts = assistedAfter;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
