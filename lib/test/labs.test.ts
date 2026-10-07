@@ -240,7 +240,7 @@ test('c302nav I3a: an intervention in neutral names reaches the worker in the re
     assert.deepEqual(req.remove_connections, ['AWCL-AIYL']);
     assert.deepEqual(req.connection_number_scaling, { 'AWCR-AIYR': 2 });
     assert.deepEqual(req.connection_polarity_override, { 'AIYL-RIAL': 'inh' });
-    assert.deepEqual(req.param_overrides, { neuron_to_neuron_chem_exc_syn_gbase: '1nS' });
+    assert.deepEqual(req.param_overrides, { neuron_to_neuron_exc_syn_conductance: '0.18nS' });
     assert.deepEqual(req.stimuli.map((s: { cell: string }) => s.cell), ['AWCR']);
     assert.ok(req.record.includes('AIYL'));
   } finally { await close(); }
@@ -276,7 +276,7 @@ test('c302nav: an experiment\'s identity is the physical one - the same in any o
     const acted = await lab.act!.start(realSpec, lab.act!.parse(exReal), 'act1', ctx);
     assert.equal(lab.episodeIdentity!(realSpec, acted), lab.act!.identity!(realSpec, lab.act!.parse(exReal)));
     /* What the act changed is in its percept, in the interface's words; an episode that changed nothing has none. */
-    assert.deepEqual(lab.at(acted, 3)!.state.changes, { remove: ['AWCL-AIYL'], scale: { 'AWCR-AIYR': 2 }, polarity: { 'AIYL-RIAL': 'inh' }, parameters: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' } });
+    assert.deepEqual(lab.at(acted, 3)!.state.changes, { remove: ['AWCL-AIYL'], scale: { 'AWCR-AIYR': 2 }, polarity: { 'AIYL-RIAL': 'inh' }, parameters: { neuron_to_neuron_exc_syn_conductance: '0.18nS' } });
     assert.equal('changes' in lab.at(drawn, 3)!.state, false);
   } finally { await close(); }
 });

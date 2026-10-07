@@ -282,11 +282,18 @@ Windows, porque PyPI no tiene paquete para Windows.
   - **tiempo:** NEURON tarda unos 35 s por cada 9 s simulados, frente a 90–140 s de jNeuroML.
   - **Tolerancias adoptadas:** R² ≥ 0,99 por señal y transiciones a menos de 1,5 ms con `dt` 0,05; se cumplen en todos
     los casos.
-  - **Alarma:** el caso `gbase 1nS` da exactamente los mismos números que el caso sin cambios. Probablemente ese cambio
-    de parámetro **no se aplica**. Pendiente de comprobar con el caso de calibración I3b
-    (SPEC-CALIBRACION-INSTRUMENTOS), también en `/simulate`.
+  - **Alarma, resuelta:** el caso `gbase 1nS` daba exactamente los mismos números que el caso sin cambios.
+    - **La causa:** C1 no tiene ese parámetro. Sus sinapsis químicas son graduadas, y su parámetro es
+      `neuron_to_neuron_exc_syn_conductance`. Ante un nombre desconocido, c302 no da error: lo añade como un parámetro
+      que nadie lee. Era un fallo del instrumento del tipo «aceptado pero no aplicado», también en `/simulate`.
+    - **El arreglo:** `generate_network` rechaza (400) un parámetro que el conjunto no tiene y da la lista de los que sí
+      tiene. Admite las claves que c302 lee por su cuenta: las específicas de una conexión, las expresiones regulares y
+      sus claves propias.
+    - **El caso de calibración I3b:** con `neuron_to_neuron_exc_syn_conductance` de 0,09 a 0,18 nS, el pico de AIYL pasa
+      de 9,67·10⁻⁷ a 1,015·10⁻⁶ y el de RIAL de 9,07·10⁻⁷ a 7,98·10⁻⁷: se aplica. El nombre equivocado se rechaza.
+    - **Revisión de los runs anteriores** de `c302nav`: sólo uno usó parámetros (`n2-task-s1`, con
+      `ca_conc_decay_time`), y con un nombre válido. Ninguna conclusión anterior quedó contaminada.
 - **Pendiente de L0:**
-  - el caso de calibración y la alarma del parámetro;
   - los pasos de control de 2,5 ms;
   - el coste de 60 s;
   - fijar las tolerancias: se propone `dt` 0,025 ms en lazo cerrado, R² ≥ 0,99 por señal, y una diferencia en las

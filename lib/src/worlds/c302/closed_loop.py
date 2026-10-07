@@ -159,7 +159,13 @@ def run(req):
     if why:
         return {"error": why, "bad_request": True}
     t0 = time.time()
-    folder, built = compiled_network(req, sim)
+    try:
+        folder, built = compiled_network(req, sim)
+    except Exception as e:
+        # The worker's BadRequest (a request it cannot simulate), from simulate.py loaded as a module of its own.
+        if type(e).__name__ == "BadRequest":
+            return {"error": str(e), "bad_request": True}
+        raise
     # NEURON loads the compiled mechanisms of the folder it starts in.
     os.chdir(str(folder))
     sys.path.insert(0, str(folder))

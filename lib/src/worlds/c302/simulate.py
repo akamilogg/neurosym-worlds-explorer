@@ -16,6 +16,7 @@ calcium are the laboratory's. It needs c302, pyNeuroML and Java (jNeuroML).
 """
 import importlib
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -92,6 +93,14 @@ def generate_network(req, work):
     known, _ = c302.get_cell_names_and_connection(c302.DEFAULT_DATA_READER)
     check(req, known)
     params = importlib.import_module("c302.parameters_" + str(req.get("parameter_set", "C1"))).ParameterisedModel()
+    # A parameter the set does not have is not an error to c302: it is added, and nothing reads it - an override accepted
+    # and never applied (SPEC-CALIBRACION-INSTRUMENTOS I2). Refused here, with the names the set has. Connection-specific
+    # ("<PRE>_to_<POST>_..."), regular-expression and c302's own keys are c302's to read.
+    for k in (req.get("param_overrides") or {}):
+        if k in ("mirrored_elec_conn_params", "custom_component_type_gate_overrides") or c302.is_regex_string(k) or re.match(r"^[A-Z0-9]+_to_[A-Z0-9]+_\w+$", k):
+            continue
+        if params.get_bioparameter(k, warn_if_missing=False) is None:
+            raise BadRequest("parameter set %s has no parameter %r; its parameters: %s" % (req.get("parameter_set", "C1"), k, ", ".join(sorted(bp.name for bp in params.bioparameters))))
     dt, duration = float(req.get("dt_ms", 0.05)), float(req["duration_ms"])
     doc = c302.generate(
         "net", params, cells=req.get("cells"), cells_to_stimulate=[], muscles_to_include=[],

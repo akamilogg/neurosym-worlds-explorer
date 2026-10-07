@@ -56,10 +56,10 @@ test('the signals are read as the world says: the difference of the calcium, fil
 
 test('the act: stimuli into any cell of the panel, cells recorded, connections and parameters changed, or the wiring; its form checked', () => {
   const a = parseC302NavAct({ stimuli: [{ cell: 'AIYL', delay_ms: 100, duration_ms: 200, amplitude_pa: 3 }, { cell: 'AWCR', kind: 'sine', delay_ms: 0, duration_ms: 1000, amplitude_pa: 2, period_ms: 400 }],
-    record: ['AIYL'], remove: ['AIYL-RIAL_GJ'], scale: { 'AWCL-AIYL': 2 }, polarity: { 'AIYL-RIAL': 'inh' }, parameters: { 'neuron_to_neuron_chem_exc_syn_gbase': '1nS' }, duration_ms: 3000 });
+    record: ['AIYL'], remove: ['AIYL-RIAL_GJ'], scale: { 'AWCL-AIYL': 2 }, polarity: { 'AIYL-RIAL': 'inh' }, parameters: { 'neuron_to_neuron_exc_syn_conductance': '0.18nS' }, duration_ms: 3000 });
   assert.equal(typeof a, 'object');
   assert.deepEqual((a as { changes: unknown }).changes, { remove_connections: ['AIYL-RIAL_GJ'], connection_number_scaling: { 'AWCL-AIYL': 2 },
-    connection_polarity_override: { 'AIYL-RIAL': 'inh' }, param_overrides: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' } });
+    connection_polarity_override: { 'AIYL-RIAL': 'inh' }, param_overrides: { neuron_to_neuron_exc_syn_conductance: '0.18nS' } });
   assert.deepEqual(parseC302NavAct({ wiring: true }), { wiring: true });
   /* Echoed as the interface writes it, never with the service's names. */
   const written = { stimuli: [{ cell: 'AWCL', delay_ms: 100, duration_ms: 200, amplitude_pa: 3 }], remove: ['AWCL-AIYL'], parameters: { ca_conc_decay_time: '100 ms' }, duration_ms: 1000 };

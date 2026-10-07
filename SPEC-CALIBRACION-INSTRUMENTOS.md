@@ -187,6 +187,18 @@ Un fallo confirmado no se arregla dentro del run: se arregla en el código, y el
 - **Pendiente:** la parte de I5 sobre campos no declarados por la interfaz. Hoy sólo se comprueba que todo número
   mostrado sea finito.
 
+**A2 en `c302nav`, primer caso (07/10/2026).** La batería de L0 del lazo cerrado (SPEC-C302-LAZO-CERRADO) encontró un
+fallo del tipo «aceptado pero no aplicado» que el contrato rápido (A1) no podía ver, porque el sustituto no simula:
+- **El fallo:** `parameters` admitía cualquier nombre. c302 añade como parámetro nuevo uno que el conjunto no tiene, y
+  nadie lo lee. El ejemplo de `act` de `c302nav` usaba uno así (`neuron_to_neuron_chem_exc_syn_gbase`, que no existe en
+  C1).
+- **El arreglo:** el trabajador rechaza (400) los nombres que el conjunto no tiene y da la lista de los que tiene.
+- **El caso de calibración I3b,** contra el simulador real: con `neuron_to_neuron_exc_syn_conductance` de 0,09 a
+  0,18 nS, el pico de AIYL pasa de 9,67·10⁻⁷ a 1,015·10⁻⁶.
+- **La contaminación:** ningún run anterior usó un nombre inválido. Sólo uno usó parámetros, y válidos.
+
+Es la defensa de §2.1 funcionando: calibrar el instrumento por separado encontró lo que la medida no veía.
+
 **A3, implementado (06/10/2026):**
 - `learn/instrument.ts`: `INSTRUMENT_SECTION` y la lectura de `instrument_report`, uno o una lista. Un tipo desconocido
   pasa a `other`; uno sin `what` se descarta.

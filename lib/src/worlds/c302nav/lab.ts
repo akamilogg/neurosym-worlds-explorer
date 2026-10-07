@@ -326,7 +326,7 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
         { stimuli: [{ cell: n.cell('AWCL'), delay_ms: 1000, duration_ms: 2000, amplitude_pa: 4 }] },
         { stimuli: [{ cell: n.cell('AWCR'), kind: 'sine', delay_ms: 0, duration_ms: 3000, amplitude_pa: 3, period_ms: 800 }], record: [n.cell('AIYL')],
           remove: [n.connection('AWCL-AIYL')], scale: { [n.connection('AWCR-AIYR')]: 2 }, polarity: { [n.connection('AIYL-RIAL')]: 'inh' },
-          parameters: { neuron_to_neuron_chem_exc_syn_gbase: '1nS' }, duration_ms: 3000 },
+          parameters: { neuron_to_neuron_exc_syn_conductance: '0.18nS' }, duration_ms: 3000 },
         { wiring: true }
       ];
     },
