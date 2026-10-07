@@ -54,7 +54,7 @@ function system2(served: { url: string }, asked: Record<string, any>[]): FetchLi
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
       : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
       : user.round === 1 && done === 0 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }, { act: { start: { x: 5, y: 0, heading: 3 }, duration_ms: 3000, blocked: true } }] }
-      : user.round === 1 && done === 1 ? { investigate: [{ act: { replay: 'act2' } }] }
+      : user.round === 1 && done === 1 ? { investigate: [{ act: { replay: 'act2' } }, { act: { stimuli: [{ cell: 'AWCL', delay_ms: 100, duration_ms: 500, amplitude_pa: 3.5 }], duration_ms: 1000 } }] }
       : HOLDING;
     const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
     return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
@@ -68,6 +68,8 @@ test('the act: an episode of its own, the body blocked, or the current of one of
   assert.match(parseClosedAct({ start: { x: 99, y: 0, heading: 0 } }) as string, /inside the arena/);
   assert.match(parseClosedAct({ replay: 'act1', start: { x: 1, y: 2, heading: 0 } }) as string, /takes no body/);
   assert.match(parseClosedAct({ fly: true }) as string, /no field "fly"/);
+  assert.equal(typeof parseClosedAct({ stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 100, amplitude_pa: 4 }] }), 'object', 'a designed current, open loop');
+  assert.match(parseClosedAct({ stimuli: [{ cell: 'AWCL', delay_ms: 0, duration_ms: 100, amplitude_pa: 4 }], start: { x: 0, y: 0, heading: 0 } }) as string, /take no body/);
   assert.doesNotMatch(CLOSED_PERCEPT_DOC, /`p\.(x|y|heading|odor)`/, 'the percept has nothing of the body');
 });
 
@@ -76,11 +78,12 @@ test('a run in the facet of signals: episodes from POST /closed-loop, an act wit
   try {
     const out = path.join(dir, 'signals.json');
     const asked: Record<string, any>[] = [];
-    await runLaboratory(closedLab, { args: [...ARGS, '--service', served.url, '--out', out], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: system2(served, asked) });
+    await runLaboratory(closedLab, { args: [...ARGS, '--acts', '3', '--service', served.url, '--out', out], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: system2(served, asked) });
     const journal = JSON.parse(fs.readFileSync(out, 'utf8'));
     const end = journal.events.find((e: { type: string }) => e.type === 'end');
     assert.deepEqual(end.episodes.map((e: { episode: string }) => e.episode).slice(0, 3), ['ep1', 'act2', 'act3']);
     assert.equal(end.episodes[2].replays, 'act2', 'the replay names the episode it replays');
+    assert.deepEqual(end.episodes[3].designed, [{ cell: 'AWCL', delay_ms: 100, duration_ms: 500, amplitude_pa: 3.5 }], 'a designed open-loop episode says what it was designed with');
     const results = journal.events.filter((e: { type: string }) => e.type === 'investigation').flatMap((e: { results: unknown[] }) => e.results);
     assert.equal(results.find((r: Record<string, unknown>) => (r.act as Record<string, unknown> | undefined)?.blocked).accepted, true);
     const check = journal.events.find((e: { type: string }) => e.type === 'check');

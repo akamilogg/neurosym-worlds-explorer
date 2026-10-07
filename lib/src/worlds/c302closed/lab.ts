@@ -5,7 +5,7 @@ import type { Objective, Place } from '../../learn/objective.ts';
 import { INVESTIGATION_TOOLS as INVESTIGATION, type WorldInterface } from '../../learn/prompt.ts';
 import { objectiveLines } from '../../learn/objective.ts';
 import { mulberry32 } from '../grid/gen.ts';
-import { PANEL, namingOf, type NamesMode, type Naming, type NetworkChanges } from '../c302nav/world.ts';
+import { PANEL, inputTraces, namingOf, type NamesMode, type Naming, type NetworkChanges, type Stimulus } from '../c302nav/world.ts';
 import { REAL_SIGNALS, answerPair, c302NavAnswer, c302NavObjective, c302NavVerdict, type C302NavCase, type C302NavResult, type SignalNames } from '../c302nav/objective.ts';
 import { changesInWords, holdR2Of, insightsOf, parseC302NavAct, realAct } from '../c302nav/lab.ts';
 import { C302_BODY, type BodySpec, type Episode, type FieldSpec, type Pose, type Signals } from './body.ts';
@@ -68,6 +68,8 @@ export interface ClosedEpisode {
   readonly blocked?: boolean;
   /** The episode whose current it replays (open loop). */
   readonly replayOf?: string;
+  /** The stimuli it was designed with (open loop, in the learner's names). */
+  readonly designed?: readonly Stimulus[];
   readonly identity: string;
   /** The names the learner is told the two odor cells and the two signals by (the run's). */
   readonly names: { readonly left: string; readonly right: string; readonly signals: readonly [string, string] };
@@ -83,10 +85,14 @@ export interface ClosedAct {
   readonly seed?: number;
   readonly blocked?: boolean;
   readonly replay?: string;
+  /** Stimuli designed by the learner into the two odor cells, in open loop (as c302nav's). */
+  readonly stimuli?: readonly Stimulus[];
   readonly place?: string;
 }
 
 export const CONTROL_MS = 5;
+/** A designed open-loop episode's length by default (c302nav's). */
+export const DESIGNED_MS = 9000;
 const ARENA = 15;
 const VIEW_ROWS = 60;
 const namesOf = (o: LabOptions | undefined): NamesMode => (o?.names === 'neutral' ? 'neutral' : 'real');
@@ -110,7 +116,8 @@ const canonical = (o: unknown): string => JSON.stringify(o, (_k, v) => (v && typ
 
 /** One episode in the service, in the real names; answered in the learner's. */
 async function episodeIn(spec: ClosedSpec, ctx: LabContext | undefined, o: { field: FieldSpec; start: Pose; seed: number; durationMs?: number; record?: readonly string[];
-  changes?: NetworkChanges; learnerChanges?: NetworkChanges; blocked?: boolean; replay?: { left: readonly number[]; right: readonly number[]; of: string } }): Promise<ClosedEpisode | null> {
+  changes?: NetworkChanges; learnerChanges?: NetworkChanges; blocked?: boolean; replay?: { left: readonly number[]; right: readonly number[]; of: string };
+  designed?: { readonly learner: readonly Stimulus[]; readonly real: readonly Stimulus[] } }): Promise<ClosedEpisode | null> {
   const naming = namingFor(spec);
   const body: BodySpec = { ...C302_BODY, sensing: { ...C302_BODY.sensing!, seed: o.seed } };
   const durationMs = o.durationMs ?? spec.durationMs;
@@ -128,16 +135,25 @@ async function episodeIn(spec: ClosedSpec, ctx: LabContext | undefined, o: { fie
   if (!Array.isArray(r.reorientation)) throw new Error('the c302 service answered no closed loop');
   const n = r.reorientation.length - 1;
   const fill = (k: string, v: number) => (Array.isArray(r[k]) ? r[k] as number[] : Array.from({ length: n }, () => v));
-  const identity = canonical({ field: o.field, start: o.start, seed: o.seed, duration_ms: durationMs, changes: o.changes ?? null, blocked: Boolean(o.blocked), replay: o.replay?.of ?? null });
+  const identity = o.designed ? designedIdentity(o.designed.real, durationMs, o.changes)
+    : canonical({ field: o.field, start: o.start, seed: o.seed, duration_ms: durationMs, changes: o.changes ?? null, blocked: Boolean(o.blocked), replay: o.replay?.of ?? null });
   return {
     t: r.t ?? Array.from({ length: n + 1 }, (_, k) => k * CONTROL_MS), x: fill('x', o.start.x), y: fill('y', o.start.y), heading: fill('heading', o.start.heading),
     c: fill('c', 0), left: r.left ?? [], right: r.right ?? [], reorientation: r.reorientation, steering: r.steering, turns: r.turns ?? [],
     accumulated: fill('accumulated', 0), turnsMade: fill('turns_made', 0),
     calcium: Object.fromEntries(Object.entries((r.calcium ?? {}) as Record<string, number[]>).map(([c, x]) => [naming.cell(c), x.map((v) => Number((v * 1e8).toPrecision(6)))])),
     end: r.end ?? { t: n * CONTROL_MS, pose: o.start, reached: false }, field: o.field, body, start: o.start,
-    ...(o.learnerChanges ? { changes: o.learnerChanges } : {}), ...(o.blocked ? { blocked: true } : {}), ...(o.replay ? { replayOf: o.replay.of } : {}), identity,
+    ...(o.learnerChanges ? { changes: o.learnerChanges } : {}), ...(o.blocked ? { blocked: true } : {}), ...(o.designed ? { designed: o.designed.learner } : o.replay ? { replayOf: o.replay.of } : {}), identity,
     names: { ...odorNames(naming), signals: [naming.signals[0], naming.signals[1]] }
   };
+}
+
+/** A designed open-loop experiment, canonical: its stimuli (in any order, with their defaults), its length, its changes. */
+function designedIdentity(stimuli: readonly Stimulus[], durationMs: number, changes: NetworkChanges | undefined): string {
+  const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+  const s = stimuli.map((x) => JSON.stringify({ cell: x.cell, kind: x.kind ?? 'pulse', delay_ms: r6(x.delay_ms), duration_ms: r6(x.duration_ms), amplitude_pa: r6(x.amplitude_pa),
+    ...(x.kind === 'sine' ? { period_ms: r6(x.period_ms!), phase_rad: r6(x.phase_rad ?? 0) } : {}) })).sort();
+  return canonical({ designed: s, duration_ms: r6(durationMs), changes: changes ?? null });
 }
 
 /** The episode as the reference body's (navigation.ts reads it so). */
@@ -166,13 +182,21 @@ const spreadOf = (x: readonly number[]): number => {
 
 /** The act's form (its network part is c302nav's), or why it cannot be read. */
 export function parseClosedAct(raw: Record<string, unknown>): ClosedAct | string {
-  const unknown = unknownFields(raw, ['start', 'source', 'length', 'duration_ms', 'record', 'remove', 'scale', 'polarity', 'parameters', 'seed', 'blocked', 'replay', 'place']);
+  const unknown = unknownFields(raw, ['start', 'source', 'length', 'duration_ms', 'record', 'remove', 'scale', 'polarity', 'parameters', 'seed', 'blocked', 'replay', 'stimuli', 'place']);
   if (unknown) return unknown;
   const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
   const net = parseC302NavAct({ stimuli: [], ...Object.fromEntries(['record', 'remove', 'scale', 'polarity', 'parameters'].filter((k) => raw[k] !== undefined).map((k) => [k, raw[k]])) });
   if (typeof net === 'string') return net;
   const place = typeof raw.place === 'string' ? { place: raw.place } : {};
   const common = { record: net.record ?? [], ...(net.changes ? { changes: net.changes } : {}), ...place };
+  if (raw.stimuli !== undefined) {
+    if (raw.replay !== undefined || raw.start !== undefined || raw.source !== undefined || raw.length !== undefined || raw.blocked !== undefined || raw.seed !== undefined)
+      return 'designed stimuli take no body, field, seed or replay: only the stimuli, the duration, the cells recorded and the network\'s changes';
+    const designed = parseC302NavAct({ stimuli: raw.stimuli, ...Object.fromEntries(['record', 'remove', 'scale', 'polarity', 'parameters', 'duration_ms'].filter((k) => raw[k] !== undefined).map((k) => [k, raw[k]])) });
+    if (typeof designed === 'string') return designed;
+    if (!designed.stimuli?.length) return '"stimuli" is a list of at least one stimulus into the two odor cells';
+    return { stimuli: designed.stimuli, ...(designed.duration_ms !== undefined ? { duration_ms: designed.duration_ms } : {}), ...common };
+  }
   if (raw.replay !== undefined) {
     if (typeof raw.replay !== 'string') return '"replay" names an episode of yours in closed loop, whose current is given again in open loop';
     if (raw.start !== undefined || raw.source !== undefined || raw.length !== undefined || raw.blocked !== undefined || raw.seed !== undefined) return 'a replay takes no body, field or seed: only the episode, the cells recorded and the network\'s changes';
@@ -294,6 +318,7 @@ export function closedInterface(options: { regression?: boolean; names?: NamesMo
       [['act'], '  {"act": {"start": {"x": <mm>, "y": <mm>, "heading": <rad>}, "source": [<x>, <y>], "length": <2 to 10 mm>, "duration_ms": <up to 60000>, "seed": <n>, "blocked": true | false, "record": ["<cell>", ...], '
         + '"remove": ["<connection>", ...], "scale": {"<connection>": <factor>}, "polarity": {"<connection>": "exc" | "inh"}, "parameters": {"<name>": "<value with its unit>"}, "place": "<laboratory>"}}   an episode of yours; everything is optional. '
         + '"seed" sets the pulses\' times; "blocked": the worm smells and its circuit acts, and it does not move. Or {"act": {"replay": "<episode of yours>", "record": [...], <changes>}}: the current of that episode given again, step by step, with the worm out of the loop. '
+        + 'Or {"act": {"stimuli": [<stimulus>, ...], "duration_ms": <up to 60000; default ' + DESIGNED_MS + '>, "record": [...], <changes>}}: a current you design into the two odor cells, with the worm out of the loop - a stimulus is {"cell": "' + naming.cell('AWCL') + '" | "' + naming.cell('AWCR') + '", "delay_ms": <n>, "duration_ms": <n>, "amplitude_pa": <n>} (a square pulse) or the same with "kind": "sine", "period_ms": <n>, "phase_rad": <n>. '
         + 'The cells are ' + naming.cells.join(', ') + '. A connection is "<pre>-<post>" (chemical) or "<pre>-<post>_GJ" (gap junction). You get the episode ("act<n>"); view it. It may be refused, and you are not told why. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at that point, part by part, and the signals that came'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
@@ -360,7 +385,8 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
     return Promise.all(Array.from({ length: ctx.checkEpisodes }, () => seedOf(rnd)).map((s) => drawn(spec, s, ctx)));
   },
   steps: (e) => Math.max(0, e.left.length - 1),
-  indexInfo: (e) => ({ reached: e.end.reached, sharp_turns: e.turns.length, ...(e.blocked ? { blocked: true } : {}), ...(e.replayOf ? { replays: e.replayOf } : {}),
+  indexInfo: (e) => ({ ...(e.replayOf || e.designed ? {} : { reached: e.end.reached, sharp_turns: e.turns.length }), ...(e.blocked ? { blocked: true } : {}), ...(e.replayOf ? { replays: e.replayOf } : {}),
+    ...(e.designed ? { designed: e.designed } : {}),
     ...(e.changes ? { changes: changesInWords(e.changes) } : {}), recorded: Object.keys(e.calcium) }),
   explored: (e, place) => ({ place, start: e.start, reached: e.end.reached, steps: e.left.length }),
   at: (e, step) => (step >= 0 && step < e.left.length ? { state: pointOf(e, step), shown: { the_signals_were: signalsAt(e, step) } } : null),
@@ -376,7 +402,7 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
     const turnAt = new Map(e.turns.map(([k, a]) => [k, a]));
     const rows = [];
     for (let k = from; k <= last; k++) {
-      rows.push({ step: k, t: e.t[k], ...(e.replayOf ? {} : { x: e.x[k], y: e.y[k], heading: e.heading[k], odor: e.c[k] }), inputs: { left: e.left[k], right: e.right[k] },
+      rows.push({ step: k, t: e.t[k], ...(e.replayOf || e.designed ? {} : { x: e.x[k], y: e.y[k], heading: e.heading[k], odor: e.c[k] }), inputs: { left: e.left[k], right: e.right[k] },
         signals: [e.reorientation[k], e.steering[k]], ...(turnAt.has(k) ? { sharp_turn: turnAt.get(k) } : {}),
         calcium: Object.fromEntries(Object.entries(e.calcium).map(([c, x]) => [c, x[k]])) });
     }
@@ -392,9 +418,20 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
       const real = realAct(naming, { stimuli: [], record: asked.record, ...(asked.changes ? { changes: asked.changes } : {}) });
       if (!real) return null;
       const changes = real.changes, record = real.record ?? [];
+      if (asked.stimuli) {
+        /* Open loop, designed: the current over each control step, as c302nav samples a stimulus (on at t when start < t <= end). */
+        const stim = asked.stimuli.map((x) => ({ ...x, cell: naming.real(x.cell) ?? '' }));
+        if (stim.some((x) => x.cell !== 'AWCL' && x.cell !== 'AWCR')) return null;
+        const durationMs = asked.duration_ms ?? DESIGNED_MS;
+        const n = Math.round(durationMs / CONTROL_MS);
+        const traces = inputTraces(stim as Stimulus[], Array.from({ length: n }, (_, k) => (k + 1) * CONTROL_MS));
+        const zeros = Array.from({ length: n }, () => 0);
+        return episodeIn(spec, ctx, { field: spec.field, start: { x: 0, y: 0, heading: 0 }, seed: 0, durationMs, record, ...(changes ? { changes, learnerChanges: asked.changes } : {}),
+          replay: { left: traces.AWCL ?? zeros, right: traces.AWCR ?? zeros, of: 'designed' }, designed: { learner: asked.stimuli, real: stim as Stimulus[] } });
+      }
       if (asked.replay) {
         const of = ctx.episodeOf?.(asked.replay) as ClosedEpisode | undefined;
-        if (!of || !of.left || of.replayOf) return null;
+        if (!of || !of.left || of.replayOf || of.designed) return null;
         return episodeIn(spec, ctx, { field: of.field, start: of.start, seed: 0, record, ...(changes ? { changes, learnerChanges: asked.changes } : {}), replay: { left: of.left, right: of.right, of: asked.replay } });
       }
       const field: FieldSpec = { ...spec.field, ...(asked.source ? { source: [asked.source[0], asked.source[1]] as [number, number] } : {}), ...(asked.length ? { length: asked.length } : {}) };
@@ -402,17 +439,24 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
       return episodeIn(spec, ctx, { field, start: asked.start ?? startFrom(mulberry32(seed), field), seed, durationMs: asked.duration_ms ?? spec.durationMs, record,
         ...(changes ? { changes, learnerChanges: asked.changes } : {}), ...(asked.blocked ? { blocked: true } : {}) });
     },
-    shown: (e) => ({ steps: e.left.length - 1, reached: e.end.reached, sharp_turns: e.turns.length, ...(e.replayOf ? { replays: e.replayOf } : {}), recorded: Object.keys(e.calcium) }),
-    asWritten: (a) => ({ ...(a.replay ? { replay: a.replay } : {}), ...(a.start ? { start: a.start } : {}), ...(a.source ? { source: a.source } : {}), ...(a.length !== undefined ? { length: a.length } : {}),
+    shown: (e) => ({ steps: e.left.length - 1, ...(e.replayOf || e.designed ? { open_loop: true } : { reached: e.end.reached, sharp_turns: e.turns.length }), ...(e.replayOf ? { replays: e.replayOf } : {}), recorded: Object.keys(e.calcium) }),
+    asWritten: (a) => ({ ...(a.stimuli ? { stimuli: a.stimuli } : {}), ...(a.replay ? { replay: a.replay } : {}), ...(a.start ? { start: a.start } : {}), ...(a.source ? { source: a.source } : {}), ...(a.length !== undefined ? { length: a.length } : {}),
       ...(a.duration_ms !== undefined ? { duration_ms: a.duration_ms } : {}), ...(a.seed !== undefined ? { seed: a.seed } : {}), ...(a.blocked ? { blocked: true } : {}),
       ...(a.record.length ? { record: a.record } : {}), ...(a.changes ? changesInWords(a.changes) : {}), ...(a.place ? { place: a.place } : {}) }),
     examples: (spec) => {
       const n = namingFor(spec);
       return [{ start: { x: 7, y: 0, heading: 3 } }, { start: { x: -6, y: 4, heading: -0.5 }, seed: 3, duration_ms: 3000, record: [n.cell('AIYL')], remove: [n.connection('AWCL-AIYL')] },
-        { start: { x: 5, y: 5, heading: 0 }, blocked: true, duration_ms: 2000 }];
+        { start: { x: 5, y: 5, heading: 0 }, blocked: true, duration_ms: 2000 },
+        { stimuli: [{ cell: n.cell('AWCL'), delay_ms: 200, duration_ms: 1500, amplitude_pa: 3.5 }, { cell: n.cell('AWCR'), kind: 'sine', delay_ms: 0, duration_ms: 2000, amplitude_pa: 2, period_ms: 500 }], duration_ms: 3000 }];
     },
     identity: (spec, a) => {
       if (a.replay) return null;
+      if (a.stimuli) {
+        const naming = namingFor(spec);
+        const stim = a.stimuli.map((x) => ({ ...x, cell: naming.real(x.cell) ?? '' }));
+        const real = realAct(naming, { stimuli: [], record: a.record, ...(a.changes ? { changes: a.changes } : {}) });
+        return real && stim.every((x) => x.cell === 'AWCL' || x.cell === 'AWCR') ? designedIdentity(stim as Stimulus[], a.duration_ms ?? DESIGNED_MS, real.changes) : null;
+      }
       const real = realAct(namingFor(spec), { stimuli: [], record: a.record, ...(a.changes ? { changes: a.changes } : {}) });
       return real ? canonical({ source: a.source ?? spec.field.source, length: a.length ?? spec.field.length, start: a.start ?? null, seed: a.seed ?? null, duration_ms: a.duration_ms ?? spec.durationMs, changes: real.changes ?? null, blocked: Boolean(a.blocked) }) : null;
     }

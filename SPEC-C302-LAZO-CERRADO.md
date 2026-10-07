@@ -170,6 +170,10 @@ Antes de atribuir nada al circuito, con "circuitos" sintéticos en lugar de c302
 - **`act` con corriente reproducida** (en lazo abierto): repetir la corriente de un episodio en lazo cerrado. Es un
   **control de consistencia del instrumento:** con el mismo estado inicial y la misma corriente, las señales deben
   salir iguales. Por sí solo no demuestra un efecto causal del movimiento.
+- **`act` con estímulos diseñados** (en lazo abierto; añadido el 07/10/2026 tras el primer run): pulsos y senos en AWCL y
+  AWCR, como en `c302nav`, con el gusano fuera del lazo y sobre el mismo motor. Sin él, los experimentos controlados
+  (subida frente a nivel sostenido, un solo lado, dos amplitudes) sólo podían buscarse entre los pulsos naturales; la
+  apertura del senior del run `c302closed-n2-2` lo dejó a la vista.
 - **Episodios largos,** de minutos, para I17, con un coste que mide L0.
 
 ## 10. Coste
