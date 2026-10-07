@@ -1,7 +1,8 @@
 # SPEC · Gestión del riesgo de modelos: el arnés como evidencia de validación
 
-Estado: propuesta (07/10/2026). Nada implementado. Va de la mano de SPEC-CONTROL-ARNES, que mide el arnés como un
-proceso controlado. Esta spec decide qué evidencia produce cada modelo aceptado y quién la firma.
+Estado: propuesta (07/10/2026), revisada con una auditoría externa el mismo día (§13). Nada implementado. Va de la mano
+de SPEC-CONTROL-ARNES, que describe el arnés como un proceso controlado. Esta spec decide qué evidencia produce cada
+modelo aceptado, cómo se versiona y quién la firma.
 
 ## 1. De dónde sale
 
@@ -14,255 +15,315 @@ La spec es el último eslabón de una conversación que empezó lejos del códig
    artefacto «La curva S de lo digital».
 2. **Digitalizar tiene niveles:** registrado (N1), predecible (N2), mecanístico (N3, acierta bajo intervención) y
    diseñable (N4, lazo cerrado). La IA actual lleva dominios a N2 con facilidad. El valor económico está en N3 y N4.
-3. **El cuello de botella pasa de generar a verificar.** En nuestros runs, el par junior y senior razona por céntimos,
-   y lo caro es el experimento y saber si el resultado es correcto. Cuando generar es barato, lo escaso es la
-   validación.
+3. **El cuello de botella pasa de generar a verificar.** En nuestros runs, el par junior y senior razona por céntimos;
+   lo caro es el experimento y saber si el resultado es correcto.
 4. **De ahí, una pregunta de carrera.** ¿Qué hace un ingeniero de software cuando la IA programa mejor que él? La
    respuesta salió del propio proyecto. El autor no escribió el código, pero tomó las decisiones que le dieron valor:
    - vio que el modelo aceptado era una sombra;
    - formuló que en un mundo simulado la realidad puede ser un bug;
    - diseñó la relación entre junior y senior;
-   - juzgó los runs por el método, no por el resultado.
+   - juzgó los runs por el método.
 
    El rol es diseñar el sistema dentro del cual trabajan las IAs, decidir qué cuenta como éxito y detectar cuándo el
    éxito es falso.
 5. **La banca ya tiene una disciplina para esto.** El autor viene de banca y comercio online. La gestión del riesgo de
-   modelos bancaria (SR 11-7) tiene casi las mismas piezas que el arnés:
+   modelos bancaria tiene piezas muy parecidas a las del arnés:
 
    | banca | arnés |
    |---|---|
    | modelo retador | rival que explica la evidencia compartida |
    | backtesting | checks |
-   | validación fuera de muestra y de periodo | familia de validación y confirmación a ciegas |
+   | validación fuera de muestra | familia de validación y confirmación a ciegas |
    | registro de auditoría | diario y reproducción |
    | calidad del dato | contrato del instrumento |
 
-   La industria, hacia donde quiere ir el autor, está metiendo IA en planta sin una cultura de validación tan formal, y
-   empieza a tener presión regulatoria.
+   La industria, hacia donde quiere ir el autor, está metiendo IA en planta sin una cultura de validación tan formal.
 6. **La pregunta del autor:** ¿puede el arnés implementar SR 11-7?
 
-### 1.2 La respuesta corta
+### 1.2 La respuesta, corregida por la auditoría
 
-No como norma, sí como evidencia. SR 11-7 es una guía de supervisión sobre cómo una **organización** gestiona sus
-modelos: roles, políticas, consejo, auditoría interna. Eso no lo hace un programa. Lo que el arnés puede hacer es
-implementar los **controles técnicos** que la guía pide y generar la **evidencia** que un validador o un supervisor
-leería. Más de la mitad ya existe; esta spec cierra los huecos.
+- **SR 11-7 ya no está vigente.** La sustituyó SR 26-2, «*Revised Guidance on Model Risk Management*», del 17/04/2026,
+  que reemplaza también a SR 21-8.
+- **La guía nueva excluye expresamente la IA generativa y agéntica** (nota 3, tras la definición de modelo): «*not
+  within the scope of this guidance*».
 
-### 1.3 Lo que los experimentos añaden a la disciplina bancaria
+Por tanto, el LLM investigador **no** es un «modelo de proveedor» cubierto por la guía bancaria, y esta spec no lo
+presenta así. Lo que sí puede caer bajo la gestión del riesgo de modelos es el **artefacto cuantitativo** que el
+investigador produce, según el uso que se le dé.
 
-- **La sombra:** en `c302nav` el protocolo aceptó un modelo que pasaba el check, la familia y la confirmación a ciegas,
-  y recuperaba 0,11 de los hallazgos del mecanismo. El backtesting no basta: un modelo puede ser correcto en todo lo que
-  se le pregunta y falso en cuanto se interviene. La validación debe incluir pruebas bajo intervención
-  (SPEC-PRUEBAS-PROPIAS).
+Y la respuesta de fondo no cambia. Ninguna guía de este tipo la «implementa» un programa, porque son de gobierno de una
+organización: roles, políticas, consejo y auditoría interna. El arnés puede producir la **evidencia técnica** que un
+validador o un supervisor leería, trazable y versionada.
+
+### 1.3 Lo que los experimentos añaden a la disciplina
+
+- **La discrepancia entre predicción y mecanismo.** En `c302nav`, el protocolo aceptó un modelo que pasaba el check, la
+  familia y la confirmación a ciegas, y recuperaba 0,11 de los hallazgos del mecanismo. El modelo es adecuado para
+  anticipar señales e insuficiente para diseñar intervenciones. La evidencia debe separar esas dos cosas (§6).
 - **El instrumento que miente:** tres fallos del simulador se convirtieron en «leyes» para el investigador. La
-  verificación del proceso debe cubrir el instrumento, no sólo el modelo (SPEC-CALIBRACION-INSTRUMENTOS).
-- **El LLM es un modelo de proveedor:** un sistema basado en LLMs tiene dos capas de modelo, el modelo que produce el
-  investigador y el LLM que lo produce. Bajo SR 11-7, la segunda es un modelo de terceros que también hay que conocer y
-  medir.
+  verificación del proceso debe cubrir el instrumento (SPEC-CALIBRACION-INSTRUMENTOS).
+- **Lo que se aprobó debe poder reconstruirse.** Un lote conservaba una recuperación de 0,25 mientras el finding
+  recalificado mostraba 0,11. Una aprobación sobre datos que cambian después no dice qué se aprobó (§7.4).
 
 ## 2. Qué no promete
 
-- **No da cumplimiento normativo.** Cumplir SR 11-7, la SS1/23 o la Ley de IA es responsabilidad de una organización.
-  El arnés produce evidencia, y la conformidad la declara una persona con autoridad para hacerlo.
-- **No sustituye al validador.** El informe de validación es un borrador con hechos verificables. El juicio final
-  (aprobado, aprobado con limitaciones, rechazado) lo firma una persona (§7).
-- **Las referencias a normas** (SR 11-7, SS1/23, NASA-STD-7009, ASME V&V 40) se resumen de memoria. Antes de presentar
-  esta evidencia ante un tercero hay que contrastar cada correspondencia con el texto oficial vigente.
+- **No da cumplimiento normativo.** Cumplir una guía o una ley es responsabilidad de una organización. El arnés produce
+  evidencia, y la conformidad la declara una persona con autoridad para hacerlo.
+- **No sustituye al validador.** El informe es un borrador con hechos verificables. El juicio lo firma una persona.
+- **No convierte el LLM en un modelo regulado.** La capa del modelo generador se caracteriza con controles propios
+  (§8.2), no por correspondencia con una guía que lo excluye.
+- **Cada correspondencia normativa lleva su referencia completa** (§10.1). Lo no contrastado con el texto se marca como
+  tal y no se presenta ante terceros.
 
 ## 3. Principios
 
-- **R1. Evidencia, no declaración.** Cada afirmación del informe de validación apunta a un hecho del diario, del finding
-  o de la auditoría. Nada se escribe a mano sin fuente.
-- **R2. Dos capas de modelo.** Se valida el modelo aceptado (el artefacto) y se caracteriza el modelo que lo generó: el
-  LLM con la configuración del arnés.
-- **R3. Independencia declarada, no supuesta.** Cada rol (desarrollo, dirección, validación) lleva su modelo y su
-  proveedor. Si el validador no es independiente del desarrollador, el informe lo dice.
-- **R4. La validación caduca.** Un modelo aceptado se revalida cuando cambia el instrumento, el LLM, el mundo o pasa su
-  fecha. Sin monitorización, no hay validación vigente.
-- **R5. Las limitaciones son parte del modelo.** Contraejemplos abiertos, sombras sospechadas, informes del instrumento
-  y aceptaciones triviales van al registro de limitaciones, con la misma visibilidad que los aciertos.
-- **R6. Dos perfiles, un núcleo.** El núcleo es común; el perfil bancario y el industrial sólo cambian la estructura
-  del informe y la clasificación de criticidad (§10).
+- **R1. Evidencia, no declaración.** Cada afirmación del informe apunta a un hecho del diario, del finding o de la
+  auditoría.
+- **R2. Tres capas de modelo** (§4): configuración generadora, artefacto aceptado y dependencias de ejecución.
+- **R3. Independencia en tres dimensiones**, registradas por separado y nunca reducidas a un booleano (§7).
+- **R4. Lo firmado es inmutable.** Una aprobación remite, mediante hashes, a una revisión cerrada de toda su evidencia.
+  Recalcular crea una revisión nueva (§7.4).
+- **R5. La validación caduca.** Cambiar una dependencia de ejecución, el instrumento o el contexto de uso obliga a
+  revalidar (§8.1).
+- **R6. Cada resultado con su nombre.** Aceptación predictiva, evidencia discriminante, adecuación al uso y
+  recuperación mecanística son dimensiones distintas (§6). Ninguna se llama «correcto».
+- **R7. Cada prueba con su nombre.** Reproducir un registro, reejecutar el instrumento, reevaluar con episodios
+  sintéticos y monitorizar observaciones reales son evidencias distintas, y el informe las llama así (§6.3, §9).
 
-## 4. Qué es un modelo aquí
+## 4. Qué es un modelo aquí: tres capas
 
-- **Modelo aceptado:** la ley o la fórmula que el protocolo aceptó (sus observaciones, reglas, pesos y salida), con su
-  huella. Es lo que se usaría.
-- **Modelo generador:** el LLM (proveedor, identificador y parámetros: temperatura, esfuerzo de razonamiento), junto con
-  la configuración del arnés que lo produjo (investigador, memoria, senior, presupuestos, `--own-tests`).
-- **Contexto de uso** (concepto de ASME V&V 40): qué pregunta responde el modelo, en qué rango de condiciones y para qué
-  decisión. Sin contexto de uso no hay criticidad ni validación.
+- **Configuración generadora:** el LLM (proveedor, identificador y parámetros) y la configuración del arnés que produjo
+  el modelo: investigador, memoria, senior, apertura, presupuestos y `--own-tests`. Cambiarla no altera un artefacto ya
+  aceptado, pero sí lo que produzca a partir de entonces.
+- **Artefacto aceptado:** la ley o la fórmula (observaciones, reglas, pesos y salida) con su huella.
+- **Dependencias de ejecución:** lo que el artefacto necesita para dar una respuesta.
+  - El ejecutor de código y la versión de la percepción del mundo.
+  - **El Judge (Jev) con su modelo, cuando la ley tiene reglas.** Sólo un artefacto de salida pura en código, como el
+    último predictor de `c302nav`, se ejecuta sin LLM.
+
+  Cambiar una dependencia **sí** puede alterar el comportamiento del artefacto, y obliga a revalidarlo.
+- **Contexto de uso** (concepto tomado de ASME V&V 40 y adaptado, §10.3): qué pregunta responde el modelo, en qué rango
+  de condiciones y para qué decisión, con los **criterios de adecuación** declarados antes de evaluar.
 
 ## 5. El inventario de modelos
 
 Un archivo por proyecto, `runs/models/inventory.json` (`model_inventory@1`). Una entrada por modelo aceptado que el
 operador decide inventariar (`lab model register <run> --use "<contexto de uso>"`):
 
-- **Identidad:** id, huella del modelo, run y commit de origen, versión del instrumento, mundo y lugares.
-- **Propietario:** la persona responsable del modelo, que no es un agente.
-- **Contexto de uso:** la pregunta, el rango de condiciones (familias, lugares) y la decisión que apoya.
-- **Criticidad** (§10): la clase del perfil elegido.
+- **Identidad:** id, huella del artefacto, run y commit de origen, versión del instrumento, mundo y lugares.
+- **Las tres capas** (§4), con las versiones de cada dependencia de ejecución.
+- **Propietario:** la persona responsable, que no es un agente.
+- **Contexto de uso y criterios de adecuación.**
+- **Criticidad** según el perfil (§10).
 - **Estado:** `en validación`, `aprobado`, `aprobado con limitaciones`, `rechazado`, `revalidar` o `retirado`.
+- **Historial de estados:** cada cambio con su fecha, quién lo hizo (persona, o el proceso de monitorización o de
+  cambios) y la revisión de evidencia a la que remite (§7.4).
 - **Fechas:** registro, última validación y próxima revisión.
-- **Enlaces:** el informe de validación vigente y los anteriores.
-
-El estado sólo lo cambia una persona (§7), salvo `revalidar`, que pone la monitorización (§9) o un cambio (§8).
 
 ## 6. El informe de validación
 
-`<run>.validation.json` (`validation_report@1`) más una versión legible. Se genera desde el diario, el finding, la
-auditoría y los lotes. Secciones del núcleo:
+`<run>.validation/<revisión>.json` (`validation_report@1`) más una versión legible. Se genera desde el diario, el
+finding, la auditoría y los lotes. Cada línea lleva su fuente (R1).
 
-1. **Descripción:** el modelo como código, sus supuestos (lo que el investigador afirmó en sus creencias) y su contexto
-   de uso.
-2. **Solidez conceptual:**
-   - la calificación frente a la verdad, donde existe, con el calificador endurecido;
-   - las preguntas del Judge sobre el método (J1–J6);
-   - cuántos hallazgos del mecanismo recupera frente a cuánto predice: la medida de sombra.
-3. **Verificación del proceso:**
+1. **Descripción:** el artefacto como código, sus supuestos (las creencias del investigador), sus tres capas y su
+   contexto de uso con los criterios declarados.
+2. **Resultados, cada uno por separado** (R6):
+   - **Aceptación predictiva:** el protocolo lo aceptó (check, familia, confirmación a ciegas), con los hechos por lugar.
+   - **Evidencia discriminante prerregistrada:** las pruebas propias severas superadas como prerregistradas, con la
+     respuesta del Judge sobre si cada rival era genuino. Que un modelo derrote a un rival concreto no demuestra
+     corrección general.
+   - **Adecuación al contexto de uso:** si cumple los criterios declarados para ese uso, que pueden pedir sólo
+     predicción o también acierto bajo intervención.
+   - **Recuperación mecanística**, donde hay verdad: la calificación con el calificador endurecido. Una recuperación
+     baja no convierte la aceptación en falsa; dice que el modelo es fenomenológico.
+3. **Verificación del proceso**, con cada prueba por su nombre (R7):
    - el contrato del instrumento (I1–I6) en la versión del run;
-   - la reproducción exacta (un run reanudado que no diverge);
+   - la **consistencia de reproducción**: un run reanudado que no diverge. Acredita el registro, no que el instrumento
+     responda hoy lo mismo;
+   - la **reejecución en vivo**, cuando se hace: los mismos `act` contra el instrumento actual, comparados con lo
+     grabado;
    - los informes del instrumento con su veredicto.
-4. **Análisis de resultados:** checks, validación en la familia, confirmación a ciegas y regresión emparejada, con sus
-   hechos por lugar.
-5. **Modelo retador y referencias:** las pruebas propias severas superadas como prerregistradas, las líneas base del
-   operador y los rivales públicos.
-6. **Robustez:** variación entre semillas y entre familias del mismo contexto de uso (de los lotes), y nombres neutros
-   frente a reales donde aplica.
-7. **Registro de limitaciones** (R5):
+4. **Referencias:** las líneas base del operador y los rivales públicos.
+5. **Robustez:** la variación entre semillas y familias del mismo contexto de uso, de los lotes, como estadística
+   descriptiva con su incertidumbre (SPEC-CONTROL-ARNES §6). Y los nombres neutros frente a los reales, donde aplica.
+6. **Registro de limitaciones:**
    - contraejemplos abiertos;
    - informes del instrumento pendientes o con veredicto `bug`;
    - fallos tolerados;
-   - aceptación trivial (una línea base también la pasa);
+   - aceptación trivial;
    - aceptación retenida;
-   - hallazgos no recuperados.
-8. **Independencia** (§7).
-9. **Modelo generador** (§8.2): su ficha de proveedor en el momento del run.
-10. **Conclusión propuesta** (borrador) y **conclusión firmada**, vacía hasta que la firma una persona.
+   - hallazgos no recuperados;
+   - y la distancia entre la adecuación declarada y la recuperación mecanística.
+7. **Independencia** en sus tres dimensiones (§7).
+8. **Configuración generadora:** su caracterización en el momento del run (§8.2).
+9. **Conclusión propuesta** (borrador) y **conclusiones firmadas**, cada una vinculada a una revisión (§7.4).
 
-Cada línea lleva su fuente: el evento del diario, el campo del finding o el archivo de auditoría (R1).
+## 7. Roles, independencia y aprobación
 
-## 7. Roles e independencia
+### 7.1 Los roles
 
-El informe registra, para cada rol, quién lo ocupó: persona o agente, con modelo y proveedor si es agente.
+| rol | en el arnés |
+|---|---|
+| **Desarrollador** | el junior: su LLM y su configuración |
+| **Director** | el senior, si lo hubo, y el operador con sus mensajes |
+| **Validador técnico** | el calificador (`GRADER_LLM_*`), el Judge de la auditoría, las pruebas del contrato |
+| **Aprobador** | una persona identificada |
 
-| rol | en el arnés | requisito de independencia |
-|---|---|---|
-| **Desarrollador** | el junior: su LLM y su configuración | — |
-| **Director** | el senior, si lo hubo, y el operador con sus mensajes | **no es independiente:** dirige al desarrollador |
-| **Validador técnico** | el calificador (`GRADER_LLM_*`), el Judge de la auditoría, las pruebas del contrato | independiente si su proveedor y modelo difieren del desarrollador y del director |
-| **Aprobador** | una persona | firma la conclusión; no puede ser el operador que dirigió el run en el perfil bancario |
+### 7.2 Tres dimensiones de independencia, registradas por separado
 
-**Regla:** si el validador técnico comparte modelo con el desarrollador o el director, el informe lo marca como **no
-independiente** y la conclusión propuesta no puede ser `aprobado` sin una nota del aprobador.
+- **Diversidad técnica:** si el validador técnico usa otro modelo y otro proveedor que el desarrollador y el director.
+  Es útil, pero no establece independencia: dos modelos distintos pueden compartir errores o recibir el mismo encuadre
+  sesgado.
+- **Separación del proceso de evaluación:** qué vio el validador. Por ejemplo, si leyó el razonamiento del desarrollador
+  o sólo su modelo y sus resultados, si el encuadre de su tarea lo escribió el mismo operador que dirigió el run y si
+  participó en el desarrollo.
+- **Independencia organizativa:** autoridad, separación de responsabilidades y capacidad de cuestionar el desarrollo.
+  La declara una persona; el arnés no la calcula. Es la dimensión que exigen los marcos bancarios, como el principio 4
+  de SS1/23.
 
-## 8. Cambios, versiones y el modelo de proveedor
+El informe muestra las tres. Ninguna se resume en «independiente: sí o no».
+
+### 7.3 Qué firma el aprobador
+
+Una conclusión (`aprobado`, `aprobado con limitaciones` o `rechazado`) sobre una revisión concreta, con su identidad,
+fecha y nota.
+
+### 7.4 Evidencia inmutable
+
+- **Una revisión de evidencia** es un manifiesto con los hashes de:
+  - el informe;
+  - el artefacto;
+  - el contexto de uso y sus criterios;
+  - el diario, el finding y la auditoría;
+  - las calificaciones;
+  - los informes de lote de los que salieron las estadísticas.
+- **La aprobación remite al hash del manifiesto.**
+- **Recalcular cualquier cosa crea una revisión nueva**, se trate de una recalificación con otro calificador, un lote
+  recalculado o un veredicto nuevo sobre un informe del instrumento. Lo firmado no se modifica, y el inventario muestra
+  que hay una revisión más reciente sin firmar.
+- **El historial de estados** (§5) enlaza cada cambio con su revisión.
+
+## 8. Cambios y caracterización de la configuración generadora
 
 ### 8.1 Disparadores de revalidación
 
 Un modelo inventariado pasa a `revalidar` cuando:
-- cambia la **versión del instrumento** del mundo: un commit que toca el laboratorio, el servicio o el simulador, o un
-  `bug` confirmado (SPEC-CALIBRACION-INSTRUMENTOS §6);
-- cambia el **contexto de uso**;
-- la **monitorización** detecta deriva (§9);
-- vence su **fecha de revisión**.
+- **cambia una dependencia de ejecución**, por ejemplo el modelo de Jev para una ley con reglas, el ejecutor o la
+  versión de la percepción;
+- **cambia la versión del instrumento** del mundo: un commit que toca el laboratorio, el servicio o el simulador, o un
+  `bug` confirmado;
+- **cambia el contexto de uso** o sus criterios;
+- **la monitorización observa deriva** (§9);
+- **vence su fecha de revisión.**
 
-Un cambio del LLM generador no invalida un modelo ya aceptado, porque el artefacto no cambia. Sí invalida la ficha de
-proveedor y obliga a revalidar la **configuración** antes de producir modelos nuevos con ella.
+Cambiar la configuración generadora no lo pone en `revalidar` (el artefacto no cambia). Sí obliga a caracterizar de
+nuevo esa configuración antes de producir modelos con ella.
 
-### 8.2 La ficha del modelo de proveedor
+### 8.2 La caracterización de la configuración generadora
 
-`runs/models/vendors/<proveedor>-<modelo>.json`, generada desde los lotes:
-- identificador, versión y fecha de las mediciones;
-- rendimiento por condición: aceptación, coste hasta aceptar, sombras y pruebas severas (de SPEC-CONTROL-ARNES);
-- variabilidad entre semillas: la banda de los gráficos de control;
-- modos de fallo observados: `llm_error`, `diverged`, insubordinación, consumo del presupuesto;
-- alternativa probada: otro modelo con su ficha;
-- límites conocidos: por ejemplo, ignora observaciones de código o tiende a sombras en cierto tipo de mundo.
+`runs/models/generators/<proveedor>-<modelo>-<config>.json`, desde los lotes. Es un control interno, no la
+correspondencia con ninguna guía (§1.2).
+- Identificador, versión y fecha de las mediciones.
+- Resultados por condición y población (mundo, criterios y versión del código), con su incertidumbre: tasas de
+  aceptación predictiva, de evidencia discriminante y de adecuación, y coste total (SPEC-CONTROL-ARNES §4).
+- Modos de fallo observados: `llm_error`, `diverged`, insubordinación, consumo del presupuesto.
+- Alternativa caracterizada.
+- Límites conocidos.
 
-## 9. Monitorización tras el uso
+## 9. Reevaluación y monitorización
 
-Para el arnés, «producción» es usar el modelo aceptado fuera del run que lo produjo:
-- **`lab model monitor <id>`** ejecuta el modelo inventariado sobre episodios nuevos de los lugares de su contexto de
-  uso, con el mismo objetivo y sin LLM.
-- **Resultado:** se apunta en el inventario y entra en el gráfico de control del modelo (SPEC-CONTROL-ARNES §6).
-- **Deriva:** una señal de causa especial, o un lugar donde deja de sostenerse, lo pasan a `revalidar`, con aviso en la
-  consola.
-- **Periodicidad:** la fija el perfil según la criticidad (§10).
+Son dos cosas distintas, y el informe las llama por su nombre (R7):
 
-## 10. Los dos perfiles
+- **Reevaluación sintética** (`lab model reevaluate <id>`): ejecuta el artefacto, con sus dependencias en la versión
+  inventariada, sobre episodios nuevos del simulador de su contexto de uso. Mide el comportamiento dentro de esa
+  distribución congelada. Es lo único que el arnés puede hacer por sí solo.
+- **Monitorización en uso:** compara el artefacto con observaciones actuales del sistema real en el que se usa. Exige
+  una conexión con ese sistema que el arnés no tiene. Hasta que exista, no se habla de deriva en producción.
+- **Lo que pasa a `revalidar`:** cualquier resultado de una reevaluación por debajo de sus criterios, o un cambio de
+  dependencia que el inventario detecte. El informe dice cuál de las dos lo motivó.
 
-### 10.1 Perfil bancario (SR 11-7 y PRA SS1/23)
+## 10. Perfiles y referencias
 
-**Correspondencia de evidencias**, resumida de memoria y por contrastar con el texto vigente:
+### 10.1 El registro de referencias
 
-| SR 11-7 | evidencia del arnés |
-|---|---|
-| desarrollo, implementación y uso sólidos | modelo como código, supuestos, contrato del instrumento, reproducción |
-| solidez conceptual | §6.2 |
-| monitorización continua: verificación del proceso | §6.3 y §9 |
-| monitorización continua: benchmarking | §6.5 |
-| análisis de resultados y backtesting | §6.4 |
-| *effective challenge* | pruebas propias frente a un rival genuino (con la pregunta del Judge sobre muñecos de paja), independencia (§7) |
-| inventario | §5 |
-| documentación | §6 |
-| productos de proveedores | §8.2 |
+Cada correspondencia normativa se registra con:
+- **documento, edición y apartado;**
+- **aplicabilidad:** si el texto se aplica a este caso, se adapta o no se aplica;
+- **evidencia disponible** en el arnés;
+- **estado:** `contrastado` (con el texto) o `por contrastar`.
 
-**SS1/23:** sus cinco principios (identificación y clasificación del riesgo, gobierno, desarrollo y uso, validación
-independiente y mitigantes) se cubren con §5, §7, §6, §7 y §6.7, respectivamente. Los mitigantes son los límites de uso
-que se derivan del registro de limitaciones.
+Estado conocido el 07/10/2026:
 
-**Criticidad:** tres clases (alta, media, baja), según la materialidad de la decisión que apoya el modelo y su
-complejidad. La revisión periódica es anual para alta y cada dos o tres años para las demás.
+| documento | edición | apartado | aplicabilidad | estado |
+|---|---|---|---|---|
+| Fed, SR 26-2, *Revised Guidance on Model Risk Management* | 17/04/2026 (sustituye a SR 11-7 y SR 21-8) | nota 3: IA generativa y agéntica fuera de alcance | no se aplica al LLM investigador | contrastado |
+| Fed, SR 26-2 | 17/04/2026 | sección VII, productos de proveedores y otros terceros | se aplicaría, en su caso, al artefacto cuantitativo según su uso | contrastado (existencia); correspondencia por contrastar |
+| PRA, SS1/23, *Model risk management principles for banks* | edición del 23/04/2026 (LIAF01/26) | principio 4, validación independiente | marco de referencia para §7.2 | edición contrastada; contenido por contrastar con la edición vigente |
+| NASA-STD-7009B | 05/03/2024 (cambio 1) | evaluación de credibilidad en las fases de desarrollo y uso | adaptación a simulación industrial | estructura contrastada; correspondencia por hacer |
+| ASME V&V 40 | — | riesgo del modelo según su influencia y la consecuencia | **adaptación**: la norma está orientada a dispositivos médicos | por contrastar |
 
-### 10.2 Perfil industrial (NASA-STD-7009 y ASME V&V 40)
+### 10.2 Perfil bancario
 
-**NASA-STD-7009** evalúa la credibilidad de un modelo o simulación en varios factores, que recuerdo así: verificación,
-validación, pedigrí de las entradas, incertidumbre de los resultados, robustez de los resultados, historial de uso,
-gestión del modelo y cualificación de las personas. Correspondencia:
+Se aplica al **artefacto cuantitativo** cuando una organización bancaria lo usa, nunca al LLM investigador. La
+correspondencia con SR 26-2 y SS1/23 se construirá apartado por apartado desde los textos vigentes. Las tablas de memoria
+de la primera versión de esta spec se retiran. Criticidad: la clasificación que use la organización.
 
-| factor | evidencia del arnés |
-|---|---|
-| verificación | contrato del instrumento, reproducción (§6.3) |
-| validación | checks, familia, confirmación a ciegas, pruebas severas (§6.4, §6.5) |
-| pedigrí de las entradas | versión del instrumento, fidelidad a la fuente (I6), informes del instrumento |
-| incertidumbre de los resultados | bandas entre semillas, tolerancias, límites de horizonte (caos) |
-| robustez de los resultados | variación entre familias y lugares (§6.6) |
-| historial de uso | monitorización (§9) |
-| gestión del modelo | inventario y cambios (§5, §8) |
-| cualificación de las personas | roles (§7); la parte humana la declara el aprobador |
+### 10.3 Perfil industrial
 
-Cada factor se puntúa de 0 a 4. El arnés propone la puntuación con su fuente y el aprobador la firma.
-
-**ASME V&V 40:** la criticidad se deriva del **riesgo del modelo**, que combina la influencia del modelo en la decisión
-con la consecuencia de una decisión equivocada. A más riesgo, más evidencia de credibilidad exigida. El inventario
-guarda ambos ejes (§5).
+- **NASA-STD-7009B organiza la credibilidad por fases de desarrollo y uso.** La correspondencia con las evidencias de
+  §6 se construirá desde su texto, no desde la estructura de la revisión A.
+- **El riesgo del modelo se toma de ASME V&V 40, como adaptación.** Combina cuánto influye el modelo en la decisión con
+  la consecuencia de una decisión equivocada: a más riesgo, más evidencia exigida. El inventario guarda los dos ejes.
 
 ## 11. Medidas
 
 - Modelos inventariados por estado y criticidad.
-- Proporción con validación vigente.
-- Tiempo desde la aceptación hasta la aprobación firmada.
+- Proporción con una revisión firmada vigente, sin dependencias cambiadas desde la firma.
+- Tiempo desde la aceptación hasta la primera firma.
 - Limitaciones por modelo y cuántas se cierran.
-- Revalidaciones por causa (instrumento, deriva, fecha, contexto).
-- Proporción de validaciones independientes.
+- Revalidaciones por causa: dependencia, instrumento, contexto, reevaluación o fecha.
+- Las tres dimensiones de independencia, por separado.
 
 ## 12. Plan
 
-- **M1.** El informe de validación (§6) generado desde lo que ya existe, más el registro de limitaciones. Es lo de más
-  valor y no necesita nada nuevo.
-- **M2.** Roles e independencia (§7): registrar modelo y proveedor de cada rol en el diario, y la regla de independencia
-  en el informe.
-- **M3.** Inventario (§5) y `lab model register`.
-- **M4.** Ficha de proveedor (§8.2), que depende de las medidas de SPEC-CONTROL-ARNES.
-- **M5.** Monitorización (§9) y disparadores de revalidación (§8.1).
-- **M6.** Perfiles (§10): la plantilla del informe en las dos estructuras y la puntuación de credibilidad del perfil
-  industrial.
+En el orden que propone la auditoría:
+- **M1. Informe trazable con revisiones inmutables** (§6, §7.4): manifiesto con hashes, revisiones nuevas al
+  recalcular, conclusión firmada vinculada a una revisión. Más los resultados separados (R6) y la verificación del
+  proceso con cada prueba por su nombre (R7).
+- **M2. Métricas descriptivas con incertidumbre** (SPEC-CONTROL-ARNES K1).
+- **M3. Inventario y dependencias de ejecución** (§4, §5, §8.1), con el historial de estados.
+- **M4. Las tres dimensiones de independencia** (§7.2).
+- **M5. Reevaluación sintética** (§9) y caracterización de la configuración generadora (§8.2).
+- **M6. Perfiles normativos** (§10), cuando los criterios estén fijados y las correspondencias contrastadas.
 
 **Preguntas abiertas:**
-- ¿Dónde firma la persona: en la consola o con `lab model approve`? Propuesta: las dos, con su nombre y fecha en el
-  inventario.
-- ¿Qué umbral de hallazgos recuperados marca un modelo como «posible sombra» en el registro de limitaciones? Propuesta:
-  lo fija el perfil, por ejemplo menos de 0,5 con predicción aceptada.
-- ¿Se inventarían modelos de mundos sin verdad (como `tank`)? Propuesta: sí, sin la sección de calificación y con más
-  peso en las pruebas severas.
+- ¿Dónde firma la persona? Propuesta: `lab model approve <id> --revision <hash>` y la consola, siempre sobre una
+  revisión.
+- ¿Quién declara los criterios de adecuación del contexto de uso? Propuesta: el propietario del modelo, antes de
+  evaluar. El cambio de criterios crea una revisión nueva.
+- ¿Se inventarían modelos de mundos sin verdad (como `tank`)? Propuesta: sí, sin recuperación mecanística, con más peso
+  en la evidencia discriminante.
+
+## 13. Auditoría externa (07/10/2026): qué cambió
+
+- **Referencias normativas:**
+  - SR 11-7 está sustituida por SR 26-2 (17/04/2026), que excluye la IA generativa y agéntica. Contrastado con la
+    fuente.
+  - El LLM ya no se presenta como modelo de proveedor de la guía bancaria; la configuración generadora se caracteriza
+    con controles propios (§8.2).
+  - SS1/23 tiene edición de 23/04/2026, y la revisión vigente de NASA es 7009B.
+  - ASME V&V 40 se toma como adaptación.
+  - Cada correspondencia lleva documento, edición, apartado, aplicabilidad y estado de contraste (§10.1). Se retiran
+    las tablas de memoria.
+- **Resultados separados** (R6, §6.2): aceptación predictiva, evidencia discriminante, adecuación al contexto de uso y
+  recuperación mecanística. Nada se llama «correcto».
+- **Tercera capa de modelo:** las dependencias de ejecución, incluido Jev para las leyes con reglas. Cambiar una obliga
+  a revalidar (§4, §8.1).
+- **Independencia en tres dimensiones** (diversidad técnica, separación del proceso, independencia organizativa), sin
+  booleano (§7.2).
+- **Aprobación vinculada a evidencia inmutable** mediante hashes, con revisiones nuevas al recalcular, identidad del
+  aprobador e historial (§7.4). El caso que lo motiva: un lote mostraba 0,25 y el finding recalificado, 0,11.
+- **Reproducir, reejecutar, reevaluar y monitorizar son evidencias distintas** (R7, §6.3, §9). Sin conexión a
+  observaciones reales, se habla de «reevaluación sintética».
+- **El plan se reordena:** primero el informe trazable, las revisiones y las métricas descriptivas; los perfiles
+  normativos, al final.
