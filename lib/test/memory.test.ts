@@ -217,3 +217,23 @@ test('the assisted researcher may insist on investigating with no steps left a f
   const pure = await runLaboratory(gridLab, { args: [...args, '--out', path.join(dir, 'p.json')], root: dir, llm, fetch: stubborn() });
   assert.equal(pure.stoppedBy, 'no_first_proposal', 'the unknown-world researcher as it was');
 });
+
+/* SPEC-ORQUESTADOR §3.3.4 in the grid: its loop too waits, after its first games, for its senior's first hypothesis, which
+   goes with the junior's first question. */
+test('the grid opens with its senior\'s first hypothesis too', async () => {
+  const { runAgentOperator } = await import('../src/orchestra/agent-operator.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grid-opening-'));
+  const out = path.join(dir, 'run.json');
+  const asked: Record<string, any>[] = [];
+  const senior = { complete: async () => ({ content: JSON.stringify({ decision: 'message', text: 'Start from this: a game ends when = reaches row 0.', why: 'w' }), latencyMs: 0, raw: null }) };
+  const controller = new AbortController();
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm: senior, pollMs: 20, maxOrders: 2, signal: controller.signal });
+  await runLaboratory(gridLab, { args: [...GRID, '--attempts', '1', '--researcher', 'assisted', '--agents', 'senior=message', '--opening', 'senior', '--out', out], root: dir, llm, fetch: system2(asked) });
+  controller.abort();
+  await agent;
+  const types = (JSON.parse(fs.readFileSync(out, 'utf8')).events as Record<string, any>[]).map((e) => e.type);
+  assert.ok(types.indexOf('awaiting_opening') > types.lastIndexOf('exploration_game'), 'after its first games');
+  assert.ok(types.includes('opening_received'));
+  assert.equal(asked[0].user.operator_messages.new[0].directive, true, 'its first question carries it, as an order');
+  assert.match(asked[0].user.operator_messages.new[0].text, /reaches row 0/);
+});

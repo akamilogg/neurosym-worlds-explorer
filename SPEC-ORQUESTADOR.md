@@ -486,7 +486,8 @@ desarrollar.
 - **Pruebas:** `lib/test/orchestra-directives.test.ts`. La primera pregunta del junior ya lleva la directiva; sin
   senior, el run espera lo indicado y sigue.
 
-**Pendiente:** el grid no espera la apertura, porque su bucle es propio.
+- **En el grid también:** su bucle llama al servicio común `awaitOpening` después de sus primeras partidas (prueba en
+  `lib/test/memory.test.ts`).
 
 ## 4. Nivel 2: el orquestador
 

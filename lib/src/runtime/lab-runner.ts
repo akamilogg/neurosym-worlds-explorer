@@ -403,7 +403,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     exchange: team.board.spec.exchange, confirmations: team.board.spec.confirmations });
   const services = { ...(isGameLab(lab) && researcher === 'assisted'
     ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous) }, run.log),
-      assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) } }
+      assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) },
+      awaitOpening: () => run.awaitOpening() }
     : run.services), ...(endings.length ? { endings } : {}), ...(team ? { team } : {}) };
   const body = isGameLab(lab)
     ? lab.run(services).then((result) => {
@@ -507,12 +508,12 @@ interface OpenRun {
   /** The environment outside, when the laboratory has one. */
   readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
   /** The operator's messages accepted and not yet delivered (the assisted researcher takes them). */
-  readonly operator: { take(): OperatorMessage[];
-    /** Waits (polling its inbox) until an order of `by` is accepted, the run is halted, or `ms` pass: whether it came. */
-    waitFor(by: string, ms: number): Promise<boolean> };
+  readonly operator: { take(): OperatorMessage[] };
   /** The agent whose first hypothesis the run waits for (SPEC-ORQUESTADOR §3.3.4), and for how long; null when none, or
       when the run resumes a history that had it. */
   readonly opening: { readonly agent: string; readonly ms: number } | null;
+  /** Waits for that first hypothesis, saying so in the journal (awaiting_opening, then opening_received or opening_missing). */
+  awaitOpening(): Promise<void>;
   /** Sources (on the web or on the disk), read through the run's log (channel "source"): a resumed run is answered what the
       first read, and reads live from there. */
   readonly sourceFetch: FetchLike;
@@ -799,18 +800,28 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       if (replay.pending() && stop.stoppedBy !== 'diverged') say('WARNING: ' + replay.pending() + ' logged answers were never asked for again: the resumed run diverged from the first');
       return { stoppedBy: stop.stoppedBy, journal: outFile, findingFile, finding, researcherFile, researcher: researcherView, researcherUsed: researcher };
   }
+  /* SPEC-ORQUESTADOR §3.3.4: the assisted researcher does not start from a hypothesis of its own - its senior reads the task
+     and the first episodes and gives it the first one to develop, as a directive that goes with its first question. */
+  const opening = arg('opening') && !previous ? { agent: arg('opening'), ms: (Number(arg('opening-minutes', '15')) || 15) * 60000 } : null;
+  async function awaitOpening(): Promise<void> {
+    if (!opening || researcher !== 'assisted') return;
+    const by = 'agent:' + opening.agent;
+    log('awaiting_opening', { agent: opening.agent, minutes: opening.ms / 60000 });
+    say('waiting for the first hypothesis of ' + by);
+    const until = Date.now() + opening.ms;
+    let came = false;
+    for (;;) {
+      pollInbox();
+      if (waiting.some((m) => m.by === by)) { came = true; break; }
+      if (halt() !== null || Date.now() >= until || closed) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    log(came ? 'opening_received' : 'opening_missing', { agent: opening.agent });
+    if (!came) say('no first hypothesis from ' + by + ': the researcher starts on its own');
+  }
   return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged, verdicts,
-    operator: { take: () => waiting.splice(0, waiting.length),
-      waitFor: async (by, ms) => {
-        const until = Date.now() + ms;
-        for (;;) {
-          pollInbox();
-          if (waiting.some((m) => m.by === by)) return true;
-          if (halt() !== null || Date.now() >= until || closed) return false;
-          await new Promise((r) => setTimeout(r, 250));
-        }
-      } },
-    opening: arg('opening') && !previous ? { agent: arg('opening'), ms: (Number(arg('opening-minutes', '15')) || 15) * 60000 } : null,
+    operator: { take: () => waiting.splice(0, waiting.length) },
+    opening, awaitOpening,
     sourceFetch: replay.wrap('source', sourceFetch(network)) };
 }
 
@@ -1338,14 +1349,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   await explore();
   /* SPEC-ORQUESTADOR §3.3.4: the assisted researcher does not start from a hypothesis of its own - its senior reads the task
      and the first episodes and gives it the first one to develop, as a directive that goes with its first question. */
-  if (run.opening && journal.researcher === 'assisted' && assistedAfter === null) {
-    const by = 'agent:' + run.opening.agent;
-    log('awaiting_opening', { agent: run.opening.agent, minutes: run.opening.ms / 60000 });
-    say('waiting for the first hypothesis of ' + by);
-    const came = await run.operator.waitFor(by, run.opening.ms);
-    log(came ? 'opening_received' : 'opening_missing', { agent: run.opening.agent });
-    if (!came) say('no first hypothesis from ' + by + ': the researcher starts on its own');
-  }
+  if (assistedAfter === null) await run.awaitOpening();
   let accepted: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
   /* An acceptance waiting for the operator's verdict (SPEC-CALIBRACION-INSTRUMENTOS §5.1): granted, as of its round, once

@@ -305,6 +305,9 @@ export interface LabServices {
   readonly assisted?: { readonly memory: boolean; readonly selector?: import('./assisted/sources.ts').LineSelector;
     /** The records of earlier runs it may read (SPEC-INVESTIGADOR-ASISTIDO §12), and in which mode the operator gave them. */
     readonly experience?: { readonly reader: import('./assisted/experience.ts').Experience; readonly mode: import('./assisted/experience.ts').ExperienceMode; readonly scope: import('./assisted/experience.ts').ExperienceScope } };
+  /** The assisted researcher's opening (SPEC-ORQUESTADOR §3.3.4): waits, after the first episodes, for its senior's first
+      hypothesis (when the run was told to); it goes with the first question. */
+  awaitOpening?(): Promise<void>;
   /** A continuation (`--resume <journal> --attempts N`): the attempts after which the run's history had an ending - its
       reflection and its grading, replayed where they were before the rounds it was given since. */
   readonly endings?: readonly number[];

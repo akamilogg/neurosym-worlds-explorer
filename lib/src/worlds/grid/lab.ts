@@ -1017,6 +1017,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     if (ceiling.wins === 0) say('[operator] WARNING: not even an informed heuristic wins this game at this depth - pick a seed from calibrate-grid.ts');
   }
   await explore();
+  /* The assisted researcher starts from its senior's first hypothesis, when the run was told to (SPEC-ORQUESTADOR §3.3.4). */
+  if (assisted) await s.awaitOpening?.();
   const first = await propose(null);
   if (!first) {
     say('no usable first proposal');
