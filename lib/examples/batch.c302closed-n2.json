@@ -1,0 +1,20 @@
+{
+  "format": "batch@1",
+  "id": "c302closed-n2-1",
+  "concurrency": 1,
+  "budget": { "tokens_per_run": 5000000 },
+  "runs": [
+    { "id": "closed-signals-s1", "lab": "c302closed", "condition": "L3: closed loop, deterministic body, facet of signals (comparable with c302nav), assisted + senior opening, real names", "researcher": "assisted",
+      "args": ["--seed", "1", "--attempts", "16", "--names", "real", "--memory", "selective", "--help-budget", "16", "--max-minutes", "300",
+        "--task", "This laboratory is EurekaBench's navigation-goals problem in closed loop, run on our own c302 service with NEURON. The panel of cells is part of the nervous system of C. elegans; its two signals are the commands of the worm's two navigation actions, reorientation and steering, and they move a worm in an odor field; the current into AWCL and AWCR comes from what the worm smells where it is. Understand the mechanism by which the odor drive becomes these two actions: what decides at each moment which action the drive produces and how strongly, what carries over from one moment to the next and on what timescale, what moves it, and how the loop - the circuit acting, the worm moving, the odor changing - takes the worm towards the odor source or not. The problem's own statement and a description of its simulator are among your sources; their simulator is not yours: your instruments are the ones in your interface.",
+        "--sources-allow", "D:/OctaneDoc/OctLocalServer/EurekaBench-sources/navigation-goals",
+        "--eureka", "D:/OctaneDoc/OctLocalServer/EurekaBench"],
+      "agent": { "id": "senior", "role": "senior", "max_orders": 16, "patience": 2 } },
+    { "id": "closed-navigation-s1", "lab": "c302closed", "condition": "L3: closed loop, deterministic body, facet of navigation (the model of the circuit in the loop), assisted + senior opening, real names", "researcher": "assisted",
+      "args": ["--seed", "1", "--attempts", "16", "--names", "real", "--memory", "selective", "--help-budget", "16", "--max-minutes", "300", "--focus", "navigation",
+        "--task", "This laboratory is EurekaBench's navigation-goals problem in closed loop, run on our own c302 service with NEURON. The panel of cells is part of the nervous system of C. elegans; its two signals are the commands of the worm's two navigation actions, reorientation and steering, and they move a worm in an odor field; the current into AWCL and AWCR comes from what the worm smells where it is. Understand the mechanism by which the odor drive becomes these two actions: what decides at each moment which action the drive produces and how strongly, what carries over from one moment to the next and on what timescale, what moves it, and how the loop - the circuit acting, the worm moving, the odor changing - takes the worm towards the odor source or not. The problem's own statement and a description of its simulator are among your sources; their simulator is not yours: your instruments are the ones in your interface.",
+        "--sources-allow", "D:/OctaneDoc/OctLocalServer/EurekaBench-sources/navigation-goals",
+        "--eureka", "D:/OctaneDoc/OctLocalServer/EurekaBench"],
+      "agent": { "id": "senior", "role": "senior", "max_orders": 16, "patience": 2 } }
+  ]
+}
