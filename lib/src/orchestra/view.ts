@@ -38,6 +38,20 @@ export function researcherEvents(journal: J): J[] {
   return out;
 }
 
+/** A model as a reviewer reads it: what each observation computes in code, what each rule asks the Judge, and how the output
+    combines them - the whole of it, each part clipped. Its output alone hides where the model leaves its work to the Judge. */
+export function modelDigest(law: J): J {
+  const code = (v: J): string => clip(v?.spec?.source ?? v?.source ?? (typeof v === 'string' ? v : JSON.stringify(v)), 220);
+  const obs = Object.entries((law?.observations ?? {}) as J);
+  const rules = Object.entries((law?.rules ?? {}) as J);
+  const out = law?.output;
+  return {
+    observations: Object.fromEntries(obs.slice(0, 12).map(([id, v]) => [id, code(v)])), ...(obs.length > 12 ? { observations_not_shown: obs.length - 12 } : {}),
+    rules_for_the_judge: Object.fromEntries(rules.slice(0, 8).map(([id, v]) => [id, { type: (v as J)?.type, asks: clip((v as J)?.instructions, 220) }])), ...(rules.length > 8 ? { rules_not_shown: rules.length - 8 } : {}),
+    output: clip(typeof out === 'string' ? out : out?.source ?? JSON.stringify(out), 500)
+  };
+}
+
 /** A run in a few hundred words, as an agent reads it: the latest rounds in full, the earlier ones counted. */
 export function runDigest(journal: J, options: { rounds?: number } = {}): J {
   const events = researcherEvents(journal);
@@ -52,8 +66,9 @@ export function runDigest(journal: J, options: { rounds?: number } = {}): J {
       beliefs: (e.beliefs ?? []).map((b: J) => ({ id: b.id, stance: b.stance, ...(b.statement ? { statement: clip(b.statement, 240) } : {}) })),
       notes: (e.notes ?? []).map((n: J) => ({ id: n.id, text: clip(n.text, 400) })),
       lessons: (e.lessons ?? []).map((l: unknown) => clip(l, 200)), next_experiment: clip(e.next_experiment, 400),
-      ...(e.law ? { model: clip(typeof e.law.output === 'string' ? e.law.output : JSON.stringify(e.law), 500), fingerprint: e.fingerprint } : {})
+      ...(e.law ? { model: modelDigest(e.law), fingerprint: e.fingerprint } : {})
     });
+    if (e.type === 'methods') r.methods = [...(r.methods ?? []), ...(e.methods ?? []).map((m: J) => ({ id: m.id, ...(m.do ? { do: m.do } : {}), ...(m.text ? { text: clip(m.text, 300) } : {}) }))];
     if (e.type === 'check') Object.assign(r, { holds: Object.fromEntries(e.laboratories.map((p: J) => [p.place, p.holds])), ...(e.validation ? { validation: e.validation } : {}), ...(e.accepted ? { accepted: true } : {}) });
   }
   const all = [...rounds.values()].sort((a, b) => a.round - b.round);

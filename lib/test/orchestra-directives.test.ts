@@ -134,3 +134,17 @@ test('the opening never comes: the run waits as long as it was told, then the ju
   assert.ok(events.some((e) => e.type === 'opening_missing'));
   assert.equal(asked[0].user.operator_messages, undefined);
 });
+
+test('the senior reads the junior\'s whole model and its methods in each round: its code, what it asks the Judge, its output', async () => {
+  const { runDigest } = await import('../src/orchestra/view.ts');
+  const { SENIOR_ROLE } = await import('../src/orchestra/agent-operator.ts');
+  const law = { observations: { drive: { spec: { kind: 'code', lang: 'js', source: '(p) => p.inputs.AWCL[p.step]' } } },
+    rules: { level: { type: 'score', instructions: 'Estimate the command from {{drive}}' } }, output: '(p, m) => ({ s1: m.rules.level })' };
+  const d = runDigest({ experiment: 'x', events: [{ type: 'proposal', round: 1, rationale: 'r', law, fingerprint: 'f1' }, { type: 'methods', round: 1, methods: [{ do: 'write', id: 'pairs', text: 'compare matched pairs' }] }] });
+  const r = d.latest_rounds[0];
+  assert.equal(r.model.observations.drive, '(p) => p.inputs.AWCL[p.step]');
+  assert.deepEqual(r.model.rules_for_the_judge.level, { type: 'score', asks: 'Estimate the command from {{drive}}' });
+  assert.match(r.model.output, /m\.rules\.level/);
+  assert.deepEqual(r.methods, [{ id: 'pairs', do: 'write', text: 'compare matched pairs' }]);
+  assert.match(SENIOR_ROLE, /REVIEW ITS WORK FIRST/);
+});

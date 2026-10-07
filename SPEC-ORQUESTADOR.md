@@ -459,6 +459,28 @@ pero las cumple.
   bucle es propio.
 - **Medir la adopción** (opción 4): qué órdenes acaban en el modelo y en cuánto tiempo.
 
+### 3.3.3b El senior revisa primero el modelo y el método del junior (07/10/2026)
+
+**El problema** (run `c302closed-n2-3`). Durante 10 rondas, el junior delegó toda la predicción en reglas de Jev: el
+código sólo resumía la entrada y las reglas pedían «estima el comando a partir de la historia». El umbral, la
+persistencia y el signo fijo del giro, que sus experimentos habían establecido, nunca entraron en el código, y ningún
+check se sostuvo. El senior no lo corrigió por dos razones:
+- **su resumen de cada ronda** sólo mostraba los primeros 500 caracteres de la salida del modelo, sin las observaciones
+  ni las reglas. En 9 decisiones abrió el modelo completo 4 veces;
+- **su papel** no le pedía revisar el modelo antes que nada.
+
+**Cambios:**
+- **`runDigest` (`modelDigest`):** el resumen de cada ronda muestra el modelo entero, recortado por partes: qué calcula
+  cada observación (su código), qué pregunta cada regla a Jev (tipo e instrucciones) y la salida. Incluye también los
+  métodos que el junior anota.
+- **`SENIOR_ROLE`, «REVIEW ITS WORK FIRST»:** en cada llamada, antes de buscar nada nuevo, el senior revisa:
+  - los informes de sus órdenes;
+  - el modelo y el método del junior;
+  - si el modelo incorpora lo que establecieron sus propios experimentos, en una forma que pueda calcularlo.
+
+  Una cantidad o una dinámica establecida pertenece al código; si se delega en Jev o se pierde, ordena el cambio primero.
+  Es método de revisión, sin pistas del entorno.
+
 ### 3.3.4 La primera hipótesis la da el senior (idea del autor, implementado, 07/10/2026)
 
 **El problema.** El junior empezaba con una hipótesis propia, y casi siempre el senior tenía que reencarrilarlo después
