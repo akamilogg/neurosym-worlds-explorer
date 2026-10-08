@@ -343,7 +343,7 @@ export function parseReflection(content: string, round: number): { ok: true; ref
 }
 
 /** The formula part of an answer (observations, rules, weights), built and checked: a proposal's, or a draft to play. */
-function buildFormula(data: Record<string, unknown>, context: { world: string; senses: Readonly<Record<string, MeasureDecl>>; lang?: string; round?: number }):
+export function buildFormula(data: Record<string, unknown>, context: { world: string; senses: Readonly<Record<string, MeasureDecl>>; lang?: string; round?: number }):
   { formula: Formula; observations: Record<string, MeasureDecl>; errors: string[]; warnings: string[] } {
   const lang = context.lang ?? 'js';
   const errors: string[] = [];

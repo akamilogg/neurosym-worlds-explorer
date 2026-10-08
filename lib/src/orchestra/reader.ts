@@ -1,3 +1,4 @@
+import { GRID_TEST_WORDS, gridLab } from '../worlds/grid/lab.ts';
 import { journalReader } from '../learn/assisted/record.ts';
 import { explorerSystem } from '../learn/explorer.ts';
 import { system2Prompt, type Tool } from '../learn/prompt.ts';
@@ -133,8 +134,12 @@ export function juniorInstruments(journal: J): string | null {
     (not the assisted researcher, or a laboratory where it does not act). */
 export function juniorTests(journal: J): string | null {
   const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
-  if (!lab || isGameLab(lab) || !lab.act || journal?.researcher !== 'assisted') return null;
+  if (!lab || journal?.researcher !== 'assisted') return null;
   const config = (journal?.config ?? {}) as J;
+  /* The grid's (SPEC-INVESTIGADOR-ASISTIDO §14.8): played from a point, with replay, in the rounds this code reviews. */
+  if (isGameLab(lab)) return lab.id === gridLab.id && typeof config.review_from === 'number' && (!Array.isArray(config.tools) || config.tools.includes('replay'))
+    ? ownTestsSection([], true, Number(config.ownTests) || 0, GRID_TEST_WORDS) : null;
+  if (!lab.act) return null;
   if (Array.isArray(config.tools) && !config.tools.includes('act')) return null;
   const spec = lab.generate(Number(config.seed) || 1, worldOptionsIn(lab.options, config));
   return ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act.identity && lab.episodeIdentity), Number(config.ownTests) || 0);

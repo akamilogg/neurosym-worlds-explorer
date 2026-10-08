@@ -723,8 +723,7 @@ La cuadrícula tiene su propio bucle (`runGrid`), y recibe lo mismo que los mund
 - **Continuar un run aceptado:** al repetir su historia, la aceptación del último nivel no corta el bucle. En el
   estadio nuevo, el investigador propone antes de volver a comprobar (`stage_after_acceptance`), porque el modelo
   aceptado ya pidió validar y se revalidaría solo.
-- **Lo que la cuadrícula sigue sin tener:** pruebas propias (`--own-tests`). Eran de los mundos de leyes con `act`
-  desde T1, y llevarlas a la cuadrícula es un trabajo aparte.
+- **Pruebas propias:** también (§14.8).
 - **Pruebas** (`test/review.test.ts`):
   - un run asistido de la cuadrícula: secciones, documentos, preguntas abiertas y una falsa creencia sin cita descartada;
   - un run de la cuadrícula hecho antes y continuado sin divergir.
@@ -732,3 +731,30 @@ La cuadrícula tiene su propio bucle (`runGrid`), y recibe lo mismo que los mund
     último nivel.
 
   La suite: 439 pruebas.
+
+### 14.8 Pruebas propias en la cuadrícula (08/10/2026)
+
+La cuadrícula tiene `act`, pero allí un acto es **un solo movimiento**: el entorno responde si está permitido y si la
+partida acaba, sin producir un episodio sobre el que juzgar dos modelos. Su veredicto no es predecir puntos sino
+**jugar**. El mecanismo de pruebas propias (`OwnTests`) no sabe nada de un mundo, así que la cuadrícula lo usa con su
+experimento natural:
+- **Protocolo:** `{"from": "<episodio>@<paso>"}`, un punto de uno de sus episodios, en un laboratorio, donde el siguiente
+  paso es suyo.
+- **Ejecución:** al cerrar la ronda, el modelo y el rival juegan desde ese punto tantas partidas como un check
+  (`--games` + `--variants`), con las mismas semillas para los dos.
+- **Veredicto:** el del check (`holds` del objetivo: todas puntúan 1). Es severa si el modelo se sostiene y el rival no.
+- **Identidad:** el lugar y la posición. "new" exige un punto desde el que no ha jugado (ningún episodio suyo empieza
+  ahí); "replicate", uno desde el que sí.
+- **El rival explica lo ya visto:** se juzga en las partidas del último check de cada laboratorio, como el modelo.
+- **Coste:** una de las repeticiones de partida de la ronda (`replays_left`).
+- **El resto, como en las leyes:**
+  - contraejemplos abiertos y su cierre por regresión;
+  - `--own-tests N` antes de la confirmación a ciegas (exige el asistido con `replay`);
+  - las pruebas que ordena el senior: `juniorTests` da al senior la sección de la cuadrícula;
+  - el resumen en el final del run (`own_tests`).
+- **Desde `review_from`,** como lo demás de esta sección: la cuadrícula no tenía pruebas, y su historia anterior se repite
+  sin ellas.
+- **La sección del prompt** es la de los mundos de leyes, con sus palabras para la cuadrícula (`OwnTestsWords`,
+  `GRID_TEST_WORDS`). La de los mundos de leyes no cambia.
+- **Prueba** (`test/review.test.ts`): un sustituto registra una réplica desde `g1@0` contra su modelo de la ronda 1. Se
+  juega, se responde con el siguiente check (`your_tests`) y el final la cuenta. Suite: 440.

@@ -173,3 +173,35 @@ test('the grid: a run made before this code, continued, repeats its history as i
   assert.deepEqual([journal.config.review_from, journal.config.fingerprint], [1, 1]);
   assert.equal(journal.events.find((e: any) => e.type === 'review_from')?.attempt, 2);
 });
+
+test('the grid: a test of its own is a point to play from - registered, played by both models with the same seeds, answered with the next check', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-grid-'));
+  const seen: { system: string; user: any }[] = [];
+  const base = gridSystem2(seen);
+  const fetch: FetchLike = async (url, init) => {
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string;
+    if (!sys.startsWith('You grade')) {
+      const user = JSON.parse(userOf(b));
+      if (user.round === 2 && !(user.investigation ?? []).length && !user.investigation_step) {
+        seen.push({ system: sys, user });
+        const content = { investigate: [{ register_test: { protocol: { from: 'g1@0' }, model: { observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.6' }, rival: 1, claim: 'it plays as well from the start', kind: 'replicate' } }] };
+        const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+        return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+      }
+    }
+    return base(url, init);
+  };
+  const r = await runLaboratory(gridLab, { args: [...GRID.filter((a, i, all) => a !== '--steps' && all[i - 1] !== '--steps'), '--steps', '2', '--no-grade', '--no-reflection', '--attempts', '3', '--researcher', 'assisted', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch });
+  const asked = seen.filter((q) => !q.system.startsWith('You grade'));
+  assert.ok(asked[0].system.includes('TESTS OF YOUR OWN') && asked[0].system.includes('{"from": "<episode>@<step>"}'), 'told what a test is in the grid');
+  const events = journalOf(r.journal).events;
+  const registered = events.find((e: any) => e.type === 'test_registered');
+  assert.ok(registered, JSON.stringify(events.filter((e: any) => e.type === 'investigation').map((e: any) => e.results)).slice(0, 600));
+  assert.deepEqual([registered.kind, registered.protocol], ['replicate', { from: 'g1@0' }]);
+  const result = events.find((e: any) => e.type === 'test_result');
+  assert.equal(result.valid, true);
+  assert.equal(typeof result.model_holds, 'boolean');
+  assert.match(JSON.stringify(asked.map((q) => q.user)), /"your_tests"/, 'answered with its next check');
+  assert.equal((r.finding as any).own_tests?.registered ?? journalOf(r.journal).events.find((e: any) => e.type === 'end').own_tests.registered, 1);
+});

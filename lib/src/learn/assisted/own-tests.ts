@@ -12,8 +12,33 @@
  * verdict is its objective's. Nothing of a world here.
  * ========================================================================== */
 
+/** How a world whose experiments are not acts says what a test is (the grid's: a point to play from). Each replaces the words
+    of the worlds of laws, which stay as they are. */
+export interface OwnTestsWords {
+  /** What the protocol is, in place of `{ ...an act... }`. */
+  readonly protocol: string;
+  /** What "new" and "replicate" mean there. */
+  readonly novelty: string;
+  /** What a test costs, in place of "one act". */
+  readonly cost: string;
+  /** What runs when the round closes, in place of `the environment runs the protocol (an episode "test<n>", yours to study)`. */
+  readonly runs: string;
+  /** What a later model must hold on to close a counterexample, in place of "its episode". */
+  readonly closes: string;
+}
+
 /** What the assisted researcher is told of its tests, with the public rivals of its laboratory. */
-export function ownTestsSection(rivals: readonly { readonly name: string; readonly about: string }[], identities: boolean, need = 0): string {
+export function ownTestsSection(rivals: readonly { readonly name: string; readonly about: string }[], identities: boolean, need = 0, words?: OwnTestsWords): string {
+  const text = lawWords(rivals, identities, need);
+  if (!words) return text;
+  return text.replace('{ ...an act... }', words.protocol)
+    .replace(/"new" must be an experiment you have not seen \(what is stimulated or changed and for how long - not what you record\); "replicate", one you have seen\./, words.novelty)
+    .replace('A test costs one act.', 'A test costs ' + words.cost + '.')
+    .replace('the environment runs the protocol (an episode "test<n>", yours to study)', words.runs)
+    .replace('until a later model of yours holds on its episode.', 'until a later model of yours holds on ' + words.closes + '.');
+}
+
+function lawWords(rivals: readonly { readonly name: string; readonly about: string }[], identities: boolean, need: number): string {
   return [
     'TESTS OF YOUR OWN. Before you trust a model, you may design the test that would refute it, as an investigation request: {"register_test": {"protocol": { ...an act... }, "model": <a round of yours, or a draft>, "rival": <another round or draft' + (rivals.length ? ', or "rival:<name>"' : '') + '>, "claim": "what your model predicts there that the rival does not, and why", "kind": "new" | "replicate", "place": "<one of your laboratories>"}}.',
     'It is registered before anyone looks: the model and the rival are frozen as they are then, and the test is a prediction of that model only. ' + (identities ? '"new" must be an experiment you have not seen (what is stimulated or changed and for how long - not what you record); "replicate", one you have seen.' : 'This environment cannot tell new experiments: only "replicate" one of your own acts.'),

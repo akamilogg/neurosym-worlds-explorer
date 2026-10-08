@@ -38,11 +38,12 @@ import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type Actio
 import { ceilingOf, tightness } from './informed.ts';
 import { variantStarts } from './variants.ts';
 import { reflectionTask, toolOf } from '../../learn/prompt.ts';
-import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, obj, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
+import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, buildFormula, explorerSystem, type ExplorerTool, explorerPayload, obj, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
 import { Notebook, parseDocuments, type GameRecord } from '../../learn/notebook.ts';
 import { OPEN_QUESTIONS_TASK, OVERREACH, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, assistedSystem } from '../../learn/assisted/session.ts';
 import { formulaFingerprint, openQuestions } from '../../learn/law-session.ts';
 import { experimentStates } from '../../orchestra/view.ts';
+import { OwnTests, ownTestsSection, type OwnTestsWords } from '../../learn/assisted/own-tests.ts';
 import { RoundConversation } from '../../learn/system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
@@ -116,6 +117,15 @@ export const gridLab: GameLab = {
   run: (s) => runGrid(s)
 };
 
+/** What a test of its own is in the grid (SPEC-INVESTIGADOR-ASISTIDO §14.8): a point to play from, not an act. */
+export const GRID_TEST_WORDS: OwnTestsWords = {
+  protocol: '{"from": "<episode>@<step>"}',
+  novelty: '"new" must start from a point you have not played from (no episode of yours starts there); "replicate", from one you have.',
+  cost: 'one of your replays of the round',
+  runs: 'your model and the rival each play from that point as many episodes as a check, with the same seeds for both,',
+  closes: 'those episodes'
+};
+
 async function runGrid(s: LabServices): Promise<LabRunEnd> {
   const o = s.options;
   const cfg = {
@@ -146,7 +156,12 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '')
     + (cfg.explorePlaces ? '\n\n' + PLACES_SECTION : '') + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : explorerSystem(tools);
   /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */
-  const systemPrompt = (): string => SYSTEM_PROMPT + (assisted && reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(Boolean(assisted.memory)) + '\n\n' + TASK_COVERAGE_SECTION : '');
+  const systemPrompt = (): string => SYSTEM_PROMPT + (assisted && reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(Boolean(assisted.memory)) + '\n\n' + TASK_COVERAGE_SECTION
+    + (ownTests ? '\n\n' + ownTestsSection([], true, ownTestsRequired(), GRID_TEST_WORDS) : '') : '');
+  /* Tests of its own (SPEC-PRUEBAS-PROPIAS, the grid's), for the assisted researcher that replays: required with --own-tests. */
+  const ownTestsNeed = Number((s.cfg as { ownTests?: number }).ownTests ?? 0);
+  if (ownTestsNeed > 0 && !(assisted && tools.has('replay'))) throw new Error('--own-tests needs the assisted researcher, with replay among its tools');
+  const ownTestsRequired = (): number => ownTestsNeed;
 
   /* --- Operator-only measures: logged for the operator, never shown to System 2 or the Judge ----------- */
 
@@ -341,7 +356,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* Its team's board (§5.2): what it publishes and reads there is answered by the board, never by the world. */
   const peers = exchange ? team!.channel : null;
   const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q))
-    || (peers !== null && (PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q)));
+    || (peers !== null && (PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q))) || (ownTests !== null && reviewing && OwnTests.accepts(q));
   let gameCounter = 0;
   const resultOf = (winner: string | null): GameRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
   /** What System 2 is told of how an episode ended: the score of the interface, never a word of a game. */
@@ -520,6 +535,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       : Array.from({ length: cfg.confirmBoards }, () => { const k = ++confirmCounter; return makePlace('blind' + k, FAMILY_INDEX.blind + k, 'confirmation'); }),
     ...(team ? { confirm: (c: { round: number }) => team.board.confirm(team.member, 'c' + (++confirmations), c.round) } : {}),
     fingerprint: (f) => formulaFingerprint(f, Number(s.cfg.fingerprint ?? 1)), replications: Number(s.cfg.fingerprint ?? 1) >= 2,
+    /* --own-tests N: before a blind confirmation is spent, N severe tests of its own registered with this very model. */
+    ...(ownTestsNeed > 0 ? { gate: ({ round, model }: { round: number; model: Formula }) => (ownTests && reviewing ? ownTests.requirement(model, ownTestsNeed, round) : null) } : {}),
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: judgeUnread(), llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
     say: (line) => say(line),
@@ -527,6 +544,75 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       exploration: 'a place to explore: you can act and replay here; your model is never checked here' }
   });
   let unaddressed: string[] = [];
+
+  /* --- Tests of its own (SPEC-PRUEBAS-PROPIAS; the grid's, SPEC-INVESTIGADOR-ASISTIDO §14.8) ---------------------------
+     A protocol is a point of one of its episodes in a laboratory, where the next step is its own: the model and the rival
+     each play from there as many episodes as a check, with the same seeds; the verdict is the check's. */
+  /** The plans of the latest check in each laboratory: what both models have seen (the rival must hold there as well). */
+  const lastPlans = new Map<string, Plan[]>();
+  interface TestStart { readonly from: string; readonly place: string; readonly plans: Plan[] }
+  let testCounter = 0;
+  const testIdentity = (state: GridState): string => where(state).id + '|' + world.key(state);
+  const playsOk = (law: Formula): string[] => {
+    const recent = [...games.values()].flatMap((g) => g.states).slice(-60);
+    const observed = replayOnEvidence(multiObserver, law.observations, recent.map((state) => ({ state }))).errors.slice(0, 4).map((e) => (e.observation ?? '') + ': ' + e.error);
+    return observed.length ? observed : outputFailures(law, recent);
+  };
+  const holdsFrom = async (law: Formula, place: string, plans: readonly Plan[]): Promise<{ holds: boolean; view: Record<string, unknown> }> => {
+    const p = places.get(place)!;
+    const m = await trial(law, 0, p, plans, { record: false, tag: '  [test] ' });
+    const results = m.scores.map((score) => ({ place, score }));
+    return { holds: objective.holds(results, { place: p }), view: objective.view(results, p) as Record<string, unknown> };
+  };
+  const ownTests = assisted && tools.has('replay') ? new OwnTests<Formula, { from: string }, TestStart>({
+    parseAct: (raw) => {
+      if (typeof raw.from !== 'string') return '{"from": "<episode>@<step>"}: a point of one of your episodes where the next step is yours';
+      const state = resolve(raw.from);
+      if (!state) return 'no such point: ' + raw.from;
+      if (where(state).world.outcome(state).over || state.turn !== 'A') return 'at ' + raw.from + ' the next step is not yours';
+      return { from: raw.from };
+    },
+    asWritten: (a) => a,
+    placeOf: (a) => where(resolve(a.from)!).id,
+    laboratories: () => labs().map((l) => l.id),
+    identity: (_place, a) => { const st = resolve(a.from); return st ? testIdentity(st) : null; },
+    identities: true,
+    seen: () => {
+      /* The points it has played from: the starts of its episodes. */
+      const identities = new Map<string, string>();
+      for (const g of games.values()) { const id = testIdentity(g.states[0]); if (!identities.has(id)) identities.set(id, g.id); }
+      return { identities, acts: new Map() };
+    },
+    model: (ref) => {
+      if (Number.isInteger(ref)) return formulaOfRound.get(ref as number) ?? 'you have no model of round ' + ref;
+      if (!ref || typeof ref !== 'object') return 'a round of yours, or a draft { observations, rules, weights, output }';
+      const built = buildFormula(ref as Record<string, unknown>, { world: world.id, senses: SENSES });
+      if (built.errors.length) return 'the draft was refused: ' + built.errors.slice(0, 4).join(' | ');
+      const f = playsOk(built.formula);
+      return f.length ? 'the draft does not compute: ' + f.join(' | ') : built.formula;
+    },
+    rival: () => null,
+    rivalNames: () => [],
+    fingerprint: (f) => formulaFingerprint(f, Number(s.cfg.fingerprint ?? 1)),
+    describe: (f) => ownFormula(f),
+    sharedHolds: async (law) => {
+      if (!lastPlans.size) return null;
+      let n = 0;
+      for (const [place, plans] of lastPlans) if (places.get(place)?.role === 'laboratory' && (await holdsFrom(law, place, plans)).holds) n++;
+      return n;
+    },
+    start: async (place, a) => {
+      const state = resolve(a.from);
+      if (!state) return null;
+      const k = ++testCounter;
+      const plans = Array.from({ length: cfg.games + cfg.variants }, (_, i) => ({ start: state, seed: cfg.seed * 6151 + k * 211 + i * 7 + level * 1_000_003, label: 'test ' + k + ' from ' + a.from + ' #' + i }));
+      return { from: a.from, place, plans };
+    },
+    cases: (_place, _id, e) => e.plans,
+    evaluate: (law, place, cases) => holdsFrom(law, place, cases as Plan[]),
+    answers: async (law) => playsOk(law).length === 0,
+    log
+  }) : null;
 
   type Labelled = LabelledPosition<GridState> & { readonly ref: string };
 
@@ -633,6 +719,11 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   async function runRequest(req: ExplorerRequest, current: Formula | null, plays: { left: number }): Promise<unknown> {
     /* Its own memory is answered by it, never by the world; its team's board by the board. */
+    /* A test of its own (SPEC-PRUEBAS-PROPIAS, the grid's: §14): registered now, it costs one replay of the round. */
+    if ('extra' in req && ownTests && OwnTests.accepts(req.extra)) {
+      const budget = { get acts() { return plays.left; }, set acts(n: number) { plays.left = n; } };
+      return ownTests.register(req.extra, currentRound, budget);
+    }
     if ('extra' in req) return recalls(req.extra) ? memory!.run(req.extra) : experience && Experience.accepts(req.extra) ? experience.run(req.extra)
       : peers && PeerChannel.acceptsRead(req.extra) ? readPeers(req.extra) : peers && PeerChannel.acceptsPublish(req.extra) ? publish(req.extra.publish) : { error: 'no such instrument' };
     /* An instrument withheld by the experiment is refused, never run. */
@@ -896,7 +987,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         log('proposal_failed', { round, error: String((error as Error)?.message || error) });
         continue;
       }
-      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience || peers ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
+      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience || peers || (ownTests && reviewing) ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => games.has(ref.trim()) || resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
       /* Its own documents, in any answer (§14.1): every version to the journal. */
       const docs = assisted && reviewing ? parseDocuments(obj(parseJsonLoose(content))?.documents, noteWarnings) : [];
@@ -1117,6 +1208,14 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       abstraction: abstractionOf(candidate, stored),
       /* OPERATOR ONLY: analyses of the learner's data it is never handed (SPEC-MUNDO-FISICO I2). */
       operator_analysis: { surprises: latestSurprises(), record: scoreboard() } });
+    if (!reused) outcome.laboratories.forEach((o) => lastPlans.set(o.place.id, (o.detail as Measured).plans));
+    /* Its tests registered this round run now; their results, and its counterexamples still open, go with this check. */
+    if (ownTests && reviewing) {
+      await ownTests.runPending(round);
+      await ownTests.closeBy(candidate, round);
+      const told = ownTests.view();
+      if (Object.keys(told).length) protocol.lastView = { ...(protocol.lastView ?? {}), ...told };
+    }
     /* The verdicts as it is given them, kept in its memory by the round of the model checked. */
     memory?.recordCheck(round, protocol.lastView);
     if (outcome.accepted) say('  ACCEPTED');
@@ -1176,6 +1275,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       final: finalModel ? ownFormula(finalModel) : null,
       accepted: accepted ? { formula: accepted.formula, round: accepted.round } : null,
       ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownFormula(acceptedBefore.formula) } } : {}),
+      ...(ownTests && (ownTests.summary().registered as number) > 0 ? { own_tests: { ...ownTests.summary(), ...(ownTestsNeed ? { required: ownTestsNeed } : {}) } } : {}),
       ...(satisfied ? { quick_stop: { model: ownFormula(satisfied), round: roundOf.get(satisfied) ?? null } } : {}),
       places: [...places.values()].map((p) => ({ id: p.id, index: p.index, role: p.role, seen: p.seen, size: p.spec.width + 'x' + p.spec.height, pieces: p.spec.A.count + '/' + p.spec.B.count })),
       best: result.best ? { formula: result.best.formula, round: roundOf.get(result.best.formula) ?? null, wins: result.best.wins, total: result.best.total } : null,
