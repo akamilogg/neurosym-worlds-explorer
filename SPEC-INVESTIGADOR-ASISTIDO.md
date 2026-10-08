@@ -677,7 +677,7 @@ afectan a la lectura de los runs en curso.
   - sin memoria, viajan enteros;
   - el lector de diarios (`journalReader`) los reconstruye para el senior y para la experiencia;
   - el finding los lista en `assistance.documents`.
-  - Sólo en los mundos de leyes. La cuadrícula no los tiene todavía.
+  - También en la cuadrícula (§14.7).
 - **Las secciones del prompt** (`OWN_DOCUMENTS_SECTION`, `TASK_COVERAGE_SECTION` en `assisted/session.ts`), para el
   asistido.
 - **`missing_instrument`**, un tipo más de informe del instrumento: no retiene ninguna aceptación (`holding` lo ignora).
@@ -700,3 +700,35 @@ afectan a la lectura de los runs en curso.
   - el estado de los experimentos.
 
   La suite: 437 pruebas.
+
+### 14.7 La cuadrícula, a la par (08/10/2026)
+
+La cuadrícula tiene su propio bucle (`runGrid`), y recibe lo mismo que los mundos de leyes, también desde `review_from`:
+- **El prompt del asistido** añade `OWN_DOCUMENTS_SECTION` y `TASK_COVERAGE_SECTION`. Ahora es una función
+  (`systemPrompt()`), porque depende de la ronda.
+- **Documentos propios:**
+  - se escriben en cualquier respuesta y van al diario (`document_written`);
+  - viajan en el cuaderno de la ronda (`your_documents`): como índice con memoria selectiva, enteros sin ella.
+- **Estado de sus experimentos:** `your_experiments_not_yet_used` en el cuaderno de la ronda. Cuentan sus actos (`actN`) y
+  los episodios de sus repeticiones de partida (`replay` → `gN`), con el mismo `experimentStates`. Repetir desde un
+  episodio cuenta como leerlo.
+- **El cierre:** la reflexión pide `open_questions` (`endingTask`, el mismo al repetir un final); el evento las guarda y el
+  finding las recoge.
+- **El calificador, versión 2**, en su `gradeRecovery`.
+- **La huella de sus fórmulas:**
+  - versión 2 con `formulaFingerprint`: el código y las palabras se normalizan como en una ley;
+  - réplicas en el protocolo;
+  - el senior ve `same_model_as_round` y, ahora también, el modelo de cada ronda de la cuadrícula en su resumen
+    (`modelDigest` de la fórmula).
+- **Continuar un run aceptado:** al repetir su historia, la aceptación del último nivel no corta el bucle. En el
+  estadio nuevo, el investigador propone antes de volver a comprobar (`stage_after_acceptance`), porque el modelo
+  aceptado ya pidió validar y se revalidaría solo.
+- **Lo que la cuadrícula sigue sin tener:** pruebas propias (`--own-tests`). Eran de los mundos de leyes con `act`
+  desde T1, y llevarlas a la cuadrícula es un trabajo aparte.
+- **Pruebas** (`test/review.test.ts`):
+  - un run asistido de la cuadrícula: secciones, documentos, preguntas abiertas y una falsa creencia sin cita descartada;
+  - un run de la cuadrícula hecho antes y continuado sin divergir.
+  - La continuación de un run aceptado de la cuadrícula no tiene prueba propia: hace falta un sustituto que gane en el
+    último nivel.
+
+  La suite: 439 pruebas.

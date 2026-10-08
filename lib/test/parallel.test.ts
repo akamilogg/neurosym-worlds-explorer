@@ -133,7 +133,7 @@ test('modality A: boards to explore are the assisted researcher\'s - shown, play
   const asked: Record<string, any>[] = [];
   const args = [...GRID, '--researcher', 'assisted', '--explore-places', '2'];
   const a = await runLaboratory(gridLab, { args: [...args, '--out', path.join(dir, 'concurrent.json')], root: dir, llm, fetch: system2(explorer, asked) });
-  assert.ok(asked[0].system.endsWith(PLACES_SECTION), 'its prompt says what its places are');
+  assert.ok(asked[0].system.includes(PLACES_SECTION), 'its prompt says what its places are');
   assert.deepEqual(asked[0].user.places.map((p: { place: string }) => p.place), ['lab1', 'explore1', 'explore2']);
   const games = asked[0].user.notebook.episodes.map((e: { episode: string; chosen_by?: string; how?: string }) => e.episode);
   assert.deepEqual(games, ['g1', 'g2', 'g3'], 'one exploration episode in the laboratory and in each place to explore');

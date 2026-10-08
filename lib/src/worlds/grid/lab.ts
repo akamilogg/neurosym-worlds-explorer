@@ -38,9 +38,11 @@ import { HypothesisRegistry, actionAccuracy, runProbes, winningMoves, type Actio
 import { ceilingOf, tightness } from './informed.ts';
 import { variantStarts } from './variants.ts';
 import { reflectionTask, toolOf } from '../../learn/prompt.ts';
-import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
-import { Notebook, type GameRecord } from '../../learn/notebook.ts';
-import { OVERREACH, assistedSystem } from '../../learn/assisted/session.ts';
+import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, explorerSystem, type ExplorerTool, explorerPayload, obj, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
+import { Notebook, parseDocuments, type GameRecord } from '../../learn/notebook.ts';
+import { OPEN_QUESTIONS_TASK, OVERREACH, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, assistedSystem } from '../../learn/assisted/session.ts';
+import { formulaFingerprint, openQuestions } from '../../learn/law-session.ts';
+import { experimentStates } from '../../orchestra/view.ts';
 import { RoundConversation } from '../../learn/system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
@@ -59,7 +61,7 @@ import { PEERS_SECTION, PeerChannel, parsePublication, type BoardEntry } from '.
 import { hashString } from '../../core/hash.ts';
 import { GRID_ANSWER, GRID_VERDICT, gridObjective } from './objective.ts';
 import { Protocol } from '../../learn/protocol.ts';
-import { GRADING_STRUCTURE, formOf, operatorSummary, type AblationRecord } from '../../learn/operator.ts';
+import { GRADING_STRUCTURE, formOf, operatorSummary, type AblationRecord, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../../learn/operator.ts';
 import type { ObserverLike } from '../../core/evaluate.ts';
 import type { Planner } from '../../core/truth.ts';
 import type { Formula, MeasureDecl } from '../../core/types.ts';
@@ -136,9 +138,15 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* A member of a team (SPEC-INVESTIGACION-PARALELA §5): its board, read and written only if the team exchanges. */
   const team = s.team ?? null;
   const exchange = team !== null && team.board.spec.exchange && assisted !== null;
+  /* From which round this code's additions apply (`review_from`, SPEC-INVESTIGADOR-ASISTIDO §14.6): from the start in a new
+     run, from its new rounds in a continuation of a run made before them; never in a history a resumed run repeats. */
+  const reviewFrom = typeof s.cfg.review_from === 'number' ? s.cfg.review_from as number : null;
+  let reviewing = reviewFrom === 0;
   const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '')
     + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '')
     + (cfg.explorePlaces ? '\n\n' + PLACES_SECTION : '') + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : explorerSystem(tools);
+  /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */
+  const systemPrompt = (): string => SYSTEM_PROMPT + (assisted && reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(Boolean(assisted.memory)) + '\n\n' + TASK_COVERAGE_SECTION : '');
 
   /* --- Operator-only measures: logged for the operator, never shown to System 2 or the Judge ----------- */
 
@@ -166,7 +174,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const truth = describeGridTruth(spec, sense);
     const brief = notebook.brief();
     const learned = { beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: notebook.reflections };
-    const system = GRID_GRADING_SYSTEM;
+    /* The grader of version 2 (SPEC-CALIBRACION-INSTRUMENTOS §11.2) in the rounds this code reviews. */
+    const v2 = reviewing;
+    const system = GRID_GRADING_SYSTEM + (v2 ? ' ' + FALSE_BELIEF_RULE : '');
     const user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: sense.glyphA, other: sense.glyphB }, learner: learned });
     try {
       const content = (await llm.complete({ system, user })).content;
@@ -174,7 +184,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const points = grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0);
       const score = Math.round(points / truth.length * 100) / 100;
-      log('operator_rule_recovery', { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: s.journal.config.llm_model });
+      log('operator_rule_recovery', { truth, grades, ...(v2 ? quotedFalseBeliefs(parsed?.false_beliefs, learned) : { false_beliefs: parsed?.false_beliefs ?? [] }), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: s.journal.config.llm_model });
       say('operator: rule recovery ' + score + ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')');
     } catch (e) {
       log('operator_rule_recovery', { truth, error: String((e as Error).message ?? e) });
@@ -509,7 +519,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       ? team.board.blindBoards(team.member, 'c' + confirmations + '.s' + set, cfg.confirmBoards).map((index) => makePlace('blind' + (++confirmCounter), index, 'confirmation'))
       : Array.from({ length: cfg.confirmBoards }, () => { const k = ++confirmCounter; return makePlace('blind' + k, FAMILY_INDEX.blind + k, 'confirmation'); }),
     ...(team ? { confirm: (c: { round: number }) => team.board.confirm(team.member, 'c' + (++confirmations), c.round) } : {}),
-    fingerprint: (f) => formulaHash(f),
+    fingerprint: (f) => formulaFingerprint(f, Number(s.cfg.fingerprint ?? 1)), replications: Number(s.cfg.fingerprint ?? 1) >= 2,
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: judgeUnread(), llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
     say: (line) => say(line),
@@ -814,11 +824,25 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   }
 
   const REFLECTION_TASK = reflectionTask(investigative);
+  /* The reflection an ending asks for: with what it leaves open, for the assisted researcher in the rounds this code reviews
+     (§14.3) - the same when a continuation repeats that ending. */
+  const endingTask = (): string => REFLECTION_TASK + (assisted && reviewing ? ' ' + OPEN_QUESTIONS_TASK : '');
 
   /* Set when the LLM service refuses the account itself (no credit, bad key): nothing further can be asked of System 2. */
   let llmFatal: string | null = null;
   /* Set when the runner stops the run (cancelled, a budget spent): nothing further is asked. */
   let halted: string | null = null;
+
+  /** Its own documents as they travel: their index with a selective memory (opened with it), whole without one. */
+  const ownDocuments = (): Record<string, unknown> => (notebook.documents.size ? { your_documents: memory ? notebook.documentIndex()
+    : [...notebook.documents.values()].map((d) => ({ id: d.id, text: d.text, updated_round: d.updated })) } : {});
+  /** The experiments of its own not yet cited as evidence - its acts and replays (SPEC-ORQUESTADOR §3.3.5), the assisted
+      researcher's, in the rounds this code reviews. */
+  const ownExperiments = (): Record<string, unknown> => {
+    if (!assisted || !reviewing) return {};
+    const open = experimentStates(s.journal).filter((x) => x.state !== 'used');
+    return open.length ? { your_experiments_not_yet_used: open.slice(-12).map((x) => ({ episode: x.episode, round: x.round, state: x.state === 'done' ? 'not read yet' : 'read, not cited as evidence' })) } : {};
+  };
 
   async function propose(from: Formula | null, directive: string | null = null, mode: 'propose' | 'reflect' = 'propose'): Promise<Formula | null> {
     if (llmFatal || halted) return null;
@@ -838,8 +862,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     let written: Record<string, unknown> = {};
     const plays = { left: cfg.plays };
     /* The round's context: the notebook as it is when the round begins (or when the researcher consolidates). */
-    const context = (): Record<string, unknown> => ({ ...explorerPayload({ round, perceptDoc: GRID_PERCEPT_DOC, notebook: memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed),
-      formula: from, formulaRound: from ? roundOf.get(from) ?? null : null, directive, task: mode === 'reflect' ? REFLECTION_TASK : null,
+    const context = (): Record<string, unknown> => ({ ...explorerPayload({ round, perceptDoc: GRID_PERCEPT_DOC, notebook: { ...(memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed)), ...ownDocuments(), ...ownExperiments() },
+      formula: from, formulaRound: from ? roundOf.get(from) ?? null : null, directive, task: mode === 'reflect' ? endingTask() : null,
       places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView }), ...counters() });
     while (refusals < 3 && steps - free - overreach - consolidated <= cfg.steps + 3) {
       const stop = s.halt();
@@ -859,7 +883,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       steps++;
       let content = '';
       try {
-        content = (await llm.complete({ system: SYSTEM_PROMPT, user: payload })).content;
+        content = (await llm.complete({ system: systemPrompt(), user: payload })).content;
       } catch (error) {
         const status = (error as ApiError)?.details?.status;
         if (status === 401 || status === 402 || status === 403) {
@@ -874,8 +898,16 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       }
       const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience || peers ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => games.has(ref.trim()) || resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
+      /* Its own documents, in any answer (§14.1): every version to the journal. */
+      const docs = assisted && reviewing ? parseDocuments(obj(parseJsonLoose(content))?.documents, noteWarnings) : [];
+      if (docs.length) {
+        const refusedDocs = notebook.applyDocuments(round, docs);
+        noteWarnings.push(...refusedDocs);
+        for (const d of docs) if (!refusedDocs.some((w) => w.includes('"' + d.id + '"'))) log('document_written', { round, id: d.id, do: d.do, ...(d.text !== undefined ? { text: d.text } : {}) });
+        say('  documents: ' + docs.map((d) => d.do + ' ' + d.id).join(', '));
+      }
       /* What it wrote in its notebook comes back in the next part of the conversation (the notebook shown is the round's). */
-      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}) };
+      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}) };
       if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) {
         say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', '));
@@ -958,7 +990,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         unaddressed = stances.unaddressed;
         notebook.recordReflection(round, r.reflection.rationale, r.reflection.lessons, r.reflection.nextExperiment);
         log('reflection', { round, investigation_steps: investigation.length, rationale: r.reflection.rationale, beliefs: r.reflection.beliefs, notes: turn.notes,
-          lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings, no_stance_on: stances.unaddressed });
+          lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings, no_stance_on: stances.unaddressed,
+          ...(openQuestions(content) ? { open_questions: openQuestions(content) } : {}) });
         say('  reflection: beliefs ' + r.reflection.beliefs.map((b) => b.id + ':' + b.stance).join(' ') + (stances.unaddressed.length ? '; NO STANCE on ' + stances.unaddressed.join(', ') : ''));
         for (const l of r.reflection.lessons) say('  lesson: ' + l);
         return from;
@@ -1031,6 +1064,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   let candidate: Formula = first;
   let accepted: { formula: Formula; round: number | null } | null = null;
+  /* The model its history accepted, in a continuation after it. */
+  let acceptedBefore: { formula: Formula; round: number | null } | null = null;
   let satisfied: Formula | null = null;
   let best: { formula: Formula; wins: number; total: number } | null = null;
   let stoppedBy = 'budget';
@@ -1041,12 +1076,27 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     /* Where the run's history had an ending (it used up its rounds and was given more): that ending, as it was - its
        reflection and its grading - then the rounds it was given since. */
     if (endings.includes(attempt - 1)) {
-      if (cfg.reflection) { say('the ending of the run it continues (attempt ' + (attempt - 1) + '): its reflection'); await propose(best?.formula ?? null, null, 'reflect'); }
+      if (cfg.reflection) { say('the ending of the run it continues (attempt ' + (attempt - 1) + '): its reflection'); await propose(accepted?.formula ?? best?.formula ?? null, null, 'reflect'); }
       if (llmFatal || halted) break;
       if (cfg.grade) await gradeRecovery();
       const to = endings.find((e) => e > attempt - 1) ?? cfg.attempts;
       log('budget_extended', { after_attempts: attempt - 1, to_attempts: to, round: currentRound });
       say('more rounds: ' + (attempt - 1) + ' → ' + to);
+    }
+    if (!reviewing && reviewFrom !== null && attempt > reviewFrom) { reviewing = true; log('review_from', { attempt, round: currentRound }); }
+    /* A continuation of a run that accepted (§14.3): a new stage - nothing checked before counts, its validations are given
+       back - and it proposes before anything is checked again; the model it accepted stays its history's. */
+    if (s.cfg.continued_after_acceptance === attempt - 1 && accepted) {
+      acceptedBefore = accepted;
+      accepted = null;
+      stoppedBy = 'budget';
+      evaluator.reset();
+      protocol.restart();
+      log('stage_after_acceptance', { accepted_round: acceptedBefore.round, round: currentRound });
+      say('a new stage after the acceptance of round ' + acceptedBefore.round + ': its checks start afresh');
+      const next = await propose(candidate);
+      if (next) candidate = next;
+      if (llmFatal || halted) break;
     }
     const round = roundOf.get(candidate) ?? currentRound;
     say('attempt ' + attempt + ' (round ' + round + ') against opponent level ' + cfg.levels[level] + (cfg.epsilon ? ' (errs ' + cfg.epsilon + ')' : '') + '; laboratories: ' + labs().map((l) => l.id).join(', '));
@@ -1091,6 +1141,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       }
       accepted = { formula: candidate, round };
       stoppedBy = 'accepted';
+      /* Its history accepted here and is continued: on to the new stage. */
+      if (s.cfg.continued_after_acceptance === attempt) continue;
       break;
     }
     /* It builds on its latest model; which of its models to build on is its own decision (no "best model" handed to it). */
@@ -1123,6 +1175,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       /* The model the finding reports, in the learner's own words. */
       final: finalModel ? ownFormula(finalModel) : null,
       accepted: accepted ? { formula: accepted.formula, round: accepted.round } : null,
+      ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownFormula(acceptedBefore.formula) } } : {}),
       ...(satisfied ? { quick_stop: { model: ownFormula(satisfied), round: roundOf.get(satisfied) ?? null } } : {}),
       places: [...places.values()].map((p) => ({ id: p.id, index: p.index, role: p.role, seen: p.seen, size: p.spec.width + 'x' + p.spec.height, pieces: p.spec.A.count + '/' + p.spec.B.count })),
       best: result.best ? { formula: result.best.formula, round: roundOf.get(result.best.formula) ?? null, wins: result.best.wins, total: result.best.total } : null,

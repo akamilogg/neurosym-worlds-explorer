@@ -7,7 +7,7 @@
  * truth), nor the world's description.
  * ========================================================================== */
 
-import { ownFingerprint } from '../learn/law-session.ts';
+import { formulaFingerprint, ownFingerprint } from '../learn/law-session.ts';
 
 type J = Record<string, any>;
 
@@ -21,7 +21,7 @@ export function researcherEvents(journal: J): J[] {
     switch (e.type) {
       case 'exploration_episode': out.push({ type: e.type, episode: e.episode }); break;
       case 'investigation': out.push({ type: e.type, round: e.round, requests: e.requests }); break;
-      case 'proposal': out.push({ type: e.type, round: e.round, rationale: e.rationale, beliefs: e.beliefs, notes: e.notes, law: e.law, fingerprint: e.fingerprint,
+      case 'proposal': out.push({ type: e.type, round: e.round, rationale: e.rationale, beliefs: e.beliefs, notes: e.notes, law: e.law, ...(e.formula ? { formula: e.formula } : {}), fingerprint: e.fingerprint,
         lessons: e.lessons, next_experiment: e.next_experiment }); break;
       case 'proposal_refused': out.push({ type: e.type, round: e.round, errors: e.errors }); break;
       case 'check': out.push({ type: e.type, round: e.round, laboratories: held(e.laboratories),
@@ -76,6 +76,10 @@ export function experimentStates(journal: J): { episode: string; round: number; 
         if (q?.act !== undefined) {
           const r = results[i];
           if (r?.accepted && typeof r.name === 'string') states.set(r.name, { episode: r.name, round: Number(e.round), state: 'done' });
+        } else if (q?.replay !== undefined && typeof results[i]?.episode === 'string') {
+          /* A replay of the grid: the episode it played is an experiment of its own (what it replayed from, it used). */
+          mark(q, 'read');
+          states.set(results[i].episode, { episode: results[i].episode, round: Number(e.round), state: 'done' });
         } else if (q?.table !== undefined && (q.on === 'episodes' || q.on === undefined)) { for (const x of states.values()) if (x.state === 'done') x.state = 'read'; }
         else mark(q, 'read');
       });
@@ -102,11 +106,11 @@ export function runDigest(journal: J, options: { rounds?: number } = {}): J {
       beliefs: (e.beliefs ?? []).map((b: J) => ({ id: b.id, stance: b.stance, ...(b.statement ? { statement: clip(b.statement, 240) } : {}) })),
       notes: (e.notes ?? []).map((n: J) => ({ id: n.id, text: clip(n.text, 400) })),
       lessons: (e.lessons ?? []).map((l: unknown) => clip(l, 200)), next_experiment: clip(e.next_experiment, 400),
-      ...(e.law ? { model: modelDigest(e.law), fingerprint: e.fingerprint } : {})
+      ...(e.law ? { model: modelDigest(e.law), fingerprint: e.fingerprint } : e.formula ? { model: modelDigest(e.formula), fingerprint: e.fingerprint } : {})
     });
     /* The same model proposed again, whatever whitespace it differs in (SPEC-CALIBRACION-INSTRUMENTOS §11.1). */
-    if (e.type === 'proposal' && e.law) {
-      const id = ownFingerprint({ ...e.law });
+    if (e.type === 'proposal' && (e.law || e.formula)) {
+      const id = e.law ? ownFingerprint({ ...e.law }) : formulaFingerprint(e.formula);
       const first = firstOf.get(id);
       if (first === undefined) firstOf.set(id, e.round); else r.same_model_as_round = first;
     }

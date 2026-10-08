@@ -111,7 +111,7 @@ test('an assisted grid run with a selective memory: its prompt, the abridged not
   const asked: Record<string, any>[] = [];
   const r = await runLaboratory(gridLab, { args: [...GRID, '--researcher', 'assisted', '--memory', 'selective', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch: system2(asked) });
   assert.equal(r.researcherUsed, 'assisted');
-  assert.ok(asked[0].system.endsWith(MEMORY_SECTION), 'its prompt says what its memory is');
+  assert.ok(asked[0].system.includes(MEMORY_SECTION), 'its prompt says what its memory is');
   assert.match(asked[0].system, /THE OPERATOR/);
   assert.ok(asked[0].user.memory && !asked[0].user.notebook.memory, 'what its memory holds, after the investigation');
   assert.equal(asked[1].user.steps_left, asked[0].user.steps_left, 'an answer of only memory requests is free');

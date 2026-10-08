@@ -283,6 +283,12 @@ export interface LabRunConfig {
   readonly grade: boolean;
   readonly reflection: boolean;
   readonly flat: boolean;
+  /** The models' fingerprint version (SPEC-CALIBRACION-INSTRUMENTOS §11.1): 1 in a journal made before it. */
+  readonly fingerprint?: number;
+  /** From which round this code's additions apply (SPEC-INVESTIGADOR-ASISTIDO §14.6); none in a run made before them. */
+  readonly review_from?: number;
+  /** A continuation of a run that accepted: the attempt it accepted in (§14.3). */
+  readonly continued_after_acceptance?: number;
 }
 
 /** What the runner gives a laboratory with a loop of its own. */

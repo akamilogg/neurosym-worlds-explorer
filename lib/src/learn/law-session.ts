@@ -1,4 +1,6 @@
 import { hashString, stableStringify } from '../core/hash.ts';
+import { formulaHash } from '../core/formula.ts';
+import type { Formula } from '../core/types.ts';
 import type { ApiError } from '../core/net.ts';
 import type { Law } from '../core/predict.ts';
 import { obj, parseReflection } from './explorer.ts';
@@ -139,6 +141,20 @@ export const FINGERPRINT_VERSION = 2;
 /** A law's identity: its own code and words (the same law has the same fingerprint; from version 2, whatever whitespace
     does not change it). */
 export const lawFingerprint = (law: Law, version: number = FINGERPRINT_VERSION): string => ownFingerprint(ownLaw(law), version);
+
+/** A formula's fingerprint (the grid's models): version 1, `formulaHash` as it is; version 2, its code and words normalized as
+    a law's (SPEC-CALIBRACION-INSTRUMENTOS §11.1). */
+export function formulaFingerprint(formula: Formula, version: number = FINGERPRINT_VERSION): string {
+  if (version < 2) return formulaHash(formula);
+  const code = (x: unknown) => (typeof x === 'string' ? normalizeCode(x) : x);
+  const spec = (d: unknown): unknown => { const o = d as { kind?: string; source?: unknown }; return o && o.kind === 'code' ? { ...o, source: code(o.source) } : d; };
+  return formulaHash({
+    ...formula,
+    observations: Object.fromEntries(Object.entries(formula.observations).map(([id, d]) => [id, { ...d, ...((d as { definition?: unknown }).definition !== undefined ? { definition: normalizeWords((d as { definition?: unknown }).definition) } : {}), spec: spec(d.spec) }])) as Formula['observations'],
+    rules: Object.fromEntries(Object.entries(formula.rules).map(([id, r]) => [id, { ...r, instructions: normalizeWords(r.instructions) }])) as unknown as Formula['rules'],
+    ...(formula.output ? { output: spec(formula.output) as Formula['output'] } : {})
+  });
+}
 
 /** The fingerprint of a model as the journal keeps it (`ownLaw`). */
 export const ownFingerprint = (ownModel: Record<string, unknown>, version: number = FINGERPRINT_VERSION): string => {

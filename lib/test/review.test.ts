@@ -119,3 +119,57 @@ test('the state of its experiments: done, read, used - from its own record', () 
   assert.deepEqual(experimentStates(journal).map((x) => x.episode + ':' + x.state), ['act1:read', 'act2:done', 'act10:used'], 'act1 is not act10');
   assert.deepEqual(runDigest(journal).its_experiments_not_yet_used, [{ episode: 'act1', round: 1, state: 'read, not cited as evidence' }, { episode: 'act2', round: 1, state: 'not read yet' }]);
 });
+
+/* --- The grid, at parity: its own loop with the same additions. */
+import { gridLab } from '../src/worlds/grid/lab.ts';
+
+function gridSystem2(seen: { system: string; user: any }[] = []): FetchLike {
+  return async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string;
+    const grading = sys.startsWith('You grade');
+    const user = grading ? {} : JSON.parse(userOf(b));
+    seen.push({ system: sys, user });
+    const content = grading ? { grades: [], false_beliefs: [{ claim: 'invented', quote: 'nothing the learner wrote', contradicted_by: 'R1' }], form: 'compact', form_evidence: 'e' }
+      : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n',
+        open_questions: [{ question: 'how the other side chooses', state: 'investigable_here', plan: 'replay from g1@2, 1 round' }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: user.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'],
+        documents: [{ do: 'write', id: 'questions', text: 'Q1 how it moves: open' }] };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+}
+const GRID = ['--seed', '22', '--explore', '1', '--variants', '1', '--family', '1', '--family-variants', '1', '--confirm-places', '1', '--levels', '2', '--depth', '1',
+  '--steps', '0', '--flat', '--no-ablation'];
+
+test('the grid: its own documents, its task question by question, what it leaves open, and the grader of version 2', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-grid-'));
+  const seen: { system: string; user: any }[] = [];
+  const r = await runLaboratory(gridLab, { args: [...GRID, '--attempts', '2', '--researcher', 'assisted', '--memory', 'selective', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch: gridSystem2(seen) });
+  const asked = seen.filter((q) => !q.system.startsWith('You grade'));
+  assert.ok(asked.every((q) => q.system.includes('YOUR OWN DOCUMENTS') && q.system.includes('YOUR TASK, QUESTION BY QUESTION')));
+  const journal = journalOf(r.journal);
+  const written = journal.events.filter((e: any) => e.type === 'document_written');
+  assert.ok(written.length >= 2 && written.every((e: any) => e.id === 'questions'), 'a version every round it wrote it');
+  assert.equal(r.finding.assistance!.documents![0].versions, written.length);
+  assert.match(JSON.stringify(asked[asked.length - 1].user), /"your_documents"/, 'its documents reach it, as an index');
+  assert.match(String(asked.find((q) => 'task' in q.user)!.user.task), /open_questions/);
+  assert.equal(r.finding.outcome.open, true);
+  const grading = journal.events.find((e: any) => e.type === 'operator_rule_recovery');
+  assert.ok(seen.find((q) => q.system.startsWith('You grade'))!.system.includes('FORM of its model is not a claim'));
+  assert.deepEqual([grading.grader_version, grading.false_beliefs.length, grading.false_beliefs_discarded.length], [2, 0, 1], 'a false belief without the learner\'s words is discarded');
+});
+
+test('the grid: a run made before this code, continued, repeats its history as it was', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-grid-'));
+  const first = await runLaboratory(gridLab, { args: [...GRID, '--no-grade', '--attempts', '1', '--out', path.join(dir, 'first.json')], root: dir, llm, fetch: gridSystem2() });
+  const j = journalOf(first.journal);
+  delete j.config.review_from;
+  delete j.config.fingerprint;
+  fs.writeFileSync(first.journal, JSON.stringify(j));
+  const more = await runLaboratory(gridLab, { args: ['--resume', first.journal, '--attempts', '2', '--out', path.join(dir, 'more.json')], root: dir, llm, fetch: gridSystem2() });
+  assert.notEqual(more.stoppedBy, 'diverged');
+  const journal = journalOf(more.journal);
+  assert.deepEqual([journal.config.review_from, journal.config.fingerprint], [1, 1]);
+  assert.equal(journal.events.find((e: any) => e.type === 'review_from')?.attempt, 2);
+});

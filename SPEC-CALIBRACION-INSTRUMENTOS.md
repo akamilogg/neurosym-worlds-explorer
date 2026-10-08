@@ -335,6 +335,6 @@ modelo por una afirmación.
   - En el run, sólo en las rondas que este código revisa (`review_from`, SPEC-INVESTIGADOR-ASISTIDO §14.6): el final de una
     historia que se repite se califica como se calificó.
   - `lab grade` (recalificar) usa siempre la versión 2.
-  - El calificador del bucle propio de la cuadrícula sigue en la versión 1; recalificar lo pasa a la 2.
+  - La cuadrícula, con su bucle propio, también: la regla desde `review_from`, como los mundos de leyes.
 - **Pruebas:** `test/fingerprint.test.ts` (normalización, versiones, falsas creencias citadas) y `test/protocol.test.ts`
   (réplicas).
