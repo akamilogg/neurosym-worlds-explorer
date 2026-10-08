@@ -1,0 +1,11 @@
+{
+  "format": "batch@1",
+  "id": "c302closed-n2-4-more",
+  "concurrency": 1,
+  "budget": { "tokens_per_run": 8000000 },
+  "runs": [
+    { "id": "closed-signals-s1-more", "lab": "c302closed", "condition": "L3 continued: the facet of signals of c302closed-n2-4, given 6 more rounds (it held in all its laboratories in round 15 and never validated it)", "researcher": "assisted",
+      "fork": { "journal": "D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/c302closed-n2-4/closed-signals-s1.json", "attempts": 22 },
+      "agent": { "id": "senior", "role": "senior", "max_orders": 22, "patience": 2 } }
+  ]
+}

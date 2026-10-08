@@ -165,3 +165,8 @@ test('the senior\'s opening asks for the technical form of the model too: what c
   assert.match(SENIOR_ROLE, /TECHNICAL FORM of its model/);
   assert.match(SENIOR_ROLE, /whether it uses the Judge's rules at all/);
 });
+
+test('the senior orders a model that holds everywhere to be validated before any refinement', async () => {
+  const { SENIOR_ROLE } = await import('../src/orchestra/agent-operator.ts');
+  assert.match(SENIOR_ROLE, /order it to validate that very model now/);
+});
