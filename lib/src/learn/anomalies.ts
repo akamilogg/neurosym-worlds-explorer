@@ -102,5 +102,5 @@ export function placesQuestioned(r: ReportRecord, placeOf: (ref: string) => stri
 /** The reports an acceptance through these places cannot do without: those still questioning them, and those found a fault
     of the instrument there (nothing in this run rests on such a place again: the fix is a branch, §6). */
 export function holding(states: readonly ReportState[], through: readonly string[], placeOf: (ref: string) => string | null): string[] {
-  return states.filter((r) => r.state !== 'world').filter((r) => { const q = placesQuestioned(r, placeOf); return q === 'all' || q.some((p) => through.includes(p)); }).map((r) => r.id);
+  return states.filter((r) => r.state !== 'world' && r.kind !== 'missing_instrument').filter((r) => { const q = placesQuestioned(r, placeOf); return q === 'all' || q.some((p) => through.includes(p)); }).map((r) => r.id);
 }

@@ -6,6 +6,7 @@ import { JournalMemory } from './memory.ts';
 import { Experience } from './experience.ts';
 import { ownLaw } from '../law-explorer.ts';
 import { INSTRUMENT_SECTION, instrumentReports } from '../instrument.ts';
+import { DOCUMENT_MAX } from '../notebook.ts';
 
 /* ============================================================================
  * The ASSISTED researcher (SPEC-INVESTIGADOR-ASISTIDO §6, A4): the one the operator may help.
@@ -71,6 +72,26 @@ export const SOURCES_SECTION = [
   'A source is a REFERENCE, never a truth: what someone wrote, an approximation of what they could see with their own instruments, and it may be wrong, partial, outdated or about something else. It is not evidence of what the environment does. Question it as you question your own beliefs: test what it says with your instruments, and open it again when you need to check it, when it contradicts what the environment answers or another source.',
   'When a source does not fit what you observe, refute it: the environment\'s answers weigh more than any text. Keep in your notes what you took from each source, and which sources (or parts) you refuted and why. When a belief rests on a source, cite it in that belief\'s evidence as "src:<document>#L<from>-<to>", next to the points of your episodes that support it.'
 ].join('\n');
+
+/** Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): kept as it likes, next to the notebook the operator reads. */
+export const OWN_DOCUMENTS_SECTION = (memory: boolean): string => [
+  'YOUR OWN DOCUMENTS. Your notebook (beliefs, notes, methods) is the record everyone reads, and it stays as it is. Besides it you may keep documents of your own, in whatever form serves you: an account of your task question by question, a table of what you fitted, a plan of experiments, anything. In any of your answers: "documents": [{"do": "write" | "forget", "id": "<lowercase_snake_case>", "text": "..."}] - a write replaces the whole text (at most ' + DOCUMENT_MAX + ' characters); every version is kept in your record.',
+  memory
+    ? 'They reach you as an index (`your_documents`: names, first words, versions); read one whole with {"memory": "open", "items": ["document:<id>"]}, list them with {"memory": "list", "of": "documents"}, and find reaches them.'
+    : 'They reach you whole, in `your_documents`.',
+  'Refer to a document from a note or a belief as "doc:<id>". Your senior reads them too.'
+].join('\n');
+
+/** The task, question by question (SPEC-INVESTIGADOR-ASISTIDO §14.2): method, nothing of the environment. */
+export const TASK_COVERAGE_SECTION = [
+  'YOUR TASK, QUESTION BY QUESTION. A model that holds may still leave questions of your task unanswered. Read your task as the questions it asks, in your own words, and keep where you stand on each - in your notes or a document of your own.',
+  'Before you ask to validate, and again as your rounds run out, set your model and your evidence against each question: answered (with what evidence: rounds, episodes, tests), in part, or open. A question still open that your instruments can investigate is your next experiment - or a test of your own - before your work is done.',
+  'A question your instruments cannot investigate: say so in an "instrument_report" of "kind": "missing_instrument" - which question, and what instrument or experiment would be needed. The operator reads it; it is no suspicion of a fault and holds nothing of yours.'
+].join('\n');
+
+/** Added to the reflection round's task (SPEC-INVESTIGADOR-ASISTIDO §14.3): what it leaves open, for the operator to act on. */
+export const OPEN_QUESTIONS_TASK = 'Add "open_questions": [{"question": "<a question of your task you have not answered, in your words>", "state": "investigable_here" | "needs_instrument", '
+  + '"plan": "<for investigable_here: the experiment or test you would run, and about how many rounds>", "report": "<for needs_instrument: what would be needed, as in your instrument report>"}] - every question of your task you leave open, and [] if none.';
 
 /** The assisted researcher's system prompt: the common one (as the unknown-world researcher's), then its own sections: the
     operator, and the instrument it may report (SPEC-CALIBRACION-INSTRUMENTOS §4). */

@@ -26,7 +26,7 @@ const toy: Objective<number, ToyPlace, Hurdle[], Cleared> = {
   trace: (rs) => rs.map((r) => ({ case: r.id, cleared: r.cleared }))
 };
 
-function setup(options: { pairedRegression?: boolean; quick?: boolean } = {}) {
+function setup(options: { pairedRegression?: boolean; quick?: boolean; replications?: boolean } = {}) {
   const places: ToyPlace[] = [
     { id: 'lab1', role: 'laboratory', seen: true, height: 1 },
     { id: 'place1', role: 'family', seen: false, height: 1 },
@@ -35,7 +35,7 @@ function setup(options: { pairedRegression?: boolean; quick?: boolean } = {}) {
   let spent = 0;
   const protocol = new Protocol(toy, {
     places: () => places, blindPlaces: (set, round) => [{ id: 'blind' + set + '-' + round, role: 'confirmation', seen: false, height: 1 }],
-    fingerprint: (m) => String(m), validations: 2, pairedRegression: options.pairedRegression ?? true, quick: options.quick,
+    fingerprint: (m) => String(m), validations: 2, pairedRegression: options.pairedRegression ?? true, quick: options.quick, replications: options.replications,
     cost: () => ({ calls: spent++ })
   });
   return { protocol, places };
@@ -166,4 +166,22 @@ test('the grader separates predicting from understanding: a table that agrees is
   assert.deepEqual(formOf({ form: 'table', form_evidence: 'a 32-entry lookup' }), { form: 'table', form_evidence: 'a 32-entry lookup' });
   assert.deepEqual(formOf({ form: 'nonsense' }), { form: null, form_evidence: null });
   assert.deepEqual(formOf(null), { form: null, form_evidence: null });
+});
+
+test('a model proposed again is recognized, and its checks add up as replications (SPEC-CALIBRACION-INSTRUMENTOS §11.1)', async () => {
+  const { protocol } = setup({ replications: true });
+  const r1 = await protocol.round(2, { round: 1, attempt: 1, validate: false });
+  assert.equal(r1.view.same_model_as_round, undefined, 'the first time, nothing to recognize');
+  await protocol.round(3, { round: 2, attempt: 2, validate: false });
+  const r3 = await protocol.round(2, { round: 3, attempt: 3, validate: false });
+  assert.equal(r3.view.same_model_as_round, 1);
+  assert.deepEqual(r3.view.this_model_so_far, { lab1: { held: 2, did_not_hold: 0 } });
+  assert.equal(r3.journal.same_model_as_round, 1, 'the journal says so too');
+  /* Validated on the check it held in: the reused check is not counted twice; the family places are. */
+  const r4 = await protocol.round(2, { round: 4, attempt: 4, validate: true });
+  assert.equal(r4.reused, 3);
+  assert.deepEqual(r4.view.this_model_so_far, { lab1: { held: 2, did_not_hold: 0 }, place1: { held: 1, did_not_hold: 0 }, place2: { held: 0, did_not_hold: 1 } });
+  const off = setup();
+  await off.protocol.round(2, { round: 1, attempt: 1, validate: false });
+  assert.equal((await off.protocol.round(2, { round: 2, attempt: 2, validate: false })).view.same_model_as_round, undefined, 'off by default: a journal of version 1');
 });

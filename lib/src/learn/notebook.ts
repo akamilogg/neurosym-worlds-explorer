@@ -50,6 +50,24 @@ export interface NoteOp {
   readonly positions?: readonly string[];
 }
 
+/** One of the researcher's own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1). */
+export interface OwnDocument { readonly id: string; text: string; readonly written: number; updated: number; versions: number }
+export interface DocumentOp { readonly do: 'write' | 'forget'; readonly id: string; readonly text?: string }
+/** The size of a document, at most. */
+export const DOCUMENT_MAX = 8000;
+
+/** Its document operations as written: [{"do": "write" | "forget", "id", "text"}] (a "text" without "do" is a write). */
+export function parseDocuments(raw: unknown, warnings: string[]): DocumentOp[] {
+  const out: DocumentOp[] = [];
+  (Array.isArray(raw) ? raw : []).forEach((d, i) => {
+    const o = d && typeof d === 'object' ? d as Record<string, unknown> : null;
+    const act = o && o.do === undefined && typeof o.text === 'string' ? 'write' : o?.do;
+    if (!o || (act !== 'write' && act !== 'forget') || typeof o.id !== 'string') { warnings.push('document #' + i + ' ignored: needs "id" and "do": write | forget'); return; }
+    out.push({ do: act, id: o.id, ...(typeof o.text === 'string' ? { text: o.text } : {}) });
+  });
+  return out;
+}
+
 export interface Note { readonly id: string; text: string; positions: string[]; readonly written: number; updated: number; archived?: boolean }
 export interface Method { readonly id: string; text: string; readonly written: number; updated: number }
 
@@ -106,6 +124,9 @@ export class Notebook {
   readonly methods = new Map<string, Method>();
   readonly rounds: RoundRecord[] = [];
   readonly games: GameRecord[] = [];
+  /** Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1), in the form it chose: their latest text; every version is in the
+      journal (`document_written`). */
+  readonly documents = new Map<string, OwnDocument>();
   /** Rounds where it only looked back (no formula): what it concluded. */
   readonly reflections: { round: number; rationale: string; lessons: string[]; next_experiment: string }[] = [];
 
@@ -136,6 +157,25 @@ export class Notebook {
     }
     const unaddressed = [...this.beliefs.values()].filter((b) => b.status !== 'dropped' && !touched.has(b.id) && b.since < round).map((b) => b.id);
     return { warnings, unaddressed };
+  }
+
+  /** Write or forget its own documents. A text over `DOCUMENT_MAX` characters is refused whole, never clipped. */
+  applyDocuments(round: number, ops: readonly DocumentOp[]): string[] {
+    const warnings: string[] = [];
+    for (const op of ops) {
+      if (!ID.test(op.id)) { warnings.push('document id "' + op.id + '" must be lowercase snake_case'); continue; }
+      if (op.do === 'forget') { if (!this.documents.delete(op.id)) warnings.push('document "' + op.id + '" does not exist'); continue; }
+      if (typeof op.text !== 'string' || !op.text.trim()) { warnings.push('document "' + op.id + '" has no text'); continue; }
+      if (op.text.length > DOCUMENT_MAX) { warnings.push('document "' + op.id + '" not written: ' + op.text.length + ' characters, at most ' + DOCUMENT_MAX); continue; }
+      const old = this.documents.get(op.id);
+      this.documents.set(op.id, { id: op.id, text: op.text, written: old?.written ?? round, updated: round, versions: (old?.versions ?? 0) + 1 });
+    }
+    return warnings;
+  }
+
+  /** The index of its documents: name, first words, versions, the round of the latest. */
+  documentIndex(): { id: string; begins: string; versions: number; updated_round: number }[] {
+    return [...this.documents.values()].map((d) => ({ id: d.id, begins: clip(d.text.replace(/\s+/g, ' '), 120), versions: d.versions, updated_round: d.updated }));
   }
 
   /** Write or forget notes. `known(ref)` says whether a "game@turn" reference exists. */

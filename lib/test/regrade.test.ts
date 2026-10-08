@@ -6,6 +6,7 @@ import path from 'node:path';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { regrade } from '../src/runtime/regrade.ts';
 import { gridLab, GRID_GRADING_SYSTEM } from '../src/worlds/grid/lab.ts';
+import { FALSE_BELIEF_RULE } from '../src/learn/operator.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
 import { userOf } from './support.ts';
@@ -37,7 +38,7 @@ test('a run whose grading failed is graded again by another model: appended, mar
     return { content: JSON.stringify({ grades: [{ id: 'win_other', grade: 'exact', evidence: 'column 4' }, { id: 'draw', grade: 'absent' }], false_beliefs: [], form: 'compact', form_evidence: 'e' }), latencyMs: 0, raw: null };
   } };
   const out = await regrade(r.journal, grader, 'senior-model');
-  assert.equal(asked[0].system, GRID_GRADING_SYSTEM, 'the run\'s own grader');
+  assert.equal(asked[0].system, GRID_GRADING_SYSTEM + ' ' + FALSE_BELIEF_RULE, 'the run\'s own grader, at version 2 (SPEC-CALIBRACION-INSTRUMENTOS §11.2)');
   assert.equal(asked[0].user.learner.beliefs[0].statement, 'the other wins when = reaches column 4', 'the learner as the run left it');
   assert.deepEqual(asked[0].user.picture_glyphs, { learner: '&', other: '=' });
   assert.equal(out.score, Math.round(1 / asked[0].user.true_rules.length * 100) / 100);

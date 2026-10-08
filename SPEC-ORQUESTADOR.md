@@ -571,6 +571,25 @@ desarrollar.
 - **Pruebas:** el estado de un experimento recorre los cuatro pasos con un diario sintético; el resumen del senior
   muestra el estado, los documentos y el aviso de modelo repetido.
 
+**Implementado (08/10/2026):**
+- **`experimentStates`** (`view.ts`), del diario: cada acto aceptado del junior (`actN`) pasa a *hecho*; a *leído* cuando
+  una petición posterior lo nombra (`view`, `inspect`, `measure`) o un `table` recorre sus episodios; a *usado* cuando lo
+  cita una propuesta o reflexión (creencias, notas, justificación, lecciones), un informe de directiva o un informe al
+  senior. Se reconocen nombres enteros (`act1` no es `act10`). El paso *ordenado* no se registra: las órdenes del senior son
+  texto libre, y el estado se lleva por experimento del junior, no por orden.
+  - **El senior:** `its_experiments_not_yet_used` en su resumen (los 12 últimos sin usar).
+  - **El junior:** `your_use` en su índice de episodios (`not read yet`, `read, not cited as evidence`, `cited as
+    evidence`), en las rondas que este código revisa (SPEC-INVESTIGADOR-ASISTIDO §14.6).
+- **`SENIOR_ROLE`:**
+  - la orden de validar va con una prueba, cuando el junior puede registrarlas;
+  - un modelo repetido es una réplica;
+  - «YOUR ORDERS ARE FEW»: no gastar órdenes en recordatorios que el estado ya muestra;
+  - «THE TASK, QUESTION BY QUESTION»: la revisión de la cobertura, y abrir sus documentos como `document:<id>`.
+- **El resumen** (`runDigest`) incluye por ronda `same_model_as_round` (huella versión 2), los documentos escritos
+  (`documents`, con su principio) y los informes del junior (`directive_report`, `junior_report`). La memoria del senior
+  admite `"of": "documents"`.
+- **Pruebas:** `test/review.test.ts` (estado de los experimentos y documentos en el resumen).
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la

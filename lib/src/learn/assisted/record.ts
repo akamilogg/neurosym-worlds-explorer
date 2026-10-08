@@ -56,6 +56,7 @@ export function journalReader(journal: J, options: Pick<MemoryOptions, 'openLimi
         break;
       }
       case 'methods': notebook.applyMethods(round, (e.methods ?? []) as NoteOp[]); break;
+      case 'document_written': notebook.applyDocuments(round, [{ do: e.do === 'forget' ? 'forget' : 'write', id: String(e.id), ...(typeof e.text === 'string' ? { text: e.text } : {}) }]); break;
       case 'proposal': {
         notebook.applyStances(round, (e.beliefs ?? []) as BeliefStance[]);
         notebook.applyNotes(round, notes, () => true);

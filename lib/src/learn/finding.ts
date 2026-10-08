@@ -45,7 +45,11 @@ export interface Finding {
   readonly question: { readonly world: string; readonly answer_form?: readonly string[]; readonly verdict_form?: readonly string[];
     /** The facet the task was about at the start, and what the operator wanted understood (assisted). */
     readonly focus?: string; readonly task?: string };
-  readonly outcome: { readonly status: string; readonly round: number | null; readonly attempt: number | null };
+  readonly outcome: { readonly status: string; readonly round: number | null; readonly attempt: number | null;
+    /** It says it could go on: questions of its task it left open that its instruments can investigate (SPEC-INVESTIGADOR-ASISTIDO §14.3). */
+    readonly open?: boolean;
+    /** In a continuation after an acceptance: the model its history accepted. */
+    readonly previously_accepted?: { readonly round: number; readonly model: unknown } };
   readonly model: { readonly round: number | null; readonly fingerprint: string | null; readonly law: unknown } | null;
   readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[];
     /** Assisted researcher: where its evidence comes from - the world (points of episodes), the operator's messages, sources. */
@@ -64,6 +68,8 @@ export interface Finding {
     readonly sources: { readonly origins: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[] };
     /** Its selective memory (§13): what it recalled of its own record - lists, items opened, finds (with what the Judge kept). */
     readonly memory?: { readonly mode: string; readonly listed: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[]; readonly selections: number };
+    /** Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): each with its versions and the rounds they were written in. */
+    readonly documents?: readonly { readonly id: string; readonly versions: number; readonly rounds: readonly number[]; readonly forgotten: boolean }[];
     /** The records of earlier runs it was given (§12), in which mode, and what it read of them. A run given experience of
         its own world (`meta`) is not a measure of investigating from nothing: `prior_knowledge_of_this_world` says so. */
     readonly experience?: { readonly mode: string; readonly scope: string; readonly prior_knowledge_of_this_world: boolean;
@@ -94,7 +100,9 @@ export interface Finding {
     readonly tolerated_misses: readonly { readonly place: string; readonly missed: number; readonly points: number }[];
     readonly trivially_passed: readonly unknown[];
     readonly accepted_trivially: boolean;
-    readonly learner: { readonly rationale?: string; readonly lessons: readonly string[]; readonly next_experiment?: string } | null;
+    readonly learner: { readonly rationale?: string; readonly lessons: readonly string[]; readonly next_experiment?: string;
+      /** What of its task it leaves open, and whether it could investigate it here (SPEC-INVESTIGADOR-ASISTIDO §14.3). */
+      readonly open_questions?: readonly { readonly question: string; readonly state: string; readonly plan?: string; readonly report?: string }[] } | null;
   };
   /** The operator's view only. */
   readonly operator?: { readonly rule_recovery?: Facts; readonly judge?: unknown; readonly truth?: unknown;
@@ -174,6 +182,13 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
       found: requests.filter((r) => r.memory === 'find').map((r) => String(r.words ?? '') + (r.of ? ' of ' + String(r.of) : '') + (r.select ? ' (select: ' + String(r.select) + ')' : '')),
       selections: events.filter((e) => e.type === 'memory_select').length
     } } : {}),
+    ...(() => {
+      const written = events.filter((e) => e.type === 'document_written');
+      if (!written.length) return {};
+      const ids = [...new Set(written.map((e) => String(e.id)))];
+      return { documents: ids.map((id) => { const of = written.filter((e) => e.id === id); return { id, versions: of.filter((e) => e.do === 'write').length,
+        rounds: of.map((e) => Number(e.round)), forgotten: of[of.length - 1].do === 'forget' }; }) };
+    })(),
     ...(given ? { experience: {
       mode: String(given.mode),
       scope: String(given.scope ?? 'all'),
@@ -234,7 +249,9 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
     question: { world: String(journal.experiment ?? ''), ...(journal.config?.focus ? { focus: String(journal.config.focus) } : {}), ...(journal.config?.task ? { task: String(journal.config.task) } : {}),
       ...(journal.objective?.answer ? { answer_form: journal.objective.answer } : {}),
       ...(journal.objective?.verdict ? { verdict_form: journal.objective.verdict } : {}) },
-    outcome: { status, round: status === 'accepted' ? acceptedRound : round, attempt: summary.accepted?.attempt ?? acceptance?.attempt ?? null },
+    outcome: { status, round: status === 'accepted' ? acceptedRound : round, attempt: summary.accepted?.attempt ?? acceptance?.attempt ?? null,
+      ...(Array.isArray(last?.open_questions) && last.open_questions.some((q: J) => q.state === 'investigable_here') ? { open: true } : {}),
+      ...(end.previously_accepted ? { previously_accepted: end.previously_accepted } : {}) },
     model: law ? { round, fingerprint, law } : null,
     claims,
     ...(assistance ? { assistance } : {}),
@@ -246,10 +263,12 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
       trivially_passed: summary.trivial_checks ?? [],
       accepted_trivially: Boolean(summary.accepted_trivially),
       learner: last ? { ...(last.rationale ? { rationale: String(last.rationale) } : {}), lessons: (last.lessons ?? []).map(String),
-        ...(last.next_experiment ? { next_experiment: String(last.next_experiment) } : {}) } : null
+        ...(last.next_experiment ? { next_experiment: String(last.next_experiment) } : {}),
+        ...(Array.isArray(last.open_questions) ? { open_questions: last.open_questions } : {}) } : null
     },
     operator: {
-      ...(recovery && !recovery.error ? { rule_recovery: { score: recovery.score, form: recovery.form, grades: recovery.grades, false_beliefs: recovery.false_beliefs } } : {}),
+      ...(recovery && !recovery.error ? { rule_recovery: { score: recovery.score, form: recovery.form, grades: recovery.grades, false_beliefs: recovery.false_beliefs,
+        ...(recovery.false_beliefs_discarded ? { false_beliefs_discarded: recovery.false_beliefs_discarded } : {}), ...(recovery.grader_version ? { grader_version: recovery.grader_version } : {}) } } : {}),
       ...(summary.judge ? { judge: summary.judge } : {}),
       ...(journal.hidden_from_the_learner?.truth ? { truth: journal.hidden_from_the_learner.truth } : {}),
       ...(meta.method ? { method_audit: meta.method } : {})
@@ -288,7 +307,8 @@ export function findingView(f: Finding, view: FindingView): Finding {
 export function findingText(f: Finding): string {
   const lines: string[] = [];
   lines.push(f.question.world + ': ' + (f.outcome.status === 'accepted' ? 'accepted in round ' + f.outcome.round : f.outcome.status)
-    + (f.model?.fingerprint ? ' (model ' + f.model.fingerprint + ')' : ''));
+    + (f.model?.fingerprint ? ' (model ' + f.model.fingerprint + ')' : '') + (f.outcome.open ? '; OPEN: it says it could go on' : ''));
+  for (const q of f.limitations.learner?.open_questions ?? []) lines.push('  open [' + q.state + '] ' + q.question + (q.plan ? '  (plan: ' + q.plan + ')' : q.report ? '  (needs: ' + q.report + ')' : ''));
   if (f.parallel) lines.push('  in parallel (a separate condition):' + (f.parallel.exploration_places ? ' ' + f.parallel.exploration_places + ' board(s) to explore (' + f.parallel.concurrency + ')' : '')
     + (f.parallel.team ? ' member ' + f.parallel.team.member + ' of team ' + f.parallel.team.id + ' (' + f.parallel.team.members.length + ' members, ' + (f.parallel.team.exchange ? 'board every ' + f.parallel.team.window + ' round(s): ' + f.parallel.team.published.length + ' published, ' + f.parallel.team.read.length + ' read(s)' : 'no board') + ')' : ''));
   for (const c of f.claims) lines.push('  claim [' + c.status + '] ' + c.statement + (c.grounded ? '  (from: ' + (c.grounded.join(', ') || 'nothing cited') + ')' : ''));

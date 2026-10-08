@@ -49,6 +49,9 @@ export interface ProtocolOptions<M, P extends Place> {
   /** The reports of the instrument an acceptance through these places must wait for (SPEC-CALIBRACION-INSTRUMENTOS §5.1):
       none, it is accepted; some, it waits for the operator's verdict on them (`release`). Default: none. */
   readonly hold?: (places: readonly string[]) => readonly string[];
+  /** Recognize a model proposed again (the same fingerprint) and tell its verdicts so far, place by place: a new check of it
+      is a replication (SPEC-CALIBRACION-INSTRUMENTOS §11.1). Default: off (journals before the fingerprint's version 2). */
+  readonly replications?: boolean;
   /** Operator only: models that know nothing (e.g. "the same row again"), run on the same cases as every check. A place
       where one of them holds too is one whose check cannot tell a model from knowing nothing: journalled, never shown. */
   readonly baselines?: readonly { readonly name: string; readonly model: M }[];
@@ -135,6 +138,8 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     accepted: ProtocolSummary['accepted']; costAtAcceptance: Record<string, number> | null; trivialChecks: number[]; acceptedTrivially: boolean | null } =
     { rounds: 0, checks: 0, firstHeld: null, validations: [], accepted: null, costAtAcceptance: null, trivialChecks: [], acceptedTrivially: null };
   private readonly costAtStart: Readonly<Record<string, number>>;
+  /** Per fingerprint: the round it was first proposed, and its verdicts in each place it was checked or validated in. */
+  private readonly byModel = new Map<string, { first: number; places: Map<string, { held: number; failed: number }> }>();
 
   constructor(objective: Objective<M, P, K, R>, options: ProtocolOptions<M, P>) {
     this.objective = objective;
@@ -161,6 +166,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
   restart(): void {
     this.previous.clear();
     this.heldAt = null;
+    this.byModel.clear();
     this.validationsLeft = this.options.validations;
   }
 
@@ -303,8 +309,20 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       if (this.options.baselines?.length && validation) this.milestones.acceptedTrivially = trivial(validation.places) && (validation.blind ?? []).every((b) => trivial(b.places));
     }
 
+    /* A model proposed before: its verdicts so far, then this round's (a check reused adds nothing). */
+    let sameModel: Record<string, unknown> | null = null;
+    if (this.options.replications) {
+      const known = this.byModel.get(fingerprint);
+      const entry = known ?? { first: round, places: new Map<string, { held: number; failed: number }>() };
+      const add = (os: readonly PlaceOutcome<P, R>[]) => { for (const o of os) { const v = entry.places.get(o.place.id) ?? { held: 0, failed: 0 }; if (o.holds) v.held++; else v.failed++; entry.places.set(o.place.id, v); } };
+      if (!reused) add(laboratories);
+      if (validation) add(validation.places);
+      this.byModel.set(fingerprint, entry);
+      if (known) sameModel = { same_model_as_round: known.first, this_model_so_far: Object.fromEntries([...entry.places].map(([id, v]) => [id, { held: v.held, did_not_hold: v.failed }])) };
+    }
     const view: Record<string, unknown> = {
       round,
+      ...(sameModel ?? {}),
       ...(reused ? { not_checked_again: 'this model already held in every one of your laboratories in round ' + reused.round + ': these are the verdicts of that check' } : {}),
       laboratories: laboratories.map((o) => this.placeView(o)),
       ...(validation ? { validation: { validated_in: validation.places.map((o) => this.placeView(o)), ...(validation.becameLaboratories.length ? { now_your_laboratories: validation.becameLaboratories } : {}),
@@ -317,7 +335,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     this.lastView = view;
     const cost = diff(costNow, costBefore);
     const journal: Record<string, unknown> = {
-      round, attempt, ...(reused ? { reused_check_of_round: reused.round } : {}),
+      round, attempt, ...(reused ? { reused_check_of_round: reused.round } : {}), ...(sameModel ?? {}),
       laboratories: laboratories.map((o) => this.placeJournal(o)), ...(operator ? { check_operator: operator } : {}),
       ...(checkTrivial !== null ? { check_is_trivial: checkTrivial } : {}),
       asked_to_validate: context.validate,

@@ -1,13 +1,14 @@
 import { hashString, stableStringify } from '../core/hash.ts';
 import type { ApiError } from '../core/net.ts';
 import type { Law } from '../core/predict.ts';
-import { parseReflection } from './explorer.ts';
+import { obj, parseReflection } from './explorer.ts';
 import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
 import { RoundConversation } from './system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
 const MAX_CONSOLIDATIONS = 2;
-import { Notebook } from './notebook.ts';
+import { Notebook, parseDocuments } from './notebook.ts';
+import { parseJsonLoose } from '../core/net.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory } from './assisted/memory.ts';
 import type { ChatClient } from './system2.ts';
 
@@ -76,6 +77,11 @@ export interface LawSessionHost<A> {
   /** How many times a round it may ask to investigate with no steps left before it counts as a refusal (logged); 0 by
       default. */
   readonly overreach?: number;
+  /** Whether it may keep documents of its own (the assisted researcher, from its first question asked live:
+      SPEC-INVESTIGADOR-ASISTIDO §14.1). None by default. */
+  documents?(): boolean;
+  /** A law's fingerprint (default: `lawFingerprint` at the current version; a resumed run keeps its journal's). */
+  fingerprint?(law: Law): string;
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
   /** Asked before each consultation of System 2: a reason to stop now (cancelled, a budget spent), or null. */
@@ -84,8 +90,69 @@ export interface LawSessionHost<A> {
   onRound?(round: number): void;
 }
 
-/** A law's identity: its own code and words (the same law has the same fingerprint). */
-export const lawFingerprint = (law: Law): string => hashString(stableStringify(ownLaw(law))).slice(0, 10);
+/** Code without the whitespace that does not change it (SPEC-CALIBRACION-INSTRUMENTOS §11.1): outside string and template
+    literals a run of whitespace goes, except one space between two characters of a word (`return x`) or two of the same
+    sign that would join (`a + +b`, `a / /r/`). Literals stay as written. */
+export function normalizeCode(source: string): string {
+  const word = /[A-Za-z0-9_$]/;
+  let out = '', i = 0;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < source.length && source[j] !== c) j += source[j] === '\\' ? 2 : 1;
+      out += source.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      let j = i;
+      while (j < source.length && /\s/.test(source[j])) j++;
+      const a = out[out.length - 1] ?? '', b = source[j] ?? '';
+      if ((word.test(a) && word.test(b)) || (a === b && '+-/'.includes(a) && a !== '')) out += ' ';
+      i = j;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/** What it leaves open, as its reflection says (SPEC-INVESTIGADOR-ASISTIDO §14.3): each question with its state, or null when
+    it says nothing of it. */
+export function openQuestions(content: string): { question: string; state: 'investigable_here' | 'needs_instrument' | 'unstated'; plan?: string; report?: string }[] | null {
+  const raw = obj(parseJsonLoose(content))?.open_questions;
+  if (!Array.isArray(raw)) return null;
+  return raw.map((q) => obj(q)).filter((q): q is Record<string, unknown> => q !== null && typeof q.question === 'string' && q.question.trim() !== '')
+    .map((q) => ({ question: String(q.question), state: q.state === 'investigable_here' || q.state === 'needs_instrument' ? q.state : 'unstated',
+      ...(typeof q.plan === 'string' ? { plan: q.plan } : {}), ...(typeof q.report === 'string' ? { report: q.report } : {}) }));
+}
+
+/** Words without the whitespace that does not change them. */
+const normalizeWords = (text: unknown): unknown => (typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : text);
+
+/** The fingerprint's version: 1, the text as written (journals before 08/10/2026); 2, code and words normalized. A journal
+    records its own, and a resumed run keeps it. */
+export const FINGERPRINT_VERSION = 2;
+
+/** A law's identity: its own code and words (the same law has the same fingerprint; from version 2, whatever whitespace
+    does not change it). */
+export const lawFingerprint = (law: Law, version: number = FINGERPRINT_VERSION): string => ownFingerprint(ownLaw(law), version);
+
+/** The fingerprint of a model as the journal keeps it (`ownLaw`). */
+export const ownFingerprint = (ownModel: Record<string, unknown>, version: number = FINGERPRINT_VERSION): string => {
+  const own = ownModel as { observations: Record<string, { definition: unknown; source: unknown; range?: unknown }>; rules: Record<string, { type: unknown; instructions: unknown; criteria: unknown }>; weights: unknown; output?: unknown };
+  if (version < 2) return hashString(stableStringify(own)).slice(0, 10);
+  own.observations ??= {}; own.rules ??= {};
+  const code = (x: unknown) => (typeof x === 'string' ? normalizeCode(x) : x);
+  return hashString(stableStringify({
+    observations: Object.fromEntries(Object.entries(own.observations).map(([id, o]) => [id, { ...o, definition: normalizeWords(o.definition), source: code(o.source) }])),
+    rules: Object.fromEntries(Object.entries(own.rules).map(([id, r]) => [id, { ...r, instructions: normalizeWords(r.instructions) }])),
+    weights: own.weights,
+    ...(own.output !== undefined ? { output: code(own.output) } : {})
+  })).slice(0, 10);
+};
 
 export class LawSession<A> {
   readonly host: LawSessionHost<A>;
@@ -111,12 +178,15 @@ export class LawSession<A> {
   notebookBrief(): Record<string, unknown> {
     const last = this.latest();
     /* With a selective memory, abridged by its fixed rule (its episodes and models included). */
-    if (this.memory) return { ...this.memory.brief(this.currentRound, this.unaddressed), ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {}) };
+    /* Its documents: their index with a selective memory (opened with it), whole without one. */
+    const docs = this.notebook.documents.size ? { your_documents: this.memory ? this.notebook.documentIndex() : [...this.notebook.documents.values()].map((d) => ({ id: d.id, text: d.text, updated_round: d.updated })) } : {};
+    if (this.memory) return { ...this.memory.brief(this.currentRound, this.unaddressed), ...docs, ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {}) };
     const { episodes: _g, models: _r, ...own } = this.notebook.brief(this.unaddressed) as Record<string, unknown>;
     return {
       ...own,
       episodes: this.host.episodes(),
       models: this.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })),
+      ...docs,
       ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {})
     };
   }
@@ -175,7 +245,15 @@ export class LawSession<A> {
       }
       const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct, ...(h.extraRequest ? { extraRequest: (q) => h.extraRequest!(q) } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...this.notebook.applyNotes(round, turn.notes, (ref) => h.known(ref)), ...this.notebook.applyMethods(round, turn.methods)];
-      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}) };
+      /* Its own documents, in any answer: every version to the journal. */
+      const docs = h.documents?.() ? parseDocuments(obj(parseJsonLoose(content))?.documents, noteWarnings) : [];
+      if (docs.length) {
+        const refusedDocs = this.notebook.applyDocuments(round, docs);
+        noteWarnings.push(...refusedDocs);
+        for (const d of docs) if (!refusedDocs.some((w) => w.includes('"' + d.id + '"'))) h.log('document_written', { round, id: d.id, do: d.do, ...(d.text !== undefined ? { text: d.text } : {}) });
+        h.say('  documents: ' + docs.map((d) => d.do + ' ' + d.id).join(', '));
+      }
+      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}) };
       if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }
       if (turn.kind === 'consolidate') {
@@ -245,7 +323,8 @@ export class LawSession<A> {
         this.unaddressed = stances.unaddressed;
         this.notebook.recordReflection(round, r.reflection.rationale, r.reflection.lessons, r.reflection.nextExperiment);
         h.log('reflection', { round, investigation_steps: investigation.length, rationale: r.reflection.rationale, beliefs: r.reflection.beliefs, notes: turn.notes,
-          lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings });
+          lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings,
+          ...(openQuestions(content) ? { open_questions: openQuestions(content) } : {}) });
         for (const l of r.reflection.lessons) h.say('  lesson: ' + l);
         return null;
       }
@@ -274,7 +353,7 @@ export class LawSession<A> {
       const p = parsed.proposal;
       const stances = this.notebook.applyStances(round, p.beliefs);
       this.unaddressed = stances.unaddressed;
-      const record: LawRecord = { round, law: p.law, fingerprint: lawFingerprint(p.law), test: null, accepted: false, validate: p.validate, lessons: p.lessons, nextExperiment: p.nextExperiment };
+      const record: LawRecord = { round, law: p.law, fingerprint: h.fingerprint ? h.fingerprint(p.law) : lawFingerprint(p.law), test: null, accepted: false, validate: p.validate, lessons: p.lessons, nextExperiment: p.nextExperiment };
       this.laws.push(record);
       h.log('proposal', { round, investigation_steps: investigation.length, rationale: p.rationale, beliefs: p.beliefs, notes: turn.notes, law: ownLaw(p.law),
         fingerprint: record.fingerprint, lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });

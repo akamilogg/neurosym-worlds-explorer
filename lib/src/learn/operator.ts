@@ -19,6 +19,33 @@ export const GRADING_RIGOR = 'A statement of NOT KNOWING is not knowing: when th
   + 'Grade "partial" only for a claim the learner positively makes that holds part of the true statement. '
   + '"false_beliefs" are the learner\'s claims that a TRUE statement CONTRADICTS. A claim is never false merely because no true statement mentions it: the true statements are not everything true of the environment, and what the learner observed beyond them is not false for that.';
 
+/** The grader's version: 2 since a false belief is a claim the learner made, quoted (SPEC-CALIBRACION-INSTRUMENTOS §11.2,
+    08/10/2026, after a grader took the form of a model - continuous outputs from kernels - for a claim that there are no
+    discrete regimes). */
+export const GRADER_VERSION = 2;
+
+/** Added to every grader's system prompt from version 2. */
+export const FALSE_BELIEF_RULE = 'A FALSE BELIEF is a claim the learner ITSELF MAKES about the mechanism - in its words, a belief, a note, the definition of an observation or its reflection - that a TRUE statement contradicts. '
+  + 'The FORM of its model is not a claim: computing continuous values, using kernels, a table, rules or code says how it predicts, not that the mechanism is otherwise; a model can implement what a true statement says in many forms. '
+  + 'Give each false belief as {"claim": ..., "quote": "the learner\'s exact words, copied", "where": "belief <id>" | "note <id>" | "observation <id>" | "reflection" | "model", "contradicted_by": "<id of the true statement>"}. '
+  + 'Without the learner\'s exact words it is not a false belief: leave it out.';
+
+/** Normalized for finding a quote in what the learner wrote: lower case, no quotes or escapes, whitespace collapsed. */
+const plain = (text: string): string => text.toLowerCase().replace(/\\[nrt]/g, ' ').replace(/[\\"'`“”‘’]/g, '').replace(/\s+/g, ' ').trim();
+
+/** The false beliefs a grader of version 2 gave, kept only when their quote is in what the learner wrote (`learner`, as the
+    grader was given it); the others are discarded and kept apart, to review the grader. */
+export function quotedFalseBeliefs(given: unknown, learner: unknown): { false_beliefs: unknown[]; false_beliefs_discarded: unknown[]; grader_version: number } {
+  const all = Array.isArray(given) ? given : [];
+  const text = plain(typeof learner === 'string' ? learner : JSON.stringify(learner));
+  const kept: unknown[] = [], discarded: unknown[] = [];
+  for (const b of all) {
+    const quote = b && typeof b === 'object' && typeof (b as { quote?: unknown }).quote === 'string' ? plain((b as { quote: string }).quote) : '';
+    (quote.length >= 8 && text.includes(quote) ? kept : discarded).push(b);
+  }
+  return { false_beliefs: kept, false_beliefs_discarded: discarded, grader_version: GRADER_VERSION };
+}
+
 /** For the operator's grader: a model that reproduces a law is not a statement of its structure. A lookup table (or a
     fit over cases) that agrees with the law shows its OUTPUTS; a statement about its STRUCTURE - what it depends on, a
     symmetry, a count, a threshold - is exact only when the learner states or computes that structure. */

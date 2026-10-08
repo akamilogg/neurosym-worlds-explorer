@@ -268,8 +268,15 @@ modelo con episodios nuevos:
 | 16 | `1vpw1ww` | se sostiene (0,786 / 0,728) | **falla** (0,399 / 0,443); en los puntos de la 15, sigue sosteniéndose |
 
 La lectura del run como «el refinamiento de la 16 perdió place2» era falsa: no hubo refinamiento. Lo que se vio es
-**fragilidad ante episodios nuevos**. Por azar, el fallo de la huella hizo de réplica: si hubiera reconocido el modelo,
-habría reutilizado la comprobación y la fragilidad no se habría visto.
+**fragilidad ante episodios nuevos**.
+
+**Corrección (al implementarlo):** en la ronda 16 el junior volvió a proponer el modelo de la 15 **pidiendo validarlo**,
+como el protocolo prevé: un modelo que se sostuvo en todos sus laboratorios en la última comprobación se valida sobre
+esa comprobación, sin otra que pueda fallar por azar. Con la huella correcta, la ronda 16 habría reutilizado la
+comprobación de la 15 y habría pasado a validar en los lugares de la familia y, si se sostenía, a la confirmación a
+ciegas, todos con episodios nuevos. El fallo de la huella no hizo de réplica afortunada: **le negó al junior una
+validación a la que tenía derecho**, y en su lugar repitió la comprobación de laboratorio. La fragilidad la habría puesto
+a prueba igualmente la validación.
 
 **El cambio:**
 - **La huella se calcula sobre el código normalizado:** sin espacios ni saltos de línea fuera de las cadenas de texto, y
@@ -306,3 +313,28 @@ modelo por una afirmación.
 - La versión del calificador sube. Los runs ya calificados conservan su nota y su versión; recalificar es explícito.
 - **El efecto en la nota es pequeño** (0,06 seguiría siendo bajo), pero una falsa creencia mal juzgada desinforma al
   operador y a la auditoría.
+
+### 11.3 Implementado (08/10/2026)
+
+- **La huella, versión 2** (`lawFingerprint(law, version)`, `normalizeCode`, `ownFingerprint` en `law-session.ts`):
+  - fuera de las cadenas y plantillas de texto, los espacios desaparecen, salvo uno entre dos caracteres de palabra
+    (`return x`) o entre dos signos iguales que se unirían (`a + +b`); las definiciones y las instrucciones de las reglas
+    sólo colapsan espacios;
+  - el diario guarda la versión (`config.fingerprint`). Un run nuevo usa la 2; uno reanudado o continuado, la de su
+    diario (sin ella, la 1). Comprobado sobre `c302closed-n2-4`: la versión 1 reproduce las 16 huellas del diario, y con la
+    2 las rondas 15 y 16 dan la misma (`vj8hl4`).
+- **Réplicas** (`replications` en el protocolo, activas con la versión 2): un modelo ya propuesto lleva en su check
+  `same_model_as_round` y `this_model_so_far` (por lugar, cuántas veces se sostuvo y cuántas no). Un check reutilizado no
+  cuenta dos veces. `restart()` (un nuevo estadio, un cambio de foco) los olvida.
+- **El senior** ve `same_model_as_round` en su resumen siempre: lo calcula con la versión 2 sobre el diario, también en
+  runs de la versión 1. En la continuación de `c302closed-n2-4` verá que la ronda 16 es el modelo de la 15.
+- **El calificador, versión 2** (`GRADER_VERSION`, `FALSE_BELIEF_RULE`, `quotedFalseBeliefs` en `operator.ts`): la regla se
+  añade al prompt de cada calificador; las falsas creencias sin cita textual que aparezca en lo que el investigador
+  escribió (sin distinguir mayúsculas, comillas ni saltos de línea) van a `false_beliefs_discarded`. El evento y el
+  finding llevan `grader_version`.
+  - En el run, sólo en las rondas que este código revisa (`review_from`, SPEC-INVESTIGADOR-ASISTIDO §14.6): el final de una
+    historia que se repite se califica como se calificó.
+  - `lab grade` (recalificar) usa siempre la versión 2.
+  - El calificador del bucle propio de la cuadrícula sigue en la versión 1; recalificar lo pasa a la 2.
+- **Pruebas:** `test/fingerprint.test.ts` (normalización, versiones, falsas creencias citadas) y `test/protocol.test.ts`
+  (réplicas).

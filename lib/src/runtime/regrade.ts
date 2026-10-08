@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseJsonLoose } from '../core/net.ts';
 import { Notebook, type Note, type NotebookBelief } from '../learn/notebook.ts';
-import { formOf } from '../learn/operator.ts';
+import { formOf, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../learn/operator.ts';
 import { findingOf, findingView, type Finding } from '../learn/finding.ts';
 import { isGameLab } from '../learn/lab.ts';
 import type { ChatClient } from '../learn/system2.ts';
@@ -80,11 +80,11 @@ export async function gradeSenior(journalFile: string, agentRecord: string, llm:
   }
   let event: J;
   try {
-    const content = (await llm.complete({ system, user })).content;
+    const content = (await llm.complete({ system: system + ' ' + FALSE_BELIEF_RULE, user })).content;
     const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
     const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
     const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-    event = { type: 'operator_rule_recovery', subject: 'senior', truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel, at: new Date().toISOString() };
+    event = { type: 'operator_rule_recovery', subject: 'senior', truth, grades, ...quotedFalseBeliefs(parsed?.false_beliefs, JSON.parse(user).learner), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel, at: new Date().toISOString() };
   } catch (e) {
     event = { type: 'operator_rule_recovery', subject: 'senior', truth, error: String((e as Error)?.message ?? e), grader_model: graderModel, at: new Date().toISOString() };
   }
@@ -115,11 +115,11 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   }
   let event: J;
   try {
-    const content = (await llm.complete({ system, user })).content;
+    const content = (await llm.complete({ system: system + ' ' + FALSE_BELIEF_RULE, user })).content;
     const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
     const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
     const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-    event = { type, truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel };
+    event = { type, truth, grades, ...quotedFalseBeliefs(parsed?.false_beliefs, JSON.parse(user).learner), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel };
   } catch (e) {
     event = { type, truth, error: String((e as Error)?.message ?? e), grader_model: graderModel };
   }

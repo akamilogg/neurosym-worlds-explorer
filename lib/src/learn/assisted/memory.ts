@@ -25,7 +25,7 @@ import type { LineSelector, SelectionRecord } from './sources.ts';
 export const MEMORY_KINDS = ['beliefs', 'notes', 'methods', 'episodes', 'models', 'reflections', 'investigations', 'checks'] as const;
 export type MemoryKind = typeof MEMORY_KINDS[number];
 
-interface Item { readonly id: string; readonly kind: MemoryKind; readonly round: number; readonly head: string; readonly body: unknown }
+interface Item { readonly id: string; readonly kind: MemoryKind | 'documents'; readonly round: number; readonly head: string; readonly body: unknown }
 
 /** What the researcher is told once it has a selective memory (appended to its system prompt). */
 export const MEMORY_SECTION = [
@@ -104,6 +104,10 @@ export class JournalMemory {
         head: r.fingerprint + (r.games.length ? ', scored 1 in ' + r.games.reduce((a, g) => a + g.wins, 0) + ' of ' + r.games.reduce((a, g) => a + g.of, 0) : '') + ': ' + Object.keys(r.formula.observations).join(', '),
         body: { round: r.round, fingerprint: r.fingerprint, model: r.formula, ...(r.changes ? { changes: r.changes } : {}), episodes: r.games.map((g) => ({ scores: g.results.map(score), scored_1: g.wins, of: g.of })),
           lessons: r.lessons, next_experiment: r.next_experiment } })),
+      /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): a kind only once it has one, so a record without them reads
+         as it did. */
+      ...[...nb.documents.values()].map((d) => ({ id: 'document:' + d.id, kind: 'documents' as const, round: d.updated, head: clip(d.text, 140),
+        body: { id: d.id, text: d.text, written_round: d.written, updated_round: d.updated, versions: d.versions } })),
       ...nb.reflections.map((r) => ({ id: 'reflection:r' + r.round, kind: 'reflections' as const, round: r.round, head: clip(r.rationale || r.lessons.join(' '), 140), body: r })),
       ...this.investigations,
       ...this.checks
@@ -113,7 +117,12 @@ export class JournalMemory {
   /** How many items of each kind it holds. */
   counts(): Record<string, number> {
     const all = this.items();
-    return Object.fromEntries(MEMORY_KINDS.map((k) => [k, all.filter((i) => i.kind === k).length]));
+    return Object.fromEntries(this.kinds().map((k) => [k, all.filter((i) => i.kind === k).length]));
+  }
+
+  /** The kinds it holds: `documents` once it has written one. */
+  private kinds(): string[] {
+    return [...MEMORY_KINDS, ...(this.notebook.documents.size ? ['documents'] : [])];
   }
 
   /** The notebook as it travels by default: the fixed rule (MEMORY_SECTION), at `round`. */
@@ -153,7 +162,7 @@ export class JournalMemory {
   async run(q: Record<string, unknown>): Promise<unknown> {
     const what = String(q.memory);
     const of = typeof q.of === 'string' ? q.of : null;
-    if (of !== null && !(MEMORY_KINDS as readonly string[]).includes(of)) return { memory: what, error: '"of" is one of ' + MEMORY_KINDS.join(', ') };
+    if (of !== null && !this.kinds().includes(of)) return { memory: what, error: '"of" is one of ' + this.kinds().join(', ') };
     const pool = this.items().filter((i) => of === null || i.kind === of);
     if (what === 'list') {
       if (of === null) return { memory: 'list', items: this.counts(), note: 'add "of": <kind> for the index of a kind' };

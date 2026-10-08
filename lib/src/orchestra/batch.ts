@@ -36,7 +36,9 @@ export interface BatchRun {
     readonly opening?: boolean };
   /** A BRANCH (SPEC-ORQUESTADOR §5.5): another run's history, continued with more rounds and handed to the assisted
       researcher, with a first message that states the alternative to explore. */
-  readonly fork?: { readonly journal: string; readonly attempts: number; readonly message?: string };
+  readonly fork?: { readonly journal: string; readonly attempts: number; readonly message?: string;
+    /** Tests of its own required from its new rounds on (SPEC-PRUEBAS-PROPIAS §13): `--own-tests N` given to the continuation. */
+    readonly own_tests?: number };
 }
 
 export interface BatchDefinition {
@@ -214,7 +216,7 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     /* A fresh run followed by a senior starts from its first hypothesis; a resumed one has it in its history. */
     const opening = r.agent?.role === 'senior' && r.agent.opening !== false ? ['--opening', r.agent.id] : [];
     const args = known ? ['--resume', known, ...control, '--out', out]
-      : r.fork ? ['--resume', r.fork.journal, '--attempts', String(r.fork.attempts), '--researcher', 'assisted', ...control, '--out', out]
+      : r.fork ? ['--resume', r.fork.journal, '--attempts', String(r.fork.attempts), '--researcher', 'assisted', ...(r.fork.own_tests ? ['--own-tests', String(r.fork.own_tests)] : []), ...control, '--out', out]
         : [...(r.args ?? []), ...(r.researcher ? ['--researcher', r.researcher] : []), ...control, ...opening, '--out', out];
     /* A branch's first message waits in its inbox for its first new round. */
     if (!known && r.fork?.message) send(out, { kind: 'message', text: r.fork.message, by: 'agent:planner' });

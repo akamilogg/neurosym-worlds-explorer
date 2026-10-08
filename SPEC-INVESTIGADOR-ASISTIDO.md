@@ -657,3 +657,46 @@ Es guía de método (permitida: estrategias de uso, sin ejemplos del entorno) pa
 
 Va después de los cambios de SPEC-CALIBRACION-INSTRUMENTOS §11 y de SPEC-ORQUESTADOR §3.3.5, que son más pequeños y
 afectan a la lectura de los runs en curso.
+
+### 14.6 Implementado (08/10/2026)
+
+- **Las rondas que este código revisa (`review_from`).** Una continuación repite su historia pidiendo lo mismo que se
+  pidió: si cambiara una pregunta, el registro dejaría de responderla y el run divergiría. Todo lo de esta sección (y el
+  estado de los experimentos, el calificador versión 2 y `--own-tests` en una continuación) se aplica desde
+  `review_from`:
+  - un run nuevo lleva `review_from: 0`: desde el principio;
+  - la continuación de un run hecho antes, desde sus rondas nuevas (`review_from` = las rondas que tenía). El evento
+    `review_from` marca dónde empieza;
+  - un run reanudado conserva el de su diario; uno hecho antes y reanudado sin rondas nuevas no las recibe nunca.
+  - La continuación de `c302closed-n2-4` las recibe desde la ronda 17.
+- **Documentos propios** (`documents` en cualquier respuesta; `Notebook.applyDocuments`, `DOCUMENT_MAX` = 8.000):
+  - cada operación va al diario (`document_written`, con el texto);
+  - con memoria selectiva viaja el índice (`your_documents`: nombre, principio, versiones) y se abren como
+    `document:<id>`, con `list`/`open`/`find`. La clase `documents` existe en la memoria sólo cuando hay alguno, para que
+    un registro sin documentos se lea como antes;
+  - sin memoria, viajan enteros;
+  - el lector de diarios (`journalReader`) los reconstruye para el senior y para la experiencia;
+  - el finding los lista en `assistance.documents`.
+  - Sólo en los mundos de leyes. La cuadrícula no los tiene todavía.
+- **Las secciones del prompt** (`OWN_DOCUMENTS_SECTION`, `TASK_COVERAGE_SECTION` en `assisted/session.ts`), para el
+  asistido.
+- **`missing_instrument`**, un tipo más de informe del instrumento: no retiene ninguna aceptación (`holding` lo ignora).
+- **El cierre:**
+  - la reflexión final pide `open_questions` (`OPEN_QUESTIONS_TASK`). Si se repite el final de una historia, se pide lo
+    mismo que entonces (`endingTask`);
+  - el evento `reflection` las guarda;
+  - el finding las lleva en `limitations.learner.open_questions` y marca `outcome.open` si alguna es
+    `investigable_here`;
+  - `findingText` las lista.
+- **Continuar un run aceptado** (`--resume <diario> --attempts N`):
+  - su historia acaba en el intento que aceptó (`continued_after_acceptance`);
+  - al repetirla, la aceptación no corta el bucle: se repite su final (reflexión y calificación) y empieza un estadio
+    nuevo (`stage_after_acceptance`: `protocol.restart()`, con las validaciones devueltas);
+  - el finding guarda el modelo aceptado antes (`outcome.previously_accepted`).
+- **Pruebas:** `test/review.test.ts`:
+  - un run nuevo: secciones, documento, preguntas abiertas y finding;
+  - un run aceptado y continuado: historia idéntica, estadio nuevo y segunda aceptación;
+  - un run hecho antes y continuado: sin divergencia, con las novedades sólo en sus rondas nuevas;
+  - el estado de los experimentos.
+
+  La suite: 437 pruebas.

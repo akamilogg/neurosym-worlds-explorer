@@ -13,17 +13,18 @@ import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
 import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
-import { LawSession, lawFingerprint } from '../learn/law-session.ts';
+import { FINGERPRINT_VERSION, LawSession, lawFingerprint } from '../learn/law-session.ts';
+import { experimentStates } from '../orchestra/view.ts';
 import { Protocol } from '../learn/protocol.ts';
 import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
 import { instrumentReports } from '../learn/instrument.ts';
-import { formOf, operatorSummary, tokensOf, type AblationRecord } from '../learn/operator.ts';
+import { formOf, operatorSummary, tokensOf, type AblationRecord, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../learn/operator.ts';
 import type { Place } from '../learn/objective.ts';
 import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
-import { assistedSession, assistedSystem, deliveredMessages, operatorClient, type OperatorMessage } from '../learn/assisted/session.ts';
+import { assistedSession, assistedSystem, deliveredMessages, operatorClient, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
 import { createHash } from 'node:crypto';
@@ -98,6 +99,9 @@ export function experimentArgs(argv: readonly string[]): string[] {
   }
   return out;
 }
+
+/** The tests of its own a command line requires (0 without --own-tests). */
+const ownTestsIn = (argv: readonly string[]): number => { const i = argv.indexOf('--own-tests'); return i >= 0 ? Math.floor(Number(argv[i + 1])) || 0 : 0; };
 
 /** The run's budgets given now (a resumed run takes these, and the journal it resumes as --out). */
 export function budgetArgs(argv: readonly string[]): string[] {
@@ -273,17 +277,34 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
      it was - its ending too (the reflection and the grading it ended with are part of its history) - and then goes on. */
   const ga = given.indexOf('--attempts');
   const moreRounds = previous && ga >= 0 && given[ga + 1] ? Number(given[ga + 1]) : null;
-  const continuedFrom = previous && moreRounds !== null ? Number(previous.config?.attempts) : null;
+  /* A run that ACCEPTED a model may be continued too (SPEC-INVESTIGADOR-ASISTIDO §14.3): its history ends at the round it
+     accepted in, and the new rounds start a new stage. */
+  const endOfPrevious = previous ? [...(previous.events as Record<string, any>[])].reverse().find((e) => e.type === 'end') : undefined;
+  const acceptedAt = previous && moreRounds !== null && endOfPrevious?.stoppedBy === 'accepted'
+    ? Number([...(previous.events as Record<string, any>[])].find((e) => e.type === 'check' && e.accepted)?.attempt ?? NaN) : null;
+  const continuedFrom = previous && moreRounds !== null ? (acceptedAt ?? Number(previous.config?.attempts)) : null;
   if (previous && moreRounds !== null) {
-    const end = [...(previous.events as Record<string, any>[])].reverse().find((e) => e.type === 'end');
-    if (!end || end.stoppedBy !== 'budget') throw new LabError('--attempts with --resume: only a run that ended by using up its rounds can be given more (this one: ' + (end ? end.stoppedBy : 'did not end') + '); resume it without --attempts');
+    if (!endOfPrevious || (endOfPrevious.stoppedBy !== 'budget' && endOfPrevious.stoppedBy !== 'accepted')) throw new LabError('--attempts with --resume: only a run that ended by using up its rounds or by accepting a model can be given more (this one: ' + (endOfPrevious ? endOfPrevious.stoppedBy : 'did not end') + '); resume it without --attempts');
+    if (acceptedAt !== null && !Number.isFinite(acceptedAt)) throw new LabError('--attempts with --resume: the run ended accepted, but its journal has no check that accepted');
     if (!(moreRounds > continuedFrom!)) throw new LabError('--attempts with --resume: give it more than the ' + continuedFrom + ' rounds it had');
   }
+  /* What this code adds to a researcher's questions (SPEC-INVESTIGADOR-ASISTIDO §14, SPEC-ORQUESTADOR §3.3.5) applies from the
+     rounds after this attempt: from the start in a new run, from its new rounds in a continuation; a run resumed keeps its
+     journal's, and one made before never gets them - the history a resumed run repeats is asked as it was. */
+  const reviewFrom: number | null = previous ? (typeof previous.config?.review_from === 'number' ? previous.config.review_from : continuedFrom) : 0;
+  /* A continuation may require tests of its own from its new rounds on (`--own-tests N` given now). */
+  const go = given.indexOf('--own-tests');
+  const ownTestsNow = previous && continuedFrom !== null && go >= 0 && given[go + 1] ? given[go + 1] : null;
   /* A resumed run is a run of its own, derived from the one it resumes, which stays as it was (its provenance). */
   const o = given.indexOf('--out');
   const derived = previous ? (o >= 0 && given[o + 1] ? given[o + 1] : resumeFrom!.replace(/\.json$/, '') + (continuedFrom !== null ? '.continued-' : '.resumed-') + new Date().toISOString().replace(/[:.]/g, '-') + '.json') : null;
-  const kept = previous ? (previous.argv as string[]).filter((a, i, all) => !(continuedFrom !== null && (a === '--attempts' || all[i - 1] === '--attempts'))) : [];
-  const argv: readonly string[] = previous ? [...kept, ...(continuedFrom !== null ? ['--attempts', String(moreRounds)] : []), ...budgetArgs(given), '--out', derived!] : given;
+  const replaced = (a: string, i: number, all: readonly string[]) => continuedFrom !== null && ['--attempts', ...(ownTestsNow !== null ? ['--own-tests'] : [])].some((n) => a === n || all[i - 1] === n);
+  const kept = previous ? (previous.argv as string[]).filter((a, i, all) => !replaced(a, i, all)) : [];
+  const argv: readonly string[] = previous ? [...kept, ...(continuedFrom !== null ? ['--attempts', String(moreRounds)] : []), ...(ownTestsNow !== null ? ['--own-tests', ownTestsNow] : []),
+    ...budgetArgs(given), '--out', derived!] : given;
+  /* The tests of its own the history it repeats was asked under. */
+  const ownTestsBefore = previous ? (typeof previous.config?.own_tests_before === 'number' ? previous.config.own_tests_before
+    : ownTestsNow !== null ? ownTestsIn(previous.argv as string[]) : null) : null;
   /* The rounds after which the run's history had an ending (a continuation replays each where it was). */
   const endings: number[] = [...((previous?.continuations as number[] | undefined) ?? []), ...(continuedFrom !== null ? [continuedFrom] : [])];
   const defaults: Record<string, string> = { ...Object.fromEntries(COMMON.map((o) => [o.name, o.default])), ...(lab.defaults ?? {}) };
@@ -321,6 +342,11 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     validations: Math.max(1, Number(arg('validations'))),
     ...(Number(arg('own-tests')) > 0 ? { ownTests: Math.floor(Number(arg('own-tests'))) } : {}),
     confirmPlaces: Math.max(1, Number(arg('confirm-places'))),
+    ...(reviewFrom !== null ? { review_from: reviewFrom } : {}),
+    ...(ownTestsBefore !== null ? { own_tests_before: ownTestsBefore } : {}),
+    ...(acceptedAt !== null ? { continued_after_acceptance: acceptedAt } : {}),
+    /* The models' fingerprint (SPEC-CALIBRACION-INSTRUMENTOS §11.1): a resumed run keeps its journal's, whose history it repeats. */
+    fingerprint: previous ? Number(previous.config?.fingerprint ?? 1) : FINGERPRINT_VERSION,
     regression: lab.regressionByDefault === false ? flag('regression') : !flag('no-regression'),
     tools: parseTools(arg('tools')),
     quick: flag('quick'),
@@ -882,7 +908,18 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const episodes = new Map<string, StoredEpisode>();
   let counter = 0;
   const store = (id: string, place: LabPlace, round: number, by: string, data: unknown) => { const e = { id, place: place.id, round, by, data }; episodes.set(id, e); return e; };
-  const episodeIndex = () => [...episodes.values()].map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, ...(lab.indexInfo?.(e.data) ?? {}), steps: lab.steps(e.data) }));
+  /* From which round this code's additions apply (`review_from`): none in a run made before them. */
+  const reviewFrom = typeof cfg.review_from === 'number' ? cfg.review_from as number : null;
+  let reviewing = reviewFrom === 0;
+  /* The tests of its own required: a continuation's from its new rounds, its history's before. */
+  const ownTestsRequired = (): number => (typeof cfg.own_tests_before === 'number' && !reviewing ? cfg.own_tests_before as number : (cfg.ownTests as number | undefined) ?? 0);
+  /* What it did with each experiment of its own (SPEC-ORQUESTADOR §3.3.5). */
+  const USE = { done: 'not read yet', read: 'read, not cited as evidence', used: 'cited as evidence' } as const;
+  const episodeIndex = () => {
+    const use = reviewing ? new Map(experimentStates(journal).map((x) => [x.episode, USE[x.state]])) : null;
+    return [...episodes.values()].map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, ...(lab.indexInfo?.(e.data) ?? {}), steps: lab.steps(e.data),
+      ...(use?.has(e.id) ? { your_use: use.get(e.id) } : {}) }));
+  };
   /** The place an episode cited by a report ran in, or the place it names. */
   const placeOfRef = (ref: string): string | null => episodes.get(ref)?.place ?? (places.has(ref) ? ref : null);
 
@@ -953,12 +990,12 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       : Array.from({ length: cfg.confirmPlaces }, () => { const k = ++blindCounter; return { id: 'blind' + k, spec: lab.placeOf(spec, 1000 + k, worldOptions) }; }))
       .map((p) => ({ ...p, role: 'confirmation' as const, seen: false })),
     ...(team ? { confirm: (c: { round: number }) => team.board.confirm(team.member, 'c' + (++confirmations), c.round) } : {}),
-    fingerprint: (law) => lawFingerprint(law),
+    fingerprint: (law) => lawFingerprint(law, cfg.fingerprint as number), replications: (cfg.fingerprint as number) >= 2,
     /* SPEC-CALIBRACION-INSTRUMENTOS §5.1: an acceptance through a place a report of the instrument questions waits. */
     hold: (through) => holding(reportStates(reportsOf(journal.events), run.verdicts(session.currentRound)), through, placeOfRef),
     /* --own-tests N (SPEC-PRUEBAS-PROPIAS §7): before a blind confirmation is spent, the model must have passed N severe tests
        of its own as registered with it, hold on the episodes of the others or have their counterexamples closed. */
-    ...(cfg.ownTests ? { gate: ({ round, model }: { round: number; model: Law }) => ownTests!.requirement(model, cfg.ownTests as number, round) } : {}),
+    ...(cfg.ownTests || cfg.own_tests_before ? { gate: ({ round, model }: { round: number; model: Law }) => (ownTestsRequired() > 0 ? ownTests!.requirement(model, ownTestsRequired(), round) : null) } : {}),
     validations: cfg.validations, pairedRegression: cfg.regression, quick: cfg.quick,
     cost: () => ({ jev_calls: judge.stats.calls, jev_not_asked: evaluator.stats.judgeUnread, llm_calls: llmUse.calls, llm_tokens: llmUse.tokens }),
     ...(lab.roleWords ? { roleWords: lab.roleWords } : {}),
@@ -1169,6 +1206,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
 
   const sessionHost: import('../learn/law-session.ts').LawSessionHost<unknown> = {
     llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: lab.perceptDoc, steps: cfg.steps, investigative,
+    fingerprint: (law) => lawFingerprint(law, cfg.fingerprint as number),
+    /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): the assisted researcher, in the rounds this code reviews. */
+    documents: () => journal.researcher === 'assisted' && helping && reviewing,
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
     parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
     ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
@@ -1238,7 +1278,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     },
     rival: (name) => { const r = lab.rivals?.(spec).find((x) => x.name === name); return r ? codeLaw(r.source) : null; },
     rivalNames: () => (lab.rivals?.(spec) ?? []).map((r) => r.name),
-    fingerprint: (law) => lawFingerprint(law),
+    fingerprint: (law) => lawFingerprint(law, cfg.fingerprint as number),
     describe: (law) => ownLaw(law),
     sharedHolds: async (law) => {
       const byPlace = latestCheckCases();
@@ -1271,7 +1311,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       take: () => (helping && run.replay.pending() === 0 ? run.operator.take() : []), scheduled: deliveredMessages(previous),
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
-        + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), (cfg.ownTests as number | undefined) ?? 0) : '') : promptFor(focus)),
+        + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
+        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
@@ -1334,11 +1375,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     const brief = session.notebook.brief();
     const learned = { [lab.grading.finalKey ?? 'final_model']: final ? ownLaw(final) : null, beliefs: brief.beliefs_held, dropped: brief.beliefs_dropped, notes: brief.notes, reflections: session.notebook.reflections };
     try {
-      const content = (await llm.complete({ system: lab.grading.system, user: JSON.stringify({ true_statements: truth, ...(Object.keys(glossary).length ? { learner_names: glossary } : {}), learner: learned }) })).content;
+      /* The grader of version 2 (SPEC-CALIBRACION-INSTRUMENTOS §11.2) in the rounds this code reviews: an ending of the history
+         a resumed run repeats is graded as it was. */
+      const v2 = reviewing;
+      const content = (await llm.complete({ system: lab.grading.system + (v2 ? ' ' + FALSE_BELIEF_RULE : ''), user: JSON.stringify({ true_statements: truth, ...(Object.keys(glossary).length ? { learner_names: glossary } : {}), learner: learned }) })).content;
       const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-      log(event, { truth, grades, false_beliefs: parsed?.false_beliefs ?? [], score, ...formOf(parsed as Record<string, unknown> | null), grader_model: journal.config.llm_model });
+      log(event, { truth, grades, ...(v2 ? quotedFalseBeliefs(parsed?.false_beliefs, learned) : { false_beliefs: parsed?.false_beliefs ?? [] }), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: journal.config.llm_model });
       say('operator: recovery ' + score + (grades.length ? ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')' : ''));
     } catch (e) { log(event, { truth, error: String((e as Error).message ?? e) }); }
   };
@@ -1351,6 +1395,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
      and the first episodes and gives it the first one to develop, as a directive that goes with its first question. */
   if (assistedAfter === null) await run.awaitOpening();
   let accepted: { law: Law; round: number } | null = null;
+  /* The reflection an ending asks for: with what it leaves open, for the assisted researcher in the rounds this code reviews
+     (SPEC-INVESTIGADOR-ASISTIDO §14.3) - the same when a continuation repeats that ending. */
+  const endingTask = (): string => reflectionTask(investigative) + (reviewing && helping && journal.researcher === 'assisted' ? ' ' + OPEN_QUESTIONS_TASK : '');
+  /* The model its history accepted, in a continuation after it. */
+  let acceptedBefore: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
   /* An acceptance waiting for the operator's verdict (SPEC-CALIBRACION-INSTRUMENTOS §5.1): granted, as of its round, once
      every report it waits for is found to be the world; void once one is found a fault of the instrument. */
@@ -1378,7 +1427,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
     /* Where the run's history had an ending (it used up its rounds and was given more): that ending, as it was. */
     if (endings.includes(attempt - 1)) {
-      if (cfg.reflection) { say('the ending of the run it continues (round ' + (attempt - 1) + '): its reflection'); await session.consult('reflect', reflectionTask(investigative)); }
+      if (cfg.reflection) { say('the ending of the run it continues (round ' + (attempt - 1) + '): its reflection'); await session.consult('reflect', endingTask()); }
       if (session.fatal || session.halted) break;
       if (cfg.grade) await gradeRecovery(session.latest()?.law ?? null);
       /* The rounds it was given then: up to the next ending of its history, or to now. */
@@ -1391,6 +1440,16 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         say('from here on, the assisted researcher: the operator may help');
       }
     }
+    /* A continuation of a run that accepted: a new stage from its new rounds - nothing checked before counts, its validations
+       are given back, and the model it accepted stays its history's (SPEC-INVESTIGADOR-ASISTIDO §14.3). */
+    if (cfg.continued_after_acceptance === attempt - 1 && accepted) {
+      acceptedBefore = accepted;
+      accepted = null;
+      protocol.restart();
+      log('stage_after_acceptance', { accepted_round: acceptedBefore.round, round: session.currentRound });
+      say('a new stage after the acceptance of round ' + acceptedBefore.round + ': its checks start afresh');
+    }
+    if (!reviewing && reviewFrom !== null && attempt > reviewFrom) { reviewing = true; log('review_from', { attempt, round: session.currentRound }); }
     accepted = settleWaiting();
     if (accepted) break;
     const record = await session.consult('propose');
@@ -1418,7 +1477,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       break;
     }
     if ((cfg.ablation || lab.operator?.ablates?.(worldOptions)) && outcome.reused === null) await ablate(record.law, record.round, detail);
-    if (outcome.accepted) { accepted = { law: record.law, round: record.round }; log('accepted', { round: record.round }); break; }
+    if (outcome.accepted) {
+      accepted = { law: record.law, round: record.round };
+      log('accepted', { round: record.round });
+      /* Its history accepted here and is continued: on to the new stage. */
+      if (cfg.continued_after_acceptance === attempt) continue;
+      break;
+    }
   }
   if (!accepted && !satisfied) accepted = settleWaiting();
   /* What the instrument was suspected of, and what the operator found (SPEC-CALIBRACION-INSTRUMENTOS §5): an acceptance still
@@ -1428,7 +1493,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   if (held) say('not accepted: the model of round ' + held.round + ' was confirmed, but the operator never answered ' + held.reports.join(', '));
   if (cfg.reflection && !session.fatal && !session.halted) {
     say('reflection round: the model is final; System 2 looks back');
-    await session.consult('reflect', reflectionTask(investigative));
+    await session.consult('reflect', endingTask());
   }
   const final = accepted?.law ?? session.latest()?.law ?? null;
   /* Of the final model, its tests: what it predicted (as registered with it) and what it holds on again (SPEC-PRUEBAS-PROPIAS §7). */
@@ -1437,6 +1502,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const result = run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     final: final ? ownLaw(final) : null,
+    ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownLaw(acceptedBefore.law) } } : {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },

@@ -339,3 +339,10 @@ de su método.
 
 **Cómo se evalúa:** con la continuación y con runs emparejados (§10), si aparecen pruebas registradas fuera del terreno
 ajustado, cuántas refutan el modelo y si los hallazgos de historia y escala de tiempo suben en la calificación.
+
+**Implementado (08/10/2026):**
+- **`--own-tests N` en una continuación** (`--resume <diario> --attempts M --own-tests N`): exige N pruebas propias a
+  partir de las rondas nuevas. La historia que se repite conserva el requisito con que se hizo (`own_tests_before` en la
+  configuración), en su sección del prompt y en la puerta de la confirmación.
+- **En los lotes:** `"fork": {..., "own_tests": N}`. `batch.c302closed-n2-4-more.json` lo lleva con 2.
+- **La orden de validar con prueba** está en el papel del senior (SPEC-ORQUESTADOR §3.3.5).

@@ -590,6 +590,7 @@ var Neurosym = (() => {
     CONSENSUS_VOTES: () => CONSENSUS_VOTES,
     CORE_DIALECT_ID: () => CORE_DIALECT_ID,
     CORE_REDUCERS: () => CORE_REDUCERS,
+    DOCUMENT_MAX: () => DOCUMENT_MAX,
     EVALUATED_RULE_FIELDS: () => EVALUATED_RULE_FIELDS,
     EXPLORER_SYSTEM: () => EXPLORER_SYSTEM,
     EXPLORER_TOOLS: () => EXPLORER_TOOLS,
@@ -689,6 +690,7 @@ var Neurosym = (() => {
     openAiChatClient: () => openAiChatClient,
     orderMoves: () => orderMoves,
     ownFormula: () => ownFormula,
+    parseDocuments: () => parseDocuments,
     parseExplorerProposal: () => parseExplorerProposal,
     parseExplorerTurn: () => parseExplorerTurn,
     parseJevAnswers: () => parseJevAnswers,
@@ -3482,6 +3484,20 @@ var Neurosym = (() => {
 
   // src/learn/notebook.ts
   var STANCES = ["new", "keep", "revise", "confirm", "drop"];
+  var DOCUMENT_MAX = 8e3;
+  function parseDocuments(raw, warnings) {
+    const out = [];
+    (Array.isArray(raw) ? raw : []).forEach((d, i) => {
+      const o = d && typeof d === "object" ? d : null;
+      const act = o && o.do === void 0 && typeof o.text === "string" ? "write" : o?.do;
+      if (!o || act !== "write" && act !== "forget" || typeof o.id !== "string") {
+        warnings.push("document #" + i + ' ignored: needs "id" and "do": write | forget');
+        return;
+      }
+      out.push({ do: act, id: o.id, ...typeof o.text === "string" ? { text: o.text } : {} });
+    });
+    return out;
+  }
   var clip = (text, n) => text.length > n ? text.slice(0, n - 1) + "…" : text;
   var ID = /^[a-z][a-z0-9_]{0,47}$/;
   function summarize(formula) {
@@ -3511,6 +3527,9 @@ var Neurosym = (() => {
       __publicField(this, "methods", /* @__PURE__ */ new Map());
       __publicField(this, "rounds", []);
       __publicField(this, "games", []);
+      /** Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1), in the form it chose: their latest text; every version is in the
+          journal (`document_written`). */
+      __publicField(this, "documents", /* @__PURE__ */ new Map());
       /** Rounds where it only looked back (no formula): what it concluded. */
       __publicField(this, "reflections", []);
     }
@@ -3553,6 +3572,35 @@ var Neurosym = (() => {
       }
       const unaddressed = [...this.beliefs.values()].filter((b) => b.status !== "dropped" && !touched.has(b.id) && b.since < round2).map((b) => b.id);
       return { warnings, unaddressed };
+    }
+    /** Write or forget its own documents. A text over `DOCUMENT_MAX` characters is refused whole, never clipped. */
+    applyDocuments(round2, ops2) {
+      const warnings = [];
+      for (const op of ops2) {
+        if (!ID.test(op.id)) {
+          warnings.push('document id "' + op.id + '" must be lowercase snake_case');
+          continue;
+        }
+        if (op.do === "forget") {
+          if (!this.documents.delete(op.id)) warnings.push('document "' + op.id + '" does not exist');
+          continue;
+        }
+        if (typeof op.text !== "string" || !op.text.trim()) {
+          warnings.push('document "' + op.id + '" has no text');
+          continue;
+        }
+        if (op.text.length > DOCUMENT_MAX) {
+          warnings.push('document "' + op.id + '" not written: ' + op.text.length + " characters, at most " + DOCUMENT_MAX);
+          continue;
+        }
+        const old = this.documents.get(op.id);
+        this.documents.set(op.id, { id: op.id, text: op.text, written: old?.written ?? round2, updated: round2, versions: (old?.versions ?? 0) + 1 });
+      }
+      return warnings;
+    }
+    /** The index of its documents: name, first words, versions, the round of the latest. */
+    documentIndex() {
+      return [...this.documents.values()].map((d) => ({ id: d.id, begins: clip(d.text.replace(/\s+/g, " "), 120), versions: d.versions, updated_round: d.updated }));
     }
     /** Write or forget notes. `known(ref)` says whether a "game@turn" reference exists. */
     applyNotes(round2, ops2, known) {

@@ -6,7 +6,9 @@
  * never a belief, never evidence about the world - logged for the operator, and costs no step.
  * ========================================================================== */
 
-export const INSTRUMENT_KINDS = ['accepted_but_not_applied', 'inconsistent_answer', 'impossible_value', 'not_what_the_interface_says', 'other'] as const;
+/** `missing_instrument` (SPEC-INVESTIGADOR-ASISTIDO §14.2) is no suspicion of a fault: a question of the task its instruments
+    cannot investigate, and what would be needed. It never holds an acceptance. */
+export const INSTRUMENT_KINDS = ['accepted_but_not_applied', 'inconsistent_answer', 'impossible_value', 'not_what_the_interface_says', 'other', 'missing_instrument'] as const;
 export type InstrumentKind = typeof INSTRUMENT_KINDS[number];
 
 export interface InstrumentReport {

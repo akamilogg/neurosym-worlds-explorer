@@ -105,7 +105,7 @@ export function seniorMemory(junior: JournalMemory, nb: Notebook, decisions: () 
     async run(q: J): Promise<unknown> {
       const what = String(q.memory);
       const of = typeof q.of === 'string' ? q.of : null;
-      if (of !== null && !isOwn(of) && !(MEMORY_KINDS as readonly string[]).includes(of)) return { memory: what, error: '"of" is one of ' + [...MEMORY_KINDS, ...OWN_KINDS].join(', ') };
+      if (of !== null && !isOwn(of) && ![...MEMORY_KINDS, 'documents'].includes(of)) return { memory: what, error: '"of" is one of ' + [...MEMORY_KINDS, 'documents', ...OWN_KINDS].join(', ') };
       if (what === 'list') {
         if (of === null) return { memory: 'list', items: counts(), note: 'add "of": <kind> for the index of a kind' };
         if (!isOwn(of)) return junior.run(q);
