@@ -140,13 +140,13 @@ test('a session the host halts asks System 2 nothing more, and says why', async 
 test('a request is its method, path, parameters and body: another request is not given the answer of the first', async () => {
   const d = dir(), first = path.join(d, 'a.jsonl');
   const at = (method: string, body = '{"x":1}') => ({ method, headers: {}, body, signal: new AbortController().signal });
-  await new ReplayLog(first).wrap('env', network().fetch)('http://service.test/first?place=p1', at('POST'));
+  await new ReplayLog(first).wrap('jev', network().fetch)('http://service.test/first?place=p1', at('POST'));
   for (const [url, method] of [['http://service.test/different?place=p1', 'PUT'], ['http://service.test/first?place=p1', 'PUT'],
     ['http://service.test/second?place=p1', 'POST'], ['http://service.test/first?place=p2', 'POST']] as const) {
     const net = network();
     const resumed = new ReplayLog(path.join(d, 'b.jsonl'), { from: first, stallMs: 30 });
-    await assert.rejects(resumed.wrap('env', net.fetch)(url, at(method)), ReplayDivergence, method + ' ' + url);
-    assert.equal(net.calls(), 0, 'and the network is not asked');
+    await assert.rejects(resumed.wrap('jev', net.fetch)(url, at(method)), ReplayDivergence, method + ' ' + url);
+    assert.equal(net.calls(), 0, 'and the network is not asked (in a channel whose answers are not deterministic: an environment\'s refusal is asked again)');
   }
 });
 
@@ -164,4 +164,39 @@ test('the same request is still the same when the service moved or a credential 
 test('a resume without the log of the run it resumes is an error, never an empty history', () => {
   const d = dir();
   assert.throws(() => new ReplayLog(path.join(d, 'b.jsonl'), { from: path.join(d, 'missing.jsonl') }), /missing/);
+});
+
+test('a refusal of the environment is an answer: logged and replayed; a log that never kept one has it asked again, and an answer in its place is a divergence', async () => {
+  const d = dir(), first = path.join(d, 'a.jsonl'), second = path.join(d, 'b.jsonl'), third = path.join(d, 'c.jsonl');
+  /* The environment refuses "bad" (422) and answers anything else; System 2 is never asked again. */
+  let envCalls = 0;
+  const env: FetchLike = async (_u, i) => { envCalls++; const bad = String(i.body).includes('bad');
+    return { ok: !bad, status: bad ? 422 : 200, text: async () => (bad ? 'refused' : 'ok:' + i.body), headers: { get: () => null } }; };
+  const log = new ReplayLog(first);
+  await log.wrap('env', env)('u', init('good1'));
+  const refused = await log.wrap('env', env)('u', init('bad'));
+  assert.deepEqual([refused.ok, refused.status], [false, 422]);
+  await log.wrap('env', env)('u', init('good2'));
+  assert.equal(readReplayLog(first).length, 3, 'the refusal is logged');
+  envCalls = 0;
+  const resumed = new ReplayLog(second, { from: first });
+  await resumed.wrap('env', env)('u', init('good1'));
+  const again = await resumed.wrap('env', env)('u', init('bad'));
+  assert.deepEqual([again.ok, again.status, await again.text()], [false, 422, 'refused']);
+  await resumed.wrap('env', env)('u', init('good2'));
+  assert.equal(envCalls, 0, 'all from the log');
+  /* A log written before refusals were kept: the refusal is missing. */
+  const old = path.join(d, 'old.jsonl');
+  fs.writeFileSync(old, readReplayLog(first).filter((e) => e.status === 200).map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const refill = new ReplayLog(third, { from: old, stallMs: 50 });
+  await refill.wrap('env', env)('u', init('good1'));
+  const asked = await refill.wrap('env', env)('u', init('bad'));
+  assert.equal(asked.status, 422, 'asked again of the service: refused, as it was');
+  assert.equal(await (await refill.wrap('env', env)('u', init('good2'))).text(), 'ok:good2', 'and the log goes on');
+  assert.deepEqual(refill.stats().refusals_asked_again, { env: 1 });
+  /* But an answer where the log has none is still a divergence; and never in another channel. */
+  const strict = new ReplayLog(path.join(d, 'e.jsonl'), { from: old, stallMs: 50 });
+  await assert.rejects(strict.wrap('env', env)('u', init('new')), ReplayDivergence);
+  const llm = new ReplayLog(path.join(d, 'f.jsonl'), { from: old, stallMs: 50 });
+  await assert.rejects(llm.wrap('llm', env)('u', init('bad')), ReplayDivergence);
 });

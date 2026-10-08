@@ -30,6 +30,13 @@ import type { FetchLike } from '../core/net.ts';
  * another address between a stop and a resume and still be the same service), and the
  * parameters that carry credentials (key, token, signature...), which may rotate.
  *
+ * A REFUSAL is an answer too, in a channel whose service is deterministic (`DETERMINISTIC`: the environment's): the same
+ * request refused again is refused again, and the run depends on it (an act refused costs nothing and says so). It is
+ * logged and served like any answer. A log written before it was (08/10/2026) lacks its refusals: a request of such a
+ * channel that finds no answer while answers wait is asked of the service then - if it is refused, that is the refusal
+ * the log never kept, and the run goes on; if it is answered, the run diverged. Never in another channel: an answer of
+ * System 2 or of the Judge asked again is another answer.
+ *
  * A resumed run needs the log of the run it resumes: without it, every request would go to
  * the network again - costs and acts repeated - so a missing log is an error, never an
  * empty history.
@@ -55,6 +62,11 @@ export function requestIdentity(channel: string, url: string, init: { method?: s
 
 interface Entry { readonly channel: string; readonly key: string; readonly status: number; readonly text: string }
 
+/** Channels whose refusals are answers (logged, replayed): the environment's service, deterministic. */
+export const DETERMINISTIC: ReadonlySet<string> = new Set(['env']);
+/** A refusal: the service understood the request and declined it (not a fault of the network, of a key or of a limit). */
+const isRefusal = (status: number): boolean => status >= 400 && status < 500 && ![401, 402, 403, 407, 408, 429].includes(status);
+
 export interface ReplayStats {
   /** Answers served from the log it resumes, per channel. */
   readonly replayed: Record<string, number>;
@@ -62,6 +74,8 @@ export interface ReplayStats {
   readonly live: Record<string, number>;
   /** Logged answers never asked for again. */
   readonly unused: number;
+  /** Refusals a log written before they were kept lacked, asked again of their deterministic service. */
+  readonly refusals_asked_again?: Record<string, number>;
   /** Set when a request found no answer while logged ones were waiting. */
   readonly diverged?: { readonly channel: string; readonly pending: number };
 }
@@ -96,6 +110,8 @@ export class ReplayLog {
   private readonly queue = new Map<string, Entry[]>();
   private readonly replayed: Record<string, number> = {};
   private readonly live: Record<string, number> = {};
+  /** Refusals a log written before they were logged lacked, asked again of their deterministic service. */
+  private readonly refilled: Record<string, number> = {};
   private readonly onDiverge?: (d: { channel: string; pending: number }) => void;
   private readonly stallMs: number;
   private served = 0;
@@ -128,7 +144,8 @@ export class ReplayLog {
   }
 
   stats(): ReplayStats {
-    return { replayed: { ...this.replayed }, live: { ...this.live }, unused: this.pending(), ...(this.diverged ? { diverged: this.diverged } : {}) };
+    return { replayed: { ...this.replayed }, live: { ...this.live }, unused: this.pending(), ...(Object.keys(this.refilled).length ? { refusals_asked_again: { ...this.refilled } } : {}),
+      ...(this.diverged ? { diverged: this.diverged } : {}) };
   }
 
   private record(entry: Entry): void {
@@ -158,13 +175,23 @@ export class ReplayLog {
         this.served++;
         this.replayed[channel] = (this.replayed[channel] ?? 0) + 1;
         this.record(e);
-        return { ok: true, status: e.status, text: async () => e.text, headers: { get: () => null } };
+        return { ok: e.status < 400, status: e.status, text: async () => e.text, headers: { get: () => null } };
       };
       const logged = take();
       if (logged) return logged;
       if (this.pending() > 0 && !(await this.mayGoLive())) {
         const later = take();
         if (later) return later;
+        /* A refusal an older log never kept, asked again of its deterministic service. */
+        if (DETERMINISTIC.has(channel) && !this.divergence()) {
+          const again = await fetch(url, init);
+          if (!again.ok && isRefusal(again.status)) {
+            const text = await again.text();
+            this.record({ channel, key, status: again.status, text });
+            this.refilled[channel] = (this.refilled[channel] ?? 0) + 1;
+            return { ok: false, status: again.status, statusText: again.statusText, text: async () => text, headers: { get: (name: string) => again.headers?.get(name) ?? null } };
+          }
+        }
         this.diverged = { channel, pending: this.pending() };
         this.onDiverge?.(this.diverged);
         throw new ReplayDivergence(channel, this.diverged.pending);
@@ -173,7 +200,14 @@ export class ReplayLog {
       const stop = this.divergence();
       if (stop) throw new ReplayDivergence(stop.channel, stop.pending);
       const response = await fetch(url, init);
-      if (!response.ok) return response;
+      if (!response.ok) {
+        if (!DETERMINISTIC.has(channel) || !isRefusal(response.status)) return response;
+        /* A refusal of the environment: an answer, logged. */
+        const text = await response.text();
+        this.record({ channel, key, status: response.status, text });
+        this.live[channel] = (this.live[channel] ?? 0) + 1;
+        return { ok: false, status: response.status, statusText: response.statusText, text: async () => text, headers: { get: (name: string) => response.headers?.get(name) ?? null } };
+      }
       const text = await response.text();
       this.record({ channel, key, status: response.status, text });
       this.live[channel] = (this.live[channel] ?? 0) + 1;
