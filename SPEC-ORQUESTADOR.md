@@ -536,6 +536,41 @@ desarrollar.
 - **En el grid también:** su bucle llama al servicio común `awaitOpening` después de sus primeras partidas (prueba en
   `lib/test/memory.test.ts`).
 
+### 3.3.5 Órdenes para lo sustancial: estado de los experimentos, prueba al validar y cobertura (08/10/2026)
+
+**El problema** (run `c302closed-n2-4`, señales, y su auditoría externa):
+- el senior gastó sus 16 órdenes en la ronda 13, y 4 fueron recordatorios de «tus experimentos se aceptaron, pero no
+  los has leído». Cuando el modelo se sostuvo en todos los laboratorios (ronda 15), ya no le quedaban órdenes;
+- ordenó validar, pero no probar el modelo fuera del terreno en que se ajustó (SPEC-PRUEBAS-PROPIAS §13);
+- nadie contrastó el modelo con las preguntas de la tarea: la de *qué se arrastra y con qué escala de tiempo* quedó sin
+  investigar, y el instrumento lo permitía.
+
+**Cambios:**
+- **El estado de cada experimento ordenado**, en el resumen del senior (`runDigest`) y en el cuaderno del junior. Se
+  calcula del diario, sin juicio del entorno:
+  - *pendiente*: ordenado y aún sin episodio;
+  - *hecho*: hay episodio (o resultado de la prueba registrada);
+  - *leído*: el junior lo abrió (`view`, `inspect`) o lo usó en `measure` o `table`;
+  - *usado*: el junior lo cita como evidencia en una postura de creencia, una nota o su informe al senior (`to_senior`).
+
+  Es contabilidad de lo que hizo el junior, no un análisis. Con ella, «aún no lo has leído» lo ve el junior sin que el
+  senior gaste una orden. El papel del senior le dice que guarde sus órdenes para discrepancias de fondo y no para
+  recordatorios que el estado ya muestra.
+- **La orden de validar lleva una prueba.** Cuando el modelo se sostiene en todos los laboratorios, el senior ordena
+  validarlo (§3.3.3b) y, con la misma orden, una prueba (`"test"`) en condiciones que ni la validación ni los episodios
+  de serie exploran, donde las partes ajustadas del modelo se juegan algo, frente a un rival que explique igual lo
+  visto. Es pauta de método, sin experimentos del entorno: qué prueba diseñar lo decide él.
+- **El senior revisa la cobertura de la tarea** (SPEC-INVESTIGADOR-ASISTIDO §14). Antes de ordenar validar y al
+  acercarse el final, contrasta lo que el junior dice haber respondido con su evidencia. Si una pregunta sigue abierta
+  y el instrumento permite investigarla, ordena investigarla (o una prueba propia) antes de dar el trabajo por
+  terminado. Si no lo permite, se asegura de que quede en un informe del instrumento (SPEC-CALIBRACION-INSTRUMENTOS §4).
+- **Los documentos propios del junior** (SPEC-INVESTIGADOR-ASISTIDO §14.1) aparecen en su resumen: índice y cambios de la
+  ronda. Puede abrirlos.
+- **Modelos idénticos:** el resumen dice cuándo el junior vuelve a proponer un modelo ya visto, con su historial de
+  veredictos por laboratorio (SPEC-CALIBRACION-INSTRUMENTOS §11.1).
+- **Pruebas:** el estado de un experimento recorre los cuatro pasos con un diario sintético; el resumen del senior
+  muestra el estado, los documentos y el aviso de modelo repetido.
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la

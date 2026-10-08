@@ -250,3 +250,59 @@ A5, cuando aparezca el primer `bug` confirmado que lo necesite.
   queda registrado qué se invalida y qué aceptación queda afectada.
 - **Arreglar y seguir pasa a ser una rama** (§6), con versión del instrumento, procedencia del corte y exclusión de
   memorias, mensajes del senior y publicaciones dependientes. La contaminación se separa en demostrada y posible.
+
+## 11. Revisión externa de `c302closed-n2-4` (08/10/2026): la huella del modelo y el calificador
+
+Dos instrumentos del arnés, no del laboratorio, dieron una lectura engañosa en el run `c302closed-n2-4` (señales, s1).
+
+### 11.1 Un modelo idéntico se trató como nuevo
+
+**Qué pasó.** Los modelos de las rondas 15 y 16 son el mismo salvo un espacio (`0.0692421/2.5, -0.274346` frente a
+`0.0692421/2.5,-0.274346`). La huella (`lawFingerprint`, un hash del texto del modelo) distingue espacios, así que dio
+dos huellas (`immjhk` y `1vpw1ww`). El protocolo no reutilizó la comprobación de la ronda 15 y volvió a comprobar el
+modelo con episodios nuevos:
+
+| ronda | huella | lab1 | place2 |
+|---|---|---|---|
+| 15 | `immjhk` | se sostiene (0,674 / 0,677) | se sostiene (0,606 / 0,56) |
+| 16 | `1vpw1ww` | se sostiene (0,786 / 0,728) | **falla** (0,399 / 0,443); en los puntos de la 15, sigue sosteniéndose |
+
+La lectura del run como «el refinamiento de la 16 perdió place2» era falsa: no hubo refinamiento. Lo que se vio es
+**fragilidad ante episodios nuevos**. Por azar, el fallo de la huella hizo de réplica: si hubiera reconocido el modelo,
+habría reutilizado la comprobación y la fragilidad no se habría visto.
+
+**El cambio:**
+- **La huella se calcula sobre el código normalizado:** sin espacios ni saltos de línea fuera de las cadenas de texto, y
+  con el resto del modelo serializado de forma estable, como ya se hace. Las huellas guardadas en diarios anteriores no
+  se recalculan: las repeticiones de runs antiguos deben dar lo mismo. La normalización lleva versión (`fingerprint:
+  2`) y el diario dice con cuál se calculó cada una.
+- **Un modelo idéntico a uno anterior se reconoce y se dice:** «es el modelo de la ronda 15». Lo ven el junior, en su
+  check, y el senior, en su resumen.
+- **Su nueva comprobación cuenta como réplica, no como modelo nuevo.** Los veredictos se acumulan por huella y por
+  laboratorio (en el ejemplo, place2: 1 sostenido, 1 fallido), y el check muestra ese historial. Es lo que el entorno
+  sabe decir, si la regla se sostiene y cuántas veces, sin métrica añadida.
+- **Qué cuenta para aceptar:** como hasta ahora, la confirmación a ciegas sobre episodios nuevos. Un fallo en una réplica
+  no se borra porque otra se sostuviera.
+- **Pruebas:** dos modelos que sólo difieren en espacios dan la misma huella; uno que difiere en una cadena de texto, no;
+  el diario de un run antiguo se repite igual.
+
+### 11.2 Una forma de modelo juzgada como falsa creencia
+
+**Qué pasó.** La calificación del run (0,06) anotó como falsa creencia: *«el modelo final calcula salidas continuas a
+partir de núcleos de historia con compuertas, en vez de regímenes de acción discretos; esto contradice la afirmación
+de I2»*. No es una afirmación del investigador, sino la forma de su modelo. Un modelo continuo con compuertas puede
+implementar regímenes discretos, y el modelo no dice que no los haya. El prompt del calificador ya exige que una falsa
+creencia sea una afirmación que un enunciado verdadero contradice (`operator.ts`), pero no le impide tomar la forma del
+modelo por una afirmación.
+
+**El cambio:**
+- **Una falsa creencia es una afirmación explícita del investigador:** en el hallazgo, en una creencia del cuaderno o en
+  la definición de una observación. Va **citada textualmente**, con su lugar, y con el enunciado verdadero que la
+  contradice.
+- **La forma del modelo no es una creencia:** cómo calcula (continuo, discreto, con núcleos o con reglas) sólo cuenta si
+  el investigador afirma que el mecanismo es así.
+- **Una falsa creencia sin cita se descarta** al leer la respuesta del calificador y queda en el registro como
+  descartada, para revisar el calificador.
+- La versión del calificador sube. Los runs ya calificados conservan su nota y su versión; recalificar es explícito.
+- **El efecto en la nota es pequeño** (0,06 seguiría siendo bajo), pero una falsa creencia mal juzgada desinforma al
+  operador y a la auditoría.

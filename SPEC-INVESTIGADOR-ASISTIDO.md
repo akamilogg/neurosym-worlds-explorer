@@ -568,3 +568,92 @@ g32@8). Mitigaciones:
     ronda va primero), y no se toca.
   - Medido en los runs: el proveedor solo reaprovecha el prompt de sistema (4.807 tokens en todas las llamadas). Si
     también reaprovecha prefijos del mensaje de usuario, se averigua con `scripts/cache-probe.ts`.
+
+## 14. Documentos propios, cobertura de la tarea y cierre abierto (idea del autor, 08/10/2026)
+
+**De dónde sale.** En el run `c302closed-n2-4` (señales, s1) el modelo validó parcialmente, pero nadie contrastó lo
+hecho con las preguntas de la tarea. La de *qué se arrastra de un momento al siguiente y con qué escala de tiempo* quedó
+sin investigar, aunque el instrumento lo permitía (SPEC-PRUEBAS-PROPIAS §13). Un investigador debería preguntarse si su
+modelo, además de validar, responde a todo lo que plantea la tarea. Si no, debería ampliar la investigación o, al menos,
+dejar registrado qué falta y por qué no pudo investigarlo con el entorno al que tiene acceso.
+
+Lo que faltaba no es un lugar donde anotarlo (el cuaderno ya tiene creencias, notas, métodos y lecciones), sino que
+nada se lo pida y que sus conclusiones no lleguen como señal al senior ni al operador. Por eso no hay un «libro de
+cobertura» con estructura fija. Hay tres piezas: documentos propios, una pauta de método y un cierre que el operador
+puede usar.
+
+### 14.1 Documentos propios
+
+- **El cuaderno principal sigue siendo obligatorio y no cambia.** Es el registro de auditoría que leen el operador, el
+  senior, el calificador y la auditoría del método.
+- **El investigador puede crear sus propios documentos,** con el nombre y el formato que le convengan: cobertura de la
+  tarea, tablas de ajuste, plan de experimentos, lo que necesite. Petición: `{"document": {"do": "write" | "forget",
+  "id": "<nombre>", "text": "..."}}`. Una nota del cuaderno puede referenciarlos (`doc:<nombre>`).
+- **Auditables:**
+  - cada versión queda en el diario, con su ronda (`document_written`). No se reescribe la historia: `forget` lo
+    retira del índice, no del diario;
+  - el finding los lista (`assistance.documents`: nombres, versiones, rondas).
+- **Sin contexto fijo:** cada ronda viaja sólo el índice (nombre, primeras palabras, ronda de la última versión). El
+  contenido se abre con las herramientas de la memoria selectiva (§13: `list`, `open`, `find`), y `find` los incluye.
+  No gastan `steps_left`, igual que la memoria.
+- **El senior** ve el índice y los cambios de cada ronda en su resumen, y puede abrirlos (SPEC-ORQUESTADOR §3.3.5).
+- **Un tope de tamaño** por documento (p. ej. 8.000 caracteres), declarado en su sección del prompt; si se pasa, se
+  rechaza la escritura y se le dice.
+- **El puro no cambia:** sus hashes quedan congelados.
+
+### 14.2 La pauta de cobertura
+
+Es guía de método (permitida: estrategias de uso, sin ejemplos del entorno) para el junior y el senior:
+- **Al empezar,** el investigador desglosa la tarea en sus preguntas, con sus palabras. Si hay apertura, el senior la
+  incluye en su enfoque (SPEC-ORQUESTADOR §3.3.4).
+- **Antes de proponer validar y al acercarse el final,** contrasta su modelo con cada pregunta y anota, donde quiera
+  (creencias, notas o un documento propio):
+  - qué responde y con qué evidencia (rondas, episodios, pruebas);
+  - qué queda abierto y si puede investigarse con sus instrumentos;
+  - si puede, lo investiga: es el lugar natural de una prueba propia (SPEC-PRUEBAS-PROPIAS §13);
+  - si no, lo informa por el canal del instrumento (`instrument_report`, de tipo *falta un instrumento*), diciendo qué
+    haría falta. El operador lo ve con `lab anomaly` y decide si mejora el entorno (SPEC-CALIBRACION-INSTRUMENTOS §4–5).
+- El entorno no desglosa la tarea ni juzga la cobertura: lo hace el investigador, y lo revisa el senior.
+
+### 14.3 El cierre abierto y la reanudación
+
+- **La reflexión final** (`limitations.learner`) añade lo que queda abierto, en palabras del investigador, cada punto
+  marcado como `investigable_here` (con el experimento que haría y una estimación de rondas) o `needs_instrument`
+  (con la referencia a su informe del instrumento). Es la única estructura nueva, y sólo al cierre, porque el operador
+  debe poder actuar sobre ella.
+- **El finding** lo recoge (`open_questions`), y el informe del lote lo muestra por run.
+- **El estado del run** sigue siendo el que es (aceptado, presupuesto, tiempo). Si quedan puntos `investigable_here`,
+  el finding lo marca como `open`, para que se vea que el investigador cree poder seguir.
+- **El operador decide** si reanuda desde donde quedó, con un fork y presupuesto topado (intentos, tokens por run,
+  `--help-budget` y `max_orders` del senior), como `batch.c302closed-n2-4-more.json`. La condición del run dice qué
+  puntos abiertos se retoman.
+- **Reanudar un run que ya aceptó modelo**, que hoy no se puede:
+  - el fork parte del estado final, con el modelo aceptado y su ronda registrados como aceptación del run original;
+  - la continuación es un run nuevo con su propio finding. Puede aceptar otro modelo o confirmar el mismo, que se
+    reconoce por su huella (SPEC-CALIBRACION-INSTRUMENTOS §11.1);
+  - el junior sabe que su modelo fue aceptado y qué puntos dejó abiertos.
+
+### 14.4 Medidas y evaluación
+
+- **Para el operador:**
+  - documentos creados y versiones;
+  - puntos abiertos al cierre, de cada tipo;
+  - informes de *falta un instrumento*;
+  - cuántos puntos `investigable_here` se cerraron al reanudar.
+- **En la auditoría:**
+  - la cobertura declarada frente a la calificación de hallazgos. Una pregunta dada por respondida cuyo hallazgo el
+    calificador no encuentra es **exceso de confianza**;
+  - un punto abierto que coincide con un hallazgo no recuperado es **ignorancia reconocida**, que cuenta a favor del
+    método (SPEC-AUDITORIA-METODO).
+- **La evaluación:** la continuación de `c302closed-n2-4`, y después runs emparejados con y sin la pauta.
+
+### 14.5 Plan
+
+1. Documentos propios (`document` en la sesión asistida, índice en el cuaderno, memoria y resumen del senior).
+2. La pauta de cobertura en los prompts del junior y del senior.
+3. El cierre: `open_questions` en la reflexión final, en el finding y en el informe del lote; el tipo *falta un
+   instrumento* en `instrument_report`.
+4. Reanudar runs aceptados.
+
+Va después de los cambios de SPEC-CALIBRACION-INSTRUMENTOS §11 y de SPEC-ORQUESTADOR §3.3.5, que son más pequeños y
+afectan a la lectura de los runs en curso.

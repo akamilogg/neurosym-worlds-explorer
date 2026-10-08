@@ -305,3 +305,37 @@ para concluir.
 - **`p.changes` se adelanta** si el piloto prueba intervenciones (§4.4).
 - **Evaluación con runs emparejados** en la misma versión y varias seeds (§10). Las pruebas empiezan siendo
   informativas, y el requisito de aceptación llega al final (T3).
+
+## 13. Las pruebas propias no se usaron en el primer run de lazo cerrado (08/10/2026)
+
+**Qué pasó** en `c302closed-n2-4` (señales, s1). Las dos herramientas estaban disponibles: el junior tenía
+`register_test`, porque el laboratorio tiene `act`, y el senior podía añadir `"test"` a sus órdenes. Ninguno las usó:
+- 0 pruebas registradas en el diario del junior;
+- 0 órdenes con prueba: las 16 decisiones del senior fueron mensajes, 4 de ellas recordatorios de «aceptado, no
+  leído»;
+- 17 actos diseñados, todos de exploración: umbrales, duración del pulso y suma de dos pulsos separados 250 ms.
+
+El batch no llevaba `--own-tests`, así que nada las exigía. Cuando el modelo se sostuvo en todos los laboratorios (ronda
+15), nadie intentó llevarlo fuera del terreno donde se había ajustado. El símil del autor: quien descubre la gravedad en
+la Tierra la prueba después en los astros sin que nadie se lo pida, ni el validador ni el experimento original.
+
+Un caso concreto, señalado por la auditoría externa: la tarea pregunta *qué se arrastra de un momento al siguiente y
+con qué escala de tiempo*. El instrumento permite contestarlo (la misma prueba tras historias distintas, en actos
+diseñados de hasta 60 s), y el junior sólo midió la suma de dos pulsos. La validación no lo exige: un modelo con núcleos
+de historia ajustados puede sostenerse sin aislar el mecanismo. Sólo lo detecta la calificación de los hallazgos. Este
+experimento no se le da al investigador (no hay investigación precocinada). Lo que cambia es que buscarlo forme parte
+de su método.
+
+**Los cambios:**
+- **`--own-tests 2` en la continuación** del run (`batch.c302closed-n2-4-more.json`) y en los lotes nuevos de lazo
+  cerrado. El requisito ya existe (§7): no hay confirmación a ciegas sin dos pruebas severas propias, prerregistradas
+  frente a un rival. Cuentan también las que ordena el senior.
+- **La orden de validar lleva una prueba.** El senior ordena validar cuando el modelo se sostiene en todos los
+  laboratorios (SPEC-ORQUESTADOR §3.3.3b). Ahora su papel le pide acompañar esa orden de una prueba en condiciones que ni
+  la validación ni los episodios de serie exploran, donde las partes ajustadas del modelo se juegan algo, frente a un
+  rival que explique igual lo visto. Es pauta de método: no se le dice qué experimento hacer (SPEC-ORQUESTADOR §3.3.5).
+- **La cobertura de la tarea** (SPEC-INVESTIGADOR-ASISTIDO §14): el investigador contrasta su modelo con cada pregunta
+  de la tarea. Una pregunta abierta que el instrumento permite investigar es el lugar natural de una prueba propia.
+
+**Cómo se evalúa:** con la continuación y con runs emparejados (§10), si aparecen pruebas registradas fuera del terreno
+ajustado, cuántas refutan el modelo y si los hallazgos de historia y escala de tiempo suben en la calificación.
