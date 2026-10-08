@@ -590,6 +590,20 @@ desarrollar.
   admite `"of": "documents"`.
 - **Pruebas:** `test/review.test.ts` (estado de los experimentos y documentos en el resumen).
 
+**Revisar el modelo como trabajo cuantitativo (08/10/2026, run `c302closed-n2-5`).** El junior ya no delegaba en Jev: todo
+en código desde la ronda 1. Pero la forma de su modelo final (núcleos que sólo se suman, disparados sólo por las
+subidas de corriente) no podía expresar lo que él mismo había establecido con el senior: interacción entre pulsos,
+procesos en competencia, la falta de aditividad bilateral. Ajustaba las constantes leyendo trazas (66 `view`, 2 `measure`,
+ninguna `table`), y el R² del check osciló durante cinco rondas sin tendencia. El papel del senior añade, de forma
+genérica, que revise el modelo como el trabajo cuantitativo de un colega, con lo que sabe de modelado y análisis de
+datos:
+- si su forma puede expresar lo establecido;
+- cómo se llegó a sus parámetros y contra qué evidencia;
+- si se entienden sus errores;
+- cuando los checks dejan de mejorar, entender por qué falla antes de otro experimento.
+
+No se le da un catálogo de métodos: la idea es que tire de su propio conocimiento (indicación del autor).
+
 ## 4. Nivel 2: el orquestador
 
 - **Un lote** es una lista de runs declarada de antemano, cada uno con su laboratorio, sus argumentos, su investigador y la
