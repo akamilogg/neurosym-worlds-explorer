@@ -26,7 +26,8 @@ export function journalReader(journal: J, options: Pick<MemoryOptions, 'openLimi
   const notebook = new Notebook();
   const episodes: EpisodeEntry[] = [];
   const models: ModelEntry[] = [];
-  const memory = new JournalMemory(notebook, { episodes: () => episodes, models: () => models, ...(options.openLimit ? { openLimit: options.openLimit } : {}),
+  const instruments: { id: string; version: number; about: string; source: string; round: number }[] = [];
+  const memory = new JournalMemory(notebook, { episodes: () => episodes, models: () => models, instruments: () => instruments, ...(options.openLimit ? { openLimit: options.openLimit } : {}),
     ...(options.selector ? { selector: options.selector } : {}), ...(options.onSelect ? { onSelect: options.onSelect } : {}) });
   const steps = new Map<number, number>();
   for (const e of (Array.isArray(journal?.events) ? journal.events : []) as J[]) {
@@ -57,6 +58,7 @@ export function journalReader(journal: J, options: Pick<MemoryOptions, 'openLimi
         break;
       }
       case 'methods': notebook.applyMethods(round, (e.methods ?? []) as NoteOp[]); break;
+      case 'instrument_registered': instruments.push({ id: String(e.id), version: Number(e.version), about: String(e.about ?? ''), source: String(e.source ?? ''), round }); break;
       case 'document_written': notebook.applyDocuments(round, [{ do: e.do === 'forget' ? 'forget' : 'write', id: String(e.id), ...(typeof e.text === 'string' ? { text: e.text } : {}) }]); break;
       case 'proposal': {
         notebook.applyStances(round, (e.beliefs ?? []) as BeliefStance[]);

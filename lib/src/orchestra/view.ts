@@ -37,6 +37,8 @@ export function researcherEvents(journal: J): J[] {
         { const { t: _t, ...rest } = e; out.push(rest); break; }
       case 'directive_report': out.push({ type: e.type, question: e.question, id: e.id, done: e.done, ...(e.not_done ? { not_done: e.not_done } : {}) }); break;
       case 'junior_report': out.push({ type: e.type, question: e.question, text: e.text }); break;
+      case 'instrument_registered': out.push({ type: e.type, round: e.round, id: e.id, version: e.version, about: e.about, source: e.source }); break;
+      case 'instrument_used': out.push({ type: e.type, round: e.round, id: e.id, version: e.version, args: e.args, ...(e.answers ? { answers: e.answers } : {}), ...(e.error ? { error: e.error } : { result: e.result }) }); break;
       case 'document_written': out.push({ type: e.type, round: e.round, id: e.id, do: e.do, ...(typeof e.text === 'string' ? { text: e.text } : {}) }); break;
       case 'end': out.push({ type: e.type, stoppedBy: e.stoppedBy }); break;
       default: break;
@@ -116,6 +118,8 @@ export function runDigest(journal: J, options: { rounds?: number } = {}): J {
       const first = firstOf.get(id);
       if (first === undefined) firstOf.set(id, e.round); else r.same_model_as_round = first;
     }
+    if (e.type === 'instrument_registered') r.instruments_registered = [...(r.instruments_registered ?? []), { id: e.id + '@' + e.version, about: clip(e.about, 200), code: clip(e.source, 400) }];
+    if (e.type === 'instrument_used') r.instruments_used = [...(r.instruments_used ?? []), { id: e.id + '@' + e.version, args: clip(JSON.stringify(e.args ?? {}), 200), ...(e.error ? { error: clip(e.error, 200) } : { result: clip(JSON.stringify(e.result), 400) }) }];
     if (e.type === 'document_written') r.documents = [...(r.documents ?? []), { id: e.id, do: e.do, ...(e.text ? { begins: clip(e.text, 300) } : {}) }];
     if (e.type === 'methods') r.methods = [...(r.methods ?? []), ...(e.methods ?? []).map((m: J) => ({ id: m.id, ...(m.do ? { do: m.do } : {}), ...(m.text ? { text: clip(m.text, 300) } : {}) }))];
     if (e.type === 'check') Object.assign(r, { holds: Object.fromEntries(e.laboratories.map((p: J) => [p.place, p.holds])),

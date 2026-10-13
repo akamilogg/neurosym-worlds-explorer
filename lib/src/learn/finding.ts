@@ -72,6 +72,8 @@ export interface Finding {
     readonly memory?: { readonly mode: string; readonly listed: readonly string[]; readonly opened: readonly string[]; readonly found: readonly string[]; readonly selections: number };
     /** Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): each with its versions and the rounds they were written in. */
     readonly documents?: readonly { readonly id: string; readonly versions: number; readonly rounds: readonly number[]; readonly forgotten: boolean }[];
+    /** Its own instruments (SPEC-INSTRUMENTOS-PROPIOS): each with its versions and how many times it used them (and how many failed). */
+    readonly instruments?: readonly { readonly id: string; readonly versions: number; readonly uses: number; readonly failed: number }[];
     /** The records of earlier runs it was given (§12), in which mode, and what it read of them. A run given experience of
         its own world (`meta`) is not a measure of investigating from nothing: `prior_knowledge_of_this_world` says so. */
     readonly experience?: { readonly mode: string; readonly scope: string; readonly prior_knowledge_of_this_world: boolean;
@@ -190,6 +192,13 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
       const ids = [...new Set(written.map((e) => String(e.id)))];
       return { documents: ids.map((id) => { const of = written.filter((e) => e.id === id); return { id, versions: of.filter((e) => e.do === 'write').length,
         rounds: of.map((e) => Number(e.round)), forgotten: of[of.length - 1].do === 'forget' }; }) };
+    })(),
+    ...(() => {
+      const registered = events.filter((e) => e.type === 'instrument_registered');
+      if (!registered.length) return {};
+      const used = events.filter((e) => e.type === 'instrument_used');
+      return { instruments: [...new Set(registered.map((e) => String(e.id)))].map((id) => ({ id, versions: registered.filter((e) => e.id === id).length,
+        uses: used.filter((e) => e.id === id).length, failed: used.filter((e) => e.id === id && e.error).length })) };
     })(),
     ...(given ? { experience: {
       mode: String(given.mode),

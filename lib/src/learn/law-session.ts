@@ -12,6 +12,7 @@ const MAX_CONSOLIDATIONS = 2;
 import { Notebook, parseDocuments } from './notebook.ts';
 import { parseJsonLoose } from '../core/net.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory } from './assisted/memory.ts';
+import { parseInstruments, type InstrumentOp } from './assisted/instruments.ts';
 import type { ChatClient } from './system2.ts';
 
 /* ============================================================================
@@ -82,6 +83,10 @@ export interface LawSessionHost<A> {
   /** Whether it may keep documents of its own (the assisted researcher, from its first question asked live:
       SPEC-INVESTIGADOR-ASISTIDO §14.1). None by default. */
   documents?(): boolean;
+  /** Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), when it may write them now: registered in any of its answers. None by
+      default. */
+  instruments?(): { apply(round: number, ops: readonly InstrumentOp[]): string[]; current(): readonly { id: string; version: number; about: string }[];
+    all(): readonly { id: string; version: number; about: string; source: string; round: number }[] } | null;
   /** A law's fingerprint (default: `lawFingerprint` at the current version; a resumed run keeps its journal's). */
   fingerprint?(law: Law): string;
   log(type: string, data?: Record<string, unknown>): void;
@@ -195,14 +200,17 @@ export class LawSession<A> {
     const last = this.latest();
     /* With a selective memory, abridged by its fixed rule (its episodes and models included). */
     /* Its documents: their index with a selective memory (opened with it), whole without one. */
+    const tools = this.host.instruments?.()?.current() ?? [];
+    const instruments = tools.length ? { your_instruments: tools.map((v) => ({ id: v.id, version: v.version, about: v.about })) } : {};
     const docs = this.notebook.documents.size ? { your_documents: this.memory ? this.notebook.documentIndex() : [...this.notebook.documents.values()].map((d) => ({ id: d.id, text: d.text, updated_round: d.updated })) } : {};
-    if (this.memory) return { ...this.memory.brief(this.currentRound, this.unaddressed), ...docs, ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {}) };
+    if (this.memory) return { ...this.memory.brief(this.currentRound, this.unaddressed), ...docs, ...instruments, ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {}) };
     const { episodes: _g, models: _r, ...own } = this.notebook.brief(this.unaddressed) as Record<string, unknown>;
     return {
       ...own,
       episodes: this.host.episodes(),
       models: this.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })),
       ...docs,
+      ...instruments,
       ...(last ? { your_last_lessons: last.lessons, your_planned_next_experiment: last.nextExperiment } : {})
     };
   }
@@ -269,7 +277,12 @@ export class LawSession<A> {
         for (const d of docs) if (!refusedDocs.some((w) => w.includes('"' + d.id + '"'))) h.log('document_written', { round, id: d.id, do: d.do, ...(d.text !== undefined ? { text: d.text } : {}) });
         h.say('  documents: ' + docs.map((d) => d.do + ' ' + d.id).join(', '));
       }
-      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}) };
+      /* Its own instruments, in any answer: compiled now, run when it uses them. */
+      const registry = h.instruments?.() ?? null;
+      const ins = registry ? parseInstruments(obj(parseJsonLoose(content))?.instruments, noteWarnings) : [];
+      if (ins.length) { noteWarnings.push(...registry!.apply(round, ins)); h.say('  instruments: ' + ins.map((d) => d.do + ' ' + d.id).join(', ')); }
+      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}),
+        ...(ins.length ? { your_instruments: ins.map((d) => d.do + ' ' + d.id) } : {}) };
       if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }
       if (turn.kind === 'consolidate') {

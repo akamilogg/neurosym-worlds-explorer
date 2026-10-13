@@ -25,7 +25,7 @@ import type { LineSelector, SelectionRecord } from './sources.ts';
 export const MEMORY_KINDS = ['beliefs', 'notes', 'methods', 'episodes', 'models', 'reflections', 'investigations', 'checks'] as const;
 export type MemoryKind = typeof MEMORY_KINDS[number];
 
-interface Item { readonly id: string; readonly kind: MemoryKind | 'documents'; readonly round: number; readonly head: string; readonly body: unknown }
+interface Item { readonly id: string; readonly kind: MemoryKind | 'documents' | 'instruments'; readonly round: number; readonly head: string; readonly body: unknown }
 
 /** What the researcher is told once it has a selective memory (appended to its system prompt). */
 export const MEMORY_SECTION = [
@@ -52,6 +52,8 @@ export interface MemoryOptions {
       them itself): each as the researcher is shown it. Default: the notebook's. */
   readonly episodes?: () => readonly EpisodeEntry[];
   readonly models?: () => readonly ModelEntry[];
+  /** Its own instruments, every version (SPEC-INSTRUMENTOS-PROPIOS): a kind only once it has one. */
+  readonly instruments?: () => readonly { readonly id: string; readonly version: number; readonly about: string; readonly source: string; readonly round: number }[];
   /** Items larger than this many characters are opened clipped (their beginning, and how large they are), unless the
       request asks for them `"whole": true`. None by default: the researcher's own memory opens items whole. */
   readonly openLimit?: number;
@@ -108,6 +110,8 @@ export class JournalMemory {
          as it did. */
       ...[...nb.documents.values()].map((d) => ({ id: 'document:' + d.id, kind: 'documents' as const, round: d.updated, head: clip(d.text, 140),
         body: { id: d.id, text: d.text, written_round: d.written, updated_round: d.updated, versions: d.versions } })),
+      ...(this.options.instruments?.() ?? []).map((v) => ({ id: 'instrument:' + v.id + '@' + v.version, kind: 'instruments' as const, round: v.round,
+        head: clip(v.about || v.source, 140), body: v })),
       ...nb.reflections.map((r) => ({ id: 'reflection:r' + r.round, kind: 'reflections' as const, round: r.round, head: clip(r.rationale || r.lessons.join(' '), 140), body: r })),
       ...this.investigations,
       ...this.checks
@@ -122,7 +126,7 @@ export class JournalMemory {
 
   /** The kinds it holds: `documents` once it has written one. */
   private kinds(): string[] {
-    return [...MEMORY_KINDS, ...(this.notebook.documents.size ? ['documents'] : [])];
+    return [...MEMORY_KINDS, ...(this.notebook.documents.size ? ['documents'] : []), ...(this.options.instruments?.().length ? ['instruments'] : [])];
   }
 
   /** The notebook as it travels by default: the fixed rule (MEMORY_SECTION), at `round`. */

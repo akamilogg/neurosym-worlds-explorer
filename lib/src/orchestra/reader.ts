@@ -1,3 +1,4 @@
+import { instrumentsSection } from '../learn/assisted/instruments.ts';
 import { GRID_TEST_WORDS, gridLab } from '../worlds/grid/lab.ts';
 import { journalReader } from '../learn/assisted/record.ts';
 import { explorerSystem } from '../learn/explorer.ts';
@@ -127,6 +128,9 @@ export function juniorInstruments(journal: J): string | null {
   const origins = [...String(config.sources_allow ?? '').split(',').map((s) => s.trim()).filter(Boolean),
     ...events.filter((e) => e.type === 'sources_allowed').map((e) => String(e.origin))];
   const parts = [...(origins.length ? [SOURCES_SECTION + '\nIts origins: ' + [...new Set(origins)].join(', ') + '.'] : []), ...(config.memory === 'selective' ? [MEMORY_SECTION] : [])];
+  /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), in a world of laws, in the rounds this code reviews. */
+  const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
+  if (lab && !isGameLab(lab) && typeof config.review_from === 'number') parts.push(instrumentsSection(lab.seriesDoc ?? null));
   return parts.length ? parts.join('\n\n') : null;
 }
 

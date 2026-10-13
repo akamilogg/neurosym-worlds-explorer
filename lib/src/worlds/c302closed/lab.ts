@@ -459,6 +459,12 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
     return e.left.map((_, k) => k).filter((k) => k % every === 0).map((k) => ({ point: id + '@' + k, state: pointOf(e, k), came: signalsAt(e, k), spread, moves }));
   },
   ownEvery: 20,
+  /* An episode whole for the researcher's own instruments: its percept at step k is these series up to k. */
+  series: (e) => ({ steps: e.left.length, t: e.left.map((_, k) => k * CONTROL_MS),
+    inputs: { [e.names.left]: e.left.map((_, k) => (k === 0 ? 0 : e.left[k - 1])), [e.names.right]: e.right.map((_, k) => (k === 0 ? 0 : e.right[k - 1])) },
+    came: { [e.names.signals[0]]: [...e.reorientation.slice(0, e.left.length)], [e.names.signals[1]]: [...e.steering.slice(0, e.left.length)] },
+    ...(e.changes ? { changes: changesInWords(e.changes) } : {}) }),
+  seriesDoc: 'the whole episode as arrays indexed by step: { steps, t, inputs: { <cell>: [...] }, came: { <signal>: [...] }, changes? } - the percept p at step k is t, inputs up to k (p.inputs[cell][j] is inputs[cell][j]), and came[signal][k] is what came at k',
   view: (e, from, to) => {
     const last = Math.min(to, from + VIEW_ROWS - 1, e.left.length - 1);
     const turnAt = new Map(e.turns.map(([k, a]) => [k, a]));

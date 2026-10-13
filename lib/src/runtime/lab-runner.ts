@@ -25,6 +25,7 @@ import { findingOf, findingText, findingView, type Finding } from '../learn/find
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
 import { assistedSession, assistedSystem, deliveredMessages, operatorClient, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
+import { Instruments, instrumentsSection } from '../learn/assisted/instruments.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
 import { createHash } from 'node:crypto';
@@ -1215,6 +1216,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     fingerprint: (law) => lawFingerprint(law, cfg.fingerprint as number),
     /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): the assisted researcher, in the rounds this code reviews. */
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
+    /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
+    instruments: () => (journal.researcher === 'assisted' && helping && reviewing ? instruments : null),
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
     parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
     ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
@@ -1259,6 +1262,43 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   };
   const codeLaw = (source: string): Law => ({ world: world.id, observations: {}, rules: {}, weights: {}, output: { kind: 'code', lang: 'js', source } });
   if (cfg.ownTests && !actLab) throw new LabError('--own-tests needs the assisted researcher in a laboratory where it acts (' + lab.id + (lab.act ? ', with act among its tools' : ' has no act') + ')');
+  /* --- Its own instruments (SPEC-INSTRUMENTOS-PROPIOS): what they may read - its episodes and the points of its checks, never
+     the places of the exam - and what its models answered there, without the Judge (its rules count as 0.5). */
+  const readable = () => [...episodes.values()].filter((e) => !e.by.startsWith('the validation'));
+  const stretch = (ref: string): { id: string; from: number; to: number } | null => {
+    const m = /^([a-z][a-z0-9-]*)(?:@(\d+)-(\d+))?$/.exec(String(ref).trim());
+    return m ? { id: m[1], from: m[2] ? Number(m[2]) : 0, to: m[3] ? Number(m[3]) : Infinity } : null;
+  };
+  const casesOf = (ref: string, every: number): Case[] | null => {
+    const s = stretch(ref);
+    const e = s ? readable().find((x) => x.id === s.id) : undefined;
+    if (!s || !e) return null;
+    return lab.cases(specOf(e.place), e.id, e.data, every).filter((c) => { const k = Number(String((c as { point: string }).point).split('@')[1]); return k >= s.from && k <= s.to; });
+  };
+  const instruments = new Instruments({
+    data: {
+      episodes: () => readable().map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, steps: lab.steps(e.data) })),
+      points: (ref, every) => casesOf(ref, every)?.map((c) => ({ point: (c as { point: string }).point, p: (c as { state: unknown }).state, came: lab.shown(c) })) ?? null,
+      ...(lab.series ? { series: (id: string) => { const e = readable().find((x) => x.id === id); return e ? lab.series!(e.data) : null; } } : {})
+    },
+    answerAt: async (model, refs, every) => {
+      const law = Number.isInteger(model) ? session.lawOfRound(model as number) : null;
+      if (!law) return '"model" is a round of yours (' + JSON.stringify(model) + ' is not)';
+      const out: { point: string; answer?: unknown; error?: string }[] = [];
+      const neutral = Object.fromEntries(Object.keys(law.rules).map((id) => [id, 0.5]));
+      for (const ref of refs) {
+        const cs = casesOf(ref, every);
+        if (!cs) return 'no episode of yours "' + ref + '"';
+        for (const c of cs) {
+          const point = (c as { point: string }).point;
+          try { out.push({ point, answer: predictor.rawAnswerWith(law, predictor.measured(law, (c as { state: Point }).state), neutral) }); }
+          catch (e) { out.push({ point, error: String((e as Error).message ?? e) }); }
+        }
+      }
+      return out;
+    },
+    log
+  });
   const ownTests = actLab ? new OwnTests<Law, unknown, unknown>({
     parseAct: (raw) => actLab.parse(raw),
     asWritten: (a) => (actLab.asWritten ? actLab.asWritten(a) : a),
@@ -1320,7 +1360,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
-        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION : '') : promptFor(focus)),
+        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
@@ -1340,6 +1380,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       ...(exchange ? { board: { accepts: (q: Record<string, unknown>) => PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q),
         run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {}),
       /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2). */
+      instruments: { accepts: (q: Record<string, unknown>) => helping && reviewing && Instruments.accepts(q), run: (q: Record<string, unknown>, round: number) => instruments.use(q, round) },
       ...(ownTests ? { tests: { accepts: (q: Record<string, unknown>) => helping && OwnTests.accepts(q),
         run: (q: Record<string, unknown>, round: number, budget: { acts: number }) => ownTests.register(q, round, budget) } } : {})
     })

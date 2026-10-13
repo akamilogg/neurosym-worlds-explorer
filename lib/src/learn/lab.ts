@@ -175,6 +175,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   cases(spec: S, id: string, episode: E, every: number): K[];
   /** Every how many steps the learner's own points are taken (its table, an ablation's fit). */
   readonly ownEvery: number;
+  /** An episode whole as plain series, for the researcher's own instruments (SPEC-INSTRUMENTOS-PROPIOS §5): compact, in the
+      learner's names, what its percept and what came - and how the interface words them (`seriesDoc`). None by default. */
+  series?(episode: E): Record<string, unknown>;
+  readonly seriesDoc?: string;
   /** Where a draft is tried before anything uses it (default: the learner's latest points), and on how many its answer. */
   readonly trial?: { points(episode: E): P[]; readonly answers: number };
   /** `view`: the steps from..to, as the interface describes them. */

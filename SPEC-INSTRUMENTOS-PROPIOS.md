@@ -1,6 +1,6 @@
 # SPEC · Instrumentos propios: el investigador escribe las herramientas con que analiza sus datos
 
-Estado: propuesta (13/10/2026), sin implementar.
+Estado: implementado en los mundos de leyes (13/10/2026, §13); la cuadrícula, pendiente.
 
 ## 1. De dónde sale
 
@@ -166,3 +166,66 @@ Se activa con `review_from` (SPEC-INVESTIGADOR-ASISTIDO §14.6), así que los ru
 - ¿Deben poder compartirse instrumentos entre runs, con `--experience` o en un equipo? Hoy la experiencia transfiere
   hallazgos, no herramientas.
 - ¿Hace falta un tope de instrumentos por run, o basta con que cada uso gaste un paso?
+
+## 13. Implementado (13/10/2026)
+
+**Diferencias con la propuesta:**
+- **Registrar** es un campo de cualquier respuesta, como los documentos, y no una petición:
+  `"instruments": [{"do": "write" | "forget", "id", "about", "source"}]`. No gasta pasos.
+- **Usar** sí es una petición de investigación (gasta un paso):
+  `{"use": "<id>" | "<id>@<versión>", "args": {...}, "answers": [{"model": <ronda>, "on": [...], "every": n}]}`.
+- **El código corre síncrono** en la VM. Así el tope de tiempo lo impone la propia VM, sin depender de que el código
+  ceda el control. Evaluar los modelos del investigador es asíncrono en el arnés, así que se pide en el uso (`"answers"`)
+  y se calcula antes de ejecutar el instrumento. El instrumento lo lee con `env.answers(<ronda>, "<ref>", every)`, que
+  sustituye a `env.answer` de §5.
+- **Sin Jev:** al responder un modelo, sus reglas para el Juez cuentan 0,5. No se rechaza un modelo con reglas
+  decorativas.
+
+**Lo que hay:**
+- **`learn/assisted/instruments.ts`:**
+  - `Instruments` registra, versiona, olvida y usa instrumentos;
+  - `parseInstruments`;
+  - `instrumentsSection`, la sección del prompt;
+  - topes: código de 12.000 caracteres, resultado de 20.000 (recortado y avisado), 3.000 puntos por uso entre lecturas y
+    respuestas, y 30 s;
+  - sandbox sin `Date`, sin `Math.random` ni generación de código desde cadenas; `env.random(seed)`;
+  - el instrumento lee copias, nunca los objetos del arnés.
+- **API (`env`):**
+  - `episodes()`;
+  - `points("<ep>" | "<ep>@<a>-<b>", every)`, cada punto con `{ point, p, came }`;
+  - `series("<ep>")`, cuando el laboratorio la declara (`lab.series`, `lab.seriesDoc`). c302closed la declara: tiempos,
+    corrientes y señales por paso, alineados con su percepto;
+  - `answers(...)`;
+  - `random(seed)`.
+  
+  Lee los episodios del investigador y los de sus checks, nunca los de validación ni los ciegos.
+- **El runner** (`lab-runner.ts`) lo activa para el asistido desde `review_from`:
+  - sección del prompt;
+  - registro en cualquier respuesta (`law-session.ts`);
+  - uso por el canal del asistido (`assisted/session.ts`);
+  - índice `your_instruments` en su cuaderno.
+- **Diario:**
+  - eventos `instrument_registered` (con el código), `instrument_used` (argumentos, resultado o error, tiempo) e
+    `instrument_forgotten`;
+  - al repetir un run, los usos se vuelven a ejecutar sobre los mismos datos.
+- **Memoria:** clase `instruments` (ids `instrument:<id>@<versión>`) cuando hay alguno, también en el lector de diarios
+  del senior y de la experiencia.
+- **Senior:**
+  - su resumen muestra por ronda `instruments_registered` (con el principio del código) e `instruments_used` (argumentos y
+    resultado);
+  - su prompt incluye la sección de instrumentos tal como la recibe el junior.
+- **Finding:** `assistance.instruments` (id, versiones, usos, fallidos).
+- **Pruebas** (`test/instruments.test.ts`):
+  - su propio ajuste por mínimos cuadrados sobre sus puntos;
+  - versiones y determinismo;
+  - lo que no tiene (reloj, azar sin semilla, el proceso);
+  - respuestas pedidas y no pedidas;
+  - topes de tiempo, puntos y tamaño;
+  - copias;
+  - un run completo con registro, uso, cuaderno, finding, resumen del senior y memoria.
+
+**Pendiente:**
+- la cuadrícula (§11, paso 4);
+- el piloto emparejado en c302closed (paso 5);
+- las preguntas abiertas de §12.
+
