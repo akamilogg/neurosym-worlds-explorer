@@ -308,6 +308,9 @@ export interface LabServices {
   say(text: string): void;
   /** Asked before each question to System 2: a reason to stop now (cancelled, a budget spent), or null. */
   halt(): string | null;
+  /** A budget stopped the investigation: from now on its closing is asked anyway (the budgets no longer halt), and what it
+      is answered is logged as a closing (SPEC-INVESTIGADOR-ASISTIDO §14.9). */
+  closing?(): void;
   /** The assisted researcher (SPEC-INVESTIGADOR-ASISTIDO), absent for the unknown-world one: `llm` then carries the operator's
       messages; `memory`, whether it has a selective memory (§13), and the Judge as the selector of its `find`. */
   readonly assisted?: { readonly memory: boolean; readonly selector?: import('./assisted/sources.ts').LineSelector;

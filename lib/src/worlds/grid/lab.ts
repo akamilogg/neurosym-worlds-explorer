@@ -1257,11 +1257,21 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   }
   const result = { accepted: accepted ? { formula: accepted.formula } : null, best, stoppedBy };
 
+  /* A budget stopped the investigation: its closing still comes (§14.9). A cancellation does not. */
+  const stopped = halted as string | null;
+  const budgetStop = stopped === 'token_budget' || stopped === 'time_budget' ? stopped : null;
+  if (budgetStop) {
+    s.closing?.();
+    halted = null;
+    log('closing_after_budget', { budget: budgetStop, round: currentRound });
+    say('the ' + budgetStop.replace('_', ' ') + ' stopped the investigation: its closing still comes');
+  }
   if (cfg.reflection && !llmFatal && !halted) {
     say('reflection round: the formula is final; System 2 looks back');
     await propose(result.accepted?.formula ?? result.best?.formula ?? null, null, 'reflect');
   }
   if (cfg.grade && !llmFatal && !halted) await gradeRecovery();
+  if (budgetStop && !halted) halted = budgetStop;
 
   if (satisfied) say('the model System 2 judged good (round ' + (roundOf.get(satisfied) ?? '?') + '):\n' + JSON.stringify(ownFormula(satisfied), null, 2));
   say('best ' + (result.best ? result.best.wins + '/' + result.best.total : '-') + ', hypotheses ' + JSON.stringify(registry.summary()));

@@ -758,3 +758,25 @@ experimento natural:
   `GRID_TEST_WORDS`). La de los mundos de leyes no cambia.
 - **Prueba** (`test/review.test.ts`): un sustituto registra una réplica desde `g1@0` contra su modelo de la ronda 1. Se
   juega, se responde con el siguiente check (`your_tests`) y el final la cuenta. Suite: 440.
+
+### 14.9 Un presupuesto termina la investigación, no su cierre (13/10/2026)
+
+**Qué pasó.** La fase A de `c302closed-staged-n2-3` agotó sus 5 millones de tokens en la ronda 15. El tope paraba antes
+de cada pregunta al modelo, también antes de la reflexión final, así que no hubo reflexión ni calificación. El finding
+quedó sin preguntas abiertas (§14.3) y sin nota: justo lo que el operador necesita para decidir si reanudar.
+
+**El cambio.**
+- Cuando un tope de tokens o de tiempo para la investigación (`token_budget`, `time_budget`), el run hace igualmente su
+  cierre:
+  - la reflexión final, que pide lo que queda abierto;
+  - la calificación del operador.
+
+  El diario lo marca (`closing_after_budget`), y el run sigue terminando con `token_budget` o `time_budget`.
+- **Una cancelación no tiene cierre:** el operador pidió parar.
+- **El cierre puede pasarse del tope:** son una o dos preguntas más.
+- **En el registro de repetición,** las respuestas del cierre van marcadas (`closing`). Un run reanudado sigue más allá
+  del punto donde paró y no vuelve a pedir ese cierre: esas respuestas no esperan a nadie y no son una divergencia.
+  Sólo se sirven si la misma pregunta vuelve, es decir, si se alcanza el mismo tope en el mismo punto.
+- **También en la cuadrícula,** con su bucle propio (`LabServices.closing`).
+- **Pruebas:** `test/closing.test.ts`. Un run cortado por tokens tiene reflexión y calificación, y reanudado sin tope
+  sigue sin divergir.

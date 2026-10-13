@@ -800,6 +800,14 @@ findings (Q1).
 - **Reanudable:** un run que terminó no se repite; uno cortado (o cancelado por el propio lote) se reanuda como run
   derivado. Un test comprueba que el lote cortado y reanudado da la misma tabla.
 - **Salida:** `runs/batches/<id>/batch.json` y `batch.txt`.
+- **Un run se refiere a otro del mismo lote como `@run:<id>`** (13/10/2026). Por ejemplo, la fase B de un lote escalonado
+  lee el diario de A con `--experience @run:closed-signals-s1`.
+  - El lote lo resuelve al arrancar el run al diario con que terminó ese run, con su sufijo si se reanudó.
+  - Si el run referido no existe en el lote, no tiene diario o no ha terminado, el run que lo pide no arranca y el lote
+    lo dice.
+  - **Por qué:** en `c302closed-staged-n2-3`, B buscaba a A con una ruta escrita a mano bajo el id de otro lote.
+- **Un run que falló antes de escribir su diario** (un argumento malo) se vuelve a empezar al relanzar el lote, y no se
+  reanuda: antes se intentaba reanudar un diario inexistente.
 
 ### 10.3 R3 y R3b · El planificador (`project.ts`)
 

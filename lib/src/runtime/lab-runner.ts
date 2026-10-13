@@ -802,7 +802,11 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     };
   }
   if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
-  const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say, halt };
+  /* A loop of its own closes after a budget as a world of laws does (§14.9). */
+  let closingAll = false;
+  const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say,
+    halt: () => { const h = halt(); return closingAll && (h === 'token_budget' || h === 'time_budget') ? null : h; },
+    closing: () => { closingAll = true; replay.closing = true; } };
   writeStatus();
   function finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): LabResult {
       state = 'ended';
@@ -1219,7 +1223,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     failures,
     episodes: episodeIndex,
     places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
-    log: logged, say, halt,
+    /* Its closing (the reflection that leaves what it could not answer) is asked even when a budget stopped the
+       investigation: a budget ends the research, not its account (SPEC-INVESTIGADOR-ASISTIDO §14.9). */
+    log: logged, say, halt: () => { const h = halt(); return closing && (h === 'token_budget' || h === 'time_budget') ? null : h; },
     /* A member of a team tells the board where it is: the versions every member has passed are sealed. */
     ...(team ? { onRound: (round: number) => team.board.reach(team.member, round) } : {})
   };
@@ -1400,6 +1406,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The reflection an ending asks for: with what it leaves open, for the assisted researcher in the rounds this code reviews
      (SPEC-INVESTIGADOR-ASISTIDO §14.3) - the same when a continuation repeats that ending. */
   const endingTask = (): string => reflectionTask(investigative) + (reviewing && helping && journal.researcher === 'assisted' ? ' ' + OPEN_QUESTIONS_TASK : '');
+  /* Set once a budget stopped the investigation: its closing is asked anyway. */
+  let closing = false;
   /* The model its history accepted, in a continuation after it. */
   let acceptedBefore: { law: Law; round: number } | null = null;
   let satisfied: { law: Law; round: number } | null = null;
@@ -1493,14 +1501,24 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const reports = reportStates(reportsOf(journal.events), run.verdicts(session.currentRound));
   const held = protocol.waiting;
   if (held) say('not accepted: the model of round ' + held.round + ' was confirmed, but the operator never answered ' + held.reports.join(', '));
+  /* A budget stopped the investigation: its closing still comes (§14.9). A cancellation does not. */
+  const budgetStop = session.halted === 'token_budget' || session.halted === 'time_budget' ? session.halted : null;
+  if (budgetStop) {
+    closing = true;
+    replay.closing = true;
+    session.halted = null;
+    log('closing_after_budget', { budget: budgetStop, round: session.currentRound });
+    say('the ' + budgetStop.replace('_', ' ') + ' stopped the investigation: its closing still comes');
+  }
   if (cfg.reflection && !session.fatal && !session.halted) {
     say('reflection round: the model is final; System 2 looks back');
     await session.consult('reflect', endingTask());
   }
+  if (budgetStop && !session.halted) session.halted = budgetStop;
   const final = accepted?.law ?? session.latest()?.law ?? null;
   /* Of the final model, its tests: what it predicted (as registered with it) and what it holds on again (SPEC-PRUEBAS-PROPIAS §7). */
   const finalTests = ownTests && final && (ownTests.summary().registered as number) > 0 ? await ownTests.standing(final, session.currentRound) : null;
-  if (cfg.grade && !session.fatal && !session.halted) await gradeRecovery(final);
+  if (cfg.grade && !session.fatal && (!session.halted || session.halted === budgetStop)) await gradeRecovery(final);
   const result = run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     final: final ? ownLaw(final) : null,

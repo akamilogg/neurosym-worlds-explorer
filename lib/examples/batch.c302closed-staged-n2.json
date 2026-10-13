@@ -1,6 +1,6 @@
 {
   "format": "batch@1",
-  "id": "c302closed-staged-n2",
+  "id": "c302closed-staged-n2-3",
   "concurrency": 1,
   "budget": { "tokens_per_run": 5000000 },
   "runs": [
@@ -26,7 +26,7 @@
       "args": [
         "--seed", "1", "--attempts", "16", "--focus", "navigation", "--names", "real",
         "--memory", "selective", "--help-budget", "16", "--max-minutes", "300", "--own-tests", "2",
-        "--experience", "runs/batches/c302closed-staged-n2/closed-signals-s1.json",
+        "--experience", "@run:closed-signals-s1",
         "--experience-mode", "meta", "--experience-scope", "all",
         "--task", "Investigate how the simulated c302 circuit, the declared body and the odor field form a feedback loop. Build and test a model of the circuit's two action signals from stimulus history alone; this laboratory evaluates its navigation when those signals drive the body. A previous research team investigated the signals in this same world. Its research record is available as exp1 through the experience instruments, including its models, experiments, observations, reasoning and open questions. Consult that work as evidence to assess and build on; decide what to reuse, test, revise or reject. You are a new research team with your own investigation and budget. Record the provenance of what you use and what your work adds or contradicts. EurekaBench's navigation-goals statement and simulator description are reference material: establish what is supported in this laboratory, including differences from that reference.",
         "--sources-allow", "D:/OctaneDoc/OctLocalServer/EurekaBench-sources/navigation-goals",

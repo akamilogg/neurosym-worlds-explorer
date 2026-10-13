@@ -121,7 +121,7 @@ test('a message sent while a resumed run still replays its history waits, and go
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assisted-'));
   const cut = await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--max-tokens', '450', '--out', path.join(dir, 'cut.json')], root: dir, llm, fetch: system2([]) });
   assert.equal(cut.stoppedBy, 'token_budget');
-  const logged = fs.readFileSync(cut.journal.replace(/\.json$/, '.replay.jsonl'), 'utf8').split('\n').filter((l) => l.includes('"llm"')).length;
+  const logged = fs.readFileSync(cut.journal.replace(/\.json$/, '.replay.jsonl'), 'utf8').split('\n').filter((l) => l.includes('"llm"') && !l.includes('"closing":true')).length;
   /* An agent or a person writes to the resumed run before it has replayed anything (as an agent following "last" did). */
   const out = path.join(dir, 'resumed.json');
   send(out, { kind: 'message', text: 'while it replays', by: 'operator' });

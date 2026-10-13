@@ -27,10 +27,11 @@ Este batch de dos investigaciones no añade un tercer run ni una evaluación con
 
 ## Reanudación
 
-La referencia inicial de B es `runs/batches/c302closed-staged-n2/closed-signals-s1.json`, relativa a la raíz del proyecto.
-Si A se interrumpe y el batch la reanuda, su journal final tendrá un sufijo (`.r1.json`, etc.). Antes del primer arranque
-válido de B, cambia su argumento `--experience` por el journal final de A que indica `batch.json`. El batch usa rutas
-literales; no resuelve automáticamente el último journal de otro run.
+B se refiere a A como `@run:closed-signals-s1`: el lote lo resuelve, al arrancar B, al journal con el que terminó A en este
+mismo lote (con su sufijo si se reanudó: `.r1.json`, etc.). No hay rutas escritas a mano, así que cambiar el ID del lote
+no rompe la referencia. Si A no ha terminado, B no arranca y el lote lo dice.
 
-Una vez que B haya empezado, conserva ese archivo de A sin modificarlo: el arnés comprueba su hash al reanudar B.
-Si se cambia el ID del batch o su directorio de salida, hay que ajustar también la referencia documental de B.
+Una vez que B haya empezado, conserva el journal de A sin modificarlo: el arnés comprueba su hash al reanudar B.
+
+Un run que falló antes de escribir su journal (por ejemplo, por un argumento) se vuelve a empezar al relanzar el lote,
+no se reanuda.

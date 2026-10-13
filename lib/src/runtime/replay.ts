@@ -37,6 +37,10 @@ import type { FetchLike } from '../core/net.ts';
  * the log never kept, and the run goes on; if it is answered, the run diverged. Never in another channel: an answer of
  * System 2 or of the Judge asked again is another answer.
  *
+ * A CLOSING after a budget (the reflection a run is asked when its tokens or its time stopped the investigation) is
+ * logged marked `closing`: a run resumed goes on past that point, so it never asks it again - those answers wait for
+ * nobody and are no divergence. They are served if the same request comes (the same budget reached at the same place).
+ *
  * A resumed run needs the log of the run it resumes: without it, every request would go to
  * the network again - costs and acts repeated - so a missing log is an error, never an
  * empty history.
@@ -60,7 +64,7 @@ export function requestIdentity(channel: string, url: string, init: { method?: s
   return createHash('sha256').update([channel, (init.method ?? 'POST').toUpperCase() + ' ' + where, init.body ?? ''].join('\n')).digest('base64url');
 }
 
-interface Entry { readonly channel: string; readonly key: string; readonly status: number; readonly text: string }
+interface Entry { readonly channel: string; readonly key: string; readonly status: number; readonly text: string; readonly closing?: boolean }
 
 /** Channels whose refusals are answers (logged, replayed): the environment's service, deterministic. */
 export const DETERMINISTIC: ReadonlySet<string> = new Set(['env']);
@@ -116,6 +120,10 @@ export class ReplayLog {
   private readonly stallMs: number;
   private served = 0;
   private diverged: { channel: string; pending: number } | undefined;
+  /** Answers of a closing after a budget: served if asked, never waited for. */
+  private readonly optional = new Map<string, Entry[]>();
+  /** Set while the run asks its closing after a budget: what it is answered is logged so marked. */
+  closing = false;
 
   /** `file`: the log this run writes (started empty). `from`: the log of the run it resumes, read and never written. */
   constructor(file: string, options: { from?: string; onDiverge?: (d: { channel: string; pending: number }) => void; stallMs?: number } = {}) {
@@ -126,9 +134,10 @@ export class ReplayLog {
       throw new Error('a resumed run writes a log of its own: ' + file + ' is the log it resumes');
     }
     for (const e of options.from ? readReplayLog(options.from) : []) {
-      const list = this.queue.get(e.key) ?? [];
+      const pool = e.closing ? this.optional : this.queue;
+      const list = pool.get(e.key) ?? [];
       list.push(e);
-      this.queue.set(e.key, list);
+      pool.set(e.key, list);
     }
     fs.writeFileSync(file, '');
   }
@@ -149,7 +158,8 @@ export class ReplayLog {
   }
 
   private record(entry: Entry): void {
-    fs.appendFileSync(this.file, JSON.stringify(entry) + '\n');
+    const { closing: _c, ...plain } = entry;
+    fs.appendFileSync(this.file, JSON.stringify(this.closing ? { ...plain, closing: true } : plain) + '\n');
   }
 
   /** Whether a request without a logged answer may go live: once nothing is waiting. While answers wait and are being
@@ -170,7 +180,7 @@ export class ReplayLog {
       if (this.diverged) throw new ReplayDivergence(this.diverged.channel, this.diverged.pending);
       const key = requestIdentity(channel, url, init);
       const take = () => {
-        const e = this.queue.get(key)?.shift();
+        const e = this.queue.get(key)?.shift() ?? this.optional.get(key)?.shift();
         if (!e) return null;
         this.served++;
         this.replayed[channel] = (this.replayed[channel] ?? 0) + 1;

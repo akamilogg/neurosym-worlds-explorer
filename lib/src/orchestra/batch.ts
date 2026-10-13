@@ -205,8 +205,21 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
   const traceOf = (e: unknown): string => String((e as Error)?.stack || (e as Error)?.message || e);
   const perRun = def.budget?.tokens_per_run ?? (def.budget?.tokens ? Math.floor(def.budget.tokens / Math.max(1, def.runs.length)) : null);
 
+  /** An argument as given, or - "@run:<id>" - the journal that run of this batch ended with. */
+  const runRef = (a: string): string => {
+    const m = /^@run:(.+)$/.exec(a);
+    if (!m) return a;
+    const id = m[1];
+    if (!def.runs.some((x) => x.id === id)) throw new Error('"' + a + '": this batch has no run "' + id + '"');
+    const j = latest.get(id);
+    if (!j || !fs.existsSync(j)) throw new Error('"' + a + '": run "' + id + '" has no journal yet (declare it before this run, with concurrency 1)');
+    if (runStatus(j).state !== 'ended') throw new Error('"' + a + '": run "' + id + '" has not ended (' + runStatus(j).state + ')');
+    return j;
+  };
+
   const one = async (r: BatchRun): Promise<void> => {
-    const known = latest.get(r.id);
+    /* A run that failed before it wrote a journal (a bad argument) is started afresh, never resumed. */
+    const known = ((j) => (j && fs.existsSync(j) ? j : undefined))(latest.get(r.id));
     if (known && ended(known)) { rows.set(r.id, rowOf(r, known, findingOfRun(known, 'researcher'))); return; }
     const k = known ? (known.match(/\.r(\d+)\.json$/)?.[1] ? Number(known.match(/\.r(\d+)\.json$/)![1]) + 1 : 1) : 0;
     const out = path.join(dir, r.id + (k ? '.r' + k : '') + '.json');
@@ -215,9 +228,18 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     const control = [...budget, ...(agents.length ? ['--agents', agents.join(';')] : [])];
     /* A fresh run followed by a senior starts from its first hypothesis; a resumed one has it in its history. */
     const opening = r.agent?.role === 'senior' && r.agent.opening !== false ? ['--opening', r.agent.id] : [];
+    /* "@run:<id>" in a run's arguments is the journal another run of this batch ended with - wherever it is (a resumed run's
+       has a suffix), never a path written by hand (c302closed-staged-n2-3: B looked for A under another batch's id). */
+    let own: string[];
+    try { own = known || r.fork ? [] : (r.args ?? []).map((a) => runRef(a)); } catch (e) {
+      rows.set(r.id, rowOf(r, out, null, String((e as Error)?.message ?? e)));
+      say('batch ' + def.id + ': ' + r.id + ' failed: ' + String((e as Error)?.message ?? e));
+      save();
+      return;
+    }
     const args = known ? ['--resume', known, ...control, '--out', out]
       : r.fork ? ['--resume', r.fork.journal, '--attempts', String(r.fork.attempts), '--researcher', 'assisted', ...(r.fork.own_tests ? ['--own-tests', String(r.fork.own_tests)] : []), ...control, '--out', out]
-        : [...(r.args ?? []), ...(r.researcher ? ['--researcher', r.researcher] : []), ...control, ...opening, '--out', out];
+        : [...own, ...(r.researcher ? ['--researcher', r.researcher] : []), ...control, ...opening, '--out', out];
     /* A branch's first message waits in its inbox for its first new round. */
     if (!known && r.fork?.message) send(out, { kind: 'message', text: r.fork.message, by: 'agent:planner' });
     latest.set(r.id, out);
