@@ -1,6 +1,6 @@
 # SPEC · Instrumentos propios: el investigador escribe las herramientas con que analiza sus datos
 
-Estado: implementado en los mundos de leyes (13/10/2026, §13); la cuadrícula, pendiente.
+Estado: implementado en los mundos de leyes y en la cuadrícula (13/10/2026, §13 y §14).
 
 ## 1. De dónde sale
 
@@ -225,7 +225,24 @@ Se activa con `review_from` (SPEC-INVESTIGADOR-ASISTIDO §14.6), así que los ru
   - un run completo con registro, uso, cuaderno, finding, resumen del senior y memoria.
 
 **Pendiente:**
-- la cuadrícula (§11, paso 4);
 - el piloto emparejado en c302closed (paso 5);
 - las preguntas abiertas de §12.
+
+## 14. La cuadrícula (13/10/2026)
+
+En la cuadrícula los episodios son partidas, y no hay una señal por punto que predecir: el modelo da un valor a cada
+posición, y lo que el entorno responde es cómo acaba cada partida.
+- **`env.episodes()`:** sus partidas (id, lugar, ronda, quién eligió sus pasos, puntuación, pasos). Nunca las de una
+  validación; las de la confirmación a ciegas no se guardan.
+- **`env.points("g3" | "g3@<a>-<b>", every)`:** cada punto con la imagen que reciben sus observaciones (`p`: `picture`,
+  `cells`, `width`, `height`, `you`, `next`, `step`) y lo que salió (`came`: `{ episode_score, steps_to_its_end }`).
+- **`env.answers(<ronda>, ref, every)`:** el valor que su fórmula de esa ronda dio a esos puntos, calculado con su código de
+  salida y sus reglas en 0,5. Una fórmula sin código de salida sólo responde a través del Juez, así que se rechaza.
+- **El resto, como en los mundos de leyes:** registro en cualquier respuesta, uso como petición, sandbox, topes,
+  diario, índice en el cuaderno, memoria, resumen del senior (`juniorInstruments` le da la sección de la cuadrícula) y
+  finding. Desde `review_from`.
+- **La sección del prompt** es la común, con las palabras de la cuadrícula para puntos y respuestas
+  (`GRID_INSTRUMENT_WORDS`). La de los mundos de leyes no cambia.
+- **Prueba** (`test/instruments.test.ts`): un run asistido de la cuadrícula registra un instrumento y lo usa sobre `g1`, con
+  la imagen, el final de la partida y el valor que dio su modelo en cada punto.
 

@@ -117,3 +117,37 @@ test('in a run: registered in any answer, used as an investigation step, shown b
   const listed = await journalReader(journal).run({ memory: 'list', of: 'instruments' }) as { index: { id: string }[] };
   assert.deepEqual(listed.index.map((i) => i.id), ['instrument:count_points@1'], 'and can open it');
 });
+
+/* --- The grid: its games point by point, the picture its code receives, how each ended; what a formula of its own valued. */
+import { gridLab } from '../src/worlds/grid/lab.ts';
+
+test('the grid: an instrument over its games - the picture at each point, how the episode ended, and what its model valued there', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'instruments-grid-'));
+  const seen: { system: string; user: any }[] = [];
+  const fetch: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string;
+    const grading = sys.startsWith('You grade');
+    const user = grading ? {} : JSON.parse(userOf(b));
+    seen.push({ system: sys, user });
+    const done = (user.investigation ?? []).length;
+    const content = grading ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : user.round === 2 && done === 0 ? { investigate: [{ use: 'by_ending', args: { on: 'g1' }, answers: [{ model: 1, on: ['g1'] }] }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.25', validate: false, beliefs: [{ id: 'b', stance: user.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'],
+        ...(user.round === 1 ? { instruments: [{ id: 'by_ending', about: 'points of a game, how it ended, what my model valued',
+          source: '(args, env) => { const pts = env.points(args.on, 1); return { n: pts.length, width: pts[0].p.width, score: pts[0].came.episode_score, valued: env.answers(1, args.on, 1).map((a) => a.answer) }; }' }] } : {}) };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const GRID = ['--seed', '22', '--explore', '1', '--variants', '1', '--family', '1', '--family-variants', '1', '--confirm-places', '1', '--levels', '2', '--depth', '1',
+    '--steps', '2', '--flat', '--no-ablation', '--no-grade', '--no-reflection', '--attempts', '3', '--researcher', 'assisted'];
+  const r = await runLaboratory(gridLab, { args: [...GRID, '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
+  assert.ok(seen.find((q) => !q.system.startsWith('You grade'))!.system.includes('YOUR OWN INSTRUMENTS'));
+  const used = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events.find((e: any) => e.type === 'instrument_used');
+  assert.ok(used && !used.error, JSON.stringify(used));
+  assert.ok(used.result.n > 1 && used.result.width > 0 && [1, 0, -1].includes(used.result.score));
+  assert.equal(used.result.valued.length, used.result.n);
+  assert.ok(used.result.valued.every((v: number) => v === 0.25), 'its output code, without the Judge');
+  assert.deepEqual(r.finding.assistance!.instruments, [{ id: 'by_ending', versions: 1, uses: 1, failed: 0 }]);
+});

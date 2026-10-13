@@ -1,5 +1,5 @@
 import { instrumentsSection } from '../learn/assisted/instruments.ts';
-import { GRID_TEST_WORDS, gridLab } from '../worlds/grid/lab.ts';
+import { GRID_INSTRUMENT_WORDS, GRID_TEST_WORDS, gridLab } from '../worlds/grid/lab.ts';
 import { journalReader } from '../learn/assisted/record.ts';
 import { explorerSystem } from '../learn/explorer.ts';
 import { system2Prompt, type Tool } from '../learn/prompt.ts';
@@ -130,7 +130,7 @@ export function juniorInstruments(journal: J): string | null {
   const parts = [...(origins.length ? [SOURCES_SECTION + '\nIts origins: ' + [...new Set(origins)].join(', ') + '.'] : []), ...(config.memory === 'selective' ? [MEMORY_SECTION] : [])];
   /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), in a world of laws, in the rounds this code reviews. */
   const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
-  if (lab && !isGameLab(lab) && typeof config.review_from === 'number') parts.push(instrumentsSection(lab.seriesDoc ?? null));
+  if (lab && typeof config.review_from === 'number') parts.push(isGameLab(lab) ? instrumentsSection(null, GRID_INSTRUMENT_WORDS) : instrumentsSection(lab.seriesDoc ?? null));
   return parts.length ? parts.join('\n\n') : null;
 }
 

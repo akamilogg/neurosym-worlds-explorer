@@ -44,6 +44,7 @@ import { OPEN_QUESTIONS_TASK, OVERREACH, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SE
 import { formulaFingerprint, openQuestions } from '../../learn/law-session.ts';
 import { experimentStates } from '../../orchestra/view.ts';
 import { OwnTests, ownTestsSection, type OwnTestsWords } from '../../learn/assisted/own-tests.ts';
+import { Instruments, instrumentsSection, parseInstruments } from '../../learn/assisted/instruments.ts';
 import { RoundConversation } from '../../learn/system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
@@ -117,6 +118,13 @@ export const gridLab: GameLab = {
   run: (s) => runGrid(s)
 };
 
+/** What `env` reads in the grid (SPEC-INSTRUMENTOS-PROPIOS): its episodes are games; at a point, `p` is the picture its
+    code receives, and what came is how the episode ended and how far its end was. */
+export const GRID_INSTRUMENT_WORDS = {
+  points: 'each point "<episode>@<step>" of your games with the picture `p` your observations receive there and what `came`: { episode_score, steps_to_its_end }',
+  answers: 'the value that model of yours gave each of those points (its output code, its rules counting 0.5: the Judge is not asked)'
+};
+
 /** What a test of its own is in the grid (SPEC-INVESTIGADOR-ASISTIDO §14.8): a point to play from, not an act. */
 export const GRID_TEST_WORDS: OwnTestsWords = {
   protocol: '{"from": "<episode>@<step>"}',
@@ -157,7 +165,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     + (cfg.explorePlaces ? '\n\n' + PLACES_SECTION : '') + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : explorerSystem(tools);
   /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */
   const systemPrompt = (): string => SYSTEM_PROMPT + (assisted && reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(Boolean(assisted.memory)) + '\n\n' + TASK_COVERAGE_SECTION
-    + (ownTests ? '\n\n' + ownTestsSection([], true, ownTestsRequired(), GRID_TEST_WORDS) : '') : '');
+    + (ownTests ? '\n\n' + ownTestsSection([], true, ownTestsRequired(), GRID_TEST_WORDS) : '')
+    + '\n\n' + instrumentsSection(null, GRID_INSTRUMENT_WORDS) : '');
   /* Tests of its own (SPEC-PRUEBAS-PROPIAS, the grid's), for the assisted researcher that replays: required with --own-tests. */
   const ownTestsNeed = Number((s.cfg as { ownTests?: number }).ownTests ?? 0);
   if (ownTestsNeed > 0 && !(assisted && tools.has('replay'))) throw new Error('--own-tests needs the assisted researcher, with replay among its tools');
@@ -349,14 +358,56 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* Its selective memory: the notebook abridged by a fixed rule, and the rest to ask for. What the Judge picked for it is the
      operator's (memory_select). */
   const memory = assisted?.memory ? new JournalMemory(notebook, { ...(assisted.selector ? { selector: assisted.selector } : {}),
-    onSelect: (record) => log('memory_select', { round: currentRound, ...record }) }) : null;
+    onSelect: (record) => log('memory_select', { round: currentRound, ...record }), instruments: () => instruments.all() }) : null;
   /* The records of earlier runs it may read (§12): answered by their reader, never by the world; each read counts as a step. */
   const experience = assisted?.experience?.reader ?? null;
   const recalls = (q: Record<string, unknown>): boolean => memory !== null && JournalMemory.accepts(q);
   /* Its team's board (§5.2): what it publishes and reads there is answered by the board, never by the world. */
   const peers = exchange ? team!.channel : null;
   const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q))
-    || (peers !== null && (PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q))) || (ownTests !== null && reviewing && OwnTests.accepts(q));
+    || (peers !== null && (PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q))) || (ownTests !== null && reviewing && OwnTests.accepts(q))
+    || (assisted !== null && reviewing && Instruments.accepts(q));
+  /* --- Its own instruments (SPEC-INSTRUMENTOS-PROPIOS; the grid's): its games - never a validation's - point by point, with
+     the picture its code receives there and how the episode came out; and what a model of its own valued there, its rules at
+     0.5 (no Judge). */
+  const readableGames = () => [...games.values()].filter((g) => !g.how.startsWith('the validation'));
+  const gameStretch = (ref: string, every: number): { g: StoredGame; ks: number[] } | null => {
+    const m = /^(g\d+)(?:@(\d+)-(\d+))?$/.exec(String(ref).trim());
+    const g = m ? readableGames().find((x) => x.id === m[1]) : undefined;
+    if (!m || !g) return null;
+    const from = m[2] ? Number(m[2]) : 0, to = m[3] ? Number(m[3]) : g.states.length - 1;
+    return { g, ks: g.states.map((_, k) => k).filter((k) => k % every === 0 && k >= from && k <= to) };
+  };
+  const pictureOf = (st: GridState) => readPicture(where(st).sense.render(st));
+  const instruments = new Instruments({
+    data: {
+      episodes: () => readableGames().map((g) => ({ episode: g.id, place: g.place, round: g.round, how: g.how, score: scoreOfResult(g.result), steps: g.states.length - 1 })),
+      points: (ref, every) => {
+        const st = gameStretch(ref, every);
+        return st ? st.ks.map((k) => ({ point: st.g.id + '@' + k, p: pictureOf(st.g.states[k]), came: { episode_score: scoreOfResult(st.g.result), steps_to_its_end: st.g.states.length - 1 - k } })) : null;
+      }
+    },
+    answerAt: async (model, refs, every) => {
+      const formula = Number.isInteger(model) ? formulaOfRound.get(model as number) : undefined;
+      if (!formula) return '"model" is a round of yours (' + JSON.stringify(model) + ' is not)';
+      if (!formula.output) return 'the model of round ' + model + ' has no output code: it answers only through the Judge';
+      const neutral = Object.fromEntries(Object.keys(formula.rules).map((id) => [id, 0.5]));
+      const out: { point: string; answer?: unknown; error?: string }[] = [];
+      for (const ref of refs) {
+        const st = gameStretch(ref, every);
+        if (!st) return 'no episode of yours "' + ref + '"';
+        for (const k of st.ks) {
+          const point = st.g.id + '@' + k;
+          try {
+            const o = multiObserver.observe(st.g.states[k], formula.observations);
+            out.push({ point, answer: outputs.run(formula.output, o.context ?? null, outputInputs(o.values, o.texts, neutral, Object.keys(neutral).length ? 0.5 : null)).answer });
+          } catch (e) { out.push({ point, error: String((e as Error).message ?? e) }); }
+        }
+      }
+      return out;
+    },
+    log
+  });
   let gameCounter = 0;
   const resultOf = (winner: string | null): GameRecord['result'] => (winner === 'A' ? 'won' : winner === 'B' ? 'lost' : 'draw');
   /** What System 2 is told of how an episode ended: the score of the interface, never a word of a game. */
@@ -719,6 +770,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   async function runRequest(req: ExplorerRequest, current: Formula | null, plays: { left: number }): Promise<unknown> {
     /* Its own memory is answered by it, never by the world; its team's board by the board. */
+    /* Its own instrument, used (SPEC-INSTRUMENTOS-PROPIOS): run over what it has observed. */
+    if ('extra' in req && assisted && reviewing && Instruments.accepts(req.extra)) return instruments.use(req.extra, currentRound);
     /* A test of its own (SPEC-PRUEBAS-PROPIAS, the grid's: §14): registered now, it costs one replay of the round. */
     if ('extra' in req && ownTests && OwnTests.accepts(req.extra)) {
       const budget = { get acts() { return plays.left; }, set acts(n: number) { plays.left = n; } };
@@ -953,7 +1006,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     let written: Record<string, unknown> = {};
     const plays = { left: cfg.plays };
     /* The round's context: the notebook as it is when the round begins (or when the researcher consolidates). */
-    const context = (): Record<string, unknown> => ({ ...explorerPayload({ round, perceptDoc: GRID_PERCEPT_DOC, notebook: { ...(memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed)), ...ownDocuments(), ...ownExperiments() },
+    const context = (): Record<string, unknown> => ({ ...explorerPayload({ round, perceptDoc: GRID_PERCEPT_DOC, notebook: { ...(memory ? memory.brief(round, unaddressed) : notebook.brief(unaddressed)), ...ownDocuments(), ...ownExperiments(),
+        ...(instruments.current().length ? { your_instruments: instruments.current().map((v) => ({ id: v.id, version: v.version, about: v.about })) } : {}) },
       formula: from, formulaRound: from ? roundOf.get(from) ?? null : null, directive, task: mode === 'reflect' ? endingTask() : null,
       places: protocol.placesView(), validationsLeft: protocol.validationsLeft, lastCheck: protocol.lastView }), ...counters() });
     while (refusals < 3 && steps - free - overreach - consolidated <= cfg.steps + 3) {
@@ -998,7 +1052,11 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         say('  documents: ' + docs.map((d) => d.do + ' ' + d.id).join(', '));
       }
       /* What it wrote in its notebook comes back in the next part of the conversation (the notebook shown is the round's). */
-      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}) };
+      /* Its own instruments, in any answer: compiled now, run when it uses them. */
+      const ins = assisted && reviewing ? parseInstruments(obj(parseJsonLoose(content))?.instruments, noteWarnings) : [];
+      if (ins.length) { noteWarnings.push(...instruments.apply(round, ins)); say('  instruments: ' + ins.map((d) => d.do + ' ' + d.id).join(', ')); }
+      written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}),
+        ...(ins.length ? { your_instruments: ins.map((d) => d.do + ' ' + d.id) } : {}) };
       if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) {
         say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', '));

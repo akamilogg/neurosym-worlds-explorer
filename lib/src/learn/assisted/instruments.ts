@@ -184,12 +184,12 @@ export class Instruments {
 }
 
 /** What the assisted researcher is told of its own instruments, with what this laboratory lets them read. */
-export function instrumentsSection(seriesDoc: string | null): string {
+export function instrumentsSection(seriesDoc: string | null, words?: { readonly points: string; readonly answers: string }): string {
   return [
     'YOUR OWN INSTRUMENTS. You may write the tools you analyse your data with, and the environment runs them for you over what you have already observed. Register one in any of your answers (it costs nothing, like a note): "instruments": [{"do": "write" | "forget", "id": "<lowercase_snake_case>", "about": "what it computes", "source": "(args, env) => { ... return result; }"}] - a write of an id you have is its next version. Use one as an investigation request (it costs a step): {"use": "<id>" | "<id>@<version>", "args": { ... }, "answers": [{"model": <a round of yours>, "on": ["<episode>" | "<episode>@<from>-<to>", ...], "every": <n>}]}.',
-    'What `env` gives your code - primitives only; any fit, statistic or comparison is yours to write: `env.episodes()` the index of your episodes; `env.points("<episode>" | "<episode>@<from>-<to>", every)` each point with the percept `p` your models receive there and what `came` there'
+    'What `env` gives your code - primitives only; any fit, statistic or comparison is yours to write: `env.episodes()` the index of your episodes; `env.points("<episode>" | "<episode>@<from>-<to>", every)` ' + (words?.points ?? 'each point with the percept `p` your models receive there and what `came` there')
     + (seriesDoc ? '; `env.series("<episode>")` ' + seriesDoc : '')
-    + '; `env.answers(<round>, "<episode or stretch>", every)` what that model of yours answered at those points - asked in the use\'s "answers", computed before your instrument runs; `env.random(seed)` a seeded generator (there is no Math.random and no clock).',
+    + '; `env.answers(<round>, "<episode or stretch>", every)` ' + (words?.answers ?? 'what that model of yours answered at those points') + ' - asked in the use\'s "answers", computed before your instrument runs; `env.random(seed)` a seeded generator (there is no Math.random and no clock).',
     'An instrument analyses what you have observed; it observes nothing new: it cannot act, simulate or ask the Judge, and it reads neither the places of your validations nor the confirmations. It runs synchronously, at most ' + (INSTRUMENT_TIMEOUT_MS / 1000) + ' s and ' + INSTRUMENT_POINTS_MAX + ' points a use; what it returns is shown to you (at most ' + INSTRUMENT_RESULT_MAX + ' characters). The same use on the same data answers the same.',
     'It is your instrument and your responsibility: before you trust what it says, try it where you know the answer. What you find with it is evidence only as far as your checks confirm it.'
   ].join('\n');
