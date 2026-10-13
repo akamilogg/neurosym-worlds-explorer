@@ -102,6 +102,26 @@ def generate_network(req, work):
         if params.get_bioparameter(k, warn_if_missing=False) is None:
             raise BadRequest("parameter set %s has no parameter %r; its parameters: %s" % (req.get("parameter_set", "C1"), k, ", ".join(sorted(bp.name for bp in params.bioparameters))))
     dt, duration = float(req.get("dt_ms", 0.05)), float(req["duration_ms"])
+    # A connection the network does not have is not an error to c302 either: removing, scaling or turning it is accepted
+    # and changes nothing (c302closed-staged-n2: "AWCL-AWCR_GJ" removed, and this panel has no gap junction of AWCL or
+    # AWCR). Refused here, as an unknown parameter is. A regular expression must match one connection at least.
+    asked = {"remove_connections": list(req.get("remove_connections") or []),
+             "connection_number_scaling": list((req.get("connection_number_scaling") or {}).keys()),
+             "connection_polarity_override": list((req.get("connection_polarity_override") or {}).keys())}
+    if any(asked.values()):
+        base = c302.generate("net", params, cells=req.get("cells"), cells_to_stimulate=[], muscles_to_include=[],
+                             duration=duration, dt=dt, target_directory=str(work), verbose=False).networks[0]
+        known = set()
+        for p in list(base.projections) + list(base.electrical_projections) + list(base.continuous_projections):
+            gap = p in base.electrical_projections or p.id.endswith("_GJ")
+            known.add("%s-%s%s" % (p.presynaptic_population, p.postsynaptic_population, "_GJ" if gap else ""))
+        for field, names in asked.items():
+            for name in names:
+                if c302.is_regex_string(name):
+                    if not any(re.match(name, k) for k in known):
+                        raise BadRequest("%s: %r matches no connection of this network" % (field, name))
+                elif name not in known:
+                    raise BadRequest("%s: this network has no connection %r" % (field, name))
     doc = c302.generate(
         "net", params, cells=req.get("cells"), cells_to_stimulate=[], muscles_to_include=[],
         conns_to_exclude=list(req.get("remove_connections") or []),

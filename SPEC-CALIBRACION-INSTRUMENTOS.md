@@ -338,3 +338,25 @@ modelo por una afirmación.
   - La cuadrícula, con su bucle propio, también: la regla desde `review_from`, como los mundos de leyes.
 - **Pruebas:** `test/fingerprint.test.ts` (normalización, versiones, falsas creencias citadas) y `test/protocol.test.ts`
   (réplicas).
+
+### 11.4 Una conexión inexistente, aceptada y nunca aplicada (13/10/2026)
+
+**Qué pasó** (run `c302closed-staged-n2`, fase A). El junior quitó `AWCL-AWCR_GJ` en un acto diseñado (`act8`), y se
+aceptó. En la red del panel no hay ninguna unión eléctrica de AWCL ni de AWCR: entre ellas sólo hay sinapsis químicas
+de glutamato, en los dos sentidos. c302 acepta quitar, escalar o invertir una conexión que no existe, y la red queda
+idéntica (204 conexiones antes y después). Es el mismo fallo que el de los parámetros (§I2): aceptado y nunca aplicado.
+Cualquier conclusión sobre "quitar la unión eléctrica no cambia nada" sería falsa.
+
+**El cambio** (`simulate.py`, `generate_network`): cuando un acto pide intervenciones, el worker genera primero la red
+sin ellas y rechaza (400) toda conexión de `remove_connections`, `connection_number_scaling` o
+`connection_polarity_override` que esa red no tenga. Los nombres son `<pre>-<post>` (química) o `<pre>-<post>_GJ`
+(eléctrica). Una expresión regular de c302 (`^...$`) debe coincidir con al menos una conexión.
+
+Comprobado con c302 real:
+- `AWCL-AWCR_GJ`: rechazada;
+- `AWCL-AWCR` y `AIAL-AIAR_GJ`: aceptadas (quedan 203 conexiones);
+- un escalado sobre una conexión inexistente: rechazado;
+- una expresión regular sin coincidencias: rechazada.
+
+Se aplica al reiniciar el servicio; el run en curso lo recibe al terminar su fase A.
+
