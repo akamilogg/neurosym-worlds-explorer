@@ -106,3 +106,11 @@ export interface Objective<M, P extends Place, K, R extends CaseResult> {
 
 /** The interface lines an objective contributes to the common prompt: the answer's form, then the verdict's. */
 export const objectiveLines = (o: { readonly answer: AnswerForm; readonly verdictForm: readonly string[] }): string[] => [...o.answer.form, ...o.verdictForm];
+
+/** Public component verdicts of a compound objective. Never forward its operator-only measures. */
+export function evaluationSummary(value: unknown): { evaluations?: Record<string, boolean> } {
+  const raw = (value && typeof value === 'object' ? (value as { evaluations?: unknown }).evaluations : null);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const evaluations = Object.fromEntries(Object.entries(raw).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean>;
+  return Object.keys(evaluations).length ? { evaluations } : {};
+}

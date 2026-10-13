@@ -349,7 +349,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const { chatFromEnv } = await import('../orchestra/launch.ts');
         const { runAgentOperator } = await import('../orchestra/agent-operator.ts');
         out('agent:' + id + ' follows ' + path.basename(journal, '.json') + ' (the run must allow it: --agents ' + id + '=message)');
-        const r = await runAgentOperator({ id, journal, role, llm: chatFromEnv(env, 'AGENT_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(patience ? { patience: Number(patience) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
+        const r = await runAgentOperator({ id, journal, role, llm: chatFromEnv(env, 'SENIOR_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(patience ? { patience: Number(patience) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
         out('the run ended; the agent\'s decisions: ' + r.file);
         return 0;
       }
@@ -360,7 +360,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const { runBatch, batchText } = await import('../orchestra/batch.ts');
         const { chatFromEnv, labEndpointsFromEnv } = await import('../orchestra/launch.ts');
         const def = JSON.parse(fs.readFileSync(file, 'utf8'));
-        const report = await runBatch(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'AGENT_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
+        const report = await runBatch(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'SENIOR_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
         out(batchText(report));
         out('report: ' + path.join(report.dir, 'batch.json'));
         return 0;
@@ -372,7 +372,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const { runTeam, teamText } = await import('../orchestra/team.ts');
         const { chatFromEnv, labEndpointsFromEnv } = await import('../orchestra/launch.ts');
         const def = JSON.parse(fs.readFileSync(file, 'utf8'));
-        const report = await runTeam(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'AGENT_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
+        const report = await runTeam(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'SENIOR_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
         out(teamText(report));
         out('report: ' + path.join(report.dir, 'team-report.json'));
         return 0;

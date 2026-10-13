@@ -2,6 +2,7 @@ import { Notebook, type BeliefStance, type NoteOp } from '../notebook.ts';
 import { JournalMemory, type EpisodeEntry, type MemoryOptions, type ModelEntry } from './memory.ts';
 import { ownFormula } from '../explorer.ts';
 import type { Formula } from '../../core/types.ts';
+import { evaluationSummary } from '../objective.ts';
 
 /* ============================================================================
  * A researcher's RECORD as another reads it, rebuilt from its journal and read with the
@@ -71,8 +72,9 @@ export function journalReader(journal: J, options: Pick<MemoryOptions, 'openLimi
         break;
       case 'check':
         /* The verdicts as the junior is given them: per place, how many episodes scored 1, whether it holds, the reruns. */
-        memory.recordCheck(round, { laboratories: (e.laboratories ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}), ...(p.rerun ? { rerun: { went_up: p.rerun.went_up, went_down: p.rerun.went_down } } : {}) })),
-          ...(e.validation ? { validation: { family: (e.validation.family ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}) })) } } : {}),
+        memory.recordCheck(round, { laboratories: (e.laboratories ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...evaluationSummary(p), ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}), ...(p.rerun ? { rerun: { went_up: p.rerun.went_up, went_down: p.rerun.went_down,
+          ...evaluationSummary(p.rerun), ...(typeof p.rerun.your_model_holds_on_them === 'boolean' ? { your_model_holds_on_them: p.rerun.your_model_holds_on_them } : {}) } } : {}) })),
+          ...(e.validation ? { validation: { family: (e.validation.family ?? []).map((p: J) => ({ place: p.place, holds: p.holds, ...evaluationSummary(p), ...(p.wins !== undefined ? { scored_1: p.wins, of: p.total } : {}) })) } } : {}),
           ...(e.accepted ? { accepted: true } : {}) });
         break;
       default: break;
@@ -80,4 +82,3 @@ export function journalReader(journal: J, options: Pick<MemoryOptions, 'openLimi
   }
   return memory;
 }
-

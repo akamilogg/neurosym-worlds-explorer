@@ -80,6 +80,29 @@ test('System 2\'s tuning from the environment: nothing set, nothing changes', as
   assert.throws(() => llmTuning({ LLM_EXTRA_BODY: '[1]' }), /JSON object/);
 });
 
+test('explicit OpenAI effort removes incompatible sampling without changing legacy Qwen requests', async () => {
+  const { llmTuning } = await import('../src/runtime/lab-runner.ts');
+  const { chatRequestBody } = await import('../src/learn/system2.ts');
+  const qwen = { chat_template_kwargs: { reasoning_effort: 'low' }, top_p: 0.95, top_k: 20 };
+  const old = chatRequestBody({ model: 'qwen', temperature: 1, maxTokens: 1000, extraBody: qwen }, 's', {});
+  assert.deepEqual(old, { model: 'qwen', temperature: 1, messages: [{ role: 'system', content: 's' }, { role: 'user', content: '{}' }],
+    max_tokens: 1000, ...qwen });
+  const tuned = llmTuning({ LLM_REASONING_EFFORT: 'high' });
+  const extraBody = { reasoning_effort: 'low', temperature: 1, top_p: 0.95, logprobs: true, top_logprobs: 2 };
+  const body = chatRequestBody({ model: 'gpt-6.1-sol', ...tuned, maxTokens: 12000, extraBody }, 's', {});
+  assert.equal(body.reasoning_effort, 'high', 'the dedicated setting wins over extraBody');
+  assert.equal(body.max_completion_tokens, 12000);
+  for (const key of ['temperature', 'top_p', 'logprobs', 'top_logprobs', 'max_tokens']) assert.equal(key in body, false, key);
+  assert.deepEqual(extraBody, { reasoning_effort: 'low', temperature: 1, top_p: 0.95, logprobs: true, top_logprobs: 2 }, 'caller settings are not mutated');
+  const none = chatRequestBody({ model: 'gpt-6-luna', reasoningEffort: 'none', temperature: 1, extraBody: { top_p: 0.9 } }, 's', {});
+  assert.deepEqual([none.reasoning_effort, none.temperature, none.top_p], ['none', 1, 0.9]);
+  for (const effort of ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+    assert.equal(llmTuning({ LLM_REASONING_EFFORT: effort }).reasoningEffort, effort);
+  assert.equal(llmTuning({ LLM_REASONING_EFFORT: ' ' }).reasoningEffort, undefined);
+  assert.throws(() => llmTuning({ LLM_REASONING_EFFORT: 'ultra' }), /LLM_REASONING_EFFORT/);
+  assert.throws(() => llmTuning({ SENIOR_LLM_REASONING_EFFORT: 'invalid' }, 'SENIOR_LLM'), /SENIOR_LLM_REASONING_EFFORT/);
+});
+
 test('System 2\'s tuning is recorded in the journal; without it, the journal is as ever', async () => {
   const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
   const { runLaboratory } = await import('../src/runtime/lab-runner.ts');
@@ -99,4 +122,9 @@ test('System 2\'s tuning is recorded in the journal; without it, the journal is 
     llm: { url: 'http://x.test/chat', model: 'm', temperature: 1, extraBody: { chat_template_kwargs: { reasoning_effort: 'medium' } } } });
   assert.deepEqual(JSON.parse(fs.readFileSync(tuned.journal, 'utf8')).config.llm_tuning, { temperature: 1, extra_body: { chat_template_kwargs: { reasoning_effort: 'medium' } } });
   assert.deepEqual((bodies.at(-1) as { chat_template_kwargs: unknown }).chat_template_kwargs, { reasoning_effort: 'medium' });
+  const reasoning = await runLaboratory(cellsLab, { args: [...args, '--out', path.join(dir, 'c.json')], root: dir, fetch: fetch as never,
+    llm: { url: 'http://x.test/chat', model: 'gpt-6-luna', reasoningEffort: 'low', maxTokens: 5000 } });
+  assert.equal(JSON.parse(fs.readFileSync(reasoning.journal, 'utf8')).config.llm_tuning.reasoning_effort, 'low');
+  assert.deepEqual([bodies.at(-1)!.reasoning_effort, bodies.at(-1)!.max_completion_tokens], ['low', 5000]);
+  assert.equal('temperature' in bodies.at(-1)!, false, 'the runner default must not leak into active reasoning requests');
 });

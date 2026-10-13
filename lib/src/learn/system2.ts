@@ -42,17 +42,24 @@ export class RoundConversation {
 }
 
 export interface ChatClient {
+  /** Public request configuration only: never endpoint credentials. */
+  readonly configuration?: Readonly<Record<string, unknown>>;
   complete(request: { system: string; user: unknown; signal?: AbortSignal | null }): Promise<ChatAnswer>;
 }
+
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ReasoningEffort = typeof REASONING_EFFORTS[number];
 
 export interface ChatClientOptions {
   readonly url: string;
   readonly apiKey?: string;
   readonly model: string;
   readonly temperature?: number;
+  /** OpenAI's top-level reasoning_effort. Unset preserves provider-specific extraBody (e.g. Qwen). */
+  readonly reasoningEffort?: ReasoningEffort;
   /** Ask for response_format json_object. */
   readonly jsonMode?: boolean;
-  /** max_tokens of an answer (unset: the endpoint's default). */
+  /** Completion limit (max_completion_tokens with explicit reasoning effort; otherwise legacy max_tokens). */
   readonly maxTokens?: number;
   /** Fields the endpoint takes besides the standard ones (e.g. vLLM's chat_template_kwargs, top_p, top_k): added to the
       body; they never replace the model or the messages. */
@@ -69,7 +76,7 @@ export interface ChatClientOptions {
 const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 /** The request body exactly as the harness sends it. */
-export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temperature' | 'jsonMode' | 'maxTokens' | 'extraBody'>, system: string, user: unknown): Record<string, unknown> {
+export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temperature' | 'reasoningEffort' | 'jsonMode' | 'maxTokens' | 'extraBody'>, system: string, user: unknown): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: options.model,
     temperature: clamp(options.temperature ?? 0.3, 0, 2),
@@ -81,12 +88,27 @@ export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temp
   if (options.jsonMode) body.response_format = { type: 'json_object' };
   if (options.maxTokens) body.max_tokens = options.maxTokens;
   if (options.extraBody) for (const [k, v] of Object.entries(options.extraBody)) if (k !== 'model' && k !== 'messages') body[k] = v;
+  if (options.reasoningEffort !== undefined) {
+    /* The dedicated setting wins over extraBody. Only this explicit OpenAI setting changes sampling: a Qwen
+       chat_template_kwargs request without it must remain exactly as before. */
+    body.reasoning_effort = options.reasoningEffort;
+    if (options.reasoningEffort !== 'none') {
+      for (const k of ['temperature', 'top_p', 'top_logprobs', 'logprobs']) delete body[k];
+    }
+    if (body.max_tokens !== undefined && body.max_completion_tokens === undefined) body.max_completion_tokens = body.max_tokens;
+    delete body.max_tokens;
+  }
   return body;
 }
 
 export function openAiChatClient(options: ChatClientOptions | (() => ChatClientOptions)): ChatClient {
   const read = typeof options === 'function' ? options : () => options;
   return {
+    get configuration() {
+      const o = read(), body = chatRequestBody(o, '', {});
+      const { messages, ...configuration } = body;
+      return configuration;
+    },
     async complete({ system, user, signal }) {
       const o = read();
       o.onRequest?.();

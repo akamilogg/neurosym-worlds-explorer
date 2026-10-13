@@ -16,9 +16,18 @@ $env:LLM_URL = "PUT-YOUR-OPENAI-COMPATIBLE-URL/chat/completions"
 $env:LLM_KEY = "PUT-YOUR-LLM-KEY"
 $env:LLM_MODEL = "PUT-YOUR-MODEL"
 
-# --- Optional: the planner's and the agents' LLM (default: the researchers') ------------
+# --- Optional: the planner and senior (connection/model default: the researchers') -----
 # $env:PLANNER_LLM_MODEL = ""
-# $env:AGENT_LLM_MODEL = ""
+# $env:SENIOR_LLM_MODEL = ""          # legacy AGENT_LLM_MODEL still works; SENIOR_LLM_MODEL takes precedence
+# $env:LLM_REASONING_EFFORT = "low"  # OpenAI: junior (values depend on the model)
+# $env:SENIOR_LLM_REASONING_EFFORT = "high" # OpenAI: senior; independent of the junior
+# $env:SENIOR_LLM_EXTRA_BODY = '{}'  # optional provider-specific senior fields; never inherits LLM_EXTRA_BODY
+
+# --- Alternative: vLLM/Qwen, without the OpenAI *_REASONING_EFFORT variables ------------
+# $env:LLM_EXTRA_BODY = '{"chat_template_kwargs":{"reasoning_effort":"low"},"top_p":0.95,"top_k":20}'
+# $env:SENIOR_LLM_EXTRA_BODY = '{"chat_template_kwargs":{"reasoning_effort":"high"},"top_p":0.95,"top_k":20}'
+# $env:LLM_TEMPERATURE = "1"
+# $env:SENIOR_LLM_TEMPERATURE = "1"  # match sampling to compare only reasoning effort
 
 # ------------------------------------------------------------------------------------
 foreach ($name in @("JEV_KEY", "LLM_KEY", "LLM_MODEL")) {

@@ -52,6 +52,9 @@ test('§7: a model that knows nothing is no better than the baselines - it does 
   const still: ModelAnswer = async () => ({ reorientation: 0, steering: 0 });
   assert.equal((await navigationCheck(ctx, episode, toyCircuit().initial, [400, 1600], still)).holds, false);
   assert.equal((await navigationCheck(ctx, episode, toyCircuit().initial, [400], async () => null)).holds, false);
+  const partial = await navigationCheck(ctx, episode, toyCircuit().initial, [400, 1600], async (p) => p.step === 400 ? null : oracle(p));
+  assert.equal(partial.holds, false, 'answering only the easier subset of checked points cannot pass');
+  assert.ok(partial.horizons.every((h) => h.model === null));
 });
 
 test('§6: the energy score is the distance with one sample, and rewards a spread that covers what came over a confident miss', () => {

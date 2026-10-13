@@ -8,11 +8,13 @@
  * ========================================================================== */
 
 import { formulaFingerprint, ownFingerprint } from '../learn/law-session.ts';
+import { evaluationSummary } from '../learn/objective.ts';
 
 type J = Record<string, any>;
 
 const clip = (s: unknown, n: number): string => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n) + '…' : t; };
-const held = (ps: unknown): { place: string; holds: boolean }[] => (Array.isArray(ps) ? ps : []).map((p: J) => ({ place: String(p.place), holds: Boolean(p.holds) }));
+const held = (ps: unknown): J[] => (Array.isArray(ps) ? ps : []).map((p: J) => ({ place: String(p.place), holds: Boolean(p.holds), ...evaluationSummary(p),
+  ...(typeof p.rerun?.your_model_holds_on_them === 'boolean' ? { rerun: { ...evaluationSummary(p.rerun), your_model_holds_on_them: p.rerun.your_model_holds_on_them } } : {}) }));
 
 /** The events of a run as its researcher lived them: an allow-list, field by field. */
 export function researcherEvents(journal: J): J[] {
@@ -116,7 +118,9 @@ export function runDigest(journal: J, options: { rounds?: number } = {}): J {
     }
     if (e.type === 'document_written') r.documents = [...(r.documents ?? []), { id: e.id, do: e.do, ...(e.text ? { begins: clip(e.text, 300) } : {}) }];
     if (e.type === 'methods') r.methods = [...(r.methods ?? []), ...(e.methods ?? []).map((m: J) => ({ id: m.id, ...(m.do ? { do: m.do } : {}), ...(m.text ? { text: clip(m.text, 300) } : {}) }))];
-    if (e.type === 'check') Object.assign(r, { holds: Object.fromEntries(e.laboratories.map((p: J) => [p.place, p.holds])), ...(e.validation ? { validation: e.validation } : {}), ...(e.accepted ? { accepted: true } : {}) });
+    if (e.type === 'check') Object.assign(r, { holds: Object.fromEntries(e.laboratories.map((p: J) => [p.place, p.holds])),
+      ...(e.laboratories.some((p: J) => p.evaluations) ? { evaluations: Object.fromEntries(e.laboratories.map((p: J) => [p.place, { ...evaluationSummary(p), ...(p.rerun ? { rerun: p.rerun } : {}) }])) } : {}),
+      ...(e.validation ? { validation: e.validation } : {}), ...(e.accepted ? { accepted: true } : {}) });
   }
   const all = [...rounds.values()].sort((a, b) => a.round - b.round);
   const keep = options.rounds ?? 6;

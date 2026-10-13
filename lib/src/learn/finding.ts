@@ -30,6 +30,8 @@
  * until it is added here.
  * ========================================================================== */
 
+import { evaluationSummary } from './objective.ts';
+
 type J = Record<string, any>;
 type Facts = Record<string, unknown>;
 
@@ -283,7 +285,7 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
 
 /** The facts of a place anyone could observe: whether the model held there, and the counts of its cases. */
 const OBSERVED = new Set(['place', 'holds', 'points', 'agreed', 'exact', 'failed', 'not_a_number', 'not_a_row', 'cells_wrong', 'wins', 'total', 'chi2_by_band']);
-const observed = (p: Facts): Facts => Object.fromEntries(Object.entries(p).filter(([k]) => OBSERVED.has(k)));
+const observed = (p: Facts): Facts => ({ ...Object.fromEntries(Object.entries(p).filter(([k]) => OBSERVED.has(k))), ...evaluationSummary(p) });
 
 /** A finding as a given audience may read it: the operator's as it is, or a researcher's without what only the operator knows. */
 export function findingView(f: Finding, view: FindingView): Finding {

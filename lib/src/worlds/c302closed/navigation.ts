@@ -133,6 +133,7 @@ export async function navigationCheck(ctx: RolloutContext, e: Episode, initial: 
   for (const h of horizons) {
     const n = Math.round(h / ctx.dtMs);
     const scores: number[] = [], base: Record<string, number[]> = {};
+    let answeredEveryPoint = true;
     let worm = 0, both = 0;
     const timing: number[] = [];
     for (const k of points) {
@@ -146,6 +147,7 @@ export async function navigationCheck(ctx: RolloutContext, e: Episode, initial: 
         samples.push(end);
       }
       if (samples.length) scores.push(energyScore(samples, truth));
+      else answeredEveryPoint = false;
       for (const [name, s] of Object.entries(baselines(ctx, e, k))) {
         const bs: Pose[] = [];
         for (let r = 0; r < replicas; r++) bs.push((await rollout(ctx, e, k, h, s, async () => s, mulberry32((o.seed ?? 1) * 104729 + k * 31 + r)))!);
@@ -159,7 +161,7 @@ export async function navigationCheck(ctx: RolloutContext, e: Episode, initial: 
         if (at !== null) { both++; timing.push(Math.abs(at - wormTurn) * ctx.dtMs); }
       }
     }
-    out.push({ horizon: h, model: median(scores), baselines: Object.fromEntries(Object.entries(base).map(([k, v]) => [k, median(v)!])),
+    out.push({ horizon: h, model: answeredEveryPoint ? median(scores) : null, baselines: Object.fromEntries(Object.entries(base).map(([k, v]) => [k, median(v)!])),
       turns: { worm, rollout_too: both, timing_ms: median(timing) } });
   }
   const holds = out.length > 0 && out.every((r) => r.model !== null && Object.values(r.baselines).every((b) => r.model! < b));

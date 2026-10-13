@@ -8,7 +8,7 @@ import { fetchJson, parseJsonLoose, type FetchLike } from '../core/net.ts';
 import { Predictor, type Law } from '../core/predict.ts';
 import type { MeasureDecl } from '../core/types.ts';
 import { nodeVmRunner } from './node-vm.ts';
-import { openAiChatClient } from '../learn/system2.ts';
+import { openAiChatClient, REASONING_EFFORTS, type ReasoningEffort } from '../learn/system2.ts';
 import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
@@ -162,6 +162,7 @@ export interface LabConnection {
   /** Its temperature (default 0.4), and fields the endpoint takes besides the standard ones (e.g. vLLM's
       chat_template_kwargs: {"reasoning_effort": "medium"}). Both are recorded in the journal's config. */
   readonly temperature?: number; readonly extraBody?: Readonly<Record<string, unknown>>;
+  readonly reasoningEffort?: ReasoningEffort;
 }
 
 export interface LabRunOptions {
@@ -588,6 +589,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const llm = openAiChatClient({ url: options.llm.url!, apiKey: options.llm.key, model: options.llm.model!, jsonMode: options.llm.jsonMode ?? true, temperature: options.llm.temperature ?? 0.4,
     timeoutMs: options.llm.timeoutMs ?? 180000, retries: 1, ...(options.llm.maxTokens ? { maxTokens: options.llm.maxTokens } : {}),
     ...(options.llm.extraBody ? { extraBody: options.llm.extraBody } : {}), fetch: replay.wrap('llm', network),
+    ...(options.llm.reasoningEffort !== undefined ? { reasoningEffort: options.llm.reasoningEffort } : {}),
     onRequest: () => { llmUse.calls++; }, onAnswer: (a) => {
       const n = tokensOf(a.raw); llmUse.tokens += n;
       const replayed = replay.stats().replayed.llm ?? 0;
@@ -1531,27 +1533,35 @@ export function parseAgentPolicy(text: string): Map<string, Set<string>> {
 }
 
 /** System 2's tuning from the environment, for models that need it: LLM_TIMEOUT_MS, LLM_JSON_MODE (0 or false: off),
-    LLM_MAX_TOKENS, LLM_TEMPERATURE, LLM_EXTRA_BODY (a JSON object added to the request's body, e.g.
+    LLM_MAX_TOKENS, LLM_TEMPERATURE, LLM_REASONING_EFFORT (OpenAI), LLM_EXTRA_BODY (a JSON object added to the request's body, e.g.
     {"chat_template_kwargs": {"reasoning_effort": "medium"}, "top_p": 0.95, "top_k": 20}). None set: nothing changes. */
-export function llmTuning(env: NodeJS.ProcessEnv): Pick<LabConnection, 'timeoutMs' | 'jsonMode' | 'maxTokens' | 'temperature' | 'extraBody'> {
+export function llmTuning(env: NodeJS.ProcessEnv, prefix = 'LLM'): Pick<LabConnection, 'timeoutMs' | 'jsonMode' | 'maxTokens' | 'temperature' | 'reasoningEffort' | 'extraBody'> {
+  const get = (suffix: string) => env[prefix + '_' + suffix];
   const n = (v: string | undefined) => (v && Number(v) > 0 ? Number(v) : undefined);
-  const timeoutMs = n(env.LLM_TIMEOUT_MS), maxTokens = n(env.LLM_MAX_TOKENS);
-  const json = env.LLM_JSON_MODE;
-  const t = env.LLM_TEMPERATURE;
+  const timeoutMs = n(get('TIMEOUT_MS')), maxTokens = n(get('MAX_TOKENS'));
+  const json = get('JSON_MODE');
+  const t = get('TEMPERATURE');
   const temperature = t !== undefined && t !== '' && Number.isFinite(Number(t)) && Number(t) >= 0 ? Number(t) : undefined;
-  if (t !== undefined && t !== '' && temperature === undefined) throw new LabError('LLM_TEMPERATURE must be a number from 0');
+  if (t !== undefined && t !== '' && temperature === undefined) throw new LabError(prefix + '_TEMPERATURE must be a number from 0');
+  const effort = get('REASONING_EFFORT')?.trim() || undefined;
+  if (effort !== undefined && !REASONING_EFFORTS.includes(effort as ReasoningEffort))
+    throw new LabError(prefix + '_REASONING_EFFORT must be one of ' + REASONING_EFFORTS.join(', '));
+  const reasoningEffort = effort as ReasoningEffort | undefined;
   let extraBody: Record<string, unknown> | undefined;
-  if (env.LLM_EXTRA_BODY) {
-    try { extraBody = JSON.parse(env.LLM_EXTRA_BODY); } catch (e) { throw new LabError('LLM_EXTRA_BODY is not JSON: ' + String((e as Error).message ?? e)); }
-    if (!extraBody || typeof extraBody !== 'object' || Array.isArray(extraBody)) throw new LabError('LLM_EXTRA_BODY must be a JSON object');
+  const extra = get('EXTRA_BODY');
+  if (extra) {
+    try { extraBody = JSON.parse(extra); } catch (e) { throw new LabError(prefix + '_EXTRA_BODY is not JSON: ' + String((e as Error).message ?? e)); }
+    if (!extraBody || typeof extraBody !== 'object' || Array.isArray(extraBody)) throw new LabError(prefix + '_EXTRA_BODY must be a JSON object');
   }
   return { ...(timeoutMs ? { timeoutMs } : {}), ...(maxTokens ? { maxTokens } : {}), ...(json !== undefined && json !== '' ? { jsonMode: !/^(0|false|no|off)$/i.test(json) } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(temperature !== undefined ? { temperature } : {}), ...(extraBody ? { extraBody } : {}) };
 }
 
 /** What the journal keeps of System 2's tuning (the model's behaviour depends on it): only what was set. */
 function llmTuningRecord(c: LabConnection): Record<string, unknown> {
   const t = { ...(c.temperature !== undefined ? { temperature: c.temperature } : {}), ...(c.extraBody ? { extra_body: c.extraBody } : {}),
+    ...(c.reasoningEffort !== undefined ? { reasoning_effort: c.reasoningEffort } : {}),
     ...(c.jsonMode !== undefined ? { json_mode: c.jsonMode } : {}), ...(c.maxTokens ? { max_tokens: c.maxTokens } : {}), ...(c.timeoutMs ? { timeout_ms: c.timeoutMs } : {}) };
   return Object.keys(t).length ? { llm_tuning: t } : {};
 }

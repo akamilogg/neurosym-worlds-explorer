@@ -433,3 +433,59 @@ pruebas en `lib/test/c302closed-contracts.test.ts`:
   motor y se califican por separado los *insights* que requieren cuerpo.
 - **Comprobado con su juez:** exige derivación y trata igual hallazgos y limitaciones, lo que confirma el endurecimiento
   de nuestro calificador.
+
+## 14. Una investigación, un modelo, dos evaluaciones (09/10/2026)
+
+Implementado como `--focus both`. Es la condición recomendada para obtener un modelo integrado del circuito.
+`signals` (también la ausencia de `--focus`) y `navigation` conservan sus condiciones individuales para comparación.
+El ejemplo `lib/examples/batch.c302closed-unified-n2.json` contiene **un solo run**, con un identificador nuevo: no
+reanuda ni encadena los dos runs independientes de los lotes anteriores.
+
+### 14.1 Qué se aprende y qué se exige
+
+- Una sola investigación conserva cuaderno, experimentos y versiones de un modelo. El modelo mantiene la misma
+  interfaz transferible: historial de tiempos y corrientes, e intervenciones cuando las hay, hacia las dos señales.
+  No recibe la posición, el rumbo, la identidad de la evaluación ni las respuestas del simulador.
+- Cada check evalúa **la misma versión**, sobre **los mismos episodios**, en señales y en navegación. El circuito
+  simulado genera el episodio una vez; evaluar las dos facetas no requiere simular otro episodio en NEURON.
+- Los resultados de ambas se muestran separados. `holds` requiere que ambas pasen. Si se repite el check anterior,
+  ambas deben pasar también al repetirlo. Esto se aplica al modelo actual; una aprobación de otra versión no cuenta.
+- La validación por familia y la confirmación ciega exigen ambas evaluaciones. Las reglas comunes sobre pruebas
+  propias, anomalías de instrumento y confirmación siguen formando parte de la aceptación.
+- El investigador decide cómo experimentar, refinar, descartar o recuperar modelos. No hay una secuencia obligatoria
+  de «primero señales, después navegación» ni un retorno automático impuesto por el arnés.
+
+### 14.2 Experimentos que aíslan el circuito
+
+Una prueba propia con estímulos diseñados, corrientes reproducidas o cuerpo bloqueado evalúa **señales**. Su navegación
+se marca explícitamente como no aplicable: no sería válido compararla con el cuerpo libre y su sensor en lazo cerrado.
+Una prueba propia de movimiento libre evalúa ambas. Esta distinción corresponde al instrumento usado; nunca permite
+omitir navegación en los checks formales, la familia o la confirmación ciega. Los episodios demasiado cortos para los
+horizontes exigidos no pasan una evaluación formal de navegación.
+
+### 14.3 Registro, transferencia y referencia
+
+Los checks guardan `evaluations: { signals, navigation }`, además de los datos propios de cada evaluación y de la
+regresión. El junior, el senior y sus lectores de memoria conservan ambos veredictos. El `finding` transferible conserva
+el modelo y su fingerprint, la evidencia y los dos resultados al aceptarlo. Las medidas exclusivas del operador no
+se incorporan a la vista del investigador.
+
+EurekaBench es una **referencia externa** del enunciado y de los mecanismos encontrados. Su rúbrica permanece en la
+calificación del operador; no decide `holds` ni la aceptación. No se exige su formato de entrega, su reajuste de
+coeficientes ni equivalencia exacta con su señal de giro. Las diferencias del circuito, lectura y cuerpo se documentan
+al interpretar la correspondencia (§11).
+
+### 14.4 Coste y compatibilidad
+
+Se comparte la generación de episodios, pero se suman las evaluaciones del modelo en señales y en los rollouts. El
+coste de estas últimas depende especialmente de si el modelo invoca a Jev. El ejemplo mantiene el presupuesto de tokens
+del junior; el senior se contabiliza aparte. No se lanza ningún run como parte de la implementación o de sus pruebas.
+
+Se corrige también el veredicto de la faceta individual de navegación: ya no puede pasar si falla el check anterior
+repetido. Un punto de navegación sin respuesta invalida su horizonte, en lugar de calcular el resultado sólo sobre los
+puntos respondidos. Al cambiar estos veredictos, reproducir un run antiguo afectado puede divergir; la condición
+conjunta se inicia con el nuevo lote, sin reescribir resultados históricos.
+
+Verificación: circuito de referencia que pasa ambas evaluaciones; fallos independientes y regresión; aceptación por
+familia y confirmación ciega; pruebas propias sin cuerpo libre; conservación de veredictos en memoria, senior y
+artefacto; recorrido con servicio y LLM simulados. Son pruebas locales sin consumo de modelos de pago.

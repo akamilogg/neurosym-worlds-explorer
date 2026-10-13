@@ -1,0 +1,22 @@
+{
+  "format": "batch@1",
+  "id": "c302closed-unified-n2",
+  "concurrency": 1,
+  "budget": { "tokens_per_run": 5000000 },
+  "runs": [
+    {
+      "id": "closed-both-s1",
+      "lab": "c302closed",
+      "condition": "One investigation: the same circuit model must hold on signals and navigation; assisted with senior opening",
+      "researcher": "assisted",
+      "args": [
+        "--seed", "1", "--attempts", "16", "--focus", "both", "--names", "real",
+        "--memory", "selective", "--help-budget", "16", "--max-minutes", "300", "--own-tests", "2",
+        "--task", "Understand how the odor drive becomes the two action signals of this simulated c302 circuit, reorientation and steering: what determines each action, what persists from one sample to the next, on what timescale, and how the circuit, body and odor form a feedback loop. Build one executable model of the circuit from stimulus history alone, supported by your experiments. The same model must explain the observed signals and the navigation when it drives the declared body. Both evaluations are reported separately and both are required for acceptance. You choose which experiments to run and how to revise the model. EurekaBench's navigation-goals statement and simulator description are reference material: investigate what is supported in this laboratory, including differences from that reference.",
+        "--sources-allow", "D:/OctaneDoc/OctLocalServer/EurekaBench-sources/navigation-goals",
+        "--eureka", "D:/OctaneDoc/OctLocalServer/EurekaBench"
+      ],
+      "agent": { "id": "senior", "role": "senior", "max_orders": 16, "patience": 2 }
+    }
+  ]
+}

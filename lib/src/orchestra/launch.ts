@@ -14,7 +14,7 @@ import { projectFiles, type Autonomy, type ProjectGoal } from './project.ts';
  *
  *   LLM_URL, LLM_MODEL, LLM_KEY                    the researchers' System 2
  *   PLANNER_LLM_URL, PLANNER_LLM_MODEL, _KEY       the planner (default: the researchers')
- *   AGENT_LLM_URL, AGENT_LLM_MODEL, AGENT_LLM_KEY  the agent operators (default: the researchers')
+ *   SENIOR_LLM_URL, SENIOR_LLM_MODEL, _KEY        the senior (default: the researchers'; AGENT_LLM_* are legacy aliases)
  *   GRADER_LLM_URL, GRADER_LLM_MODEL, _KEY         `lab grade`: a finished run graded again (default: the researchers')
  *   JEV_URL, JEV_KEY, JEV_MODEL                    the Judge
  *
@@ -32,8 +32,21 @@ export interface ProjectFile {
   readonly max_runs?: number;
 }
 
+type ChatRole = 'PLANNER_LLM' | 'SENIOR_LLM' | 'AGENT_LLM' | 'GRADER_LLM' | 'AUDIT_LLM';
+
+/** Translate old scripts internally; the new senior settings always take precedence. Never mutate the caller's env. */
+function seniorEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const normalized = { ...env };
+  for (const [key, value] of Object.entries(env)) if (key.startsWith('AGENT_LLM_')) {
+    const name = 'SENIOR_LLM_' + key.slice('AGENT_LLM_'.length);
+    if (!normalized[name]) normalized[name] = value;
+  }
+  return normalized;
+}
+
 /** The endpoints of a role from the environment (a role's own, else the researchers'). */
-export function endpointsFromEnv(env: NodeJS.ProcessEnv, role: 'LLM' | 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM' | 'AUDIT_LLM'): { url?: string; model?: string; key?: string } {
+export function endpointsFromEnv(env: NodeJS.ProcessEnv, role: 'LLM' | ChatRole): { url?: string; model?: string; key?: string } {
+  if (role === 'AGENT_LLM' || role === 'SENIOR_LLM') { env = seniorEnv(env); role = 'SENIOR_LLM'; }
   const pick = (k: string) => env[role + '_' + k] || env['LLM_' + k];
   return { url: pick('URL'), model: pick('MODEL'), key: pick('KEY') };
 }
@@ -44,11 +57,16 @@ export function labEndpointsFromEnv(env: NodeJS.ProcessEnv): { llm: LabRunOption
 }
 
 /** An agent's or the planner's client, through a replay log when one is given. */
-export function chatFromEnv(env: NodeJS.ProcessEnv, role: 'PLANNER_LLM' | 'AGENT_LLM' | 'GRADER_LLM' | 'AUDIT_LLM', replay?: { file: string; from?: string; channel: string }): ChatClient {
+export function chatFromEnv(env: NodeJS.ProcessEnv, role: ChatRole, replay?: { file: string; from?: string; channel: string }): ChatClient {
+  const senior = role === 'AGENT_LLM' || role === 'SENIOR_LLM';
+  if (senior) { env = seniorEnv(env); role = 'SENIOR_LLM'; }
   const e = endpointsFromEnv(env, role);
-  if (!e.url || !e.model) throw new LabError('the ' + (role === 'PLANNER_LLM' ? 'planner' : role === 'GRADER_LLM' ? 'grader' : role === 'AUDIT_LLM' ? 'audit\'s extractor' : 'agent') + ' needs an LLM: ' + role + '_URL and ' + role + '_MODEL (or LLM_URL and LLM_MODEL)');
+  if (!e.url || !e.model) throw new LabError('the ' + (role === 'PLANNER_LLM' ? 'planner' : role === 'GRADER_LLM' ? 'grader' : role === 'AUDIT_LLM' ? 'audit\'s extractor' : 'senior') + ' needs an LLM: ' + role + '_URL and ' + role + '_MODEL (or LLM_URL and LLM_MODEL)');
   const log = replay ? new ReplayLog(replay.file, replay.from ? { from: replay.from } : {}) : null;
-  return openAiChatClient({ url: e.url, apiKey: e.key, model: e.model, jsonMode: true, temperature: 0.3, timeoutMs: 180000, retries: 1, ...(log ? { fetch: log.wrap(replay!.channel) } : {}) });
+  /* Connection/model may fall back to the junior. Tuning never does: its effort and Qwen extras are independent. */
+  const tuning = senior ? llmTuning(env, 'SENIOR_LLM') : {};
+  return openAiChatClient({ url: e.url, apiKey: e.key, model: e.model, jsonMode: true, temperature: 0.3, timeoutMs: 180000, retries: 1,
+    ...tuning, ...(log ? { fetch: log.wrap(replay!.channel) } : {}) });
 }
 
 /** The planner's replay logs of a project, oldest first: the next one to write, and the latest to replay. */

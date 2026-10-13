@@ -202,7 +202,7 @@ Un agente con un modelo más capaz puede hacer de senior que revisa a un junior.
   
   El mensaje llega al junior como cualquier ayuda, atribuido a `agent:<id>`, dentro de la política del run
   (`--agents senior=message`) y de su presupuesto de ayuda (`--help-budget`).
-- **Modelo.** `AGENT_LLM_URL` y `AGENT_LLM_MODEL` (por defecto el de los investigadores). La idea es un modelo más
+- **Modelo.** `SENIOR_LLM_URL` y `SENIOR_LLM_MODEL` (por defecto el de los investigadores; `AGENT_LLM_*` sigue como alias). La idea es un modelo más
   capaz que el del junior.
 - **Su prompt: un investigador con otra capacidad, no otro método.** Se compone de tres partes:
   1. su papel;
@@ -378,12 +378,14 @@ cuánto de **la división en dos papeles**. Con el mismo modelo en ambos, la dif
 - **El coste y la caché**, de cada uno.
 - **Si el junior aprende o sólo obedece** (§3.3).
 
+**Configuración implementada:**
+- **Esfuerzo separado para OpenAI:** `LLM_REASONING_EFFORT` (junior) y `SENIOR_LLM_REASONING_EFFORT` (senior), enviados
+  como `reasoning_effort` en Chat Completions. El senior no hereda el esfuerzo ni `LLM_EXTRA_BODY` del junior.
+  `SENIOR_LLM_EXTRA_BODY` permite parámetros propios del proveedor; el flujo existente de Qwen no cambia.
+- **Registro del senior:** `llm_config` guarda su modelo y los parámetros efectivos de la petición, sin claves.
+
 **Lo que falta para poder hacerlo:**
-- **Fijar el esfuerzo de razonamiento del senior.** Hoy el junior puede fijarlo con `LLM_EXTRA_BODY` (el parámetro del
-  proveedor, por ejemplo `{"reasoning": {"effort": "low"}}`). El senior no tiene su equivalente: hay que añadir
-  `AGENT_LLM_EXTRA_BODY` y, en un lote, la opción de darlo por agente.
-- **Registrar en el registro del senior su modelo y sus parámetros,** que hoy no se guardan, para que cada condición
-  quede declarada.
+- **Configuración por miembro de un lote:** fijar el esfuerzo del senior por agente, además de por entorno.
 - **Presupuestos comparables:** el lote ya fija tokens por run; habría que poder fijarlos sumando los del agente.
 
 ### 3.3.3 Las órdenes del senior: equilibrar el escepticismo del junior (implementado, 06/10/2026)
@@ -847,7 +849,7 @@ findings (Q1).
   - el informe.
 
   Los runs de un lote se abren en su vista de run.
-- **Claves:** sólo del entorno (`LLM_*`, `PLANNER_LLM_*`, `AGENT_LLM_*`, `JEV_*`). La plantilla `lib/lab.example.ps1` las
+- **Claves:** sólo del entorno (`LLM_*`, `PLANNER_LLM_*`, `SENIOR_LLM_*`, `JEV_*`; `AGENT_LLM_*` como alias antiguo). La plantilla `lib/lab.example.ps1` las
   pone y lanza la CLI.
 - **Ejemplos:** `lib/examples/batch.example.json` y `lib/examples/project.example.json`.
 
@@ -866,4 +868,3 @@ sustitutos (System 2, agente y planificador) sobre `cells` y sobre `particles3d`
 - la consola y la CLI de proyectos.
 
 Los journals puros no cambian (0 diferencias con el LLM falso).
-

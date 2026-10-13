@@ -204,11 +204,40 @@ cd lib && npm install && npm test
 ```
 
 Endpoints and keys come from the environment only: `LLM_URL` (any OpenAI-compatible `/chat/completions`), `LLM_MODEL`,
-`LLM_KEY`, and `JEV_KEY` (optionally `JEV_URL`, `JEV_MODEL`) for the judge; agents, the planner, the grader and the audit's
-extractor take `AGENT_LLM_*`, `PLANNER_LLM_*`, `GRADER_LLM_*` and `AUDIT_LLM_*` (default `LLM_*`). The easiest way is a
+`LLM_KEY`, and `JEV_KEY` (optionally `JEV_URL`, `JEV_MODEL`) for the judge; the senior, planner, grader and audit's
+extractor take `SENIOR_LLM_*`, `PLANNER_LLM_*`, `GRADER_LLM_*` and `AUDIT_LLM_*` (connection/model default `LLM_*`).
+Old `AGENT_LLM_*` variables remain aliases of `SENIOR_LLM_*`; when both are set, the new names win. The easiest way is a
 launcher: copy `lib/lab.example.ps1` (or a `run-<world>.example.ps1` / `.sh`) to the same name without `.example`, fill
 in your keys (those names are git-ignored), and pass any option through. `--flat` runs any world with a judge that knows
 nothing, without a key.
+
+For OpenAI reasoning models, set `LLM_REASONING_EFFORT` for the junior and `SENIOR_LLM_REASONING_EFFORT` for the senior
+independently. For example, `LLM_MODEL=gpt-6-luna`, `LLM_REASONING_EFFORT=low` and `SENIOR_LLM_REASONING_EFFORT=high`
+use the same model with different effort. Neither effort setting inherits from the other; unset means the provider's
+default. Values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, subject to the model's supported values
+(GPT-6.1 Sol does not support `none` or `minimal`; GPT-6 Sol/Luna do not support `minimal`). Explicit effort is sent as
+top-level `reasoning_effort`; active reasoning omits incompatible `temperature`, `top_p`, `logprobs` and `top_logprobs`.
+With explicit effort, completion limits use `max_completion_tokens`, including reasoning tokens.
+`LLM_EXTRA_BODY` keeps its existing Qwen/vLLM behaviour when no OpenAI effort is set. Senior tuning uses its own
+`SENIOR_LLM_EXTRA_BODY`, `_TEMPERATURE`, `_MAX_TOKENS`, `_JSON_MODE` and `_TIMEOUT_MS`, without inheriting junior tuning.
+The junior's journal records its explicit effort; the senior's record includes `llm_config` with the public request
+configuration (model and effective parameters, without keys or conversation text).
+
+For vLLM/Qwen, set each role's extra body separately using the served model's template options. For the existing
+`chat_template_kwargs.reasoning_effort` configuration, the same model can receive `low` as junior and `high` as senior:
+
+```powershell
+# Clear OpenAI-specific effort overrides if this shell previously used them.
+Remove-Item Env:LLM_REASONING_EFFORT, Env:SENIOR_LLM_REASONING_EFFORT -ErrorAction SilentlyContinue
+$env:LLM_EXTRA_BODY = '{"chat_template_kwargs":{"reasoning_effort":"low"},"top_p":0.95,"top_k":20}'
+$env:SENIOR_LLM_EXTRA_BODY = '{"chat_template_kwargs":{"reasoning_effort":"high"},"top_p":0.95,"top_k":20}'
+$env:LLM_TEMPERATURE = "1"
+$env:SENIOR_LLM_TEMPERATURE = "1"
+```
+
+The senior uses `LLM_URL` and `LLM_MODEL` unless its own connection/model is set. Each extra body is merged into its own
+request, preserving nested template options and sampling fields. `AGENT_LLM_EXTRA_BODY` is a legacy alias; the new
+`SENIOR_LLM_EXTRA_BODY` takes precedence. An unset senior extra body does not inherit the junior's.
 
 ### Runs
 
@@ -285,6 +314,28 @@ result.stoppedBy;   // accepted, budget, cancelled, diverged, ...
 result.researcher;  // finding@1 for another agent
 result.finding;     // the same with every measure of the operator
 ```
+
+### One c302 investigation, two evaluations
+
+`c302closed --focus both` researches one circuit model: its output remains the two signals from stimulus history.
+Every formal check, family validation and blind confirmation evaluates both its signals and its navigation on the same
+episodes. Both must pass, including the previous check when run again. Junior and senior see the separate verdicts;
+the transferable finding records them alongside the model and its fingerprint.
+
+The researcher chooses its experiments and revisions. Its own tests with designed/replayed inputs or a blocked body
+evaluate signals; free-moving tests evaluate both. These diagnostic tests do not replace joint final validation.
+EurekaBench supplies reference material and a separate operator comparison, not the acceptance criterion.
+
+From `lib/`, with the c302 service and the usual model configuration ready:
+
+```powershell
+.\lab.ps1 batch examples\batch.c302closed-unified-n2.json
+```
+
+This example launches one investigation, with a new batch ID. Its token budget applies to the junior; senior usage is
+accounted separately. The older `signals` (including no `--focus`) and `navigation` modes remain available for comparisons.
+Changing the evaluation of an old run can change its replay; use the new batch for the joint condition.
+See [the joint evaluation contract](SPEC-C302-LAZO-CERRADO.md#14-una-investigación-un-modelo-dos-evaluaciones-09102026).
 
 ## Documents
 

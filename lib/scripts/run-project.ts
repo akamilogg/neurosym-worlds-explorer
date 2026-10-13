@@ -22,7 +22,7 @@ const r = await runProject({
   root, id, goal: { question: goal.question, ...(goal.criterion ? { criterion: goal.criterion } : {}) }, budget: goal.budget,
   autonomy: goal.autonomy ?? 'consultive', ...(goal.threshold !== undefined ? { threshold: goal.threshold } : {}), ...(goal.max_runs ? { maxRuns: goal.max_runs } : {}),
   planner: chatFromEnv(process.env, 'PLANNER_LLM', { file: logs.next, ...(logs.latest ? { from: logs.latest } : {}), channel: 'planner' }),
-  agentLlm: (agent) => chatFromEnv(process.env, 'AGENT_LLM', { file: path.join(files.dir, 'agent-' + agent + '.replay.' + Date.now() + '.jsonl'), channel: 'agent' }),
+  agentLlm: (agent) => chatFromEnv(process.env, 'SENIOR_LLM', { file: path.join(files.dir, 'agent-' + agent + '.replay.' + Date.now() + '.jsonl'), channel: 'agent' }),
   ...labEndpointsFromEnv(process.env), signal: controller.signal, print: (l) => console.log(new Date().toISOString() + ' ' + l)
 });
 console.log('project ' + id + ' ended: ' + r.ended?.why);

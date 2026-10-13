@@ -107,3 +107,22 @@ test('a run in the facet of navigation: the model is put in the loop with the bo
     assert.ok(asked.some((q) => /better_than/.test(JSON.stringify(q.user))), 'the learner is told whether its model did better than each baseline');
   } finally { await served.close(); }
 });
+
+test('a single run reports both evaluations to the learner and checks both again on the previous episodes', async () => {
+  const served = await serveC302({ worker, concurrency: 4 });
+  try {
+    const out = path.join(dir, 'both.json');
+    const asked: Record<string, any>[] = [];
+    await runLaboratory(closedLab, { args: [...ARGS.map((a, i) => (ARGS[i - 1] === '--attempts' ? '2' : a)), '--service', served.url,
+      '--focus', 'both', '--out', out], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: system2(served, asked) });
+    assert.match(asked[0].system, /one model of the circuit must hold on BOTH/);
+    const journal = JSON.parse(fs.readFileSync(out, 'utf8'));
+    const checks = journal.events.filter((e: { type: string }) => e.type === 'check');
+    const first = checks[0].laboratories[0];
+    assert.deepEqual(first.evaluations, { signals: true, navigation: false }, 'the worker has the right signals but a deliberately incompatible body');
+    assert.equal(first.holds, false);
+    assert.ok(first.signals.points > 0 && first.navigation.navigation.length === 1);
+    assert.deepEqual(checks[1].laboratories[0].rerun.evaluations, { signals: true, navigation: false });
+    assert.ok(asked.some((q) => /"evaluations":\{"signals":true,"navigation":false\}/.test(JSON.stringify(q.user))));
+  } finally { await served.close(); }
+});

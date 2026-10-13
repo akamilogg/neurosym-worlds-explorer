@@ -21,7 +21,8 @@ import { HORIZONS_MS, navigationCheck, signalsPoint, type HorizonResult, type Si
  *                 exponential (5 mm), the family's of other lengths and shapes, never seen
  *   the episodes  20 s (--duration) from a start drawn around the source, the pulses' times
  *                 from the episode's seed
- *   two FACETS    "signals" (the default): c302nav's task - the two signals from the current
+ *   the FACETS    "both" (recommended): one model must pass signals and navigation together.
+ *                 "signals" (the historical default): c302nav's task - the two signals from the current
  *                 alone (the percept has nothing of the body, §5); "navigation": the learner's
  *                 model of the circuit is put in the loop with the body, from the true state at
  *                 a few points, and must beat three baselines at 50 ms, 500 ms and 2 s (§7)
@@ -216,7 +217,54 @@ export function parseClosedAct(raw: Record<string, unknown>): ClosedAct | string
 }
 
 /** The objective of a facet: c302nav's for the signals; the model in the loop for the navigation. */
-export interface ClosedResult { readonly facet: 'signals' | 'navigation'; readonly place: string; readonly point: string; readonly signals?: C302NavResult; readonly holds?: boolean; readonly horizons?: readonly HorizonResult[] }
+export interface ClosedResult {
+  readonly facet: 'signals' | 'navigation' | 'both'; readonly place: string; readonly point: string;
+  readonly signals?: C302NavResult; readonly holds?: boolean; readonly horizons?: readonly HorizonResult[];
+  /** One model, two evaluations. Null navigation is only for the learner's open-loop tests. */
+  readonly components?: { readonly signals: readonly ClosedResult[]; readonly navigation: readonly ClosedResult[] | null };
+}
+
+function combinedObjective<M, P extends Place>(signal: Objective<M, P, readonly C302NavCase[], ClosedResult>,
+  navigation: Objective<M, P, readonly C302NavCase[], ClosedResult>, episode: (id: string) => unknown): Objective<M, P, readonly C302NavCase[], ClosedResult> {
+  const parts = (rs: readonly ClosedResult[]) => rs.length === 1 && rs[0].components ? rs[0].components : { signals: [], navigation: [] };
+  const evaluations = (rs: readonly ClosedResult[], place: P): Record<string, boolean> => {
+    const p = parts(rs);
+    return { signals: signal.holds(p.signals, { place }), ...(p.navigation === null ? {} : { navigation: navigation.holds(p.navigation, { place }) }) };
+  };
+  const holds = (rs: readonly ClosedResult[], place: P) => Object.values(evaluations(rs, place)).every(Boolean);
+  const notApplicable = { applicable: false, reason: 'This experiment fixes the inputs or the body: only the signals are evaluated.' };
+  return {
+    answer: signal.answer, verdictForm: signal.verdictForm, casesIn: signal.casesIn,
+    async run(model, cases, context) {
+      const signals = await signal.run(model, cases, context);
+      /* Own tests may isolate the circuit. Checks, family validation and blind confirmation always require both. */
+      const navCases = cases.map((c) => ({ ...c, cases: context.purpose !== 'test' ? c.cases : c.cases.filter((p) => {
+        const e = episode(p.point.split('@')[0]) as ClosedEpisode | undefined;
+        return !e || !(e.blocked || e.replayOf || e.designed);
+      }) }));
+      const required = navCases.map((c, i) => context.purpose !== 'test' || c.cases.length > 0 || !cases[i].cases.length);
+      const nav = await navigation.run(model, navCases.filter((_, i) => required[i]), context);
+      let j = 0;
+      return { byPlace: cases.map(({ place }, i) => [{ facet: 'both' as const, place: place.id, point: 'both',
+        components: { signals: signals.byPlace[i] ?? [], navigation: required[i] ? nav.byPlace[j++] ?? [] : null } }]) };
+    },
+    holds: (rs, ctx) => holds(rs, ctx.place) && (!ctx.rerun || holds(ctx.rerun.now, ctx.place)),
+    view(rs, place) {
+      const p = parts(rs);
+      return { evaluations: evaluations(rs, place), signals: signal.view(p.signals, place),
+        navigation: p.navigation === null ? notApplicable : navigation.view(p.navigation, place) };
+    },
+    rerunView: (r, place) => ({ your_model_holds_on_them: holds(r.now, place), evaluations: evaluations(r.now, place) }),
+    operatorView(rs, place) {
+      const p = parts(rs);
+      return { evaluations: evaluations(rs, place), signals: signal.operatorView?.(p.signals, place),
+        navigation: p.navigation === null ? notApplicable : navigation.operatorView?.(p.navigation, place) };
+    },
+    trace: (rs, place) => signal.trace?.(parts(rs).signals, place) ?? [],
+    line: (rs, place, rerun) => Object.entries(evaluations(rs, place)).map(([name, ok]) => name + (ok ? ' holds' : ' does not hold')).join('; ')
+      + (rerun ? ' (run again: ' + Object.entries(evaluations(rerun.now, place)).map(([name, ok]) => name + (ok ? ' holds' : ' does not hold')).join('; ') + ')' : '')
+  };
+}
 
 function closedObjective<M, P extends Place & { readonly spec?: ClosedSpec }>(host: { casesIn: any; answer(m: M, s: SignalsPoint): Promise<unknown>; focus?(): string | null; episode?(id: string): unknown; regression?: boolean },
   options: LabOptions): Objective<M, P, readonly C302NavCase[], ClosedResult> {
@@ -224,13 +272,17 @@ function closedObjective<M, P extends Place & { readonly spec?: ClosedSpec }>(ho
   const signals = signalNames(naming);
   const sig = c302NavObjective<M, P>({ casesIn: host.casesIn, answer: (m, s) => host.answer(m, s as SignalsPoint), holdR2: holdR2Of(options), signals, ...(host.regression ? { regression: true } : {}) });
   const navPoints = Math.max(1, Math.floor(Number(options['nav-points']) || 2));
-  const facet = (): 'signals' | 'navigation' => (host.focus?.() === 'navigation' ? 'navigation' : 'signals');
+  const facet = (): 'signals' | 'navigation' | 'both' => (host.focus?.() === 'both' ? 'both' : host.focus?.() === 'navigation' ? 'navigation' : 'signals');
+  let joint: Objective<M, P, readonly C302NavCase[], ClosedResult> | undefined;
+  const both = () => joint ??= combinedObjective(closedObjective({ ...host, focus: () => 'signals' }, options),
+    closedObjective({ ...host, focus: () => 'navigation' }, options), (id) => host.episode?.(id));
   const nav = (rs: readonly ClosedResult[]) => rs.length > 0 && rs.every((r) => r.holds);
   return {
     answer: c302NavAnswer(signals),
     verdictForm: c302NavVerdict({ signals, ...(host.regression ? { regression: true } : {}) }),
     casesIn: (place, context) => sig.casesIn(place, context),
     async run(model, cases, context) {
+      if (facet() === 'both') return both().run(model, cases, context);
       if (facet() === 'signals') {
         const out = await sig.run(model, cases, context);
         return { ...out, byPlace: out.byPlace.map((rs) => rs.map((r) => ({ facet: 'signals' as const, place: r.place, point: r.point, signals: r }))) };
@@ -241,7 +293,7 @@ function closedObjective<M, P extends Place & { readonly spec?: ClosedSpec }>(ho
         const episodes = [...new Set(points.map((c) => c.point.split('@')[0]))];
         for (const id of episodes) {
           const e = host.episode?.(id) as ClosedEpisode | undefined;
-          if (!e || !e.left.length) continue;
+          if (!e || !e.left.length) { rs.push({ facet: 'navigation', place: place.id, point: id, holds: false }); continue; }
           const steps = points.filter((c) => c.point.startsWith(id + '@')).map((c) => c.state.step).filter((k) => k + 2000 / CONTROL_MS < e.left.length);
           const chosen = Array.from({ length: Math.min(navPoints, steps.length) }, (_, i) => steps[Math.floor((i + 0.5) * steps.length / Math.min(navPoints, steps.length))]);
           const names = { left: e.names.left, right: e.names.right };
@@ -257,9 +309,11 @@ function closedObjective<M, P extends Place & { readonly spec?: ClosedSpec }>(ho
       }
       return { byPlace };
     },
-    holds: (results, ctx) => (results[0]?.facet === 'navigation' || (!results.length && facet() === 'navigation') ? nav(results)
+    holds: (results, ctx) => (results[0]?.facet === 'both' || (!results.length && facet() === 'both') ? both().holds(results, ctx)
+      : results[0]?.facet === 'navigation' || (!results.length && facet() === 'navigation') ? nav(results) && (!ctx.rerun || nav(ctx.rerun.now))
       : sig.holds(results.map((r) => r.signals!), ctx.rerun ? { ...ctx, rerun: { before: ctx.rerun.before.map((r) => r.signals!), now: ctx.rerun.now.map((r) => r.signals!) } } : { place: ctx.place })),
     view(results, place) {
+      if (results[0]?.facet === 'both') return both().view(results, place);
       if (results[0]?.facet !== 'navigation') return sig.view(results.map((r) => r.signals!), place);
       /* Facts only: per episode and horizon, whether the model in the loop did better than each baseline, and the turns. */
       return { episodes: results.map((r) => ({ episode: r.point, your_model_holds_here: r.holds,
@@ -267,13 +321,16 @@ function closedObjective<M, P extends Place & { readonly spec?: ClosedSpec }>(ho
           better_than: Object.fromEntries(Object.entries(h.baselines).map(([b, s]) => [b, h.model !== null && h.model < s])),
           sharp_turns: { the_worm_made: h.turns.worm, your_model_made_too: h.turns.rollout_too } })) })) };
     },
-    rerunView: (rerun, place) => (rerun.now[0]?.facet === 'navigation' ? { episodes: rerun.now.length, your_model_holds_on_them: nav(rerun.now) }
+    rerunView: (rerun, place) => (rerun.now[0]?.facet === 'both' || (!rerun.now.length && facet() === 'both') ? both().rerunView!(rerun, place)
+      : rerun.now[0]?.facet === 'navigation' || (!rerun.now.length && facet() === 'navigation') ? { episodes: rerun.now.length, your_model_holds_on_them: nav(rerun.now) }
       : sig.rerunView!({ before: rerun.before.map((r) => r.signals!), now: rerun.now.map((r) => r.signals!) }, place)),
-    operatorView: (results, place) => (results[0]?.facet === 'navigation' ? { navigation: results.map((r) => ({ episode: r.point, holds: r.holds, horizons: r.horizons })) }
+    operatorView: (results, place) => (results[0]?.facet === 'both' ? both().operatorView!(results, place)
+      : results[0]?.facet === 'navigation' ? { navigation: results.map((r) => ({ episode: r.point, holds: r.holds, horizons: r.horizons })) }
       : sig.operatorView!(results.map((r) => r.signals!), place)),
-    trace: (results, place) => (results[0]?.facet === 'navigation' ? [] : sig.trace!(results.map((r) => r.signals!), place)),
-    line: (results, place, rerun) => (results[0]?.facet === 'navigation'
+    trace: (results, place) => (results[0]?.facet === 'both' ? both().trace!(results, place) : results[0]?.facet === 'navigation' ? [] : sig.trace!(results.map((r) => r.signals!), place)),
+    line: (results, place, rerun) => (results[0]?.facet === 'both' ? both().line!(results, place, rerun) : results[0]?.facet === 'navigation'
       ? 'navigation: ' + results.map((r) => r.point + (r.holds ? ' holds' : ' does not hold') + ' [' + (r.horizons ?? []).map((h) => h.horizon + 'ms ' + (h.model === null ? '-' : h.model.toFixed(3)) + ' vs ' + Object.values(h.baselines).map((b) => b.toFixed(3)).join('/')).join('; ') + ']').join(', ')
+        + (rerun ? ' (run again: ' + (nav(rerun.now) ? 'holds' : 'does not hold') + ')' : '')
       : sig.line!(results.map((r) => r.signals!), place, rerun ? { before: rerun.before.map((r) => r.signals!), now: rerun.now.map((r) => r.signals!) } : undefined))
   } as Objective<M, P, readonly C302NavCase[], ClosedResult>;
 }
@@ -302,17 +359,21 @@ const BODY_WORDS = 'THE WORM (the apparatus; it is not what you investigate). It
 
 export function closedInterface(options: { regression?: boolean; names?: NamesMode; focus?: string | null } = {}): WorldInterface {
   const naming = namingOf(options.names ?? 'real', 0);
-  const nav = options.focus === 'navigation';
+  const both = options.focus === 'both';
+  const nav = options.focus === 'navigation' || both;
   return {
     tools: ['view', 'inspect', 'act', 'measure', 'table'],
     features: ['check'],
     lines: [
       ...objectiveLines({ answer: c302NavAnswer(naming.signals as unknown as SignalNames), verdictForm: c302NavVerdict({ ...options, signals: naming.signals as unknown as SignalNames }) }),
       BODY_WORDS,
-      nav ? 'WHAT COUNTS NOW: the navigation. Your model of the two signals is put in the loop with the worm: from where the worm truly was at a few points of an episode, its own signals move the worm, '
+      ...(both ? ['WHAT COUNTS TOGETHER: one model of the circuit must hold on BOTH its two signals and its navigation. The same version is evaluated on both, in each laboratory, family place and blind confirmation. The evaluations are reported separately; both must hold, including the previous check run again when present. Your model still answers only the two signals from the stimulus history. You choose your experiments and how to revise it.',
+        'Own tests with designed or replayed inputs, or a blocked body, evaluate the signals only: navigation does not apply there. This does not replace the two evaluations required for acceptance.'] : []),
+      nav ? (both ? 'THE NAVIGATION EVALUATION: ' : 'WHAT COUNTS NOW: the navigation. ') + 'Your model of the two signals is put in the loop with the worm: from where the worm truly was at a few points of an episode, its own signals move the worm, '
         + 'pulse after pulse, without seeing the real worm again, for ' + HORIZONS_MS.join(', ') + ' ms. It holds when, at every horizon, it ends closer to where the worm went than three explanations that know nothing: '
         + 'going straight on, keeping the recent angular velocity, and turning at the episode\'s mean rate.'
         : 'WHAT COUNTS: the two signals at each point, from the current alone (as in an open loop), on episodes in which the worm moved.',
+      ...(both ? ['THE SIGNALS EVALUATION: the two signals at each point are also compared with those observed in the same episodes, from the stimulus history alone, as in the signals facet. Passing navigation alone does not pass the check.'] : []),
       [INVESTIGATION, 'Requests:'],
       [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   the rows of a stretch of one of your episodes (at most 60): the time, where the worm was and where it headed, the odor at its nose, the current into each odor cell, the two signals, its sharp turns, and the calcium of the cells recorded'],
       [['act'], '  {"act": {"start": {"x": <mm>, "y": <mm>, "heading": <rad>}, "source": [<x>, <y>], "length": <2 to 10 mm>, "duration_ms": <up to 60000>, "seed": <n>, "blocked": true | false, "record": ["<cell>", ...], '
@@ -337,7 +398,7 @@ async function drawn(spec: ClosedSpec, seed: number, ctx: LabContext | undefined
 export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase, ClosedAct> = {
   id: 'c302-navigation-closed@1',
   about: 'c302nav in closed loop (SPEC-C302-LAZO-CERRADO): the panel of 28 cells of c302, simulated by NEURON step by step, its two signals moving a worm in an odor field, the current into its odor cells '
-    + 'coming in pulses from what it smells where it is. Facet "signals" (default): the two signals from the current alone; facet "navigation": the learner\'s model of the circuit put in the loop with the worm. '
+    + 'coming in pulses from what it smells where it is. Facet "both" (recommended): one model must pass signals and navigation together. Facet "signals" (historical default): the two signals from the current alone; facet "navigation": the learner\'s model of the circuit put in the loop with the worm. '
     + 'The environment is the c302 service (scripts/c302-service.ts) with NEURON (NEURONHOME).',
   options: [
     { name: 'service', default: 'http://127.0.0.1:18600', help: 'where the c302 service is (start it with scripts/c302-service.ts, in an environment with NEURON)' },
@@ -350,6 +411,7 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
     { name: 'eureka', default: '', help: 'OPERATOR ONLY: a local copy of EurekaBench, whose rubric gives the insights the learner is graded against' }
   ],
   facets: [
+    { id: 'both', help: 'one investigation and one circuit model, required to hold on both signals and navigation (recommended)' },
     { id: 'signals', help: 'the two signals at each point, from the current alone (the default)' },
     { id: 'navigation', help: 'the learner\'s model of the circuit in the loop with the worm, against three baselines, at several horizons' }
   ],
@@ -480,4 +542,3 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
     'of a simulated nervous system (c302, the panel of 28 cells of C. elegans) in closed loop with a worm in an odor field: what turns the odor drive into the two action signals (reorientation, steering), what persists between them, what moves it, and how the loop takes the worm towards the odor. The true statements are questions a mechanism should answer; a learner states one when its model or words give that answer',
     'Read its model as code and words: what its observations, rules and output compute, and what its notes and rules say of the mechanism, is what it claims. When it was given neutral names, `learner_names` says what each of its names is.') }
 };
-

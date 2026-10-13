@@ -173,7 +173,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   const file = agentFile(o.journal, o.id);
   const role: AgentRole = o.role ?? 'coach';
   const record: { format: string; agent: string; role: AgentRole; run: string; started: string; decisions: AgentDecision[]; usage?: Usage;
+    llm_config?: Readonly<Record<string, unknown>>;
     continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
+  if (o.llm.configuration) record.llm_config = o.llm.configuration;
   const save = () => fs.writeFileSync(file, JSON.stringify(record, null, 2));
   /* The senior keeps a state of its own (SPEC-ORQUESTADOR §3.3.1): its notebook and its conversation. */
   if (role === 'senior') record.senior = emptySeniorState();

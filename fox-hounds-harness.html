@@ -619,6 +619,7 @@ var Neurosym = (() => {
     PATH_TIE_MARGIN: () => PATH_TIE_MARGIN,
     PLAY_PV_ALPHA_BETA: () => PLAY_PV_ALPHA_BETA,
     PREFILTER_TOLERANCE: () => PREFILTER_TOLERANCE,
+    REASONING_EFFORTS: () => REASONING_EFFORTS,
     REVISION_MIN_DELTA: () => REVISION_MIN_DELTA,
     RoundConversation: () => RoundConversation,
     STANCES: () => STANCES,
@@ -2875,6 +2876,7 @@ var Neurosym = (() => {
       return new UserParts([...this.parts]);
     }
   };
+  var REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
   var clock4 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
   function chatRequestBody(options, system, user) {
     const body = {
@@ -2890,11 +2892,24 @@ var Neurosym = (() => {
     if (options.extraBody) {
       for (const [k, v] of Object.entries(options.extraBody)) if (k !== "model" && k !== "messages") body[k] = v;
     }
+    if (options.reasoningEffort !== void 0) {
+      body.reasoning_effort = options.reasoningEffort;
+      if (options.reasoningEffort !== "none") {
+        for (const k of ["temperature", "top_p", "top_logprobs", "logprobs"]) delete body[k];
+      }
+      if (body.max_tokens !== void 0 && body.max_completion_tokens === void 0) body.max_completion_tokens = body.max_tokens;
+      delete body.max_tokens;
+    }
     return body;
   }
   function openAiChatClient(options) {
     const read = typeof options === "function" ? options : () => options;
     return {
+      get configuration() {
+        const o = read(), body = chatRequestBody(o, "", {});
+        const { messages, ...configuration } = body;
+        return configuration;
+      },
       async complete({ system, user, signal }) {
         const o = read();
         o.onRequest?.();
