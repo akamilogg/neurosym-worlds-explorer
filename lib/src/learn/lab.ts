@@ -319,7 +319,10 @@ export interface LabRunConfig {
     commit that brought it, and how a journal made before `capabilities_from` says it had it. */
 export const CAPABILITIES: readonly { readonly name: string; readonly since: string; inJournal(config: Record<string, unknown>): boolean }[] = [
   /* SPEC-INSTRUMENTOS-PROPIOS: 7fc7cb4; the switch `instruments` in the configuration since a7e1cf4. */
-  { name: 'instruments', since: '7fc7cb4', inJournal: (config) => typeof config.instruments === 'boolean' }
+  { name: 'instruments', since: '7fc7cb4', inJournal: (config) => typeof config.instruments === 'boolean' },
+  /* The assisted researcher's system prompt fixed for the whole run, what changes later added as messages (14/10/2026).
+     Every journal made before it either keeps `capabilities_from` without it or predates `capabilities_from` (and c55cb53). */
+  { name: 'fixed_system', since: 'c55cb53', inJournal: () => false }
 ];
 
 /** Whether a capability applies at an attempt of a run whose configuration is `cfg`. */
@@ -334,6 +337,9 @@ export interface LabServices {
   readonly options: LabOptions;
   /** System 2 (its answers logged for --resume) and what it has cost. */
   readonly llm: import('./system2.ts').ChatClient;
+  /** The operator's own questions (its grader): System 2's model without the researcher's channel - no operator message,
+      no section of the researcher's prompt, not one of its questions. Default: `llm`. */
+  readonly operatorLlm?: import('./system2.ts').ChatClient;
   readonly llmUse: { readonly calls: number; readonly tokens: number };
   /** The Judge (the flat one with --flat; its answers logged for --resume). */
   readonly judge: import('../core/jev.ts').JevJudge;

@@ -207,7 +207,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const system = GRID_GRADING_SYSTEM + (v2 ? ' ' + FALSE_BELIEF_RULE : '');
     const user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: sense.glyphA, other: sense.glyphB }, learner: learned });
     try {
-      const content = (await llm.complete({ system, user })).content;
+      const content = (await (s.operatorLlm ?? llm).complete({ system, user })).content;
       const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string; evidence?: string }[]; false_beliefs?: unknown[] } | null;
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const points = grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0);

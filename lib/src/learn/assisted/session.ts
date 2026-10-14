@@ -104,6 +104,12 @@ export interface OperatorChannel {
   readonly scheduled?: ReadonlyMap<number, readonly OperatorMessage[]>;
   /** The system prompt now (it changes with a focus); default: the one the session was given. */
   system?(): string;
+  /** The conversation only grows (capability `fixed_system`): the system prompt of its first assisted question is kept
+      for the whole run, and what changes in it later - a directive's section, the sources', a focus's interface - is
+      added as a message instead, at the question it applies from, and again after the first part of every later round.
+      Off: the system prompt is rewritten (journals made before, replayed as they were). While it returns false (the
+      unknown-world researcher's rounds, before a hand-over) nothing is fixed yet. */
+  fixedSystem?(): boolean;
   /** What the operator wants understood, if they said: sent with every question as `operator_task`. */
   task?(): string | null;
   /** Told of each message as it is delivered, with its question (a focus is applied, a source read, then). */
@@ -155,6 +161,9 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
      earlier ones after the round's first part, a new one after the parts it arrived with. A new round starts afresh. */
   let roundKey = '';
   let placed: { after: number; part: Record<string, unknown> }[] = [];
+  /* With the system prompt fixed: the one kept, the latest it would have been, and what was added since as messages. */
+  let fixedPrompt: string | null = null, lastPrompt = '';
+  let announced: Record<string, unknown>[] = [];
   const lastScheduled = Math.max(0, ...(channel.scheduled ? [...channel.scheduled.keys()] : []));
   return {
     openDirectives: () => [...open.values()],
@@ -172,7 +181,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       if (request.user instanceof UserParts) {
         const parts = request.user.parts as Record<string, unknown>[];
         const key = JSON.stringify(parts[0]);
-        if (key !== roundKey) { roundKey = key; placed = earlier.length ? [{ after: 1, part: { operator_messages: { earlier: [...earlier] } } }] : []; }
+        if (key !== roundKey) { roundKey = key; placed = [...(earlier.length ? [{ after: 1, part: { operator_messages: { earlier: [...earlier] } } }] : []), ...announced.map((part) => ({ after: 1, part }))]; }
         if (fresh.length) placed.push({ after: parts.length, part: { operator_messages: { new: fresh } } });
         const out: unknown[] = [];
         parts.forEach((p, i) => { out.push(i === 0 ? { ...p, ...standing } : p); for (const x of placed) if (x.after === i + 1) out.push(x.part); });
@@ -184,7 +193,24 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       earlier.push(...fresh);
       for (const m of fresh) if (m.directive) { open.set(m.id, { ...m, ...(channel.round ? { round: channel.round() } : {}) }); directed = true; }
       const base = channel.system ? channel.system() : request.system;
-      const system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '');
+      let system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '');
+      if (channel.fixedSystem?.()) {
+        if (fixedPrompt === null) fixedPrompt = lastPrompt = system;
+        else if (system !== lastPrompt) {
+          /* What changed, as a message: what was added at its end, or (a focus rewrites the interface) the whole of it now. */
+          const part: Record<string, unknown> = system.startsWith(lastPrompt) ? { instructions_added: system.slice(lastPrompt.length).trim() } : { instructions_now: system };
+          if ('instructions_now' in part) announced = [];
+          announced.push(part);
+          lastPrompt = system;
+          if (user instanceof UserParts) {
+            placed.push({ after: (request.user as UserParts).parts.length, part });
+            user = new UserParts([...user.parts, part]);
+          }
+        }
+        /* A question in one message (an object): what was added goes with it. A question already written as text is sent as it is. */
+        if (!(user instanceof UserParts) && announced.length && user && typeof user === 'object' && !Array.isArray(user)) user = { ...(user as Record<string, unknown>), instructions_added_during_the_run: announced };
+        system = fixedPrompt;
+      } else fixedPrompt = null;
       const answer = await llm.complete({ ...request, system, user });
       /* What it reports to its senior, in any answer: kept for the senior, and a directive carried out is closed. */
       const said = parseJsonLoose(answer.content) as Record<string, unknown> | null;

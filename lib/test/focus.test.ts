@@ -101,7 +101,9 @@ test('assisted: a task goes with every question; a focus sent during the run is 
   assert.equal(r.stoppedBy, 'accepted');
   assert.ok(asked.every((q) => q.user.operator_task), 'the task, with every question');
   assert.equal(asked[0].user.operator_task, 'how the even cells change');
-  assert.ok(!asked[1].system.includes('WHAT COUNTS') && asked[2].system.includes(cellsFocusLine('even')!), 'the prompt says what counts from the question it went with');
+  /* Its system prompt is never rewritten (test/append-only.test.ts): what counts now comes as a message, with the question it went with. */
+  assert.ok(!asked[1].system.includes('WHAT COUNTS') && asked[2].system === asked[1].system, 'the system prompt stays');
+  assert.ok(!JSON.stringify(asked[1].user).includes('WHAT COUNTS') && JSON.stringify(asked[2].user.instructions_now).includes(JSON.stringify(cellsFocusLine('even')!).slice(1, -1)), 'what counts, from the question it went with');
   assert.equal(asked[2].user.operator_task, 'the even layer');
   assert.match(asked[2].user.operator_messages.new[0].text, /facet "even"/);
   const events = eventsOf(r.journal);

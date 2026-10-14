@@ -780,3 +780,173 @@ quedó sin preguntas abiertas (§14.3) y sin nota: justo lo que el operador nece
 - **También en la cuadrícula,** con su bucle propio (`LabServices.closing`).
 - **Pruebas:** `test/closing.test.ts`. Un run cortado por tokens tiene reflexión y calificación, y reanudado sin tope
   sigue sin divergir.
+
+### 14.10 La conversación sólo crece, también su prompt de sistema (14/10/2026)
+
+**Qué pasaba.** Dentro de una ronda, la conversación del junior ya sólo crecía (`RoundConversation`). Pero su prompt de
+sistema se reescribía a mitad del run:
+- con la primera directiva de su senior, para añadir qué es una directiva (`DIRECTIVES_SECTION`);
+- con el primer origen permitido, para añadir cómo leer fuentes (`SOURCES_SECTION`);
+- con un cambio de foco, para cambiar la interfaz entera.
+
+Cada reescritura invalidaba la caché del proveedor desde el primer mensaje.
+
+Además, en la cuadrícula el calificador del operador preguntaba por el mismo canal que el junior. Contaba como pregunta
+suya, y con una directiva se llevaba sus secciones.
+
+**El cambio** (capacidad `fixed_system`, con su inicio en `capabilities_from`):
+- **El prompt de sistema se fija** en la primera pregunta del investigador asistido y no cambia en todo el run.
+- **Lo que cambie después llega como un mensaje añadido** en la pregunta desde la que vale:
+  - `instructions_added`: lo añadido al final del prompt;
+  - `instructions_now`: el prompt entero, cuando un foco reescribe la interfaz.
+- **En cada ronda siguiente se repite** detrás de su primera parte, junto a los mensajes anteriores del operador.
+- **Una pregunta de un solo mensaje** (la reflexión) los lleva en `instructions_added_during_the_run`.
+- **Antes del relevo** (las rondas del investigador de mundo desconocido) no se fija nada.
+- **Un diario hecho antes** se reanuda como era: sin la capacidad, el prompt se reescribe como entonces.
+- **El calificador de la cuadrícula** pregunta por su propio cliente (`LabServices.operatorLlm`), fuera del canal del
+  investigador.
+
+**Pruebas** (`test/append-only.test.ts`):
+- **El junior, con un senior que le escribe:** un solo prompt de sistema en todo el run. Dentro de cada ronda, cada
+  pregunta es la anterior con mensajes añadidos al final. La sección de las directivas llega como mensaje y se repite en
+  cada ronda siguiente.
+- **Un foco enviado a mitad del run:** el prompt de sistema no cambia, y las instrucciones nuevas llegan como mensaje.
+- **El senior, a lo largo de varias llamadas y rondas del junior:** un solo prompt de sistema, y cada pregunta es la
+  anterior con mensajes añadidos.
+
+Una consolidación, pedida por el investigador o forzada por tamaño, es el único reinicio declarado. Estas pruebas no
+tienen ninguna.
+
+## 15. Presupuesto visible (idea del autor, 14/10/2026)
+
+### 15.1 De dónde sale
+
+En el primer piloto del mundo de artefactos (`artifacts-dedup-pilot`), el investigador hizo un solo cambio. Lo aceptaron
+en la ronda 3 y dedicó las siete rondas restantes al modelo de tiempo, sin volver a tocar el artefacto. No hizo nada mal:
+no sabía cuánto le quedaba.
+
+Hoy sólo ve presupuestos locales:
+- los actos de esta ronda (`acts_left`);
+- las validaciones (`validations_left`);
+- las respuestas de su memoria (`memory_answers_left`).
+
+No sabe en qué ronda está respecto al total, ni cuántos tokens o minutos le quedan. Sin eso no puede decidir si le
+compensa otro cambio arriesgado, una réplica más o consolidar lo que tiene.
+
+La propuesta del autor: que sea consciente de su presupuesto, porque **aprender a gestionar recursos es parte de
+investigar** y algo que merece medirse.
+
+### 15.2 Principios
+
+- **Lo que ve es exactamente lo que le para.** El mismo contador que corta el run, ni una estimación ni otro distinto.
+- **Sólo lo que el operador limitó.** Un límite que no existe no aparece.
+- **El presupuesto es suyo, y cómo repartirlo también.** El entorno dice cuánto hay y cuánto lleva, nunca cómo gastarlo:
+  ni "te queda poco, valida ya" ni ritmos recomendados (sin investigación precocinada, sin métrica para System 2).
+- **Genérico.** El mismo bloque en todos los mundos de leyes y en la cuadrícula. Ningún mundo lo redefine.
+- **Sólo el investigador asistido.** El de mundo desconocido sigue congelado, byte a byte.
+- **Es una condición declarada.** Con presupuesto visible o sin él, y el finding lo dice. Así se puede medir si aprende a
+  gestionar recursos.
+
+### 15.3 Qué ve, y dónde
+
+**La conversación con System 2 sólo crece** (`RoundConversation`, `lib/src/learn/system2.ts`):
+- la primera parte de una ronda no cambia;
+- cada paso añade un mensaje al final, nunca reescribe uno anterior.
+
+Así, la caché del proveedor reutiliza todo lo anterior. **El presupuesto respeta eso:**
+- **No va en el prompt de sistema ni en la primera parte de la ronda.** Ninguna sección fija se reescribe con él, y lo
+  que la caché reutiliza no cambia.
+- **Va en un mensaje propio, añadido al final:** uno al abrir la ronda, detrás de su primera parte, y uno nuevo con cada
+  paso de investigación y con la propuesta, con los valores de ese momento. Los mensajes anteriores se quedan como
+  estaban, con sus valores de entonces.
+
+```json
+{ "budget": {
+  "rounds":  { "this": 4, "of": 10 },
+  "tokens":  { "spent": 412000, "of": 3000000 },
+  "minutes": { "elapsed": 37, "of": 180 }
+} }
+```
+
+- **`rounds`:** la ronda actual y el número de rondas (`--attempts`).
+- **`tokens`:** los tokens de System 2 contados por el mismo contador que el tope (`--max-tokens`, o el `tokens_per_run`
+  de un lote). Incluye lo gastado antes de una reanudación, porque ese contador lo incluye.
+- **`minutes`:** el tiempo desde que arrancó este proceso, y el tope (`--max-minutes`). Es lo que corta hoy (§15.5).
+
+Los contadores locales de siempre (`steps_left`, `acts_left`, `validations_left`, `memory_answers_left`) siguen donde
+están y como están. Se refieren a cosas distintas.
+
+**En la interfaz,** una línea, fija desde el principio del run como el resto del prompt de sistema, dice:
+- qué es cada campo;
+- que al acabarse las rondas, los tokens o los minutos la investigación termina y sólo queda el cierre (la reflexión,
+  §14.9);
+- que repartirlo es decisión suya.
+
+No dice nada más. Con `--budget-hidden` esa línea no está, y el prompt de sistema es el de antes.
+
+**El senior** (SPEC-ORQUESTADOR §3.3), cuando revisa a un junior atascado, recibe el último bloque del junior en el
+mensaje de su revisión, también añadido: una recomendación que no sabe cuánto queda puede ser imposible de seguir.
+
+### 15.4 Repetición y diarios antiguos
+
+**El bloque varía con el tiempo y con los tokens,** así que al reanudar no saldría igual: una reanudación divergiría.
+- **El valor se registra como una respuesta del entorno** (`LabContext.recorded`, la ruta `/budget`) y se sirve del log
+  al reanudar.
+- **Pasado el final del log, se toma vivo.**
+
+**Es una capacidad con su propio inicio** (`CAPABILITIES`, `capabilities_from`). Un diario hecho antes se reanuda sin el
+bloque, como era.
+
+### 15.5 La condición y su interruptor
+
+- **Por omisión, visible** en el investigador asistido.
+- **`--budget-hidden`** lo oculta: es la condición de comparación.
+- **Queda en el diario** (`config.budget_visible`) y en el finding, como procedencia (`assistance.budget_visible`).
+
+**Los minutos son de este proceso,** igual que el corte hoy. Un run reanudado recibe el tiempo que le dé el operador al
+reanudar, y lo ve así. Si algún día el corte pasa a ser de todo el run (sumando los tramos vivos), lo visible cambia con
+él: siempre lo que le para.
+
+### 15.6 Medidas y evaluación
+
+Son del operador; van al diario y al finding, nunca a System 2.
+- **El reparto:** qué fracción de cada presupuesto llevaba gastada en cada hito:
+  - el primer modelo que se sostuvo;
+  - cada validación;
+  - cada aceptación, del modelo y, en un mundo de artefactos, del artefacto;
+  - y lo que gastó después de la última aceptación.
+- **En qué lo gastó:** pasos por clase (ver, actuar, medir, tablas, memoria, documentos, instrumentos) por tramo del
+  presupuesto: primer tercio, segundo y último.
+- **Cómo terminó:**
+  - si dejó presupuesto sin usar;
+  - si el tope le cortó con una línea de trabajo abierta: lo dice su cierre (§14.3), con preguntas investigables aquí.
+- **La comparación:** visible frente a oculto, con el mismo mundo, semilla y modelo:
+  - si con presupuesto visible llega a más (más escalones aceptados, otra validación) o reparte de otra manera;
+  - si cambia el método, que es lo que se juzga (no ganar).
+
+### 15.7 Riesgos y preguntas abiertas
+
+- **Prisa.** Que valide antes de tiempo porque queda poco: puede ser una buena decisión o una mala. El método lo juzga Jev
+  y la auditoría, no una regla del entorno.
+- **Gastar por gastar.** El presupuesto no es un objetivo: no hay premio por agotarlo ni por ahorrarlo.
+- **Terminar antes.** Con presupuesto visible, quizá quiera darlo por terminado antes de agotarlo. Hoy no puede: sólo
+  propone hasta que se acaba. ¿Debe poder cerrar por su cuenta? Queda abierto. Si se permite, su cierre dice por qué, y el
+  dato es una medida más.
+- **Tokens de quién.** El tope cuenta los de System 2. Los de Jev y los del senior no cuentan. Si el operador limitara
+  también esos, el bloque los mostraría con el mismo principio.
+
+### 15.8 Plan
+
+1. El bloque `budget`, en mensajes añadidos de la conversación del investigador asistido de los mundos de leyes, y su
+   línea en la interfaz. Registrado al reanudar, con su capacidad. Pruebas:
+   - lo que muestra coincide con lo que corta;
+   - cada pregunta es la anterior con algo añadido al final: ninguna parte anterior cambia;
+   - una reanudación no diverge;
+   - un diario anterior se reanuda sin él;
+   - el de mundo desconocido no cambia.
+2. La cuadrícula, a la par.
+3. `--budget-hidden` y la procedencia en el finding.
+4. Las medidas de §15.6 en el resumen del operador y en el finding.
+5. Un piloto emparejado, visible frente a oculto, en el mundo de artefactos con un enunciado de "lo más rápido que puedas".
+   Va junto con el listón que sube (SPEC-MUNDO-ARTEFACTOS), que es lo que hace que quede algo por ganar después de una
+   aceptación.

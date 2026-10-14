@@ -454,7 +454,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (team) run.log('team', { id: team.board.spec.id, member: team.member, members: team.board.spec.members, window: team.board.spec.window,
     exchange: team.board.spec.exchange, confirmations: team.board.spec.confirmations });
   const services = { ...(isGameLab(lab) && researcher === 'assisted'
-    ? { ...run.services, llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous) }, run.log),
+    ? { ...run.services, operatorLlm: run.services.llm, llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous), fixedSystem: () => capabilitiesFrom.fixed_system === 0 }, run.log),
       assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) },
       awaitOpening: () => run.awaitOpening() }
     : run.services), ...(endings.length ? { endings } : {}), ...(team ? { team } : {}) };
@@ -1429,6 +1429,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '') : promptFor(focus)),
       task: () => (helping ? task : null),
+      /* Its conversation only grows: its system prompt fixed from its first question, what changes added as messages. */
+      fixedSystem: () => helping && cfg.capabilities_from?.fixed_system === 0,
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
         if (m.source) { sources.allow(m.source); log('sources_allowed', { question, origin: m.source }); }
