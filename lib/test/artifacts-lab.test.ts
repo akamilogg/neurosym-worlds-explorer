@@ -43,7 +43,7 @@ function system2(seen: Record<string, any>[]): FetchLike {
 test('an assisted run on an artifact: versions to read, changes and runs as acts, checks of the reference and the latest version - and measured runs given again on a resume', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-lab-'));
   const seen: Record<string, any>[] = [];
-  const args = ['--task', 'dedup', '--scale', '0.2', '--seed', '1', '--researcher', 'assisted', '--steps', '3', '--attempts', '2', '--flat', '--no-grade', '--no-reflection', '--no-ablation'];
+  const args = ['--artifact', 'dedup', '--scale', '0.2', '--seed', '1', '--researcher', 'assisted', '--steps', '3', '--attempts', '2', '--flat', '--no-grade', '--no-reflection', '--no-ablation'];
   const r = await runLaboratory(artifactsLab, { args: [...args, '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: system2(seen) });
   const journal = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
   const inv = journal.events.filter((e: any) => e.type === 'investigation');
@@ -84,7 +84,7 @@ test('an assisted run on an artifact: versions to read, changes and runs as acts
 
 /* Its contract (the generic one runs every laboratory at its default scale: test/labs.test.ts), here at a small scale. */
 test('artifacts: its contract - acts echoed and refused as the others, a change the same version twice, cases and points the same, places described', async () => {
-  const options = { task: 'dedup', scale: '0.1', acts: '3', tolerance: '0.25', workloads: '2' };
+  const options = { artifact: 'dedup', scale: '0.1', acts: '3', tolerance: '0.25', workloads: '2' };
   const lab = artifactsLab;
   const spec = lab.generate(1, options);
   assert.equal(lab.interface({ world: options }).tools.includes('act'), true);

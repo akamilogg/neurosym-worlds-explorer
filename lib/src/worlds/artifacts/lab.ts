@@ -153,15 +153,15 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
   id: 'artifacts@1',
   about: 'System 2 changes an artifact and runs its versions, and writes a model of its behaviour: the metric of a run, from what is known before it.',
   options: [
-    { name: 'task', default: 'dedup', help: 'the artifact task: ' + Object.keys(TASKS).join(', ') },
+    { name: 'artifact', default: 'dedup', help: 'the artifact and its task: ' + Object.keys(TASKS).join(', ') },
     { name: 'scale', default: '1', help: 'the size of every workload, relative' },
     { name: 'acts', default: '3', help: 'changes and runs System 2 may make per round' },
     { name: 'tolerance', default: '0.25', help: 'how far from what was measured an answer may be, relative' },
     { name: 'workloads', default: '2', help: 'fresh workloads per family in a check' }
   ],
   generate: (seed, o) => {
-    const make = TASKS[o.task];
-    if (!make) throw new Error('--task: no artifact task "' + o.task + '" (' + Object.keys(TASKS).join(', ') + ')');
+    const make = TASKS[o.artifact];
+    if (!make) throw new Error('--artifact: no artifact task "' + o.artifact + '" (' + Object.keys(TASKS).join(', ') + ')');
     const task = make(Number(o.scale) || 1);
     const lab = task.families.find((f) => f.role === 'laboratory');
     if (!lab) throw new Error('the task has no laboratory family');
@@ -173,7 +173,7 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
     family: spec.world.task.families.filter((f) => f.role === 'family').map((f) => ({ id: f.id, spec: { ...spec, family: f.id } }))
   }),
   blindPlaces: (spec, set) => spec.world.task.families.filter((f) => f.role === 'blind').map((f) => ({ id: f.id + '-' + set, spec: { ...spec, family: f.id } })),
-  runName: (seed, o) => 'artifacts-' + o.task + '-s' + seed,
+  runName: (seed, o) => 'artifacts-' + o.artifact + '-s' + seed,
   headline: (spec) => spec.world.task.id + ' (base ' + spec.world.reference + ')',
   placeInfo: (spec) => ({ family: spec.family }),
   explorationSeed: (seed) => seed * 4973 + 7,
@@ -181,7 +181,7 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
   world: pointWorld,
   perceive: (p) => p,
   perceptDoc: PERCEPT_DOC,
-  interface: (options) => artifactInterface(TASKS[options.world?.task ?? 'dedup']?.(Number(options.world?.scale) || 1) ?? dedupTask(), Number(options.world?.tolerance) || 0.25, options.regression),
+  interface: (options) => artifactInterface(TASKS[options.world?.artifact ?? 'dedup']?.(Number(options.world?.scale) || 1) ?? dedupTask(), Number(options.world?.tolerance) || 0.25, options.regression),
 
   /* Exploration: the base, to read, and the base on the first laboratory's workloads. */
   episode: async (spec, rnd, ctx) => {

@@ -603,7 +603,8 @@ La referencia es la base.
 ### 18.4 El mundo de artefactos como laboratorio (14/10/2026; plan, paso 3)
 
 **El laboratorio** (`lib/src/worlds/artifacts/lab.ts`, registrado como `artifacts`) conecta el mundo al investigador
-asistido como un mundo de leyes más:
+asistido como un mundo de leyes más. El artefacto se elige con `--artifact` (`dedup`), no con `--task`, que es
+el enunciado del operador para el investigador asistido; el piloto, `lib/examples/batch.artifacts-dedup-pilot.json`:
 - **Episodios de dos clases:** una versión, que se lee línea a línea, y una tanda de ejecuciones, cada una con su punto.
 - **El punto, sólo lo que se sabe antes de ejecutar** (§7): familia, parámetros de la carga, versión, archivos cambiados
   respecto de la base y tamaño de cada archivo. Lo medido nunca está en su propio punto.

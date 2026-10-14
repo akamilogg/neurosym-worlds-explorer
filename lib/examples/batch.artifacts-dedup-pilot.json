@@ -1,0 +1,32 @@
+{
+  "format": "batch@1",
+  "id": "artifacts-dedup-pilot",
+  "concurrency": 1,
+  "budget": {
+    "tokens_per_run": 3000000
+  },
+  "runs": [
+    {
+      "id": "dedup-assisted",
+      "lab": "artifacts",
+      "condition": "the first artifact: a data script with real inefficiencies (SPEC-MUNDO-ARTEFACTOS §18.4)",
+      "researcher": "assisted",
+      "args": [
+        "--artifact",
+        "dedup",
+        "--seed",
+        "1",
+        "--attempts",
+        "10",
+        "--memory",
+        "selective",
+        "--own-tests",
+        "2",
+        "--max-minutes",
+        "180",
+        "--task",
+        "Make this artifact faster without changing what it writes, and understand why: build and test an executable model of its run time from what is known before a run, put forward the version you can defend, and record the evidence of each change, the failed alternatives, the limitations and the open questions so another team can reconstruct your work."
+      ]
+    }
+  ]
+}
