@@ -72,6 +72,31 @@ Cada tarea es un laboratorio, con la interfaz común (`Lab`), y declara:
 - **No hay una "versión actual" impuesta.** El investigador elige de qué versión parte cada cambio. Volver atrás es partir
   de una versión anterior, y nunca se pierde nada.
 
+### 5.1 Lo que no es: no reimplementar git
+
+El autor teme acabar reimplementando git (14/10/2026). El riesgo es real: un árbol de versiones por hash se parece mucho a
+git, y cada necesidad nueva (fusionar ramas, mover archivos, versiones grandes) empuja hacia él. La frontera:
+
+- **Lo que necesitamos y git no tiene:** el vínculo de cada versión con su razón. Qué hipótesis motivó el cambio, qué
+  predijo, qué se midió, en qué creencias se apoya y qué se invalida si cae una (§9). Eso es el valor del mundo, y vive en
+  el diario, no en el control de versiones.
+- **Lo que git tiene y no necesitamos, y no se construye:**
+  - **fusiones automáticas:** combinar dos ramas es un cambio más que escribe el investigador, declarando en qué creencias
+    de cada rama se apoya (§12);
+  - historia reescribible, ramas con nombre, etiquetas, remotos;
+  - parches por líneas con contexto: un parche sustituye o quita archivos enteros, o una región que el propio
+    investigador indica;
+  - detección de renombrados, archivos binarios grandes, permisos.
+- **El almacén se queda mínimo:** contenido por hash, padre y parche, y `diff`, `view` y `materialize`. Si algo de lo
+  anterior hace falta de verdad, el criterio es **usar git, no imitarlo**. Git ya está en la máquina de quien trabaja con
+  código, así que no sería una dependencia nueva como lo sería Docker. Por ejemplo:
+  - artefactos que son repositorios grandes: el almacén guarda las versiones como objetos de git
+    (`git hash-object`, `git worktree` para materializar), en lugar de copias completas;
+  - entregar el artefacto aceptado: se exporta como una rama o un commit del repositorio del usuario, con el mensaje que
+    resume su razón y sus predicciones cumplidas.
+- **Señal de alarma:** si una tarea pide fusionar texto línea a línea o resolver conflictos, no se resuelve en el
+  almacén. Es trabajo del investigador, como cualquier otro cambio, o es el momento de delegar en git.
+
 ## 6. Los actos
 
 Lo que hoy es `act` se divide en primitivas del mundo:
@@ -219,6 +244,79 @@ Pequeño, local y sin red, para probar el mundo antes de llevarlo a automatizaci
   - que no acepte mejoras que sólo lo son en la familia donde se probaron.
 
 Después, una automatización real con sus APIs simuladas.
+
+## 14.1 Más allá del código: formas, diseños y CAD
+
+El autor apunta (14/10/2026) que el mundo sirve igual para **refinar formas o hacer diseños CAD**. La estructura no
+cambia: el artefacto es el diseño, y el modelo es el de su comportamiento.
+
+| Pieza | Código | Diseño o CAD |
+|---|---|---|
+| Artefacto | el programa | el diseño paramétrico: un script CAD (OpenSCAD, CadQuery), una escena de Blender, una malla con sus parámetros |
+| Cambio | un parche | cambiar parámetros o geometría: un radio, un espesor, un perfil, una topología |
+| Oráculo de corrección | salidas iguales a la referencia | restricciones: dimensiones, holguras, sin interferencias, fabricable (paredes mínimas, voladizos, ensamblaje) |
+| Cargas por familias | entradas de datos | casos de uso: cargas mecánicas, condiciones de flujo, temperaturas, tolerancias de fabricación |
+| Métrica | tiempo, memoria | masa, rigidez, tensión máxima, arrastre, coste de material, tiempo de impresión |
+| `run` / `profile` | ejecutar y perfilar | simular: elementos finitos, CFD, físicas de Blender, cálculo de propiedades de masa |
+| Modelo del comportamiento | qué determina el rendimiento | qué determina la métrica: "la tensión se concentra en el chaflán; un radio mayor la baja a la mitad sin añadir más de un 5 % de masa" |
+
+**Lo que aporta aquí el arnés:**
+- **Predicciones antes de simular:** cada cambio de forma va con su efecto esperado, y se aprende de los que fallan. Las
+  simulaciones son caras, y un modelo que acierta evita muchas.
+- **Validación en otras familias de carga y a ciegas:** un diseño optimizado para un caso de carga suele fallar en otro;
+  el protocolo obliga a comprobarlo antes de aceptarlo.
+- **Volver atrás por creencias:** si cae la hipótesis que justificaba un refuerzo, se ven qué cambios dependían de ella.
+
+**Lo que habría que añadir para este dominio:**
+- un simulador por tarea, dentro del sandbox y sin dependencias que el usuario tenga que instalar aparte. Blender ya se usa
+  en el mundo 3D; otros simuladores dependerían de la tarea;
+- un percepto geométrico: medidas del diseño que sus observaciones puedan leer (dimensiones, volúmenes, secciones), antes de
+  simular, como en §7;
+- métricas con ruido numérico (mallados, convergencia), que el criterio estadístico del veredicto ya contempla.
+
+Sería un segundo caso después del primero de código (§14).
+
+## 14.2 Un gimnasio de RL: enseñar a un robot
+
+El autor propone (14/10/2026) usar el mundo para optimizar un gimnasio de aprendizaje por refuerzo que enseñe a un robot,
+partiendo sólo de los parámetros que definen el score.
+
+| Pieza | Gimnasio de RL |
+|---|---|
+| Artefacto | la configuración de entrenamiento: función de recompensa, currículo, aleatorización del entorno, hiperparámetros, arquitectura de la política |
+| Cambio | modificar la recompensa, un hiperparámetro, el currículo o la aleatorización |
+| `run` | entrenar una política, con varias semillas, y evaluarla |
+| Métrica | el score de la tarea, medido sobre la política ya entrenada |
+| Familias de carga | condiciones del entorno: terrenos, masas, fricciones, perturbaciones, objetivos |
+| Confirmación a ciegas | condiciones reservadas que el entrenamiento nunca vio |
+| Modelo del comportamiento | qué hace aprender o no a la política, por ejemplo: "la penalización por velocidad articular impide que aprenda a saltar; bajarla a la mitad le deja superar el escalón sin aumentar las caídas" |
+
+**La condición clave: recompensa y score separados.**
+- **La recompensa es parte del artefacto:** el investigador la cambia, porque es su herramienta para enseñar.
+- **El score es el veredicto del entorno:** los parámetros que definen qué es hacerlo bien los declara la tarea, son fijos
+  y el investigador no los toca.
+- Si la misma cosa se optimizara y se evaluara, aparecería el **reward hacking**: la política aprende a puntuar sin hacer
+  la tarea. Las defensas son las del protocolo:
+  - el **oráculo de corrección**, distinto del score: restricciones del comportamiento que se quiere, como no caerse, no
+    pasar de ciertos esfuerzos o terminar en la postura pedida;
+  - la **validación** en otras familias de condiciones;
+  - la **confirmación a ciegas** en condiciones que el entrenamiento no vio. Una política que puntúa sin hacer la tarea
+    casi nunca generaliza.
+
+**Lo que lo hace caro y delicado:**
+- **Cada `run` es un entrenamiento completo:** minutos u horas. Es donde más vale el modelo, porque predecir el efecto de
+  un cambio antes de entrenar ahorra entrenamientos.
+- **El ruido entre semillas es grande:** el veredicto necesita varias semillas por versión y un criterio estadístico
+  serio (§8). Una sola ejecución no dice nada.
+- **El simulador** (MuJoCo, Isaac, PyBullet o uno propio) es una dependencia de la tarea, no del arnés: lo aporta quien
+  la plantea (§10).
+- **Si el destino es un robot real,** pasar de la simulación a la realidad es la confirmación a ciegas definitiva, y
+  ocurre fuera del sandbox.
+
+**Lo que aporta frente a ajustar a mano o a una búsqueda ciega de hiperparámetros:**
+- cada cambio de recompensa queda con su razón y su predicción;
+- cuando una idea cae, se ven los cambios que dependían de ella (§9);
+- ninguna mejora se da por buena hasta confirmarla en condiciones nuevas.
 
 ## 15. Medidas y evaluación
 
