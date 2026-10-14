@@ -1,6 +1,6 @@
 # SPEC · El mundo de artefactos: construir y optimizar con método científico
 
-Estado: propuesta (14/10/2026), sin implementar. Idea del autor.
+Estado: en construcción (14/10/2026). Idea del autor. Hecho: §18.
 
 ## 1. De dónde sale
 
@@ -239,3 +239,38 @@ Después, una automatización real con sus APIs simuladas.
 5. **`profile`** y los instrumentos propios sobre perfiles.
 6. **Equipos y ramas.**
 7. **Una automatización real** con APIs simuladas.
+
+## 18. Implementado
+
+### 18.1 El artefacto versionado y el sandbox mínimo (14/10/2026; plan, paso 1)
+
+- **`lib/src/artifacts/store.ts` (`ArtifactStore`):**
+  - la base se lee de un directorio (sin `.git`, `node_modules` ni `__pycache__`), con límites de archivos y bytes;
+  - `apply(padre, parche)` crea una versión identificada por el hash de su contenido. El mismo contenido es la misma
+    versión: volver a la base es la base;
+  - un parche sustituye o quita archivos enteros (`{"files": {"<ruta>": "<contenido>" | null}}`);
+  - rutas sólo dentro del artefacto: sin `..`, sin rutas absolutas ni unidades;
+  - `materialize`, `diff` (añadidos, quitados, cambiados) y `view` (líneas numeradas).
+- **`lib/src/artifacts/sandbox.ts`:** una interfaz (`Sandbox.run(artefacto, ejecución, límites)`) y dos backends.
+  - **Ejecución:** el comando, la entrada estándar, los archivos de la carga y los archivos de salida que se leen
+    después.
+  - **Resultado:** código de salida, si se pasó del tiempo, salida estándar y de error recortadas, salidas, tiempo de
+    pared y, donde se mide, CPU y memoria máxima. Dice siempre qué backend lo ejecutó y si estaba aislado.
+  - **`docker` (aislado):**
+    - un contenedor nuevo por ejecución, sin red (`--network none`) y con la raíz de sólo lectura;
+    - límites de memoria, CPU y procesos;
+    - el artefacto montado como sólo lectura en `/work/src`, y un directorio de trabajo nuevo;
+    - el tiempo, la CPU y la memoria máxima se miden **dentro** del contenedor (su cgroup), así que su arranque no
+      cuenta;
+    - el límite de tiempo se aplica dentro, con `timeout -s KILL`.
+  - **`process` (NO aislado):** un proceso local con el artefacto copiado junto a la carga y un entorno vacío (sólo lo
+    que encuentra el runtime: ninguna clave del anfitrión). Mide sólo el tiempo de pared. Es para desarrollo y para las
+    pruebas del arnés con artefactos propios.
+  - `dockerAvailable()` dice si el motor responde.
+- **Pruebas** (`test/artifacts.test.ts`):
+  - **Versiones:** por contenido, rechazos, `diff`, `view` y `materialize`.
+  - **Los dos backends,** con la misma batería: entrada, salidas, entrada estándar, sin secretos del anfitrión, y el
+    límite de tiempo.
+  - **El de Docker,** además, sin red, con el artefacto de sólo lectura y con CPU y memoria medidas. Se salta si el
+    motor no está arrancado. **No se ha ejecutado todavía:** el motor de Docker Desktop estaba parado.
+
