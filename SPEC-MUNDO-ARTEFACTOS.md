@@ -318,6 +318,74 @@ partiendo sólo de los parámetros que definen el score.
 - cuando una idea cae, se ven los cambios que dependían de ella (§9);
 - ninguna mejora se da por buena hasta confirmarla en condiciones nuevas.
 
+### 14.3 Un caso concreto: Microduck, el pato de Hugging Face (investigado el 14/10/2026)
+
+El autor propone el robot pato de Hugging Face como juguete para validar §14.2. Lo que hay, según sus repositorios y la
+prensa:
+
+**El robot.** Microduck, de Pollen Robotics (comprada por Hugging Face en 2025), es la versión de producto del proyecto
+abierto Open Duck Mini (Antoine Pirrone), una miniatura del droide BDX de Disney.
+- Es un bípedo de unos 25 cm y menos de 800 g, con 14 o 15 servos (piernas, cuello, cabeza y un pico articulado).
+- Su política neuronal corre a 50 Hz.
+- Reservas a 399 $ desde agosto de 2026, con entregas previstas antes de Navidad.
+
+**Dos gimnasios abiertos:**
+
+| | `pollen-robotics/microduck_rl` | `apirrone/Open_Duck_Playground` |
+|---|---|---|
+| Simulador | mjlab (MuJoCo Warp) | MuJoCo, al estilo de MuJoCo Playground |
+| Algoritmo | PPO (rsl_rl) | PPO |
+| Entrenar | `uv run train Mjlab-Velocity-Flat-MicroDuck --env.scene.num-envs 4096` | `uv run playground/open_duck_mini_v2/runner.py --task flat_terrain_backlash --num_timesteps ...` |
+| Coste | GPU CUDA; según el README, entre 1 y 2 horas para un andar usable con 4.096 entornos; o en Hugging Face Jobs (`--hf-jobs`), de pago | GPU; el README no da tiempos |
+| Recompensas | `src/mjlab_microduck/tasks/mdp.py`, con reglas de diseño en `AGENTS.md` y pruebas de los signos de las recompensas | `common/rewards.py`, elegidas en `joystick.py`; recompensa opcional de imitación |
+| Aleatorización | modelo de actuador (BAM, XL330) con voltaje de batería, caída de tensión, retardo de mando y fricción por entorno, conmutables con `ENABLE_*`; holgura de ±1° en las variantes `-Backlash` | `common/randomize.py` |
+| Tareas | andar con mandos de velocidad y de cabeza (`Velocity-{Flat,Rough}`), levantarse, sentarse, recoger con el pico, chutar, patines... | andar con joystick, en terreno plano o irregular |
+| Salida | ONNX (61 entradas → 14 objetivos articulares), normalizador incluido | ONNX |
+| Licencia | código Apache 2.0; mallas 3D CC BY-NC-SA 4.0 | la página no lo indica |
+
+**Por qué sirve para validar el mundo:**
+- **La recompensa ya está separada en un archivo de código** (`mdp.py`): es el artefacto natural, y cambiarla es un parche.
+- **Las familias de carga ya existen** como variantes de la tarea y como interruptores de aleatorización: plano frente a
+  irregular, con y sin holgura, voltaje, retardo y fricción. Una combinación reservada, por ejemplo terreno irregular con
+  holgura y retardo, es la confirmación a ciegas natural.
+- **La tarea de andar con mandos de velocidad** da un score que no es la recompensa: el error de seguimiento de la
+  velocidad mandada, más las caídas, sobre episodios de evaluación con mandos fijados por la tarea.
+
+**Lo que tendríamos que poner nosotros:**
+- **El score y el oráculo,** fuera del alcance del investigador. Un evaluador propio carga la política ONNX y la ejecuta en
+  CPU (MuJoCo) sobre episodios fijados por la tarea:
+  - el **score** es el error de seguimiento de la velocidad;
+  - el **oráculo** pide no caerse, mantener los límites articulares y no sobrepasar un umbral de esfuerzo (con el modelo
+    de actuador).
+
+  La recompensa de entrenamiento nunca decide el veredicto.
+- **Entrenamientos cortos para iterar:** con 1 o 2 horas por entrenamiento, el piloto tendría que usar presupuestos
+  reducidos (menos pasos o menos entornos) y comparar versiones con el mismo presupuesto, varias semillas cada una.
+  Validación y confirmación con presupuesto completo.
+- **Fuera del repositorio:** el gimnasio se clona aparte, como las fuentes de EurekaBench. Su código es Apache 2.0, pero
+  sus mallas son CC BY-NC-SA: nada suyo se copia al arnés.
+
+**Lo que hay que resolver antes (preguntas para el autor):**
+- **Hardware de entrenamiento:** hace falta una GPU NVIDIA con CUDA, o pagar Hugging Face Jobs. La máquina del autor tiene
+  una RTX 3080 Ti con 12 GB: basta para entrenar en local, aunque quizá con menos de 4.096 entornos si no cabe en memoria.
+  Instalar el entorno (uv, dependencias de mjlab) lo hace el usuario: no es una dependencia del arnés (§10, y la regla de
+  no imponer dependencias).
+- **Coste del piloto:** con presupuesto reducido y unas 3 semillas por versión, cada comparación tarda horas. ¿Cuántas
+  versiones caben?
+- **Qué tarea:** `Velocity-Flat` para empezar (la más simple, con score claro). Levantarse o chutar después.
+- **Sin robot físico,** la confirmación a ciegas es en simulación con condiciones reservadas. Con un robot, el paso a la
+  realidad sería la confirmación definitiva.
+
+**Fuentes:**
+- [pollen-robotics/microduck_rl](https://github.com/pollen-robotics/microduck_rl)
+- [apirrone/Open_Duck_Playground](https://github.com/apirrone/Open_Duck_Playground)
+- [Open Duck Mini (DeepWiki)](https://deepwiki.com/apirrone/Open_Duck_Mini)
+- [The New Stack: Hugging Face Microduck](https://thenewstack.io/hugging-face-microduck-robot/?p=22834765)
+- [AI Weekly: pre-orders for Microduck](https://aiweekly.co/alerts/hugging-face-opens-pre-orders-for-399-microduck-rl-biped)
+
+Algunas cifras de la prensa no coinciden (procesador, sensores, número de servos). Las del entrenamiento salen de los
+README de los repositorios.
+
 ## 15. Medidas y evaluación
 
 - **Para el operador:**
