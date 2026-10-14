@@ -1,0 +1,83 @@
+{
+  "format": "batch@1",
+  "id": "c302closed-instruments-pilot-1",
+  "concurrency": 1,
+  "budget": {
+    "tokens_per_run": 5000000
+  },
+  "runs": [
+    {
+      "id": "signals-with-instruments",
+      "lab": "c302closed",
+      "condition": "instruments: the assisted researcher may write its own instruments (SPEC-INSTRUMENTOS-PROPIOS)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "1",
+        "--attempts",
+        "16",
+        "--focus",
+        "signals",
+        "--names",
+        "real",
+        "--memory",
+        "selective",
+        "--help-budget",
+        "16",
+        "--max-minutes",
+        "300",
+        "--own-tests",
+        "2",
+        "--task",
+        "Investigate how the odor drive becomes the two action signals of this simulated c302 circuit, reorientation and steering: what determines each action, what persists from one sample to the next, on what timescale, and what changes it. Build and test an executable model of both signals from stimulus history alone. Support your explanation with experiments and record its evidence, failed alternatives, limitations and open questions so another research team can consult your work. This laboratory evaluates the signals. EurekaBench's navigation-goals statement and simulator description are reference material: establish what is supported in this laboratory, including differences from that reference.",
+        "--sources-allow",
+        "D:/OctaneDoc/OctLocalServer/EurekaBench-sources/navigation-goals",
+        "--eureka",
+        "D:/OctaneDoc/OctLocalServer/EurekaBench"
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 16,
+        "patience": 2
+      }
+    },
+    {
+      "id": "signals-without-instruments",
+      "lab": "c302closed",
+      "condition": "no instruments: the same run with --no-instruments",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "1",
+        "--attempts",
+        "16",
+        "--focus",
+        "signals",
+        "--names",
+        "real",
+        "--memory",
+        "selective",
+        "--help-budget",
+        "16",
+        "--max-minutes",
+        "300",
+        "--own-tests",
+        "2",
+        "--task",
+        "Investigate how the odor drive becomes the two action signals of this simulated c302 circuit, reorientation and steering: what determines each action, what persists from one sample to the next, on what timescale, and what changes it. Build and test an executable model of both signals from stimulus history alone. Support your explanation with experiments and record its evidence, failed alternatives, limitations and open questions so another research team can consult your work. This laboratory evaluates the signals. EurekaBench's navigation-goals statement and simulator description are reference material: establish what is supported in this laboratory, including differences from that reference.",
+        "--sources-allow",
+        "D:/OctaneDoc/OctLocalServer/EurekaBench-sources/navigation-goals",
+        "--eureka",
+        "D:/OctaneDoc/OctLocalServer/EurekaBench",
+        "--no-instruments"
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 16,
+        "patience": 2
+      }
+    }
+  ]
+}

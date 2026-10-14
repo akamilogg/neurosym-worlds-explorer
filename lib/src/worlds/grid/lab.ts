@@ -166,7 +166,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */
   const systemPrompt = (): string => SYSTEM_PROMPT + (assisted && reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(Boolean(assisted.memory)) + '\n\n' + TASK_COVERAGE_SECTION
     + (ownTests ? '\n\n' + ownTestsSection([], true, ownTestsRequired(), GRID_TEST_WORDS) : '')
-    + '\n\n' + instrumentsSection(null, GRID_INSTRUMENT_WORDS) : '');
+    + (s.cfg.instruments !== false ? '\n\n' + instrumentsSection(null, GRID_INSTRUMENT_WORDS) : '') : '');
   /* Tests of its own (SPEC-PRUEBAS-PROPIAS, the grid's), for the assisted researcher that replays: required with --own-tests. */
   const ownTestsNeed = Number((s.cfg as { ownTests?: number }).ownTests ?? 0);
   if (ownTestsNeed > 0 && !(assisted && tools.has('replay'))) throw new Error('--own-tests needs the assisted researcher, with replay among its tools');
@@ -366,7 +366,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   const peers = exchange ? team!.channel : null;
   const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q))
     || (peers !== null && (PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q))) || (ownTests !== null && reviewing && OwnTests.accepts(q))
-    || (assisted !== null && reviewing && Instruments.accepts(q));
+    || (assisted !== null && reviewing && s.cfg.instruments !== false && Instruments.accepts(q));
   /* --- Its own instruments (SPEC-INSTRUMENTOS-PROPIOS; the grid's): its games - never a validation's - point by point, with
      the picture its code receives there and how the episode came out; and what a model of its own valued there, its rules at
      0.5 (no Judge). */
@@ -771,7 +771,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   async function runRequest(req: ExplorerRequest, current: Formula | null, plays: { left: number }): Promise<unknown> {
     /* Its own memory is answered by it, never by the world; its team's board by the board. */
     /* Its own instrument, used (SPEC-INSTRUMENTOS-PROPIOS): run over what it has observed. */
-    if ('extra' in req && assisted && reviewing && Instruments.accepts(req.extra)) return instruments.use(req.extra, currentRound);
+    if ('extra' in req && assisted && reviewing && s.cfg.instruments !== false && Instruments.accepts(req.extra)) return instruments.use(req.extra, currentRound);
     /* A test of its own (SPEC-PRUEBAS-PROPIAS, the grid's: §14): registered now, it costs one replay of the round. */
     if ('extra' in req && ownTests && OwnTests.accepts(req.extra)) {
       const budget = { get acts() { return plays.left; }, set acts(n: number) { plays.left = n; } };
@@ -1053,7 +1053,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       }
       /* What it wrote in its notebook comes back in the next part of the conversation (the notebook shown is the round's). */
       /* Its own instruments, in any answer: compiled now, run when it uses them. */
-      const ins = assisted && reviewing ? parseInstruments(obj(parseJsonLoose(content))?.instruments, noteWarnings) : [];
+      const ins = assisted && reviewing && s.cfg.instruments !== false ? parseInstruments(obj(parseJsonLoose(content))?.instruments, noteWarnings) : [];
       if (ins.length) { noteWarnings.push(...instruments.apply(round, ins)); say('  instruments: ' + ins.map((d) => d.do + ' ' + d.id).join(', ')); }
       written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}),
         ...(ins.length ? { your_instruments: ins.map((d) => d.do + ' ' + d.id) } : {}) };

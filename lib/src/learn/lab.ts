@@ -294,6 +294,8 @@ export interface LabRunConfig {
   readonly fingerprint?: number;
   /** From which round this code's additions apply (SPEC-INVESTIGADOR-ASISTIDO §14.6); none in a run made before them. */
   readonly review_from?: number;
+  /** Whether the assisted researcher may write instruments of its own (SPEC-INSTRUMENTOS-PROPIOS); default true. */
+  readonly instruments?: boolean;
   /** A continuation of a run that accepted: the attempt it accepted in (§14.3). */
   readonly continued_after_acceptance?: number;
 }

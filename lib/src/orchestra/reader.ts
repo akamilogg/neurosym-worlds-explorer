@@ -130,7 +130,7 @@ export function juniorInstruments(journal: J): string | null {
   const parts = [...(origins.length ? [SOURCES_SECTION + '\nIts origins: ' + [...new Set(origins)].join(', ') + '.'] : []), ...(config.memory === 'selective' ? [MEMORY_SECTION] : [])];
   /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), in a world of laws, in the rounds this code reviews. */
   const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
-  if (lab && typeof config.review_from === 'number') parts.push(isGameLab(lab) ? instrumentsSection(null, GRID_INSTRUMENT_WORDS) : instrumentsSection(lab.seriesDoc ?? null));
+  if (lab && typeof config.review_from === 'number' && config.instruments !== false) parts.push(isGameLab(lab) ? instrumentsSection(null, GRID_INSTRUMENT_WORDS) : instrumentsSection(lab.seriesDoc ?? null));
   return parts.length ? parts.join('\n\n') : null;
 }
 

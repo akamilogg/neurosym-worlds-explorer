@@ -273,3 +273,13 @@ decirle al investigador cuál es la forma eficiente.
 - un instrumento que recorre los 4.000 puntos de un episodio ve en cada uno su historia entera, y tarda lo que cuesta el
   episodio.
 
+## 16. El piloto emparejado (14/10/2026)
+
+- **`--no-instruments`:** la condición sin instrumentos. No hay sección del prompt, ni registro ni uso, y el senior no
+  recibe la sección. La configuración lo guarda (`instruments: false`). Funciona en los mundos de leyes y en la
+  cuadrícula.
+- **`lib/examples/batch.c302closed-instruments-pilot.json`:** dos runs de la faceta de señales, idénticos salvo
+  `--no-instruments` (semilla 1, 16 rondas, 5 millones de tokens, `--own-tests 2`, senior). Qué se compara y cómo
+  lanzarlo: `batch.c302closed-instruments-pilot.md`.
+- **Prueba:** un run con `--no-instruments` no tiene sección, ni registros, ni usos.
+

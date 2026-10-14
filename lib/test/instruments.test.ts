@@ -184,3 +184,15 @@ test('views of a prefix read as arrays and never copy; c302closed\'s points over
   assert.equal(r.result, n * (n + 1) / 2, 'every point saw its whole history');
   assert.ok(Date.now() - t0 < 10000, 'and it cost the episode, not the square of it');
 });
+
+test('--no-instruments: the condition without them - no section, nothing registered, a use not understood', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'instruments-off-'));
+  const seen: { system: string; user: any }[] = [];
+  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--steps', '2', '--attempts', '2', '--no-instruments', '--out', path.join(dir, 'run.json')], root: dir,
+    llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: system2(seen) });
+  assert.ok(seen.filter((q) => !q.system.startsWith('You grade')).every((q) => !q.system.includes('YOUR OWN INSTRUMENTS')));
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events;
+  assert.ok(!events.some((e: any) => e.type === 'instrument_registered' || e.type === 'instrument_used'));
+  assert.equal(r.finding.assistance!.instruments, undefined);
+  assert.equal(JSON.parse(fs.readFileSync(r.journal, 'utf8')).config.instruments, false);
+});

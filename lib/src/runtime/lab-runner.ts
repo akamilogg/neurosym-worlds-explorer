@@ -75,6 +75,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'no-ablation', help: 'skip the operator\'s ablation of the Judge' },
   { name: 'no-grade', help: 'skip the operator-only grading of the recovered rule (one LLM call)' },
   { name: 'no-reflection', help: 'skip the final reflection round' },
+  { name: 'no-instruments', help: 'the assisted researcher writes no instruments of its own (SPEC-INSTRUMENTOS-PROPIOS): the condition without them' },
   { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
 ];
 
@@ -354,6 +355,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     quick: flag('quick'),
     ablation: !flag('no-ablation') && !flag('quick'),
     grade: !flag('no-grade'),
+    instruments: !flag('no-instruments'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
     ...(arg('focus') ? { focus: arg('focus') } : {}),
@@ -1217,7 +1219,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): the assisted researcher, in the rounds this code reviews. */
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
-    instruments: () => (journal.researcher === 'assisted' && helping && reviewing ? instruments : null),
+    instruments: () => (journal.researcher === 'assisted' && helping && reviewing && cfg.instruments !== false ? instruments : null),
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
     parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
     ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
@@ -1361,7 +1363,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
-        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : promptFor(focus)),
+        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (cfg.instruments !== false ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
@@ -1381,7 +1383,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       ...(exchange ? { board: { accepts: (q: Record<string, unknown>) => PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q),
         run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {}),
       /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2). */
-      instruments: { accepts: (q: Record<string, unknown>) => helping && reviewing && Instruments.accepts(q), run: (q: Record<string, unknown>, round: number) => instruments.use(q, round) },
+      instruments: { accepts: (q: Record<string, unknown>) => helping && reviewing && cfg.instruments !== false && Instruments.accepts(q), run: (q: Record<string, unknown>, round: number) => instruments.use(q, round) },
       ...(ownTests ? { tests: { accepts: (q: Record<string, unknown>) => helping && OwnTests.accepts(q),
         run: (q: Record<string, unknown>, round: number, budget: { acts: number }) => ownTests.register(q, round, budget) } } : {})
     })
