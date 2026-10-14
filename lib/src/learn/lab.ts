@@ -66,6 +66,10 @@ export interface LabContext {
   readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
   /** An episode of the learner's by its name (an act that builds on an earlier one, e.g. replaying its current), or undefined. */
   readonly episodeOf?: (id: string) => unknown;
+  /** Something the laboratory computes itself whose result varies from one time to the next (a measured run of an
+      artifact: SPEC-MUNDO-ARTEFACTOS §11): computed once and logged as the environment's answer, so a run resumed is
+      given what it was given. The same `route` and `body` in the same order are the same answer. */
+  readonly recorded?: <T>(route: string, body: unknown, compute: () => Promise<T>) => Promise<T>;
 }
 
 /** One point of a check: its name, the state perceived there, and what happened next (the laboratory's). */
@@ -179,6 +183,14 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       learner's names, what its percept and what came - and how the interface words them (`seriesDoc`). None by default. */
   series?(episode: E): Record<string, unknown>;
   readonly seriesDoc?: string;
+  /** The verdict on the ARTIFACT itself, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8): a version the researcher puts
+      forward, judged in a place on fresh workloads - correct, and better than the reference (or not worse, where the place
+      asks only that). Only a world of artifacts declares it; the runner gives it a protocol of its own. */
+  readonly artifact?: {
+    known(spec: S, version: string): boolean;
+    check(spec: S, version: string, context: { readonly round: number; readonly purpose: string; readonly set?: number; readonly index: number }, ctx: LabContext):
+      Promise<{ readonly holds: boolean; readonly view: Record<string, unknown>; readonly journal: Record<string, unknown> }>;
+  };
   /** With `series`: the SOURCE of `(series, k, prefix) => ({ p, came })` - the percept at step k (the same as its points'
       `state`) and what came there (the same as `shown`), over the series with views of their prefixes, never copies. It runs
       inside the researcher's sandbox (SPEC-INSTRUMENTOS-PROPIOS §17): code, never a function of the host. */

@@ -17,8 +17,10 @@ import { c302NavObjective, FLAT_FRACTION, type C302NavCase } from '../src/worlds
 
 /* SPEC-OBJETIVO O9: a world connects as one declaration. What every declaration must keep consistent. */
 
-/* The laboratories whose world runs here (tank@1's runs in a service of its own: test/tank.test.ts). */
-const LAW_LABS = Object.entries(LABS).filter(([, l]) => !isGameLab(l) && !(l as LawLab).external) as [string, LawLab][];
+/* The laboratories whose world runs here (tank@1's runs in a service of its own: test/tank.test.ts). artifacts@1 runs real
+   processes for seconds at its default scale: its contract is test/artifacts-lab.test.ts, at a small scale. */
+const OWN_CONTRACT = new Set(['artifacts']);
+const LAW_LABS = Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && !(l as LawLab).external && !OWN_CONTRACT.has(n)) as [string, LawLab][];
 
 for (const [name, lab] of LAW_LABS) {
   const options = Object.fromEntries(lab.options.map((o) => [o.name, o.default]));
@@ -173,10 +175,11 @@ function notFinite(x: unknown, at = ''): string | null {
 /** An act as the learner reads it back and writes it again. */
 const echoed = (lab: LawLab, act: unknown): Record<string, unknown> => JSON.parse(JSON.stringify(lab.act!.asWritten ? lab.act!.asWritten(act) : act));
 
-const ACT_LABS = Object.entries(LABS).filter(([, l]) => !isGameLab(l) && (l as LawLab).act) as [string, LawLab][];
+const ACT_LABS = Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as LawLab).act && !OWN_CONTRACT.has(n)) as [string, LawLab][];
 
-test('every laboratory that acts is in the contract', () => {
+test('every laboratory that acts is in the contract (or has its own)', () => {
   assert.deepEqual(ACT_LABS.map(([n]) => n).sort(), ['c302closed', 'c302nav', 'cells', 'orbit', 'particles3d', 'tank']);
+  assert.deepEqual(Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as LawLab).act && OWN_CONTRACT.has(n)).map(([n]) => n), ['artifacts']);
 });
 
 for (const [name, lab] of ACT_LABS) {

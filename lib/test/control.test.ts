@@ -34,6 +34,8 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
     particles3d: ['268b63917ce2663e', 'f21aea4aefef35aa', 'c82859a959caa037'],
     c302nav: ['2ec794d2b3b97ce8', 'f020fd16447faf91', '71f6699109c68c7e'],
     c302closed: ['49b560bc501cd3f0', 'e40ead68b23b4af2', '86b67843a966cf1d'],
+    /* The world of artifacts (SPEC-MUNDO-ARTEFACTOS, 14/10/2026): its prompt, frozen from its first version. */
+    artifacts: ['c88a282a35885af9', '86c0ac790e7c27d3', 'd2d45f19e85d6bc9'],
     grid: ['655eb619829d609f']
   };
   for (const [name, lab] of Object.entries(LABS)) {

@@ -51,6 +51,7 @@ export function dedupTask(options: { scale?: number; python?: string } = {}): Ar
       command: () => [python, 'src/main.py'],
       inputs: (w) => ({ 'input.csv': dedupInput(w) }),
       outputs: ['out.csv'],
+      environment: [[python, '--version']],
       timeoutMs: 60000
     },
     read: (files, measured) => ({ metrics: { wall_ms: measured.wallMs }, output: files['out.csv'] ?? null }),

@@ -122,6 +122,9 @@ export interface LawProposal {
   readonly law: Law;
   /** It asks the environment to validate this law where it has not looked. */
   readonly validate: boolean;
+  /** A world of artifacts: the version of the artifact it puts forward, and whether it asks to validate it. */
+  readonly artifact?: string;
+  readonly validateArtifact?: boolean;
   readonly rationale: string;
   readonly beliefs: BeliefStance[];
   readonly lessons: string[];
@@ -137,7 +140,7 @@ export function parseLawProposal(content: string, context: { world: string; lang
   const { law, errors, warnings } = buildLaw(data, context);
   const { beliefs, lessons, nextExperiment } = parseReflective(data, context.round ?? 0, warnings);
   if (errors.length) return { ok: false, errors };
-  return { ok: true, proposal: { law, validate: data.validate === true, rationale: typeof data.rationale === 'string' ? data.rationale : '', beliefs, lessons, nextExperiment, warnings } };
+  return { ok: true, proposal: { law, validate: data.validate === true, ...(typeof data.artifact === 'string' && data.artifact ? { artifact: data.artifact, validateArtifact: data.validate_artifact === true } : {}), rationale: typeof data.rationale === 'string' ? data.rationale : '', beliefs, lessons, nextExperiment, warnings } };
 }
 
 /* --- Investigation requests ------------------------------------------------------------ */

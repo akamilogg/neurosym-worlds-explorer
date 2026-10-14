@@ -20,7 +20,7 @@ import { Protocol } from '../learn/protocol.ts';
 import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
 import { instrumentReports } from '../learn/instrument.ts';
 import { formOf, operatorSummary, tokensOf, type AblationRecord, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../learn/operator.ts';
-import type { Place } from '../learn/objective.ts';
+import type { Objective, Place } from '../learn/objective.ts';
 import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
@@ -559,6 +559,8 @@ interface OpenRun {
   readonly commit: string | null;
   /** The environment outside, when the laboratory has one. */
   readonly effects?: { request(route: string, body: unknown): Promise<unknown> };
+  /** What the laboratory computes itself and must be given again when resumed (`LabContext.recorded`). */
+  readonly recorded: <T>(route: string, body: unknown, compute: () => Promise<T>) => Promise<T>;
   /** The operator's messages accepted and not yet delivered (the assisted researcher takes them). */
   readonly operator: { take(): OperatorMessage[] };
   /** The agent whose first hypothesis the run waits for (SPEC-ORQUESTADOR §3.3.4), and for how long; null when none, or
@@ -876,7 +878,13 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     log(came ? 'opening_received' : 'opening_missing', { agent: opening.agent });
     if (!came) say('no first hypothesis from ' + by + ': the researcher starts on its own');
   }
-  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), finish, diverged, verdicts,
+  /* A laboratory's own computation, logged as the environment's answer (channel "env"): computed once, given again. */
+  const recorded = async <T>(route: string, body: unknown, compute: () => Promise<T>): Promise<T> => {
+    const local = replay.wrap('env', async () => { const text = JSON.stringify(await compute()); return { ok: true, status: 200, text: async () => text, headers: { get: () => null } }; });
+    const r = await local('local://' + lab.id + route, { method: 'POST', headers: {}, body: JSON.stringify(body), signal: new AbortController().signal });
+    return JSON.parse(await r.text()) as T;
+  };
+  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), recorded, finish, diverged, verdicts,
     operator: { take: () => waiting.splice(0, waiting.length) },
     opening, awaitOpening,
     sourceFetch: replay.wrap('source', sourceFetch(network)) };
@@ -894,7 +902,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
-  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), episodeOf: (id: string) => episodes.get(id)?.data };
+  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, episodeOf: (id: string) => episodes.get(id)?.data };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
   if (assistedAfter !== null) journal.assisted_after_attempts = assistedAfter;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
@@ -1014,6 +1022,37 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
      (orbit) has them from its own stretch, past 100000. */
   const team = o.team;
   let confirmations = 0;
+  /* The ARTIFACT's own protocol (SPEC-MUNDO-ARTEFACTOS §8), apart from the model's: its own places (a place where the
+     artifact does not hold becomes its laboratory, not the model's), the same blind families, the version as its own
+     fingerprint, no paired regression. What it tells System 2 is the protocol's verdict only, never a metric. */
+  type ArtifactMark = { round: number; purpose: string; set?: number; index: number };
+  type ArtifactResult = { place: string; holds: boolean; view: Record<string, unknown>; journal: Record<string, unknown> };
+  const artifactPlaces = new Map<string, LabPlace>();
+  for (const p of start.laboratories) artifactPlaces.set(p.id, { ...p, role: 'laboratory', seen: true });
+  for (const p of start.family) artifactPlaces.set(p.id, { ...p, role: 'family', seen: false });
+  const artifactObjective: Objective<string, LabPlace, ArtifactMark[], ArtifactResult> | null = lab.artifact ? {
+    answer: { form: ['A version of the artifact.'], use: 'act' }, verdictForm: [],
+    casesIn: (place, c) => [{ round: c.round, purpose: c.purpose, ...(c.set !== undefined ? { set: c.set } : {}), index: c.index }],
+    async run(version, cases) {
+      const byPlace: ArtifactResult[][] = [];
+      for (const { place, cases: marks } of cases) {
+        const r = await lab.artifact!.check(place.spec, version, marks[0], ctx);
+        byPlace.push([{ place: place.id, holds: r.holds, view: r.view, journal: r.journal }]);
+      }
+      return { byPlace };
+    },
+    holds: (results) => results.length > 0 && results.every((r) => r.holds),
+    view: (results) => results[0]?.view ?? {},
+    operatorView: (results) => results[0]?.journal ?? {}
+  } : null;
+  let artifactBlind = 0;
+  const artifactProtocol = artifactObjective ? new Protocol(artifactObjective, {
+    places: () => [...artifactPlaces.values()],
+    blindPlaces: (set: number, round: number) => (lab.blindPlaces ? lab.blindPlaces(spec, set, round, ctx) : [])
+      .map((p) => ({ ...p, id: 'artifact-' + p.id + '-' + (++artifactBlind), role: 'confirmation' as const, seen: false })),
+    fingerprint: (v: string) => v, validations: cfg.validations, pairedRegression: false, quick: false
+  }) : null;
+  let artifactAccepted: { version: string; round: number } | null = null;
   const protocol = new Protocol(objective, {
     places: () => [...places.values()],
     blindPlaces: (set: number, round: number) => (team
@@ -1068,7 +1107,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     if ('act' in req) {
       if (!lab.act) return { act: req.act, error: '"act" is not available in this experiment' };
       if (budget.acts <= 0) return { act: req.act, error: 'no acts left this round' };
-      const place = places.get(lab.act.place(req.act) ?? 'lab1');
+      const place = places.get(lab.act.place(req.act) ?? labs()[0]?.id ?? 'lab1');
       if (!place || place.role !== 'laboratory') return { act: req.act, error: 'you can act only in your laboratories: ' + labs().map((l) => l.id).join(', ') };
       const id = 'act' + (counter + 1);
       const data = await lab.act.start(place.spec, req.act, id, ctx);
@@ -1330,7 +1369,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const ownTests = actLab ? new OwnTests<Law, unknown, unknown>({
     parseAct: (raw) => actLab.parse(raw),
     asWritten: (a) => (actLab.asWritten ? actLab.asWritten(a) : a),
-    placeOf: (a) => actLab.place(a) ?? 'lab1',
+    placeOf: (a) => actLab.place(a) ?? labs()[0]?.id ?? 'lab1',
     laboratories: () => labs().map((l) => l.id),
     identity: (place, a) => actLab.identity?.(specOf(place), a) ?? null,
     identities: Boolean(actLab.identity && lab.episodeIdentity),
@@ -1435,7 +1474,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     let model = 0, flat = 0;
     const byPlace: Record<string, { model: number; flat: number; points: number }> = {};
     for (const p of points) {
-      const place = episodes.get(p.point.split('@')[0])?.place ?? 'lab1';
+      const place = episodes.get(p.point.split('@')[0])?.place ?? labs()[0]?.id ?? 'lab1';
       const w = (byPlace[place] ??= { model: 0, flat: 0, points: 0 });
       w.points++;
       try { if (lab.agrees(await answerOf(law, p.state), p)) { model++; w.model++; } } catch { /* a miss */ }
@@ -1541,6 +1580,19 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       cases: checkPoints.get(outcome.reused ?? record.round) ?? [] }, operatorContext) ?? {};
     if (own.test) record.test = own.test;
     log('check', { ...outcome.journal, jev: { calls: judge.stats.calls, errors: judge.stats.errors }, ...(own.journal ?? {}) });
+    /* The version it puts forward, judged by the artifact's own protocol; its verdict goes with the check, under `artifact`. */
+    if (artifactProtocol && record.artifact) {
+      let told: Record<string, unknown>;
+      if (!lab.artifact!.known(spec, record.artifact)) told = { version: record.artifact, refused: 'you have no version "' + record.artifact + '"' };
+      else {
+        const a = await artifactProtocol.round(record.artifact, { round: record.round, attempt, validate: Boolean(record.validateArtifact) });
+        /* The protocol's words are a model's: here they are said of the artifact. */
+        told = { version: record.artifact, ...JSON.parse(JSON.stringify(a.view).replace(/your_model/g, 'your_artifact').replace(/your model/g, 'your artifact')) };
+        log('artifact_check', { version: record.artifact, told, ...a.journal });
+        if (a.accepted && !artifactAccepted) { artifactAccepted = { version: record.artifact, round: record.round }; log('artifact_accepted', artifactAccepted); say('  ARTIFACT ACCEPTED: ' + record.artifact); }
+      }
+      protocol.lastView = { ...(protocol.lastView ?? {}), artifact: told };
+    }
     /* Its tests registered this round run now; their results, and its counterexamples still open, go with this check. */
     if (ownTests) {
       await ownTests.runPending(record.round);
@@ -1593,6 +1645,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     final: final ? ownLaw(final) : null,
     ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownLaw(acceptedBefore.law) } } : {}),
+    /* A world of artifacts: the artifact's own state, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8). */
+    ...(artifactProtocol ? { artifact: { accepted: artifactAccepted, protocol: artifactProtocol.summary() } } : {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },

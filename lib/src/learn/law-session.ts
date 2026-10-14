@@ -36,6 +36,9 @@ export interface LawRecord {
   accepted: boolean;
   /** System 2 asked to validate this law. */
   readonly validate: boolean;
+  /** A world of artifacts: the version it put forward, and whether it asked to validate it. */
+  readonly artifact?: string;
+  readonly validateArtifact?: boolean;
   readonly lessons: string[];
   readonly nextExperiment: string;
 }
@@ -382,10 +385,10 @@ export class LawSession<A> {
       const p = parsed.proposal;
       const stances = this.notebook.applyStances(round, p.beliefs);
       this.unaddressed = stances.unaddressed;
-      const record: LawRecord = { round, law: p.law, fingerprint: h.fingerprint ? h.fingerprint(p.law) : lawFingerprint(p.law), test: null, accepted: false, validate: p.validate, lessons: p.lessons, nextExperiment: p.nextExperiment };
+      const record: LawRecord = { round, law: p.law, fingerprint: h.fingerprint ? h.fingerprint(p.law) : lawFingerprint(p.law), test: null, accepted: false, validate: p.validate, ...(p.artifact ? { artifact: p.artifact, validateArtifact: Boolean(p.validateArtifact) } : {}), lessons: p.lessons, nextExperiment: p.nextExperiment };
       this.laws.push(record);
       h.log('proposal', { round, investigation_steps: investigation.length, rationale: p.rationale, beliefs: p.beliefs, notes: turn.notes, law: ownLaw(p.law),
-        fingerprint: record.fingerprint, lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });
+        fingerprint: record.fingerprint, ...(p.artifact ? { artifact: p.artifact, validate_artifact: Boolean(p.validateArtifact) } : {}), lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });
       h.say('  proposes: ' + Object.keys(p.law.observations).length + ' observations, ' + Object.keys(p.law.rules).length + ' rules' + (p.law.output ? ', output in code' : '') +
         '; beliefs ' + p.beliefs.map((x) => x.id + ':' + x.stance).join(' ') + (p.validate ? '; asks to validate' : ''));
       return record;

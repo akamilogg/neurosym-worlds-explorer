@@ -599,3 +599,74 @@ La referencia es la base.
   declare la tarea;
 - el finding con los dos estados por separado (§8) y, en RL, los tres productos (§14.2).
 
+
+### 18.4 El mundo de artefactos como laboratorio (14/10/2026; plan, paso 3)
+
+**El laboratorio** (`lib/src/worlds/artifacts/lab.ts`, registrado como `artifacts`) conecta el mundo al investigador
+asistido como un mundo de leyes más:
+- **Episodios de dos clases:** una versión, que se lee línea a línea, y una tanda de ejecuciones, cada una con su punto.
+- **El punto, sólo lo que se sabe antes de ejecutar** (§7): familia, parámetros de la carga, versión, archivos cambiados
+  respecto de la base y tamaño de cada archivo. Lo medido nunca está en su propio punto.
+- **Los actos:**
+  - `change` hace una versión;
+  - `run` la ejecuta en cargas nuevas de un laboratorio.
+- **El modelo predice la métrica en un punto,** y la comprobación ejecuta la referencia y la última versión en cargas
+  nuevas.
+- **Las ejecuciones medidas varían,** así que pasan por un canal nuevo, `LabContext.recorded`: se registran en el log de
+  replay como respuestas del entorno y, al reanudar, se sirven de ahí. Una reanudación no vuelve a medir, y el diario
+  reanudado tiene las mismas medidas.
+
+**La respuesta doble** (§8): el artefacto tiene su propio protocolo, aparte del del modelo.
+- **La propuesta** puede llevar `"artifact": "<versión>"` y, cuando se sostiene en todos los laboratorios,
+  `"validate_artifact": true`.
+- **El protocolo es el mismo de siempre** (`Protocol`), con estas diferencias:
+  - sus propios lugares: una familia donde el artefacto no se sostiene pasa a ser laboratorio del artefacto, no del
+    modelo;
+  - las mismas familias ciegas;
+  - la versión como huella;
+  - sin regresión emparejada.
+- **Lo que decide se sostiene en un lugar es el veredicto de `check`** (§8): referencia y candidata intercaladas, en
+  cargas nuevas.
+- **A System 2 se le dicen hechos, nunca cuánto** (sin métrica para System 2):
+  - si se sostiene;
+  - si todo fue correcto, y qué cargas no;
+  - si fue mejor (o no peor, donde la familia sólo pide eso);
+  - qué restricción se rompió.
+  
+  El cociente y su intervalo quedan en el diario (`artifact_check`), con lo que se le dijo.
+- **Una versión desconocida se rechaza** sin gastar nada.
+- **La aceptación se registra en `artifact_accepted`.**
+- **El finding tiene el estado del artefacto aparte del del modelo** (`artifact`: aceptado o no, la versión, la ronda,
+  cuántas comprobaciones y lo último que se le dijo). Uno puede aceptarse y el otro no.
+
+**Toda acción con su razón** (§3): un `change` lleva su hipótesis y lo que espera (`why` y `expect`), o declara que es
+exploratorio (`why` y `exploratory: true`).
+- Sin razón, se rechaza.
+- La razón queda en el episodio de la versión, escrita antes de medir nada de ella.
+- Las predicciones que se pueden comprobar son las pruebas propias de siempre (SPEC-PRUEBAS-PROPIAS), registradas sobre
+  los puntos de las ejecuciones. Así, una predicción sobre un cambio se comprueba con los mismos medios que cualquier otra.
+
+**La huella del entorno** (§11, reejecución):
+- **Qué recoge.** `ArtifactWorld.environment()` toma una vez:
+  - la máquina: plataforma, versión, arquitectura, CPU, núcleos y memoria;
+  - Node;
+  - el sandbox, y si aísla;
+  - lo que digan los comandos de entorno que declara la tarea (`run.environment`; en `dedup`, `python --version`).
+- **La huella es el hash de todo eso.**
+- **Dónde va.** Cada episodio de ejecuciones y cada veredicto la llevan. El investigador ve la huella en sus episodios, y
+  el diario guarda los hechos completos.
+- **Al reanudar** se sirve del log, como la medida a la que acompaña.
+
+**Pruebas:**
+- `test/artifacts-lab.test.ts`: una corrida asistida con un sustituto de System 2. Lee la base, hace una versión con su
+  razón, la ejecuta y propone un modelo. Pone adelante primero una versión inexistente (rechazada) y luego la suya
+  (juzgada: sólo hechos a System 2; el cociente y la huella, en el diario). El finding lleva el estado del artefacto. Al
+  reanudar salen las mismas medidas y los mismos veredictos del artefacto.
+- Su contrato a escala pequeña: un cambio sin razón, o sin expectativa ni `exploratory`, se rechaza.
+
+**Lo que falta:**
+- **En RL, los tres productos (§14.2):** receta, política y modelo explicativo. Esperan a una tarea de RL (Microduck,
+  §14.3); el laboratorio no supone nada de ellos.
+- **Medir en el banco de pruebas.** `test/artifact-world.test.ts` mide tiempos reales. Con la suite en paralelo, la familia
+  `duplicates` (unos 0,17 s, casi todo arranque de Python) puede salir peor que la tolerancia por ruido de la máquina.
+  Corrida sola, pasa.

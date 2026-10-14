@@ -76,6 +76,9 @@ export interface ArtifactTask {
     inputs(w: Workload): Readonly<Record<string, string>>;
     readonly outputs: readonly string[];
     readonly timeoutMs: number;
+    /** Commands whose output names what the artifact runs on (its interpreter's version...): part of the environment's
+        fingerprint (§11, re-execution). */
+    readonly environment?: readonly (readonly string[])[];
   };
   /** What a run measured and what it left, read from the files it left and the sandbox's measures. */
   read(files: Readonly<Record<string, string | null>>, measured: { readonly wallMs: number; readonly stdout: string }): { metrics: Record<string, number> | null; output: string | null };
