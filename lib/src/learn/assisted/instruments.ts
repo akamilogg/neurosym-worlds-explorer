@@ -36,28 +36,11 @@ export interface InstrumentData {
   points(ref: string, every: number): readonly { readonly point: string; readonly p: unknown; readonly came: unknown }[] | null;
   /** The whole of an episode as plain series, when the laboratory has them (compact: one array per quantity). */
   series?(id: string): Record<string, unknown> | null;
-  /** With series: the percept and what came at step k, built over (a copy of) them - its arrays views of the series' prefix,
-      never copies, so reading every point of an episode costs the episode once. Its number of steps is `series.steps`. */
-  perceptAt?(series: Record<string, unknown>, k: number, prefix: <T>(a: readonly T[], n: number) => readonly T[]): { readonly p: unknown; readonly came: unknown };
-}
-
-/** The first n elements of an array, as an array that reads them where they are: its length, its indices, its methods and
-    `Array.isArray` as an array's; it cannot be written. A point's history is a view of its episode's, never a copy. */
-export function prefixView<T>(arr: readonly T[], n: number): readonly T[] {
-  const len = Math.max(0, Math.min(Math.floor(n), arr.length));
-  const index = (prop: PropertyKey): number | null => {
-    if (typeof prop !== 'string') return null;
-    const i = Number(prop);
-    return Number.isInteger(i) && i >= 0 && String(i) === prop ? i : null;
-  };
-  return new Proxy([] as T[], {
-    get: (t, prop, r) => (prop === 'length' ? len : index(prop) !== null ? (index(prop)! < len ? arr[index(prop)!] : undefined) : Reflect.get(t, prop, r)),
-    has: (t, prop) => (index(prop) !== null ? index(prop)! < len : Reflect.has(t, prop)),
-    ownKeys: () => [...Array.from({ length: len }, (_, i) => String(i)), 'length'],
-    getOwnPropertyDescriptor: (t, prop) => (prop === 'length' ? { value: len, writable: true, enumerable: false, configurable: false }
-      : index(prop) !== null && index(prop)! < len ? { value: arr[index(prop)!], writable: false, enumerable: true, configurable: true } : undefined),
-    set: () => false, defineProperty: () => false, deleteProperty: () => false
-  });
+  /** With series: the SOURCE of `(series, k, prefix) => ({ p, came })`, the percept and what came at step k built over the
+      series - its arrays views of their prefix (`prefix(array, n)`), never copies, so reading every point of an episode costs
+      the episode once. It is compiled inside the sandbox: nothing of the host is ever handed to the researcher's code. Its
+      number of steps is `series.steps`. */
+  readonly perceptAtSource?: string;
 }
 
 /** How many numbers (and other leaves) a copy holds. */
@@ -77,6 +60,60 @@ export function parseInstruments(raw: unknown, warnings: string[]): InstrumentOp
   });
   return out;
 }
+
+/* What the sandbox builds for itself, before the researcher's code: its `env`, from a bridge to the host that only takes and
+   gives TEXT (JSON) and is never reachable from that code - a host object or function inside the context would lead out of it
+   (`env.episodes.constructor("return process")()`: an external review, 14/10/2026). The bridge never throws into the
+   context: its errors come back as text, and are thrown here as the context's own. */
+export const BOOTSTRAP = `"use strict";
+(bridge, perceptAt, hasSeries) => {
+  const parse = JSON.parse, text = JSON.stringify;
+  const call = (op, arg) => { const r = parse(bridge(op, text(arg === undefined ? null : arg))); if (r.error !== undefined) throw new Error(r.error); return r.value; };
+  const index = (prop) => { if (typeof prop !== "string") return null; const i = Number(prop); return Number.isInteger(i) && i >= 0 && String(i) === prop ? i : null; };
+  /* The first n elements of an array as an array that reads them where they are: never a copy, never writable. */
+  const prefix = (arr, n) => {
+    const len = Math.max(0, Math.min(Math.floor(n), arr.length));
+    return new Proxy([], {
+      get: (t, p, r) => (p === "length" ? len : index(p) !== null ? (index(p) < len ? arr[index(p)] : undefined) : Reflect.get(t, p, r)),
+      has: (t, p) => (index(p) !== null ? index(p) < len : Reflect.has(t, p)),
+      ownKeys: () => [...Array.from({ length: len }, (_, i) => String(i)), "length"],
+      getOwnPropertyDescriptor: (t, p) => (p === "length" ? { value: len, writable: true, enumerable: false, configurable: false }
+        : index(p) !== null && index(p) < len ? { value: arr[index(p)], writable: false, enumerable: true, configurable: true } : undefined),
+      set: () => false, defineProperty: () => false, deleteProperty: () => false
+    });
+  };
+  const copies = new Map();
+  const series = (id) => { id = String(id); if (!copies.has(id)) copies.set(id, call("series", id)); return copies.get(id); };
+  const env = {
+    episodes: () => call("episodes"),
+    points: (ref, every = 1) => {
+      const step = Math.max(1, Math.floor(Number(every) || 1));
+      if (!perceptAt) return call("points", { ref: String(ref), every: step });
+      const m = /^([a-z][a-z0-9-]*)(?:@(\\d+)-(\\d+))?$/.exec(String(ref).trim());
+      if (!m) throw new Error("no episode of yours \\"" + ref + "\\"");
+      const s = series(m[1]);
+      const steps = Number(s.steps) || 0;
+      const from = m[2] ? Number(m[2]) : 0, to = Math.min(steps - 1, m[3] ? Number(m[3]) : steps - 1);
+      const out = [];
+      for (let k = from; k <= to; k++) if (k % step === 0) out.push(Object.assign({ point: m[1] + "@" + k }, perceptAt(s, k, prefix)));
+      return out;
+    },
+    answers: (model, ref, every = 1) => call("answers", { model, ref: String(ref), every: Math.max(1, Math.floor(Number(every) || 1)) }),
+    random: (seed) => {
+      let a = Math.floor(Number(seed) || 0) >>> 0;
+      return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    }
+  };
+  if (hasSeries) env.series = series;
+  Object.freeze(env);
+  /* The run: its arguments parsed here, its result made text here - within the time limit, as the run itself. */
+  Object.defineProperty(globalThis, "__run", { value: (fn, input) => {
+    const r = fn(parse(input), env);
+    if (r !== null && (typeof r === "object" || typeof r === "function") && typeof r.then === "function") return "\\u0001promise";
+    const out = text(r);
+    return out === undefined ? "\\u0001nothing" : out;
+  }, writable: false, configurable: false });
+}`;
 
 /** A fresh sandbox: nothing of the host, no clock, no unseeded randomness, no code from strings. */
 function sandbox(): vm.Context {
@@ -155,20 +192,7 @@ export class Instruments {
     const v = m[2] ? list[Number(m[2]) - 1] : list[list.length - 1];
     if (!v) return refuse('instrument "' + m[1] + '" has ' + list.length + ' version(s)');
     let budget = INSTRUMENT_POINTS_MAX;
-    /* Each episode's series copied once a use, and read through views: what it costs is the episodes, not the points. */
     let numbers = INSTRUMENT_NUMBERS_MAX;
-    const copies = new Map<string, Record<string, unknown>>();
-    const copyOf = (id: string): Record<string, unknown> => {
-      const had = copies.get(id);
-      if (had) return had;
-      const raw = this.data.series?.(id) ?? null;
-      if (raw === null) throw new Error('no episode of yours "' + id + '"');
-      const copy = clone(raw);
-      numbers -= leaves(copy);
-      if (numbers < 0) throw new Error('more than ' + INSTRUMENT_NUMBERS_MAX + ' numbers of your episodes read in one use: read fewer episodes');
-      copies.set(id, copy);
-      return copy;
-    };
     /* What its models answered, asked in the use: computed first (the instrument runs synchronously). */
     const answers = new Map<string, unknown>();
     for (const a of (Array.isArray(q.answers) ? q.answers : []) as Record<string, unknown>[]) {
@@ -182,52 +206,57 @@ export class Instruments {
         answers.set(JSON.stringify([a?.model, ref, every]), got);
       }
     }
-    const context = sandbox();
-    const fn = compile(v.source, context);
-    if (typeof fn === 'string') return refuse(fn);
-    const env = {
-      episodes: () => clone(this.data.episodes()),
-      points: (ref: string, every = 1) => {
-        const step = Math.max(1, Math.floor(Number(every) || 1));
-        if (this.data.series && this.data.perceptAt) {
-          const m = /^([a-z][a-z0-9-]*)(?:@(\d+)-(\d+))?$/.exec(String(ref).trim());
-          if (!m) throw new Error('no episode of yours "' + ref + '"');
-          const copy = copyOf(m[1]);
-          const steps = Number(copy.steps) || 0;
-          const from = m[2] ? Number(m[2]) : 0, to = Math.min(steps - 1, m[3] ? Number(m[3]) : steps - 1);
-          const out: { point: string; p: unknown; came: unknown }[] = [];
-          for (let k = from; k <= to; k++) if (k % step === 0) out.push({ point: m[1] + '@' + k, ...this.data.perceptAt(copy, k, prefixView) });
-          return out;
+    /* The bridge: text in, text out, never a throw. What it reads it accounts for. */
+    const bridge = (op: string, argText: string): string => {
+      try {
+        const arg = JSON.parse(String(argText)) as Record<string, unknown> | string | null;
+        const ok = (value: unknown) => JSON.stringify({ value: value === undefined ? null : value });
+        if (op === 'episodes') return ok(this.data.episodes());
+        if (op === 'series') {
+          const raw = this.data.series?.(String(arg)) ?? null;
+          if (raw === null) return JSON.stringify({ error: 'no episode of yours "' + String(arg) + '"' });
+          numbers -= leaves(raw);
+          if (numbers < 0) return JSON.stringify({ error: 'more than ' + INSTRUMENT_NUMBERS_MAX + ' numbers of your episodes read in one use: read fewer episodes' });
+          return ok(raw);
         }
-        const pts = this.data.points(String(ref), step);
-        if (pts === null) throw new Error('no episode of yours "' + ref + '"');
-        budget -= pts.length;
-        if (budget < 0) throw new Error('more than ' + INSTRUMENT_POINTS_MAX + ' points read in one use: read fewer, or with a larger "every"');
-        return clone(pts);
-      },
-      ...(this.data.series ? { series: (id: string) => copyOf(String(id)) } : {}),
-      answers: (model: unknown, ref: string, every = 1) => {
-        const got = answers.get(JSON.stringify([model, String(ref), Math.max(1, Math.floor(Number(every) || 1))]));
-        if (got === undefined) throw new Error('the answers of model ' + JSON.stringify(model) + ' on "' + ref + '" were not asked in this use ("answers")');
-        return clone(got);
-      },
-      random: (seed: number) => mulberry32(Math.floor(Number(seed) || 0))
+        if (op === 'points') {
+          const a = (arg ?? {}) as { ref?: string; every?: number };
+          const pts = this.data.points(String(a.ref), Math.max(1, Math.floor(Number(a.every) || 1)));
+          if (pts === null) return JSON.stringify({ error: 'no episode of yours "' + String(a.ref) + '"' });
+          budget -= pts.length;
+          if (budget < 0) return JSON.stringify({ error: 'more than ' + INSTRUMENT_POINTS_MAX + ' points read in one use: read fewer, or with a larger "every"' });
+          return ok(pts);
+        }
+        if (op === 'answers') {
+          const a = (arg ?? {}) as { model?: unknown; ref?: string; every?: number };
+          const got = answers.get(JSON.stringify([a.model, String(a.ref), a.every]));
+          return got === undefined ? JSON.stringify({ error: 'the answers of model ' + JSON.stringify(a.model) + ' on "' + a.ref + '" were not asked in this use ("answers")' }) : ok(got);
+        }
+        return JSON.stringify({ error: 'no such primitive "' + op + '"' });
+      } catch (e) { return JSON.stringify({ error: String((e as Error)?.message ?? e) }); }
     };
+    const context = sandbox();
     const started = Date.now();
-    let result: unknown;
+    let out: unknown;
     try {
+      /* Its env first, then its code: nothing of the host but the bridge's text ever reaches the context. */
+      const perceptAt = this.data.series && this.data.perceptAtSource
+        ? new vm.Script('"use strict"; (' + this.data.perceptAtSource + ')', { filename: 'percept.js' }).runInContext(context, { timeout: 2000 }) : null;
+      (new vm.Script(BOOTSTRAP, { filename: 'instrument-env.js' }).runInContext(context, { timeout: 2000 }) as Function)(bridge, perceptAt, Boolean(this.data.series));
+      const fn = compile(v.source, context);
+      if (typeof fn === 'string') return refuse(fn);
       context.__fn = fn;
-      context.__args = clone(q.args ?? {});
-      context.__env = env;
-      result = new vm.Script('__fn(__args, __env)', { filename: 'instrument-call.js' }).runInContext(context, { timeout: this.timeoutMs });
-      if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('an instrument runs synchronously: return its result, not a promise');
+      context.__in = JSON.stringify(q.args ?? {});
+      out = new vm.Script('__run(__fn, __in)', { filename: 'instrument-call.js' }).runInContext(context, { timeout: this.timeoutMs });
+      if (typeof out !== 'string') throw new Error('what it returned could not be read');
+      if (out === '\u0001promise') throw new Error('an instrument runs synchronously: return its result, not a promise');
+      if (out === '\u0001nothing') throw new Error('it returned nothing that can be written as JSON (a function, or undefined)');
     } catch (e) {
       const error = String((e as Error)?.message ?? e);
       this.log('instrument_used', { round, id: v.id, version: v.version, args: q.args ?? {}, ...(q.answers ? { answers: q.answers } : {}), error, ms: Date.now() - started });
       return { use: v.id + '@' + v.version, error };
     }
-    let text: string;
-    try { text = JSON.stringify(result ?? null); } catch { text = JSON.stringify(String(result)); }
+    const text = out as string;
     const clipped = text.length > INSTRUMENT_RESULT_MAX;
     const answer = clipped ? text.slice(0, INSTRUMENT_RESULT_MAX) : JSON.parse(text);
     this.log('instrument_used', { round, id: v.id, version: v.version, args: q.args ?? {}, ...(q.answers ? { answers: q.answers } : {}), result: answer, ...(clipped ? { clipped: text.length } : {}), ms: Date.now() - started });

@@ -179,9 +179,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       learner's names, what its percept and what came - and how the interface words them (`seriesDoc`). None by default. */
   series?(episode: E): Record<string, unknown>;
   readonly seriesDoc?: string;
-  /** With `series`: the percept at step k (the same as its points' `state`) and what came there (the same as `shown`), built
-      over the series with views of their prefixes (`prefix`), never copies. */
-  perceptAt?(series: Record<string, unknown>, k: number, prefix: <T>(a: readonly T[], n: number) => readonly T[]): { readonly p: unknown; readonly came: unknown };
+  /** With `series`: the SOURCE of `(series, k, prefix) => ({ p, came })` - the percept at step k (the same as its points'
+      `state`) and what came there (the same as `shown`), over the series with views of their prefixes, never copies. It runs
+      inside the researcher's sandbox (SPEC-INSTRUMENTOS-PROPIOS §17): code, never a function of the host. */
+  readonly perceptAtSource?: string;
   /** Where a draft is tried before anything uses it (default: the learner's latest points), and on how many its answer. */
   readonly trial?: { points(episode: E): P[]; readonly answers: number };
   /** `view`: the steps from..to, as the interface describes them. */
@@ -294,11 +295,26 @@ export interface LabRunConfig {
   readonly fingerprint?: number;
   /** From which round this code's additions apply (SPEC-INVESTIGADOR-ASISTIDO §14.6); none in a run made before them. */
   readonly review_from?: number;
+  /** From which attempt each capability added after `review_from` applies (none: never in this run). */
+  readonly capabilities_from?: Readonly<Record<string, number>>;
   /** Whether the assisted researcher may write instruments of its own (SPEC-INSTRUMENTOS-PROPIOS); default true. */
   readonly instruments?: boolean;
   /** A continuation of a run that accepted: the attempt it accepted in (§14.3). */
   readonly continued_after_acceptance?: number;
 }
+
+/** The capabilities added after `review_from`, each applying from its own attempt (`capabilities_from`): its name, the
+    commit that brought it, and how a journal made before `capabilities_from` says it had it. */
+export const CAPABILITIES: readonly { readonly name: string; readonly since: string; inJournal(config: Record<string, unknown>): boolean }[] = [
+  /* SPEC-INSTRUMENTOS-PROPIOS: 7fc7cb4; the switch `instruments` in the configuration since a7e1cf4. */
+  { name: 'instruments', since: '7fc7cb4', inJournal: (config) => typeof config.instruments === 'boolean' }
+];
+
+/** Whether a capability applies at an attempt of a run whose configuration is `cfg`. */
+export const capabilityAt = (cfg: { readonly capabilities_from?: Readonly<Record<string, number>> }, name: string, attempt: number): boolean => {
+  const from = cfg.capabilities_from?.[name];
+  return typeof from === 'number' && attempt > from;
+};
 
 /** What the runner gives a laboratory with a loop of its own. */
 export interface LabServices {

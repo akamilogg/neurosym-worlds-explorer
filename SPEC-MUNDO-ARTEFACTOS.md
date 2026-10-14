@@ -88,15 +88,24 @@ Los resultados de `run` y `profile` son los **episodios** de este mundo. Se guar
 
 ## 7. El percepto y las observaciones
 
-El código del investigador (observaciones y salida del modelo) recibe en cada punto, es decir, en cada ejecución de una
-versión sobre un caso:
-- la carga: su familia y sus parámetros;
-- las métricas medidas;
-- el perfil, si lo hubo;
-- la versión: su hash y sus cambios respecto a la de partida.
+**Lo que se sabe antes de ejecutar y lo que la ejecución revela van separados,** como en los mundos de leyes, donde el
+percepto de un punto nunca contiene lo que hay que predecir en él (corregido tras una revisión externa, 14/10/2026: la
+primera versión daba al modelo las métricas de la misma ejecución que debía predecir, y bastaba con copiarlas).
 
-Sus observaciones extraen de ahí las magnitudes que, según su modelo, deciden el rendimiento: tamaño de la entrada,
-proporción de repetidos, tiempo en una función. La salida del modelo predice la métrica de esa ejecución.
+**El percepto de un punto** (una versión sobre una carga) es sólo lo disponible **antes** de ejecutarla:
+- la carga: su familia, sus parámetros y la propia entrada, o un resumen que la tarea declare;
+- la versión: su hash, su código y sus cambios respecto a la de partida.
+
+**Lo que salió** (`came`, como en los demás mundos) es lo que la ejecución revela **después**, y nunca entra en el
+percepto del mismo punto:
+- las métricas medidas;
+- la corrección del caso;
+- el perfil, si lo hubo.
+
+Sus observaciones extraen del percepto las magnitudes que, según su modelo, deciden el rendimiento: el tamaño de la
+entrada, la proporción de repetidos, si la versión usa un índice. La salida del modelo predice la métrica de esa
+ejecución. Lo que aprendió de perfiles y métricas de **otras** ejecuciones (sus episodios) lo lleva a su modelo por la vía
+de siempre: sus creencias, sus documentos y el código que escribe, no leyéndolo en el punto que predice.
 
 Así el modelo es comprobable como en un mundo de leyes: **predice el rendimiento de una versión en una carga.** Y es útil:
 sirve para elegir qué cambio probar antes de gastar ejecuciones.
@@ -276,3 +285,10 @@ Después, una automatización real con sus APIs simuladas.
   - **Versiones:** por contenido, rechazos, `diff`, `view` y `materialize`.
   - **El backend de procesos:** entrada, salidas, entrada estándar, sin secretos del anfitrión, y el límite de tiempo.
 
+### 18.2 Revisión externa (14/10/2026)
+
+- **Rutas en una sola forma:** `./a.txt` es `a.txt`. Antes eran dos entradas que se escribían en el mismo archivo: `view`
+  mostraba una y se ejecutaba la otra, y reconstruir el artefacto daba otro hash.
+- **Colisiones rechazadas:** en un parche, en una versión y en una base se rechazan dos nombres que un sistema de
+  archivos sin distinción de mayúsculas escribiría como uno.
+- **§7 corregido:** el percepto sólo lleva lo que se sabe antes de ejecutar, y las métricas son lo que salió.

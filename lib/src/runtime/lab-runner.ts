@@ -14,6 +14,7 @@ import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/promp
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
 import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { FINGERPRINT_VERSION, LawSession, lawFingerprint } from '../learn/law-session.ts';
+import { CAPABILITIES, capabilityAt } from '../learn/lab.ts';
 import { experimentStates } from '../orchestra/view.ts';
 import { Protocol } from '../learn/protocol.ts';
 import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
@@ -100,6 +101,14 @@ export function experimentArgs(argv: readonly string[]): string[] {
     out.push(argv[i]);
   }
   return out;
+}
+
+/** Whether the code a journal was made with already had a commit (git's ancestry; null when git cannot tell). */
+function madeWith(made: unknown, commit: string, root: string): boolean | null {
+  const head = typeof made === 'string' ? made.replace(/\+changes$/, '') : '';
+  if (!head) return null;
+  try { execFileSync('git', ['merge-base', '--is-ancestor', commit, head], { cwd: root, stdio: 'ignore' }); return true; }
+  catch (e) { return (e as { status?: number }).status === 1 ? false : null; }
 }
 
 /** The tests of its own a command line requires (0 without --own-tests). */
@@ -295,6 +304,18 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
      rounds after this attempt: from the start in a new run, from its new rounds in a continuation; a run resumed keeps its
      journal's, and one made before never gets them - the history a resumed run repeats is asked as it was. */
   const reviewFrom: number | null = previous ? (typeof previous.config?.review_from === 'number' ? previous.config.review_from : continuedFrom) : 0;
+  /* Each capability added after `review_from` has its own start, kept in the journal (`capabilities_from`): a journal made
+     before it gets it from its new rounds when continued, and never when only resumed - its history is asked as it was
+     (an external review, 14/10/2026: a journal of review_from 0 made before the instruments got their section from round 1,
+     and its replay diverged). */
+  const capabilitiesFrom: Record<string, number> = Object.fromEntries(CAPABILITIES.map((c) => {
+    if (!previous) return [c.name, 0];
+    const had = previous.config?.capabilities_from;
+    if (had && typeof had === 'object') return [c.name, typeof had[c.name] === 'number' ? had[c.name] : continuedFrom];
+    /* A journal from before `capabilities_from`: it had the capability from its review_from if its code did. */
+    const had_it = c.inJournal(previous.config ?? {}) || madeWith(previous.commit, c.since, options.root) === true;
+    return [c.name, had_it && typeof previous.config?.review_from === 'number' ? previous.config.review_from : continuedFrom];
+  }).filter(([, from]) => typeof from === 'number'));
   /* A continuation may require tests of its own from its new rounds on (`--own-tests N` given now). */
   const go = given.indexOf('--own-tests');
   const ownTestsNow = previous && continuedFrom !== null && go >= 0 && given[go + 1] ? given[go + 1] : null;
@@ -346,6 +367,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(Number(arg('own-tests')) > 0 ? { ownTests: Math.floor(Number(arg('own-tests'))) } : {}),
     confirmPlaces: Math.max(1, Number(arg('confirm-places'))),
     ...(reviewFrom !== null ? { review_from: reviewFrom } : {}),
+    capabilities_from: capabilitiesFrom,
     ...(ownTestsBefore !== null ? { own_tests_before: ownTestsBefore } : {}),
     ...(acceptedAt !== null ? { continued_after_acceptance: acceptedAt } : {}),
     /* The models' fingerprint (SPEC-CALIBRACION-INSTRUMENTOS §11.1): a resumed run keeps its journal's, whose history it repeats. */
@@ -920,6 +942,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* From which round this code's additions apply (`review_from`): none in a run made before them. */
   const reviewFrom = typeof cfg.review_from === 'number' ? cfg.review_from as number : null;
   let reviewing = reviewFrom === 0;
+  /* The attempt now (the capabilities added later apply from their own: `capabilities_from`). */
+  let attemptNow = 1;
+  const instrumenting = (): boolean => cfg.instruments !== false && capabilityAt(cfg as never, 'instruments', attemptNow);
   /* The tests of its own required: a continuation's from its new rounds, its history's before. */
   const ownTestsRequired = (): number => (typeof cfg.own_tests_before === 'number' && !reviewing ? cfg.own_tests_before as number : (cfg.ownTests as number | undefined) ?? 0);
   /* What it did with each experiment of its own (SPEC-ORQUESTADOR §3.3.5). */
@@ -1219,7 +1244,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): the assisted researcher, in the rounds this code reviews. */
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
-    instruments: () => (journal.researcher === 'assisted' && helping && reviewing && cfg.instruments !== false ? instruments : null),
+    instruments: () => (journal.researcher === 'assisted' && helping && reviewing && instrumenting() ? instruments : null),
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
     parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
     ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
@@ -1282,7 +1307,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       episodes: () => readable().map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, steps: lab.steps(e.data) })),
       points: (ref, every) => casesOf(ref, every)?.map((c) => ({ point: (c as { point: string }).point, p: (c as { state: unknown }).state, came: lab.shown(c) })) ?? null,
       ...(lab.series ? { series: (id: string) => { const e = readable().find((x) => x.id === id); return e ? lab.series!(e.data) : null; } } : {}),
-      ...(lab.series && lab.perceptAt ? { perceptAt: lab.perceptAt } : {})
+      ...(lab.series && lab.perceptAtSource ? { perceptAtSource: lab.perceptAtSource } : {})
     },
     answerAt: async (model, refs, every) => {
       const law = Number.isInteger(model) ? session.lawOfRound(model as number) : null;
@@ -1363,7 +1388,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
-        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (cfg.instruments !== false ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '') : promptFor(focus)),
+        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
       onDeliver: (m, question) => {
@@ -1383,7 +1408,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       ...(exchange ? { board: { accepts: (q: Record<string, unknown>) => PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q),
         run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {}),
       /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2). */
-      instruments: { accepts: (q: Record<string, unknown>) => helping && reviewing && cfg.instruments !== false && Instruments.accepts(q), run: (q: Record<string, unknown>, round: number) => instruments.use(q, round) },
+      instruments: { accepts: (q: Record<string, unknown>) => helping && reviewing && instrumenting() && Instruments.accepts(q), run: (q: Record<string, unknown>, round: number) => instruments.use(q, round) },
       ...(ownTests ? { tests: { accepts: (q: Record<string, unknown>) => helping && OwnTests.accepts(q),
         run: (q: Record<string, unknown>, round: number, budget: { acts: number }) => ownTests.register(q, round, budget) } } : {})
     })
@@ -1504,6 +1529,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       say('a new stage after the acceptance of round ' + acceptedBefore.round + ': its checks start afresh');
     }
     if (!reviewing && reviewFrom !== null && attempt > reviewFrom) { reviewing = true; log('review_from', { attempt, round: session.currentRound }); }
+    attemptNow = attempt;
     accepted = settleWaiting();
     if (accepted) break;
     const record = await session.consult('propose');

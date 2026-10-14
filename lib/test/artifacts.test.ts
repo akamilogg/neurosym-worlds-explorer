@@ -42,6 +42,12 @@ test('versions by content: a patch makes another, the same content is the same v
   assert.equal(fs.readFileSync(path.join(out, 'lib', 'fast.py'), 'utf8'), 'Y = 2\n');
   assert.ok(!fs.existsSync(path.join(out, 'lib', 'util.py')));
   assert.equal(cleanPath('a\\b.py'), 'a/b.py');
+  /* One file, one entry: "./a" is "a", and two names one file system would write as one are refused. */
+  assert.equal(cleanPath('./lib/./util.py'), 'lib/util.py');
+  const dotted = store.apply(store.base, { files: { './main.py': 'print(3)' + String.fromCharCode(10) } });
+  assert.ok(typeof dotted !== 'string' && [...dotted.files.keys()].sort().join() === 'lib/util.py,main.py', 'the same file, changed');
+  assert.match(String(store.apply(store.base, { files: { 'main.py': 'a', './main.py': 'b' } })), /names one file twice/);
+  assert.match(String(store.apply(store.base, { files: { 'MAIN.py': 'a' } })), /would be one file where case is ignored/);
   assert.equal(hashOf(new Map([['a', '1'], ['b', '2']])), hashOf(new Map([['b', '2'], ['a', '1']])), 'order does not matter');
 });
 

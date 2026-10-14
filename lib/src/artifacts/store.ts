@@ -36,11 +36,21 @@ export function hashOf(files: ReadonlyMap<string, string>): string {
   return h.digest('hex').slice(0, 16);
 }
 
-/** A path inside the artifact, or why not: relative, "/"-separated, no "..", no drive, no absolute. */
+/** A path inside the artifact in its one written form, or null: relative, "/"-separated, without "." segments (`./a.txt`
+    is `a.txt`: the same file, never two entries - an external review, 14/10/2026), no "..", no drive, no absolute. */
 export function cleanPath(p: string): string | null {
   const s = String(p).replace(/\\/g, '/').trim();
-  if (!s || s.startsWith('/') || /^[a-z]:/i.test(s) || s.split('/').some((part) => part === '..' || part === '')) return null;
-  return s;
+  if (!s || s.startsWith('/') || /^[a-z]:/i.test(s)) return null;
+  const parts = s.split('/').filter((part) => part !== '.');
+  if (!parts.length || parts.some((part) => part === '..' || part === '')) return null;
+  return parts.join('/');
+}
+
+/** Two paths a file system that ignores case would write to one file, or null. */
+function collision(paths: Iterable<string>): [string, string] | null {
+  const seen = new Map<string, string>();
+  for (const p of paths) { const k = p.toLowerCase(); if (seen.has(k)) return [seen.get(k)!, p]; seen.set(k, p); }
+  return null;
 }
 
 export class ArtifactStore {
@@ -71,6 +81,8 @@ export class ArtifactStore {
       }
     };
     walk('');
+    const clash = collision(files.keys());
+    if (clash) throw new Error('"' + clash[0] + '" and "' + clash[1] + '" would be one file where case is ignored');
     return new ArtifactStore(files);
   }
 
@@ -83,6 +95,8 @@ export class ArtifactStore {
     if (!from) return 'no version "' + parent + '"';
     const entries = Object.entries(patch?.files ?? {});
     if (!entries.length) return 'the patch changes no file: {"files": {"<path>": "<new content>" | null}}';
+    const twice = collision(entries.map(([p]) => cleanPath(p)).filter((p): p is string => p !== null));
+    if (twice) return 'the patch names one file twice: "' + twice[0] + '" and "' + twice[1] + '"';
     const files = new Map(from.files);
     for (const [p, content] of entries) {
       const clean = cleanPath(p);
@@ -93,6 +107,8 @@ export class ArtifactStore {
       files.set(clean, content);
     }
     if (files.size > ARTIFACT_FILES_MAX) return 'the artifact would have more than ' + ARTIFACT_FILES_MAX + ' files';
+    const clash = collision(files.keys());
+    if (clash) return '"' + clash[0] + '" and "' + clash[1] + '" would be one file where case is ignored: rename one';
     const hash = hashOf(files);
     if (hash === from.hash) return 'the patch changes nothing';
     const known = this.versions.get(hash);

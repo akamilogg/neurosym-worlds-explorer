@@ -50,7 +50,10 @@ const CODE: Record<string, string> = {
 };
 const RANGES: Record<string, [number, number]> = { cat_row_spread: [0, 7], mouse_mobility: [0, 4], covered_mouse_moves: [0, 4], mouse_routes: [0, 8] };
 
-for (const runnerName of ['function', 'node-vm'] as const) {
+/* The node-vm runner hands the point over as data (never an object of the host: an external review, 14/10/2026), so a
+   context that carries the world's functions - this eval mode's `ctx.world.actions` - runs with the function runner only.
+   The worlds that use node-vm perceive plain data. */
+for (const runnerName of ['function'] as const) {
   test('Eval mode (' + runnerName + ' runner) rediscovers catalogue measures from the rules alone', () => {
     const observer = new Observer(foxhounds, { dialects: [foxhoundsDialect], runners: runnerName === 'node-vm' ? [nodeVmRunner()] : [] });
     const code: Record<string, MeasureDecl> = {};
@@ -112,9 +115,10 @@ test('a code measure is a pure fact: no randomness, no clock, no host globals; f
       mutate: { spec: { kind: 'code', lang: 'js', source: '(ctx) => { ctx.state.cats[0][1] = 7; return 1; }' }, range: [0, 1] },
       ok: { spec: { kind: 'code', lang: 'js', source: '(ctx) => ctx.view.entities.length' }, range: [0, 10] }
     });
-    assert.deepEqual(Object.keys(o.values), ['ok']);
+    assert.deepEqual(Object.keys(o.values).sort(), runners.length ? ['mutate', 'ok'] : ['ok']);
     assert.equal(o.values.ok, 5);
-    assert.deepEqual(o.errors.map((e) => e.id).sort(), ['clock', 'mutate', 'nan', 'proc', 'rnd']);
+    /* With node-vm the code gets a copy of the point: writing to it is no error, and reaches nothing. */
+    assert.deepEqual(o.errors.map((e) => e.id).sort(), runners.length ? ['clock', 'nan', 'proc', 'rnd'] : ['clock', 'mutate', 'nan', 'proc', 'rnd']);
     assert.equal(s.cats[0][1] === 7, false, 'the caller\'s state is untouched');
   }
 });

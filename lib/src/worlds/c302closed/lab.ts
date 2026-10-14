@@ -464,11 +464,8 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
     inputs: { [e.names.left]: e.left.map((_, k) => (k === 0 ? 0 : e.left[k - 1])), [e.names.right]: e.right.map((_, k) => (k === 0 ? 0 : e.right[k - 1])) },
     came: { [e.names.signals[0]]: [...e.reorientation.slice(0, e.left.length)], [e.names.signals[1]]: [...e.steering.slice(0, e.left.length)] },
     ...(e.changes ? { changes: changesInWords(e.changes) } : {}) }),
-  perceptAt: (s, k, prefix) => {
-    const inputs = s.inputs as Record<string, number[]>, came = s.came as Record<string, number[]>;
-    return { p: { step: k, t: prefix(s.t as number[], k + 1), inputs: Object.fromEntries(Object.entries(inputs).map(([cell, x]) => [cell, prefix(x, k + 1)])), ...(s.changes ? { changes: s.changes } : {}) },
-      came: { the_signals_were: Object.fromEntries(Object.entries(came).map(([sig, x]) => [sig, x[k]])) } };
-  },
+  perceptAtSource: '(s, k, prefix) => ({ p: Object.assign({ step: k, t: prefix(s.t, k + 1), inputs: Object.fromEntries(Object.entries(s.inputs).map(([cell, x]) => [cell, prefix(x, k + 1)])) }, s.changes ? { changes: s.changes } : {}),'
+    + ' came: { the_signals_were: Object.fromEntries(Object.entries(s.came).map(([sig, x]) => [sig, x[k]])) } })',
   seriesDoc: 'the whole episode as arrays indexed by step: { steps, t, inputs: { <cell>: [...] }, came: { <signal>: [...] }, changes? } - the percept p at step k is t, inputs up to k (p.inputs[cell][j] is inputs[cell][j]), and came[signal][k] is what came at k',
   view: (e, from, to) => {
     const last = Math.min(to, from + VIEW_ROWS - 1, e.left.length - 1);

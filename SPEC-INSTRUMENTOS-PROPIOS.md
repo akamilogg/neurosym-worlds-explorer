@@ -283,3 +283,35 @@ decirle al investigador cuál es la forma eficiente.
   lanzarlo: `batch.c302closed-instruments-pilot.md`.
 - **Prueba:** un run con `--no-instruments` no tiene sección, ni registros, ni usos.
 
+## 17. Revisión externa (14/10/2026): qué cambió
+
+- **El sandbox no deja salir (P1).** Al `env` se le pasaban funciones del anfitrión, y desde una de ellas se llegaba a
+  `process`, `Date` y `Math.random` (`env.episodes.constructor("return process")()`); también desde los argumentos.
+  - **Ahora sólo cruzan cadenas y números.** El `env` se construye dentro del sandbox (`BOOTSTRAP`) y habla con el arnés
+    por un único puente que sólo recibe y devuelve JSON, nunca lanza excepciones hacia dentro y no está al alcance del
+    código del investigador.
+  - **Los argumentos y el resultado** se convierten a texto y desde texto dentro del sandbox.
+  - **El percepto de c302closed** se construye dentro del sandbox, con el código que declara el laboratorio
+    (`perceptAtSource`) y vistas del prefijo definidas también dentro.
+  - **El mismo agujero estaba en las observaciones de código** de todos los mundos (`nodeVmRunner`), porque el percepto
+    era un objeto del anfitrión. Ahora el punto entra como JSON y se lee dentro. Una consecuencia: el código recibe una
+    copia, así que escribir en ella ya no es un error, y no afecta a nada. El modo antiguo con funciones del mundo en el
+    contexto (`ctx.world.actions`), que sólo usaban unas pruebas, queda para el runner de funciones.
+- **Un resultado no puede bloquear el run (P1).** Convertirlo a JSON se hacía fuera del límite de tiempo: un `toJSON`
+  infinito colgaba el proceso, y devolver una función provocaba una excepción sin controlar. Ahora la conversión ocurre
+  dentro del sandbox y del límite, y un resultado que no se puede escribir en JSON es un error del instrumento.
+- **La reanudación de runs anteriores (P1).** Los instrumentos se activaban con `review_from`, que ya existía antes que
+  ellos: un diario con `review_from: 0` hecho antes recibía su sección desde la ronda 1, y su repetición divergía.
+  - **Ahora cada capacidad añadida después tiene su propio inicio** en el diario (`capabilities_from`, y en el código
+    `CAPABILITIES` y `capabilityAt`). Un diario hecho antes la recibe sólo en sus rondas nuevas al continuarlo, y nunca al
+    reanudarlo tal cual.
+  - **Un diario sin `capabilities_from` la tenía** si su configuración lo dice (la opción `instruments`) o si se hizo con
+    un código que ya la traía (`git merge-base --is-ancestor` con el commit que la introdujo).
+- **Pruebas** (`test/instruments.test.ts`, `test/node-vm.test.ts`, `test/observer.test.ts`):
+  - los cuatro caminos de salida, cerrados: `env`, argumentos, datos y errores;
+  - un `toJSON` infinito, cortado por el límite;
+  - devolver una función, como error;
+  - el percepto construido dentro, idéntico al de los checks;
+  - un diario con `review_from: 0` hecho sin instrumentos: se reanuda sin divergir y, al continuarlo, los recibe en
+    sus rondas nuevas;
+  - una observación no puede salir del sandbox por su punto.

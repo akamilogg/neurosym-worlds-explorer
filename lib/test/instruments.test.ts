@@ -154,14 +154,8 @@ test('the grid: an instrument over its games - the picture at each point, how th
 
 /* --- What it costs to read an episode: its series once, its points as views - the same percept the checks give. */
 import { closedLab } from '../src/worlds/c302closed/lab.ts';
-import { prefixView } from '../src/learn/assisted/instruments.ts';
 
-test('views of a prefix read as arrays and never copy; c302closed\'s points over its series are its checks\' percepts, and an episode read whole costs it once', async () => {
-  const v = prefixView([1, 2, 3, 4], 2) as number[];
-  assert.ok(Array.isArray(v));
-  assert.deepEqual([v.length, v[0], v[1], v[2], [...v], v.map((x) => x * 10), v.slice(1), JSON.stringify(v)], [2, 1, 2, undefined, [1, 2], [10, 20], [2], '[1,2]']);
-  assert.throws(() => { 'use strict'; (v as number[])[0] = 9; });
-  /* A closed-loop episode of 4000 steps, as the laboratory keeps it. */
+test('c302closed\'s points, built inside the sandbox over its series, are its checks\' percepts; views read as arrays and never copy; an episode read whole costs it once', async () => {
   const n = 4000;
   const e = { left: Array.from({ length: n }, (_, k) => (k % 50 < 10 ? 4 : 0)), right: Array.from({ length: n }, (_, k) => (k % 70 < 5 ? 3 : 0)),
     reorientation: Array.from({ length: n + 1 }, (_, k) => Math.sin(k / 30)), steering: Array.from({ length: n + 1 }, (_, k) => Math.cos(k / 40)),
@@ -169,20 +163,43 @@ test('views of a prefix read as arrays and never copy; c302closed\'s points over
   const lab = closedLab as any;
   const series = lab.series(e);
   const cases = lab.cases(null, 'act1', e, 1);
-  for (const k of [0, 1, 7, 1234, n - 1]) {
-    const c = cases[k];
-    const built = lab.perceptAt(series, k, prefixView);
-    assert.equal(JSON.stringify(built.p), JSON.stringify(c.state), 'the percept at ' + k);
-    assert.deepEqual(built.came, lab.shown(c), 'what came at ' + k);
-  }
-  const ins = new Instruments({ data: { episodes: () => [{ episode: 'act1' }], points: () => null, series: (id) => (id === 'act1' ? series : null), perceptAt: lab.perceptAt },
+  const ins = new Instruments({ data: { episodes: () => [{ episode: 'act1' }], points: () => null, series: (id) => (id === 'act1' ? series : null), perceptAtSource: lab.perceptAtSource },
     answerAt: async () => [], log: () => {} });
-  ins.apply(1, parseInstruments([{ id: 'all_points', source: '(args, env) => { let s = 0; for (const q of env.points("act1", 1)) s += q.p.inputs.AWCL.length; return s; }' }], []));
+  ins.apply(1, parseInstruments([
+    { id: 'some_points', source: '(args, env) => args.at.map((k) => { const q = env.points("act1@" + k + "-" + k, 1)[0]; const d = (x) => [x.length, x.reduce((a, b) => a + b, 0), x[x.length - 1]];'
+      + ' return { p: { step: q.p.step, t: d(q.p.t), AWCL: d(q.p.inputs.AWCL), AWCR: d(q.p.inputs.AWCR), keys: Object.keys(q.p) }, came: q.came }; })' },
+    { id: 'views', source: '(args, env) => { const v = env.points("act1@1-1", 1)[0].p.inputs.AWCL; let wrote = true; try { v[0] = 9; wrote = v[0] === 9; } catch (e) { wrote = false; } return [Array.isArray(v), v.length, [...v], v.map((x) => x + 1), v.slice(1), wrote]; }' },
+    { id: 'all_points', source: '(args, env) => { let s = 0; for (const q of env.points("act1", 1)) s += q.p.inputs.AWCL.length; return s; }' }
+  ], []));
+  const at = [0, 1, 7, 1234, n - 1];
+  const got = (await ins.use({ use: 'some_points', args: { at } }, 2) as { result: { p: unknown; came: unknown }[] }).result;
+  const d = (x: number[]) => [x.length, x.reduce((a, b) => a + b, 0), x[x.length - 1]];
+  at.forEach((k, i) => {
+    const st = cases[k].state;
+    assert.deepEqual(got[i].p, { step: st.step, t: d(st.t), AWCL: d(st.inputs.AWCL), AWCR: d(st.inputs.AWCR), keys: Object.keys(st) }, 'the percept at ' + k);
+    assert.deepEqual(got[i].came, lab.shown(cases[k]), 'what came at ' + k);
+  });
+  assert.deepEqual((await ins.use({ use: 'views' }, 2) as { result: unknown }).result, [true, 2, [0, 4], [1, 5], [4], false]);
   const t0 = Date.now();
   const r = await ins.use({ use: 'all_points' }, 2) as { result: number; error?: string };
   assert.equal(r.error, undefined);
   assert.equal(r.result, n * (n + 1) / 2, 'every point saw its whole history');
   assert.ok(Date.now() - t0 < 10000, 'and it cost the episode, not the square of it');
+});
+
+test('nothing of the host is reachable: not through env, its arguments, its errors or its results; a result is made text within the limit', async () => {
+  const ins = make([], 1000);
+  ins.apply(1, parseInstruments([
+    { id: 'via_env', source: '(a, env) => { try { return typeof env.episodes.constructor("return process")(); } catch (e) { return "blocked"; } }' },
+    { id: 'via_args', source: '(a, env) => { try { return typeof a.constructor.constructor("return process")(); } catch (e) { return "blocked"; } }' },
+    { id: 'via_data', source: '(a, env) => { try { return typeof env.points("ep1", 1)[0].constructor.constructor("return process")(); } catch (e) { return "blocked"; } }' },
+    { id: 'via_error', source: '(a, env) => { try { env.points("nothing", 1); } catch (e) { try { return typeof e.constructor.constructor("return process")(); } catch (f) { return "blocked"; } } }' },
+    { id: 'loop_json', source: '() => ({ toJSON() { for (;;) {} } })' },
+    { id: 'a_function', source: '() => () => 1' }
+  ], []));
+  for (const id of ['via_env', 'via_args', 'via_data', 'via_error']) assert.equal((await ins.use({ use: id, args: {} }, 2) as { result: unknown }).result, 'blocked', id);
+  assert.match(String((await ins.use({ use: 'loop_json' }, 2) as { error: string }).error), /timed out/i, 'its result made text within the limit');
+  assert.match(String((await ins.use({ use: 'a_function' }, 2) as { error: string }).error), /nothing that can be written as JSON/);
 });
 
 test('--no-instruments: the condition without them - no section, nothing registered, a use not understood', async () => {
@@ -195,4 +212,31 @@ test('--no-instruments: the condition without them - no section, nothing registe
   assert.ok(!events.some((e: any) => e.type === 'instrument_registered' || e.type === 'instrument_used'));
   assert.equal(r.finding.assistance!.instruments, undefined);
   assert.equal(JSON.parse(fs.readFileSync(r.journal, 'utf8')).config.instruments, false);
+});
+
+test('a journal made before the instruments (review_from 0, no capabilities_from): resumed as it was, given them only from its new rounds when continued', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'instruments-old-'));
+  const llm = { url: 'http://system2.test/chat', model: 'stand-in' };
+  const args = ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--steps', '2', '--no-grade'];
+  /* Made as before them: no section, no switch, no capabilities_from - only review_from 0. */
+  const first = await runLaboratory(cellsLab, { args: [...args, '--attempts', '2', '--max-tokens', '350', '--no-instruments', '--out', path.join(dir, 'old.json')], root: dir, llm, fetch: system2([]) });
+  const j = JSON.parse(fs.readFileSync(first.journal, 'utf8'));
+  assert.deepEqual(j.config.capabilities_from, { instruments: 0 }, 'a new journal says where its capabilities start');
+  delete j.config.capabilities_from;
+  delete j.config.instruments;
+  j.argv = j.argv.filter((a: string) => a !== '--no-instruments');
+  fs.writeFileSync(first.journal, JSON.stringify(j));
+  const seen: { system: string; user: any }[] = [];
+  const resumed = await runLaboratory(cellsLab, { args: ['--resume', first.journal, '--out', path.join(dir, 'resumed.json')], root: dir, llm, fetch: system2(seen) });
+  assert.notEqual(resumed.stoppedBy, 'diverged', 'its history asked as it was');
+  assert.ok(seen.every((q) => !q.system.includes('YOUR OWN INSTRUMENTS')), 'and no instruments when only resumed');
+  assert.equal(JSON.parse(fs.readFileSync(resumed.journal, 'utf8')).config.capabilities_from.instruments, undefined);
+  /* Continued: from its new rounds on. */
+  const ended = await runLaboratory(cellsLab, { args: ['--resume', resumed.journal, '--out', path.join(dir, 'ended.json')], root: dir, llm, fetch: system2([]) });
+  assert.equal(ended.stoppedBy, 'budget', 'it used up its rounds: it can be continued');
+  const seen2: { system: string; user: any }[] = [];
+  const more = await runLaboratory(cellsLab, { args: ['--resume', ended.journal, '--attempts', '4', '--out', path.join(dir, 'more.json')], root: dir, llm, fetch: system2(seen2) });
+  assert.notEqual(more.stoppedBy, 'diverged');
+  assert.equal(JSON.parse(fs.readFileSync(more.journal, 'utf8')).config.capabilities_from.instruments, 2);
+  assert.ok(seen2.some((q) => q.system.includes('YOUR OWN INSTRUMENTS')), 'its new rounds have them');
 });
