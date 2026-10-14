@@ -18,8 +18,10 @@ import { mulberry32 } from '../../worlds/grid/gen.ts';
 /** The size of an instrument's code and of what one use answers, at most. */
 export const INSTRUMENT_SOURCE_MAX = 12000;
 export const INSTRUMENT_RESULT_MAX = 20000;
-/** Points one use may read or have answered, at most (over all its calls). */
+/** Points one use may read or have answered, at most (over all its calls), where each point is copied whole. */
 export const INSTRUMENT_POINTS_MAX = 3000;
+/** Numbers one use may copy of its episodes' series, at most: each episode once, whatever it reads of it. */
+export const INSTRUMENT_NUMBERS_MAX = 5_000_000;
 /** The time one use may run (ms). */
 export const INSTRUMENT_TIMEOUT_MS = 30000;
 
@@ -34,7 +36,32 @@ export interface InstrumentData {
   points(ref: string, every: number): readonly { readonly point: string; readonly p: unknown; readonly came: unknown }[] | null;
   /** The whole of an episode as plain series, when the laboratory has them (compact: one array per quantity). */
   series?(id: string): Record<string, unknown> | null;
+  /** With series: the percept and what came at step k, built over (a copy of) them - its arrays views of the series' prefix,
+      never copies, so reading every point of an episode costs the episode once. Its number of steps is `series.steps`. */
+  perceptAt?(series: Record<string, unknown>, k: number, prefix: <T>(a: readonly T[], n: number) => readonly T[]): { readonly p: unknown; readonly came: unknown };
 }
+
+/** The first n elements of an array, as an array that reads them where they are: its length, its indices, its methods and
+    `Array.isArray` as an array's; it cannot be written. A point's history is a view of its episode's, never a copy. */
+export function prefixView<T>(arr: readonly T[], n: number): readonly T[] {
+  const len = Math.max(0, Math.min(Math.floor(n), arr.length));
+  const index = (prop: PropertyKey): number | null => {
+    if (typeof prop !== 'string') return null;
+    const i = Number(prop);
+    return Number.isInteger(i) && i >= 0 && String(i) === prop ? i : null;
+  };
+  return new Proxy([] as T[], {
+    get: (t, prop, r) => (prop === 'length' ? len : index(prop) !== null ? (index(prop)! < len ? arr[index(prop)!] : undefined) : Reflect.get(t, prop, r)),
+    has: (t, prop) => (index(prop) !== null ? index(prop)! < len : Reflect.has(t, prop)),
+    ownKeys: () => [...Array.from({ length: len }, (_, i) => String(i)), 'length'],
+    getOwnPropertyDescriptor: (t, prop) => (prop === 'length' ? { value: len, writable: true, enumerable: false, configurable: false }
+      : index(prop) !== null && index(prop)! < len ? { value: arr[index(prop)!], writable: false, enumerable: true, configurable: true } : undefined),
+    set: () => false, defineProperty: () => false, deleteProperty: () => false
+  });
+}
+
+/** How many numbers (and other leaves) a copy holds. */
+const leaves = (x: unknown): number => (Array.isArray(x) ? x.reduce((n: number, v) => n + leaves(v), 0) : x && typeof x === 'object' ? Object.values(x).reduce((n: number, v) => n + leaves(v), 0) : 1);
 
 const ID = /^[a-z][a-z0-9_]*$/;
 const clone = <T>(x: T): T => (x === undefined ? x : JSON.parse(JSON.stringify(x)));
@@ -128,6 +155,20 @@ export class Instruments {
     const v = m[2] ? list[Number(m[2]) - 1] : list[list.length - 1];
     if (!v) return refuse('instrument "' + m[1] + '" has ' + list.length + ' version(s)');
     let budget = INSTRUMENT_POINTS_MAX;
+    /* Each episode's series copied once a use, and read through views: what it costs is the episodes, not the points. */
+    let numbers = INSTRUMENT_NUMBERS_MAX;
+    const copies = new Map<string, Record<string, unknown>>();
+    const copyOf = (id: string): Record<string, unknown> => {
+      const had = copies.get(id);
+      if (had) return had;
+      const raw = this.data.series?.(id) ?? null;
+      if (raw === null) throw new Error('no episode of yours "' + id + '"');
+      const copy = clone(raw);
+      numbers -= leaves(copy);
+      if (numbers < 0) throw new Error('more than ' + INSTRUMENT_NUMBERS_MAX + ' numbers of your episodes read in one use: read fewer episodes');
+      copies.set(id, copy);
+      return copy;
+    };
     /* What its models answered, asked in the use: computed first (the instrument runs synchronously). */
     const answers = new Map<string, unknown>();
     for (const a of (Array.isArray(q.answers) ? q.answers : []) as Record<string, unknown>[]) {
@@ -147,13 +188,24 @@ export class Instruments {
     const env = {
       episodes: () => clone(this.data.episodes()),
       points: (ref: string, every = 1) => {
-        const pts = this.data.points(String(ref), Math.max(1, Math.floor(Number(every) || 1)));
+        const step = Math.max(1, Math.floor(Number(every) || 1));
+        if (this.data.series && this.data.perceptAt) {
+          const m = /^([a-z][a-z0-9-]*)(?:@(\d+)-(\d+))?$/.exec(String(ref).trim());
+          if (!m) throw new Error('no episode of yours "' + ref + '"');
+          const copy = copyOf(m[1]);
+          const steps = Number(copy.steps) || 0;
+          const from = m[2] ? Number(m[2]) : 0, to = Math.min(steps - 1, m[3] ? Number(m[3]) : steps - 1);
+          const out: { point: string; p: unknown; came: unknown }[] = [];
+          for (let k = from; k <= to; k++) if (k % step === 0) out.push({ point: m[1] + '@' + k, ...this.data.perceptAt(copy, k, prefixView) });
+          return out;
+        }
+        const pts = this.data.points(String(ref), step);
         if (pts === null) throw new Error('no episode of yours "' + ref + '"');
         budget -= pts.length;
         if (budget < 0) throw new Error('more than ' + INSTRUMENT_POINTS_MAX + ' points read in one use: read fewer, or with a larger "every"');
         return clone(pts);
       },
-      ...(this.data.series ? { series: (id: string) => { const s = this.data.series!(String(id)); if (s === null) throw new Error('no episode of yours "' + id + '"'); return clone(s); } } : {}),
+      ...(this.data.series ? { series: (id: string) => copyOf(String(id)) } : {}),
       answers: (model: unknown, ref: string, every = 1) => {
         const got = answers.get(JSON.stringify([model, String(ref), Math.max(1, Math.floor(Number(every) || 1))]));
         if (got === undefined) throw new Error('the answers of model ' + JSON.stringify(model) + ' on "' + ref + '" were not asked in this use ("answers")');

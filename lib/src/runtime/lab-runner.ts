@@ -1279,7 +1279,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     data: {
       episodes: () => readable().map((e) => ({ episode: e.id, place: e.place, round: e.round, by: e.by, steps: lab.steps(e.data) })),
       points: (ref, every) => casesOf(ref, every)?.map((c) => ({ point: (c as { point: string }).point, p: (c as { state: unknown }).state, came: lab.shown(c) })) ?? null,
-      ...(lab.series ? { series: (id: string) => { const e = readable().find((x) => x.id === id); return e ? lab.series!(e.data) : null; } } : {})
+      ...(lab.series ? { series: (id: string) => { const e = readable().find((x) => x.id === id); return e ? lab.series!(e.data) : null; } } : {}),
+      ...(lab.series && lab.perceptAt ? { perceptAt: lab.perceptAt } : {})
     },
     answerAt: async (model, refs, every) => {
       const law = Number.isInteger(model) ? session.lawOfRound(model as number) : null;

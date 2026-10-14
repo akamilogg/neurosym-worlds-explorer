@@ -179,6 +179,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       learner's names, what its percept and what came - and how the interface words them (`seriesDoc`). None by default. */
   series?(episode: E): Record<string, unknown>;
   readonly seriesDoc?: string;
+  /** With `series`: the percept at step k (the same as its points' `state`) and what came there (the same as `shown`), built
+      over the series with views of their prefixes (`prefix`), never copies. */
+  perceptAt?(series: Record<string, unknown>, k: number, prefix: <T>(a: readonly T[], n: number) => readonly T[]): { readonly p: unknown; readonly came: unknown };
   /** Where a draft is tried before anything uses it (default: the learner's latest points), and on how many its answer. */
   readonly trial?: { points(episode: E): P[]; readonly answers: number };
   /** `view`: the steps from..to, as the interface describes them. */

@@ -151,3 +151,36 @@ test('the grid: an instrument over its games - the picture at each point, how th
   assert.ok(used.result.valued.every((v: number) => v === 0.25), 'its output code, without the Judge');
   assert.deepEqual(r.finding.assistance!.instruments, [{ id: 'by_ending', versions: 1, uses: 1, failed: 0 }]);
 });
+
+/* --- What it costs to read an episode: its series once, its points as views - the same percept the checks give. */
+import { closedLab } from '../src/worlds/c302closed/lab.ts';
+import { prefixView } from '../src/learn/assisted/instruments.ts';
+
+test('views of a prefix read as arrays and never copy; c302closed\'s points over its series are its checks\' percepts, and an episode read whole costs it once', async () => {
+  const v = prefixView([1, 2, 3, 4], 2) as number[];
+  assert.ok(Array.isArray(v));
+  assert.deepEqual([v.length, v[0], v[1], v[2], [...v], v.map((x) => x * 10), v.slice(1), JSON.stringify(v)], [2, 1, 2, undefined, [1, 2], [10, 20], [2], '[1,2]']);
+  assert.throws(() => { 'use strict'; (v as number[])[0] = 9; });
+  /* A closed-loop episode of 4000 steps, as the laboratory keeps it. */
+  const n = 4000;
+  const e = { left: Array.from({ length: n }, (_, k) => (k % 50 < 10 ? 4 : 0)), right: Array.from({ length: n }, (_, k) => (k % 70 < 5 ? 3 : 0)),
+    reorientation: Array.from({ length: n + 1 }, (_, k) => Math.sin(k / 30)), steering: Array.from({ length: n + 1 }, (_, k) => Math.cos(k / 40)),
+    names: { left: 'AWCL', right: 'AWCR', signals: ['reorientation', 'steering'] } } as never;
+  const lab = closedLab as any;
+  const series = lab.series(e);
+  const cases = lab.cases(null, 'act1', e, 1);
+  for (const k of [0, 1, 7, 1234, n - 1]) {
+    const c = cases[k];
+    const built = lab.perceptAt(series, k, prefixView);
+    assert.equal(JSON.stringify(built.p), JSON.stringify(c.state), 'the percept at ' + k);
+    assert.deepEqual(built.came, lab.shown(c), 'what came at ' + k);
+  }
+  const ins = new Instruments({ data: { episodes: () => [{ episode: 'act1' }], points: () => null, series: (id) => (id === 'act1' ? series : null), perceptAt: lab.perceptAt },
+    answerAt: async () => [], log: () => {} });
+  ins.apply(1, parseInstruments([{ id: 'all_points', source: '(args, env) => { let s = 0; for (const q of env.points("act1", 1)) s += q.p.inputs.AWCL.length; return s; }' }], []));
+  const t0 = Date.now();
+  const r = await ins.use({ use: 'all_points' }, 2) as { result: number; error?: string };
+  assert.equal(r.error, undefined);
+  assert.equal(r.result, n * (n + 1) / 2, 'every point saw its whole history');
+  assert.ok(Date.now() - t0 < 10000, 'and it cost the episode, not the square of it');
+});

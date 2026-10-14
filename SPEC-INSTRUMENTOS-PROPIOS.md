@@ -246,3 +246,30 @@ posición, y lo que el entorno responde es cómo acaba cada partida.
 - **Prueba** (`test/instruments.test.ts`): un run asistido de la cuadrícula registra un instrumento y lo usa sobre `g1`, con
   la imagen, el final de la partida y el valor que dio su modelo en cada punto.
 
+## 15. Lo que cuesta leer un episodio (14/10/2026)
+
+**El problema.** En c302closed, el percepto `p` de cada punto lleva la historia entera hasta ese paso. `env.points`
+copiaba cada punto, así que leer todos los puntos de un episodio de 4.000 pasos eran unos 24 millones de números. El tope
+de 3.000 puntos por uso contaba puntos, no tamaño. El autor pidió resolverlo en el entorno y en la estructura de datos, sin
+decirle al investigador cuál es la forma eficiente.
+
+**La estructura:**
+- **En cada uso, cada episodio se copia una sola vez** (sus series), la primera vez que el instrumento lo lee.
+  `env.series` devuelve esa copia, y `env.points` construye sobre ella el percepto de cada punto
+  (`lab.perceptAt(series, k, prefix)`).
+- **Los arrays de historia de `p` son vistas del prefijo de la copia** (`prefixView`), no copias. Se comportan como arrays
+  normales: longitud, índices, métodos, `Array.isArray`, iteración y JSON. No se pueden escribir.
+- **El instrumento ve exactamente el percepto de sus observaciones,** y leer todos los puntos de un episodio cuesta el
+  episodio, no su cuadrado.
+- **El tope** pasa a contar los números copiados de las series (`INSTRUMENT_NUMBERS_MAX`, 5 millones por uso), cada
+  episodio una vez. Los mundos sin series (la cuadrícula, cuyos puntos tienen tamaño fijo) siguen copiando cada punto,
+  con el tope de puntos. Lo mismo vale para las respuestas de sus modelos.
+- **La sección del prompt no cambia:** nada le indica al investigador qué primitiva usar.
+
+**Prueba** (`test/instruments.test.ts`):
+- las vistas se comportan como arrays y no se pueden escribir;
+- en c302closed, el percepto y lo que salió, construidos sobre las series, son idénticos a los de los puntos de los checks
+  (pasos 0, 1, 7, 1.234 y 3.999);
+- un instrumento que recorre los 4.000 puntos de un episodio ve en cada uno su historia entera, y tarda lo que cuesta el
+  episodio.
+
