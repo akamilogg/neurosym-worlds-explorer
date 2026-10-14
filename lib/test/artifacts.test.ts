@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ArtifactStore, cleanPath, hashOf } from '../src/artifacts/store.ts';
-import { dockerAvailable, dockerSandbox, processSandbox, type Sandbox } from '../src/artifacts/sandbox.ts';
+import { processSandbox, type Sandbox } from '../src/artifacts/sandbox.ts';
 
 /* SPEC-MUNDO-ARTEFACTOS §5 and §10: the artifact versioned by its content, and where it runs. */
 
@@ -72,17 +72,4 @@ async function exercise(sandbox: Sandbox, python: string) {
 test('process backend (NOT isolated): runs the artifact beside its workload, reads its outputs back, enforces the limit', async () => {
   const r = await exercise(processSandbox(), 'python');
   assert.deepEqual([r.backend, r.isolated, r.cpuMs, r.peakKb], ['process', false, null, null]);
-});
-
-const docker = dockerAvailable();
-test('docker backend: isolated - no network, the artifact read-only, CPU and memory measured inside', { skip: docker ? false : 'the docker engine is not running' }, async () => {
-  const sandbox = dockerSandbox('python:3.11-slim');
-  const r = await exercise(sandbox, 'python');
-  assert.deepEqual([r.backend, r.isolated], ['docker', true]);
-  assert.ok(r.cpuMs !== null && r.peakKb !== null, 'measured by its cgroup');
-  const dir = tmp();
-  fs.writeFileSync(path.join(dir, 'net.py'), 'import socket\ntry:\n  socket.create_connection(("1.1.1.1", 80), timeout=3); print("net")\nexcept Exception: print("no net")\n');
-  fs.writeFileSync(path.join(dir, 'write.py'), 'try:\n  open("src/x", "w").write("x"); print("wrote")\nexcept Exception: print("read-only")\n');
-  assert.equal((await sandbox.run(dir, { command: ['python', 'src/net.py'] }, { timeoutMs: 20000 })).stdout.trim(), 'no net');
-  assert.equal((await sandbox.run(dir, { command: ['python', 'src/write.py'] }, { timeoutMs: 20000 })).stdout.trim(), 'read-only');
 });

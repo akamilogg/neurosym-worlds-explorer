@@ -1,17 +1,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 /* ============================================================================
- * Where an artifact runs (SPEC-MUNDO-ARTEFACTOS §10). One interface, two backends:
+ * Where an artifact runs (SPEC-MUNDO-ARTEFACTOS §10): one interface, so that a backend that
+ * isolates can come later without changing anything that runs artifacts. Today one backend,
+ * with no dependency (the author's rule, 14/10/2026: no Docker):
  *
- *   docker    isolated: a fresh container per run, no network, limits of CPU, memory and
- *             processes, the artifact mounted read-only, a fresh working directory. Wall time,
- *             CPU and peak memory are measured INSIDE the container (its cgroup), so starting
- *             the container never counts as the artifact's time.
- *   process   a local process, NOT isolated: for development and for the harness's own tests,
- *             with artifacts of its own. What it measures is the host's view (wall time only).
+ *   process   a local process in a fresh working directory, the artifact copied beside its
+ *             workload, an empty environment (no secret of the host), a time limit, its output
+ *             clipped. It is NOT isolated: it can reach the network and the files the user can.
+ *             Only for artifacts the operator trusts.
  *
  * Every run says which backend ran it and whether it was isolated.
  * ========================================================================== */
@@ -19,17 +19,12 @@ import { spawn, spawnSync } from 'node:child_process';
 export interface Limits {
   /** Wall time of the command, at most (ms). */
   readonly timeoutMs: number;
-  /** Memory (MB) and CPUs (docker). */
-  readonly memoryMb?: number;
-  readonly cpus?: number;
-  /** Processes at once (docker). */
-  readonly pids?: number;
   /** stdout and stderr kept, at most (characters each). */
   readonly outputMax?: number;
 }
 
 export interface Execution {
-  /** The command, run in the working directory, the artifact at `src/` (read-only in docker). */
+  /** The command, run in the working directory, the artifact at `src/`. */
   readonly command: readonly string[];
   /** What the command reads on its standard input. */
   readonly stdin?: string;
@@ -40,7 +35,7 @@ export interface Execution {
 }
 
 export interface RunResult {
-  readonly backend: 'docker' | 'process';
+  readonly backend: 'process';
   readonly isolated: boolean;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
@@ -56,7 +51,7 @@ export interface RunResult {
 }
 
 export interface Sandbox {
-  readonly backend: 'docker' | 'process';
+  readonly backend: 'process';
   readonly isolated: boolean;
   /** Runs one execution of the artifact written at `artifactDir`. */
   run(artifactDir: string, execution: Execution, limits: Limits): Promise<RunResult>;
@@ -116,51 +111,4 @@ export function processSandbox(): Sandbox {
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     }
   };
-}
-
-/** The script the container runs: the command timed inside, then what its cgroup says of CPU and memory, on a last line. */
-const MEASURE = [
-  'start=$(date +%s%N)',
-  'timeout -s KILL "$LIMIT_S" "$@" < /work/stdin',
-  'code=$?',
-  'end=$(date +%s%N)',
-  'cpu=$(sed -n "s/^usage_usec //p" /sys/fs/cgroup/cpu.stat 2>/dev/null)',
-  'peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null)',
-  'echo "@@measure@@ $code $(( (end - start) / 1000 )) ${cpu:--} ${peak:--}" >&2',
-  'exit $code'
-].join('\n');
-
-/** Isolated: a fresh container per run, with no network and the given limits, from `image`. */
-export function dockerSandbox(image: string, options: { docker?: string } = {}): Sandbox {
-  const docker = options.docker ?? 'docker';
-  return {
-    backend: 'docker', isolated: true,
-    async run(artifactDir, execution, limits) {
-      const dir = workdir({ ...(execution.inputs ?? {}), stdin: execution.stdin ?? '', 'measure.sh': MEASURE });
-      try {
-        const args = ['run', '--rm', '--network', 'none', '--read-only', '--tmpfs', '/tmp:rw,size=64m',
-          '--memory', (limits.memoryMb ?? 512) + 'm', '--memory-swap', (limits.memoryMb ?? 512) + 'm', '--cpus', String(limits.cpus ?? 1), '--pids-limit', String(limits.pids ?? 128),
-          '--mount', 'type=bind,src=' + path.resolve(artifactDir) + ',dst=/work/src,readonly',
-          '--mount', 'type=bind,src=' + dir + ',dst=/work',
-          '-e', 'LIMIT_S=' + Math.max(1, Math.ceil(limits.timeoutMs / 1000)), '-w', '/work', image, 'sh', '/work/measure.sh', ...execution.command];
-        /* The container's own start is outside the command's limit: a margin, the command timed inside. */
-        const r = await spawnWith(docker, args, { timeoutMs: limits.timeoutMs + 15000 });
-        const m = /@@measure@@ (-?\d+) (\d+) (\S+) (\S+)\s*$/.exec(r.stderr);
-        const stderr = r.stderr.replace(/@@measure@@[^\n]*\n?$/, '');
-        const wallMs = m ? Number(m[2]) / 1000 : r.ms;
-        /* Killed by its limit inside (137 from `timeout -s KILL`), or the container overran its margin. */
-        const timedOut = r.timedOut || (m !== null && Number(m[1]) === 137 && wallMs >= limits.timeoutMs - 50) || wallMs > limits.timeoutMs;
-        const max = limits.outputMax ?? OUTPUT_MAX;
-        return { backend: 'docker', isolated: true, exitCode: timedOut ? null : m ? Number(m[1]) : r.code, timedOut, stdout: clip(r.stdout, max), stderr: clip(stderr, max),
-          outputs: readBack(dir, execution.outputs), wallMs,
-          cpuMs: m && m[3] !== '-' ? Number(m[3]) / 1000 : null, peakKb: m && m[4] !== '-' ? Math.round(Number(m[4]) / 1024) : null };
-      } finally { fs.rmSync(dir, { recursive: true, force: true }); }
-    }
-  };
-}
-
-/** Whether docker answers here (its engine running), and its server version; null when it does not. */
-export function dockerAvailable(docker = 'docker'): string | null {
-  const r = spawnSync(docker, ['info', '--format', '{{.ServerVersion}}'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
-  return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null;
 }

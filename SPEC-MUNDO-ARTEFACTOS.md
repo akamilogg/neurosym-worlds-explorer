@@ -140,13 +140,23 @@ demás.
 
 ## 10. El sandbox
 
-- **Un contenedor por run** (o por ejecución, si la tarea lo exige), con el runtime declarado: Node, Python, una shell.
-- **Límites** de CPU, memoria, tiempo de pared y disco por ejecución.
-- **Red:** cerrada por defecto. Si la tarea es una automatización que llama a APIs, sólo hacia réplicas o simuladores de
-  esas APIs, declarados en la tarea. Nunca hacia sistemas reales.
-- **Ficheros:** la versión del artefacto, montada como sólo lectura, y un directorio de trabajo nuevo en cada ejecución.
-- **Ruido controlado:** misma máquina, mismo contenedor y ejecuciones alternadas (referencia y variante intercaladas)
-  para que la deriva de la máquina no se confunda con mejora. La tarea declara cuántas repeticiones.
+**Sin dependencias** (regla del autor, 14/10/2026): nada de Docker ni de otro software que el usuario tenga que
+instalar o arrancar. El sandbox es una interfaz, y hoy tiene un backend de procesos locales:
+- **Un proceso por ejecución,** con el runtime declarado (Node, Python, una shell), en un directorio de trabajo nuevo,
+  con la versión del artefacto copiada junto a la carga.
+- **Un entorno vacío:** sólo lo que encuentra el runtime, y ninguna clave ni variable del anfitrión.
+- **Límites:** tiempo de pared (el proceso se mata al pasarlo) y tamaño de lo que escribe en su salida.
+- **Ruido controlado:** misma máquina y ejecuciones alternadas (referencia y variante intercaladas), para que la deriva
+  de la máquina no se confunda con mejora. La tarea declara cuántas repeticiones.
+
+**Lo que este backend NO hace:** aislar. El proceso puede llegar a la red y a los archivos que el usuario puede, y no
+limita memoria ni CPU. Por eso:
+- **Sólo para artefactos de confianza:** los del propio operador, o código del investigador sobre tareas suyas. Cada
+  ejecución dice que no estaba aislada, y el finding lo recoge.
+- **Las automatizaciones que llaman a APIs** se ejecutan contra réplicas o simuladores declarados en la tarea. Lo
+  garantiza la tarea (sus direcciones), no el sandbox.
+- **Un backend que aísle** puede añadirse después sin cambiar nada de lo que ejecuta artefactos, siempre que no imponga
+  dependencias. Queda como pregunta abierta (§16).
 
 ## 11. Repetir y reanudar
 
@@ -178,7 +188,7 @@ La investigación en paralelo (SPEC-INVESTIGACION-PARALELA) da el lado evolutivo
 - la auditoría del método y el registro de anomalías del instrumento.
 
 **Hay que construir:**
-1. **El sandbox de ejecución:** contenedores, runtimes, límites y red cerrada o simulada.
+1. **El sandbox de ejecución:** procesos locales sin dependencias, runtimes y límites (§10).
 2. **El artefacto versionado:** árbol de versiones por hash, parches, construcción y `diff`/`view` de código.
 3. **El objetivo "optimizar":** veredicto con oráculo de corrección, repeticiones, criterio estadístico y restricciones.
 4. **Los actos** `change`, `run` y `profile`, y su percepto.
@@ -221,6 +231,7 @@ Después, una automatización real con sus APIs simuladas.
 
 - **El coste:** es lento y caro comparado con un agente directo. Tiene sentido cuando equivocarse sale caro, o cuando la
   misma clase de tarea se repite muchas veces.
+- **Aislar sin dependencias:** ¿con qué mecanismo del propio sistema operativo, y en qué sistemas? Hasta entonces, sólo artefactos de confianza (§10).
 - **El ruido de medida** puede ser grande en máquinas compartidas. ¿Hace falta una máquina dedicada, o contar
   instrucciones en vez de tiempo?
 - **Oráculos débiles:** si la corrección se decide con pocos tests, el artefacto puede sobreajustarse a ellos. ¿Generar
@@ -232,7 +243,7 @@ Después, una automatización real con sus APIs simuladas.
 
 ## 17. Plan
 
-1. **Sandbox mínimo** (Node y Python en contenedor, sin red) y artefacto versionado.
+1. **Sandbox mínimo** (procesos locales de Node y Python, sin dependencias) y artefacto versionado.
 2. **El objetivo "optimizar"** con oráculo, repeticiones y criterio, y los actos `change`, `run` y `view`.
 3. **El primer caso** (§14) con el investigador asistido y su senior. Piloto.
 4. **Predicciones prerregistradas de cambios** (pruebas propias) y el vínculo cambio → creencias.
@@ -251,26 +262,17 @@ Después, una automatización real con sus APIs simuladas.
   - un parche sustituye o quita archivos enteros (`{"files": {"<ruta>": "<contenido>" | null}}`);
   - rutas sólo dentro del artefacto: sin `..`, sin rutas absolutas ni unidades;
   - `materialize`, `diff` (añadidos, quitados, cambiados) y `view` (líneas numeradas).
-- **`lib/src/artifacts/sandbox.ts`:** una interfaz (`Sandbox.run(artefacto, ejecución, límites)`) y dos backends.
+- **`lib/src/artifacts/sandbox.ts`:** una interfaz (`Sandbox.run(artefacto, ejecución, límites)`) y un backend.
   - **Ejecución:** el comando, la entrada estándar, los archivos de la carga y los archivos de salida que se leen
     después.
   - **Resultado:** código de salida, si se pasó del tiempo, salida estándar y de error recortadas, salidas, tiempo de
     pared y, donde se mide, CPU y memoria máxima. Dice siempre qué backend lo ejecutó y si estaba aislado.
-  - **`docker` (aislado):**
-    - un contenedor nuevo por ejecución, sin red (`--network none`) y con la raíz de sólo lectura;
-    - límites de memoria, CPU y procesos;
-    - el artefacto montado como sólo lectura en `/work/src`, y un directorio de trabajo nuevo;
-    - el tiempo, la CPU y la memoria máxima se miden **dentro** del contenedor (su cgroup), así que su arranque no
-      cuenta;
-    - el límite de tiempo se aplica dentro, con `timeout -s KILL`.
   - **`process` (NO aislado):** un proceso local con el artefacto copiado junto a la carga y un entorno vacío (sólo lo
     que encuentra el runtime: ninguna clave del anfitrión). Mide sólo el tiempo de pared. Es para desarrollo y para las
     pruebas del arnés con artefactos propios.
-  - `dockerAvailable()` dice si el motor responde.
+  - Hubo un backend de Docker (aislado, con medidas del cgroup). Se quitó a petición del autor: el arnés no depende de
+    Docker.
 - **Pruebas** (`test/artifacts.test.ts`):
   - **Versiones:** por contenido, rechazos, `diff`, `view` y `materialize`.
-  - **Los dos backends,** con la misma batería: entrada, salidas, entrada estándar, sin secretos del anfitrión, y el
-    límite de tiempo.
-  - **El de Docker,** además, sin red, con el artefacto de sólo lectura y con CPU y memoria medidas. Se salta si el
-    motor no está arrancado. **No se ha ejecutado todavía:** el motor de Docker Desktop estaba parado.
+  - **El backend de procesos:** entrada, salidas, entrada estándar, sin secretos del anfitrión, y el límite de tiempo.
 
