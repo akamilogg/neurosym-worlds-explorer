@@ -53,7 +53,7 @@ const RANGES: Record<string, [number, number]> = { cat_row_spread: [0, 7], mouse
 /* The node-vm runner hands the point over as data (never an object of the host: an external review, 14/10/2026), so a
    context that carries the world's functions - this eval mode's `ctx.world.actions` - runs with the function runner only.
    The worlds that use node-vm perceive plain data. */
-for (const runnerName of ['function'] as const) {
+for (const runnerName of ['function'] as ('function' | 'node-vm')[]) {
   test('Eval mode (' + runnerName + ' runner) rediscovers catalogue measures from the rules alone', () => {
     const observer = new Observer(foxhounds, { dialects: [foxhoundsDialect], runners: runnerName === 'node-vm' ? [nodeVmRunner()] : [] });
     const code: Record<string, MeasureDecl> = {};

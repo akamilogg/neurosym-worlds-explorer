@@ -35,6 +35,18 @@ corrige con lo que pasa.
 
 ## 3. Principios
 
+**La hipótesis de valor** (el autor, 14/10/2026, al conciliar una revisión externa): no es el coste. Es obtener una
+**solución interpretable** y una **investigación reconstruible por completo**, porque cada acción en el mundo y cada
+edición del artefacto se conservan a propósito. El historial forma parte del resultado y permite reconstruir:
+- **qué se produjo:** artefactos, versiones y resultados;
+- **cómo se llegó:** experimentos, herramientas, cambios y ramas;
+- **por qué se decidió:** hipótesis, predicciones, evidencia y motivos para seguir o volver atrás.
+
+Así otro investigador puede examinar una conclusión, cuestionar un paso concreto y continuar desde ahí, y se distingue una
+solución que funciona de una explicación respaldada de por qué funciona. Registrar las razones hace interpretable el
+proceso; contrastar sus predicciones respalda la explicación. **El coste decide dónde es viable aplicarlo, no si tiene
+éxito.**
+
 - **Corrección antes que rendimiento.** Una variante más rápida y rota no existe: el oráculo de corrección decide
   primero.
 - **Sin sobreajuste al benchmark.** Igual que en los mundos de leyes: casos nuevos en cada check, familias de carga
@@ -43,6 +55,10 @@ corrige con lo que pasa.
   medida.
 - **Toda acción con su razón.** Cada cambio del artefacto va con la hipótesis que lo motiva y su predicción, registradas
   antes de medir.
+  - **El modelo puede ser local y provisional.** No hace falta predecir con precisión todo el rendimiento. "Este cambio
+    mejora las cargas grandes y apenas afecta a las pequeñas" ya orienta experimentos valiosos.
+  - **Un cambio puede ser exploratorio,** con su expectativa declarada como incierta. Registrar la incertidumbre es mejor
+    que obligar a inventar una explicación convincente antes de cada prueba.
 - **Aislamiento.** El artefacto se ejecuta en un sandbox, sobre réplicas y nunca sobre sistemas reales. Sólo sale a la red
   si la tarea lo declara y hacia los destinos que declara.
 - **Las reglas de siempre:** el entorno da veredictos y primitivas, no análisis hechos (sin investigación precocinada);
@@ -156,9 +172,13 @@ Dos veredictos, ambos del entorno y ambos sólo "se sostiene o no", sin métrica
 - El entorno ejecuta y responde si se cumplió. Una predicción que falla queda como contraejemplo abierto.
 - `--own-tests N` exige N predicciones severas cumplidas antes de la confirmación a ciegas, como ya existe.
 
-**La aceptación** necesita las dos cosas: un artefacto confirmado a ciegas, y un modelo cuyas predicciones prerregistradas
-se cumplieron. Un artefacto que mejora sin que nadie sepa por qué se acepta como artefacto, pero el finding lo marca como
-**no explicado**.
+**Dos estados, por separado** (corregido tras una revisión externa: el texto anterior los mezclaba):
+- **Artefacto validado:** confirmado a ciegas.
+- **Predicciones del modelo respaldadas:** cuáles se registraron antes de medir, cuáles se cumplieron y cuáles fallaron.
+
+El finding da los dos. Un artefacto validado cuyo modelo tiene pocas predicciones cumplidas es un artefacto que funciona y
+está **poco explicado**. Un modelo con predicciones cumplidas sobre un artefacto que no se validó es comprensión sin
+producto. Ninguno de los dos estados oculta al otro.
 
 ## 9. Volver atrás por creencias
 
@@ -167,9 +187,11 @@ El cuaderno ya guarda creencias con su evidencia. Aquí se añade un vínculo:
 - **Cuando una creencia cae** (se descarta o la refuta una prueba), el entorno lista las versiones cuyos cambios se
   apoyaban en ella, y si siguen en la línea de la versión vigente. Es un hecho del registro, no un análisis: decidir qué
   revertir sigue siendo del investigador.
-- **El senior lo revisa:** un cambio que sobrevive a la caída de su razón es un cambio sin justificar.
+- **El senior lo revisa:** un cambio que sobrevive a la caída de su razón es un cambio sin justificar, no un cambio malo.
+- **Una creencia refutada señala cambios que revisar; no demuestra que sean perjudiciales.** El cambio pudo funcionar por
+  otra razón: entonces se queda, con su razón corregida, y se anota.
 
-Así, volver atrás no es "ir al commit anterior": es quitar justo lo que dependía de lo que resultó falso y conservar lo
+Así, volver atrás no es "ir al commit anterior": es revisar justo lo que dependía de lo que resultó falso, y conservar lo
 demás.
 
 ## 10. El sandbox
@@ -192,7 +214,22 @@ limita memoria ni CPU. Por eso:
 - **Un backend que aísle** puede añadirse después sin cambiar nada de lo que ejecuta artefactos, siempre que no imponga
   dependencias. Queda como pregunta abierta (§16).
 
-## 11. Repetir y reanudar
+## 11. Repetir, reejecutar, reproducir
+
+Tres garantías distintas (precisadas tras una revisión externa, 14/10/2026):
+
+1. **Reconstrucción histórica:** recuperar exactamente las acciones, ediciones, observaciones y decisiones registradas. La da
+   la repetición desde el registro, lo que el arnés ya hace.
+2. **Reejecución:** volver a ejecutar el procedimiento con sus dependencias, configuración, semillas y artefactos
+   conservados. Para eso hay que guardar también el **entorno de ejecución**: las versiones del runtime y de las
+   dependencias que declare la tarea (por ejemplo, la versión de Python, o el `uv.lock` de un gimnasio) y la máquina. Cada
+   episodio lleva la huella de ese entorno.
+3. **Reproducción del resultado:** comprobar que la conclusión se sostiene al repetir el experimento. Con mediciones
+   variables o entrenamientos, con los criterios estadísticos declarados (§8): no los mismos números, sino el mismo
+   veredicto.
+
+El registro garantiza la primera. Las otras dos necesitan conservar el entorno y verificar de nuevo los resultados.
+
 
 - **El artefacto** se reconstruye exactamente de su árbol de versiones: cada versión es su base más su parche, y se
   identifica por hash.
@@ -272,7 +309,10 @@ cambia: el artefacto es el diseño, y el modelo es el de su comportamiento.
   en el mundo 3D; otros simuladores dependerían de la tarea;
 - un percepto geométrico: medidas del diseño que sus observaciones puedan leer (dimensiones, volúmenes, secciones), antes de
   simular, como en §7;
-- métricas con ruido numérico (mallados, convergencia), que el criterio estadístico del veredicto ya contempla.
+- **distinguir ruido de error del simulador.** Repetir una simulación mide su variabilidad, pero no corrige un sesgo
+  sistemático por el mallado o por una física insuficiente. Cuando la tarea lo requiera, comprobaciones de convergencia
+  (refinar la malla, el paso de tiempo) o de fidelidad (contra un caso con solución conocida). Es la calibración de
+  instrumentos (SPEC-CALIBRACION-INSTRUMENTOS) aplicada al simulador.
 
 Sería un segundo caso después del primero de código (§14).
 
@@ -296,12 +336,24 @@ partiendo sólo de los parámetros que definen el score.
 - **El score es el veredicto del entorno:** los parámetros que definen qué es hacerlo bien los declara la tarea, son fijos
   y el investigador no los toca.
 - Si la misma cosa se optimizara y se evaluara, aparecería el **reward hacking**: la política aprende a puntuar sin hacer
-  la tarea. Las defensas son las del protocolo:
-  - el **oráculo de corrección**, distinto del score: restricciones del comportamiento que se quiere, como no caerse, no
-    pasar de ciertos esfuerzos o terminar en la postura pedida;
-  - la **validación** en otras familias de condiciones;
-  - la **confirmación a ciegas** en condiciones que el entrenamiento no vio. Una política que puntúa sin hacer la tarea
-    casi nunca generaliza.
+  la tarea. **Separarlas es necesario, pero no basta.** Un fallo del score también se puede explotar en condiciones
+  nuevas: las familias reservadas comprueban la robustez frente a esas condiciones, no que el objetivo esté bien definido.
+  - **La defensa principal es que el evaluador mida bien** el objetivo y sus restricciones: el **oráculo de corrección**,
+    distinto del score, con el comportamiento que se quiere (no caerse, no pasar de ciertos esfuerzos, terminar en la
+    postura pedida);
+  - después, la **validación** en otras familias de condiciones y la **confirmación a ciegas**, que miden la robustez.
+
+**Tres productos, no dos** (precisado tras una revisión externa):
+
+| Producto | Qué se comprueba de él |
+|---|---|
+| **La receta:** recompensa, currículo, hiperparámetros | si produce buenas políticas de forma consistente, con varias semillas |
+| **La política entrenada** (su checkpoint) | si ese resultado concreto funciona |
+| **El modelo explicativo** del investigador | si sus predicciones sobre los cambios orientan bien la búsqueda |
+
+Una política excelente obtenida con una semilla afortunada no demuestra que la receta sea mejor. El finding identifica los
+tres con sus evaluaciones. Una confirmación con entrenamiento completo produce una **política nueva**, que necesita su
+propia evaluación.
 
 **Lo que lo hace caro y delicado:**
 - **Cada `run` es un entrenamiento completo:** minutos u horas. Es donde más vale el modelo, porque predecir el efecto de
@@ -359,15 +411,20 @@ abierto Open Duck Mini (Antoine Pirrone), una miniatura del droide BDX de Disney
     de actuador).
 
   La recompensa de entrenamiento nunca decide el veredicto.
-- **Entrenamientos cortos para iterar:** con 1 o 2 horas por entrenamiento, el piloto tendría que usar presupuestos
-  reducidos (menos pasos o menos entornos) y comparar versiones con el mismo presupuesto, varias semillas cada una.
-  Validación y confirmación con presupuesto completo.
+- **Entrenamientos cortos para iterar, calibrados:** con 1 o 2 horas por entrenamiento, el piloto usaría presupuestos
+  reducidos (menos pasos o menos entornos) y compararía versiones con el mismo presupuesto, varias semillas cada una, y la
+  validación y la confirmación con presupuesto completo. **Pero un entrenamiento corto es una aproximación que hay que
+  calibrar:** una configuración puede aprender rápido y estancarse, y otra empezar peor y terminar mejor. El piloto
+  comprueba primero si las comparaciones cortas anticipan razonablemente las completas.
+- **Primero, sólo la recompensa:** arquitectura, algoritmo y presupuesto fijos. Después se amplían las variables. Así es
+  más fácil interpretar qué aprendió el investigador y cuánto cuesta.
 - **Fuera del repositorio:** el gimnasio se clona aparte, como las fuentes de EurekaBench. Su código es Apache 2.0, pero
   sus mallas son CC BY-NC-SA: nada suyo se copia al arnés.
 
 **Lo que hay que resolver antes (preguntas para el autor):**
 - **Hardware de entrenamiento:** hace falta una GPU NVIDIA con CUDA, o pagar Hugging Face Jobs. La máquina del autor tiene
-  una RTX 3080 Ti con 12 GB: basta para entrenar en local, aunque quizá con menos de 4.096 entornos si no cabe en memoria.
+  una RTX 3080 Ti con 12 GB. **Pendiente de una prueba local** de compatibilidad, memoria y velocidad: el README da de
+  1 a 2 horas con 4.096 entornos, pero no para esta tarjeta.
   Instalar el entorno (uv, dependencias de mjlab) lo hace el usuario: no es una dependencia del arnés (§10, y la regla de
   no imponer dependencias).
 - **Coste del piloto:** con presupuesto reducido y unas 3 semillas por versión, cada comparación tarda horas. ¿Cuántas
@@ -395,12 +452,21 @@ README de los repositorios.
   - predicciones registradas, cumplidas y fallidas;
   - cambios revertidos al caer su creencia;
   - tokens.
-- **Comparaciones** emparejadas, con la misma tarea y el mismo presupuesto:
+- **Comparaciones** emparejadas, con la misma tarea, el mismo modelo, el mismo acceso a herramientas y el mismo
+  presupuesto total, contando ejecuciones y tiempo además de tokens:
   - frente a un agente de código directo, sin protocolo;
   - frente a una búsqueda ciega, con mutaciones sin modelo;
   - con y sin el requisito de predicciones (`--own-tests`).
-- **Qué sostendría la idea:** mejoras que se confirman a ciegas cuando las del agente directo no, o el mismo resultado con
-  menos ejecuciones gracias al modelo.
+- **Qué sostendría la idea** (la hipótesis de valor, §3), en este orden:
+  1. **Interpretabilidad:** la solución viene con una explicación cuyas predicciones se contrastaron. Cuántas se
+     cumplieron y cuántas fallaron.
+  2. **Reconstrucción:** otro investigador puede reconstruir, reejecutar y reproducir el resultado y el camino (§11).
+  3. **Fiabilidad:** mejoras que se confirman a ciegas cuando las del agente directo no.
+
+  El coste se mide y se informa, porque decide dónde es viable el método; que cueste menos que un agente directo no es lo
+  que se pretende probar.
+- **El orden de los pilotos:** primero el ciclo completo con el programa de procesamiento de datos (§14). Después, el mismo
+  contrato en Microduck (§14.3), como prueba de que el método es genérico.
 
 ## 16. Riesgos y preguntas abiertas
 
@@ -458,3 +524,78 @@ README de los repositorios.
 - **Colisiones rechazadas:** en un parche, en una versión y en una base se rechazan dos nombres que un sistema de
   archivos sin distinción de mayúsculas escribiría como uno.
 - **§7 corregido:** el percepto sólo lleva lo que se sabe antes de ejecutar, y las métricas son lo que salió.
+
+### 18.3 La tarea, los actos y el veredicto (14/10/2026; plan, paso 2)
+
+**La tarea** (`lib/src/artifacts/task.ts`, `ArtifactTask`) se declara por comandos y salidas, sin suponer qué hace el
+artefacto. Así sirve igual para procesar un CSV que para entrenar y evaluar una política (Microduck, §14.3). Declara:
+- el artefacto base;
+- cómo se ejecuta una versión en una carga: comando, archivos de entrada, archivos que deja y límite de tiempo;
+- cómo se leen las métricas y la salida de lo que deja;
+- las familias de cargas, cada una un lugar con su papel (laboratorio, familia o ciega), y sus cargas generadas de una
+  semilla, con los parámetros que se saben antes de ejecutar;
+- el oráculo de corrección, frente a la ejecución de la referencia en la misma carga;
+- el objetivo: métrica, dirección, margen, confianza, repeticiones y restricciones.
+
+**El veredicto** (`judge`):
+- correcto en todas las ejecuciones;
+- mejor que la referencia por el margen: el extremo superior de un intervalo bootstrap, con la confianza pedida, de la
+  media geométrica por carga del cociente de medianas, por debajo de 1 − margen;
+- ninguna restricción rota.
+
+Es determinista: el bootstrap usa una semilla fija.
+
+**Qué exige cada familia,** que lo declara la tarea antes de ejecutar nada (`requires`):
+- **ser mejor por el margen** (lo normal), donde se espera ganar;
+- **o sólo no ser peor** (`not_worse`, con una tolerancia), donde no hay nada que ganar y la familia sirve para ver que
+  nada se rompe ni se ralentiza.
+
+**Por qué:** exigir mejora en todas las familias haría imposible aceptar nada. En el primer caso, con pocas claves
+distintas, todo el tiempo es el arranque de Python, y una versión excelente no puede ser un 10 % más rápida ahí.
+
+**El mundo** (`lib/src/artifacts/world.ts`, `ArtifactWorld`), sobre el almacén y el sandbox:
+- `change`: un parche, una versión;
+- `run`: una versión sobre cargas de una familia, como episodio. Cada ejecución lleva lo que se sabía antes (la carga y
+  la versión) y lo que salió (métricas, y si fue correcta frente a la referencia). Nunca sobre una familia ciega, y dice si
+  estaba aislado;
+- `check`: el veredicto en unas familias, con cargas nuevas, referencia y candidata intercaladas repetición a repetición y
+  alternando quién va primero, para que la deriva de la máquina caiga sobre las dos.
+
+La referencia es la base.
+
+**El primer caso** (`lib/src/artifacts/tasks/dedup.ts`, base en `lib/examples/artifacts/dedup/base/main.py`):
+- **El script:** deduplica por clave, filtra etiquetas bien formadas y ordena por valor.
+- **Sus ineficiencias son reales y de distinto tipo:**
+  - una lista para las claves vistas, cuadrática en las claves distintas;
+  - una ordenación tras cada fila conservada, cuadrática en las conservadas;
+  - la salida construida por concatenación.
+- **Familias:**
+  - `mixed`, de 1.200 filas: el laboratorio;
+  - `unique`, de 12.000 filas con casi todas las claves distintas: la familia donde está la ganancia (unos 3,6 s la
+    base);
+  - `duplicates`, de 12.000 filas con pocas claves, que sólo exige no empeorar: casi todo es el arranque, unos 0,17 s;
+  - `wide`, de 5.000 filas con etiquetas largas: la ciega.
+  
+  Los primeros tamaños eran tan pequeños que el arranque de Python dominaba y la ganancia no se distinguía del ruido.
+- **Oráculo:** el mismo `out.csv` que la referencia.
+- **Métrica:** tiempo de pared, un 10 % mejor con un 90 % de confianza, en tres repeticiones.
+
+**Pruebas** (`test/artifact-world.test.ts`):
+- **el veredicto con medidas sintéticas:** mejor, igual, incorrecto, mejor en casi todo pero mucho peor en una carga, y una
+  restricción rota; y determinista;
+- **el caso real a escala pequeña:**
+  - la base es correcta frente a sí misma;
+  - una versión eficiente (un conjunto, una sola ordenación, la salida unida de una vez) se sostiene en `unique`;
+  - una que olvida el desempate por clave se detecta como incorrecta;
+  - un cambio cosmético no se sostiene;
+  - la familia ciega no se puede ejecutar.
+
+**Lo que falta** (plan, paso 3): conectarlo al investigador asistido como un laboratorio:
+- el percepto de antes de ejecutar;
+- la respuesta doble (artefacto y modelo);
+- el protocolo de familia y ciegas sobre `check`;
+- las predicciones de cada cambio como pruebas propias, incluidas las exploratorias con su incertidumbre declarada;
+- la huella del entorno de ejecución en cada episodio (§11, reejecución): versiones del runtime y de las dependencias que
+  declare la tarea;
+- el finding con los dos estados por separado (§8) y, en RL, los tres productos (§14.2).
+
