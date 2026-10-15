@@ -227,4 +227,27 @@ que empieza con la capacidad `channel`. El de mundo desconocido no tiene canal.
   - un run cortado y reanudado entrega lo mismo en las mismas preguntas.
 - **El investigador de mundo desconocido** no recibe nada.
 
-**Siguiente:** paso 2, los `pins` de System 2.
+### 13.2 Paso 2: lo que fija System 2 (15/10/2026)
+
+- **En cualquier respuesta,** `"pins"` (`parsePins`): fijar un documento suyo, un aviso que recibió o un texto (uno de
+  los tres), o retirar por id. Lo que no se puede leer es un aviso en su respuesta, nunca una suposición.
+- **El runner lo publica como `self`:**
+  - **un documento** es un valor vivo: llega su última versión (`{document, version, text}`) o que ya no existe;
+  - **un aviso** sólo si ya le llegó;
+  - **un texto** tal cual.
+
+  Fijar otra vez el mismo id lo sustituye. Lo que fijaron otros no lo puede quitar: sus claves son de otro autor.
+- **Se le confirma** en `your_pins`, y los rechazos van entre los avisos de su respuesta.
+- **El prompt de sistema lleva una línea** (`PINS_SECTION`) desde la primera pregunta: es una herramienta suya y tiene que
+  saber que existe. Dice qué puede fijar, no qué fijar.
+- **`--no-pins`** es la condición sin fijados: ni la línea ni lo que intente fijar (`config.pins`).
+- **Pruebas** (`test/channel.test.ts`). Un run en el que:
+  - escribe su lista de tareas y la fija junto con un texto;
+  - la reescribe a mitad de la ronda 2, y en la pregunta siguiente le llega la versión 2;
+  - la ronda 3 abre con la versión 2 y sin el texto, que retiró;
+  - un aviso que nunca recibió se rechaza con su razón.
+
+  Además, la conversación sólo crece, y un run cortado y reanudado no diverge. `--no-pins` no tiene ni la línea ni los
+  fijados.
+
+**Siguiente:** paso 3, el mundo publica (el de artefactos, cada versión aceptada) y el finding guarda la cadena.

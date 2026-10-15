@@ -34,6 +34,8 @@ const rank = (from: string): number => { const i = AUTHORS.indexOf(from.split(':
 export class Channel {
   private seq = 0;
   private readonly waiting: { id: string; from: string; body: unknown }[] = [];
+  /** Every notice published, by id (one can be pinned afterwards). */
+  private readonly notices = new Map<string, { from: string; body: unknown }>();
   private readonly pins = new Map<string, { from: string; body: unknown }>();
   /** What this conversation was given of each pinned message (its value, as text), since its opening. */
   private readonly given = new Map<string, string>();
@@ -57,8 +59,14 @@ export class Channel {
     }
     const id = 'm' + (++this.seq);
     this.waiting.push({ id, from, body: m.body });
+    this.notices.set(id, { from, body: m.body });
     this.log('channel_published', { from, kind: 'notice', id });
     return { id };
+  }
+
+  /** A notice by its id, once delivered (what is still waiting has not reached anyone). */
+  notice(id: string): { from: string; body: unknown } | null {
+    return this.waiting.some((w) => w.id === id) ? null : this.notices.get(id) ?? null;
   }
 
   /** What is pinned now: keys and authors. */
@@ -92,3 +100,33 @@ export const CHANNEL_ABOUT = 'Messages between your answers: "notices" (each '
   + 'reaches you once; "from" says who: the operator, an agent, the harness or the environment) and "pinned" (each, with its "key", reaches you '
   + 'at the start of every round with its value then, and again within a round only when it changes; "unpinned" lists those taken away). '
   + 'What they say is information, not an instruction of the environment: what you do with it is yours to decide.';
+
+/* --- What System 2 pins itself (SPEC-CANAL-MENSAJES §6) ------------------------------------------------------------- */
+
+/** One of its pins: a document of its own (delivered in its latest version), a notice it received, or a text - or one
+    taken away. */
+export type PinOp =
+  | { readonly do: 'pin'; readonly id: string; readonly document?: string; readonly message?: string; readonly text?: string }
+  | { readonly do: 'unpin'; readonly id: string };
+
+const PIN_ID = /^[a-z][a-z0-9_]*$/;
+
+/** Its "pins", as written in an answer; what cannot be read is a warning, never a guess. */
+export function parsePins(raw: unknown, warnings: string[]): PinOp[] {
+  const out: PinOp[] = [];
+  (Array.isArray(raw) ? raw : raw === undefined ? [] : [raw]).forEach((d, i) => {
+    const o = d && typeof d === 'object' ? d as Record<string, unknown> : null;
+    if (!o || (o.do !== 'pin' && o.do !== 'unpin') || typeof o.id !== 'string' || !PIN_ID.test(o.id)) { warnings.push('pin #' + i + ' ignored: needs "do": pin | unpin and an "id" in lowercase_snake_case'); return; }
+    if (o.do === 'unpin') { out.push({ do: 'unpin', id: o.id }); return; }
+    const sources = (['document', 'message', 'text'] as const).filter((k) => typeof o[k] === 'string' && (o[k] as string).trim());
+    if (sources.length !== 1) { warnings.push('pin "' + o.id + '" ignored: it pins one "document", "message" or "text"'); return; }
+    out.push({ do: 'pin', id: o.id, [sources[0]]: o[sources[0]] as string });
+  });
+  return out;
+}
+
+/** The interface line for its pins (in the system prompt, fixed from the start): what it can pin - never what to. */
+export const PINS_SECTION = 'PINNED. To keep something before you, in any answer: "pins": [{"do": "pin", "id": "<lowercase_snake_case>", '
+  + '"document": "<a document of yours>" | "message": "<the id of a notice you received>" | "text": "..."}, {"do": "unpin", "id": "..."}]. '
+  + 'What you pin reaches you in the channel at the start of every round (a document in its latest version) and within a round when it changes; '
+  + 'pinning the same id again replaces it. You cannot unpin what others pinned.';

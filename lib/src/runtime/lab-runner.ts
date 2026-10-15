@@ -27,7 +27,7 @@ import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
 import { assistedSession, assistedSystem, deliveredMessages, operatorClient, BUDGET_SECTION, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
 import { Instruments, instrumentsSection } from '../learn/assisted/instruments.ts';
-import { Channel, type ChannelPublication } from '../learn/assisted/channel.ts';
+import { Channel, PINS_SECTION, type ChannelPublication, type PinOp } from '../learn/assisted/channel.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
 import { createHash } from 'node:crypto';
@@ -77,6 +77,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'no-ablation', help: 'skip the operator\'s ablation of the Judge' },
   { name: 'no-grade', help: 'skip the operator-only grading of the recovered rule (one LLM call)' },
   { name: 'no-reflection', help: 'skip the final reflection round' },
+  { name: 'no-pins', help: 'the assisted researcher cannot pin messages of its own in its channel (SPEC-CANAL-MENSAJES §6): the condition without' },
   { name: 'budget-hidden', help: 'the assisted researcher is not shown its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the condition without it' },
   { name: 'no-instruments', help: 'the assisted researcher writes no instruments of its own (SPEC-INSTRUMENTOS-PROPIOS): the condition without them' },
   { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
@@ -384,6 +385,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     grade: !flag('no-grade'),
     instruments: !flag('no-instruments'),
     budget_visible: !flag('budget-hidden'),
+    pins: !flag('no-pins'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
     ...(arg('focus') ? { focus: arg('focus') } : {}),
@@ -923,6 +925,27 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The researcher's channel (SPEC-CANAL-MENSAJES): the assisted researcher's, in a run that starts with it. */
   const channelOn = run.journal.researcher === 'assisted' && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.channel === 0;
   const channel = new Channel(run.log);
+  /* What it pins itself, with --no-pins the condition without. */
+  const pinning = (): boolean => channelOn && helping && (cfg as { pins?: boolean }).pins !== false;
+  const applyPins = (ops: readonly PinOp[]): string[] => {
+    const warnings: string[] = [];
+    for (const op of ops) {
+      let r: { id: string } | { refused: string };
+      if (op.do === 'unpin') r = channel.publish('self', { kind: 'pinned', key: op.id, unpin: true });
+      else if (op.document !== undefined) {
+        const doc = op.document;
+        r = channel.publish('self', { kind: 'pinned', key: op.id, body: () => {
+          const d = session.notebook.documents.get(doc);
+          return d ? { document: doc, version: d.versions, text: d.text } : { document: doc, absent: 'no document "' + doc + '" now' };
+        } });
+      } else if (op.message !== undefined) {
+        const n = channel.notice(op.message);
+        r = n ? channel.publish('self', { kind: 'pinned', key: op.id, body: { message: op.message, from: n.from, body: n.body } }) : { refused: 'no notice "' + op.message + '" reached you' };
+      } else r = channel.publish('self', { kind: 'pinned', key: op.id, body: op.text });
+      if ('refused' in r) warnings.push('pin "' + op.id + '": ' + r.refused);
+    }
+    return warnings;
+  };
   const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, episodeOf: (id: string) => episodes.get(id)?.data,
     ...(channelOn ? { publish: (m: ChannelPublication) => { channel.publish('world', m); } } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
@@ -1306,6 +1329,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
     /* Its visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the assisted researcher's, once it is helped. */
     channel: (at) => (channelOn && helping ? channel.deliver(at) : null),
+    /* What it pins itself (SPEC-CANAL-MENSAJES §6): a document in its latest version, a notice it received, or a text. */
+    pins: () => (pinning() ? { apply: (round: number, ops: readonly PinOp[]) => applyPins(ops) } : null),
     budget: () => (run.services.budget && journal.researcher === 'assisted' && helping ? run.services.budget(attemptNow, roundsAt(cfg, attemptNow)) : {}),
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
     instruments: () => (journal.researcher === 'assisted' && helping && reviewing && instrumenting() ? instruments : null),
@@ -1453,7 +1478,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
-        + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') : promptFor(focus)),
+        + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* Its conversation only grows: its system prompt fixed from its first question, what changes added as messages. */
       fixedSystem: () => helping && cfg.capabilities_from?.fixed_system === 0,

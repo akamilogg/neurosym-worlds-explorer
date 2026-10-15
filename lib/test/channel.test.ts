@@ -107,3 +107,73 @@ test('the unknown-world researcher has no channel: nothing published reaches it,
   assert.ok(asked.length > 0);
   assert.ok(asked.every((m) => parts(m).every((p) => !p.channel)));
 });
+
+/* --- Step 2: what System 2 pins itself (SPEC-CANAL-MENSAJES §6). */
+
+test('its pins as written: a document, a notice or a text, one of them; unpin by id; what cannot be read is a warning', async () => {
+  const { parsePins } = await import('../src/learn/assisted/channel.ts');
+  const warnings: string[] = [];
+  const ops = parsePins([{ do: 'pin', id: 'tasks', document: 'tasks' }, { do: 'pin', id: 'x', text: 'a', document: 'b' }, { do: 'unpin', id: 'note' }, { do: 'keep', id: 'y' }, { do: 'pin', id: 'Bad' }], warnings);
+  assert.deepEqual(ops, [{ do: 'pin', id: 'tasks', document: 'tasks' }, { do: 'unpin', id: 'note' }]);
+  assert.equal(warnings.length, 3);
+});
+
+test('a run: it pins its own task list and a text, and they reach it every round - the list in its latest version, within the round when it changes; unpinned, gone; resumed, the same', async () => {
+  const { PINS_SECTION } = await import('../src/learn/assisted/channel.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'channel-pins-'));
+  const asked: Message[][] = [];
+  const answers: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const messages = b.messages as Message[];
+    const grading = messages[0].content.startsWith('You grade');
+    if (!grading) asked.push(messages);
+    const ps = parts(messages);
+    const first = ps[0] ?? {};
+    const looked = ps.some((p) => p.investigation_step);
+    const round = first.round;
+    const content = grading ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in first ? { rationale: 'r', beliefs: [{ id: 'same', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : !looked && round === 1 ? { investigate: [{ view: 'ep1', from: 0, to: 2 }], documents: [{ do: 'write', id: 'tasks', text: '1. look at the rows' }],
+        pins: [{ do: 'pin', id: 'tasks', document: 'tasks' }, { do: 'pin', id: 'note', text: 'the borders matter' }] }
+      : !looked && round === 2 ? { investigate: [{ view: 'ep1', from: 0, to: 2 }], documents: [{ do: 'write', id: 'tasks', text: '1. done\n2. test the neighbours' }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false,
+        beliefs: [{ id: 'same', stance: round === 1 ? 'new' : 'keep', statement: 'the row repeats', evidence: [] }], lessons: ['l'], next_experiment: 'n',
+        ...(round === 2 ? { pins: [{ do: 'unpin', id: 'note' }, { do: 'pin', id: 'old', message: 'm999' }] } : {}) };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const r = await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch: answers });
+  assert.ok(asked.every((m) => m[0].content.includes(PINS_SECTION)), 'its prompt says how to pin');
+  const roundOf = (m: Message[]) => parts(m)[0].round;
+  const openingOf = (round: number) => asked.find((m) => roundOf(m) === round && !('task' in parts(m)[0]))!;
+  const pinnedAt = (m: Message[], key: string) => parts(m).filter((p) => p.channel?.pinned).flatMap((p) => p.channel.pinned).filter((p: any) => p.key === key);
+  /* Round 1: pinned after its first answer, so it reaches it at its next question, within the round. */
+  const r1 = asked.filter((m) => roundOf(m) === 1);
+  assert.equal(pinnedAt(r1[1], 'self:tasks')[0].value.text, '1. look at the rows');
+  assert.ok(parts(r1[1]).some((p) => (p.your_pins ?? []).includes('pin tasks')), 'what it pinned, echoed');
+  /* Round 2 opens with both; the list rewritten within the round reaches it in its latest version at the next question. */
+  const o2 = openingOf(2);
+  assert.deepEqual(pinnedAt(o2, 'self:tasks').map((p: any) => p.value.version), [1]);
+  assert.equal(pinnedAt(o2, 'self:note')[0].value, 'the borders matter');
+  const r2 = asked.filter((m) => roundOf(m) === 2);
+  assert.deepEqual(pinnedAt(r2[1], 'self:tasks').map((p: any) => p.value.version), [1, 2], 'within the round, only when it changed');
+  /* Round 3: the note was unpinned; a notice it never received cannot be pinned. */
+  const o3 = openingOf(3);
+  assert.deepEqual(pinnedAt(o3, 'self:tasks').map((p: any) => p.value.text), ['1. done\n2. test the neighbours']);
+  assert.equal(pinnedAt(o3, 'self:note').length, 0);
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  assert.ok(events.some((e) => e.type === 'proposal' && (e.warnings ?? []).some((w: string) => /pin "old": no notice "m999"/.test(w))), 'refused, and said why');
+  /* The conversation only grows. */
+  for (let i = 1; i < asked.length; i++) if (asked[i][1].content === asked[i - 1][1].content)
+    assert.deepEqual(asked[i].slice(0, asked[i - 1].length), asked[i - 1], 'question ' + i);
+  /* Resumed, cut by its tokens: no divergence. */
+  const cut = await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--max-tokens', '350', '--no-reflection', '--out', path.join(dir, 'cut.json')], root: dir, llm, fetch: answers });
+  assert.equal(cut.stoppedBy, 'token_budget');
+  const resumed = await runLaboratory(cellsLab, { args: ['--resume', cut.journal, '--out', path.join(dir, 'resumed.json')], root: dir, llm, fetch: answers });
+  assert.notEqual(resumed.stoppedBy, 'diverged');
+  /* --no-pins: neither the line nor its pins. */
+  const without: Message[][] = [];
+  const counting: FetchLike = async (u, init) => { without.push(JSON.parse(String(init.body)).messages); return answers(u, init); };
+  await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--no-pins', '--out', path.join(dir, 'nopins.json')], root: dir, llm, fetch: counting });
+  assert.ok(without.every((m) => !m[0].content.includes(PINS_SECTION) && parts(m).every((p) => !p.channel?.pinned)));
+});

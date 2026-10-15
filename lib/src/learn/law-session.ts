@@ -13,6 +13,7 @@ import { Notebook, parseDocuments } from './notebook.ts';
 import { parseJsonLoose } from '../core/net.ts';
 import { FREE_MEMORY_ANSWERS, JournalMemory } from './assisted/memory.ts';
 import { parseInstruments, type InstrumentOp } from './assisted/instruments.ts';
+import { parsePins, type PinOp } from './assisted/channel.ts';
 import type { ChatClient } from './system2.ts';
 
 /* ============================================================================
@@ -101,6 +102,9 @@ export interface LawSessionHost<A> {
   /** The channel (SPEC-CANAL-MENSAJES): what it delivers before a question, as a part added to the conversation - at a
       conversation's opening every pinned message, then only what is new. Null: nothing. */
   channel?(at: { round: number; question: number; opening: boolean }): Record<string, unknown> | null;
+  /** What it pins itself (SPEC-CANAL-MENSAJES §6), in any answer: applied to its channel; answers the warnings. Null: it
+      cannot pin. */
+  pins?(): { apply(round: number, ops: readonly PinOp[]): string[] } | null;
   /** Told when a round begins (a member of a team tells its board where it is). */
   onRound?(round: number): void;
 }
@@ -295,8 +299,12 @@ export class LawSession<A> {
       const registry = h.instruments?.() ?? null;
       const ins = registry ? parseInstruments(obj(parseJsonLoose(content))?.instruments, noteWarnings) : [];
       if (ins.length) { noteWarnings.push(...registry!.apply(round, ins)); h.say('  instruments: ' + ins.map((d) => d.do + ' ' + d.id).join(', ')); }
+      /* What it pins, in any answer: to its channel. */
+      const pinning = h.pins?.() ?? null;
+      const pinOps = pinning ? parsePins(obj(parseJsonLoose(content))?.pins, noteWarnings) : [];
+      if (pinOps.length) { noteWarnings.push(...pinning!.apply(round, pinOps)); h.say('  pins: ' + pinOps.map((d) => d.do + ' ' + d.id).join(', ')); }
       written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}),
-        ...(ins.length ? { your_instruments: ins.map((d) => d.do + ' ' + d.id) } : {}) };
+        ...(ins.length ? { your_instruments: ins.map((d) => d.do + ' ' + d.id) } : {}), ...(pinOps.length ? { your_pins: pinOps.map((d) => d.do + ' ' + d.id) } : {}) };
       if (turn.notes.length) h.say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) { h.say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', ')); h.log('methods', { round, methods: turn.methods }); }
       if (turn.kind === 'consolidate') {
