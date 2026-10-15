@@ -152,6 +152,8 @@ const pointWorld = (): World<ArtifactPoint, never> => ({
 
 export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, ArtifactCase, ArtifactAct> = {
   id: 'artifacts@1',
+  /* Its product is the artifact, as good as the budget allows: an accepted model of it does not end the investigation. */
+  goesOnAfterAcceptance: true,
   about: 'System 2 changes an artifact and runs its versions, and writes a model of its behaviour: the metric of a run, from what is known before it.',
   options: [
     { name: 'artifact', default: 'dedup', help: 'the artifact and its task: ' + Object.keys(TASKS).join(', ') },

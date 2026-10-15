@@ -1604,6 +1604,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     return { law: record.law, round: r.round };
   };
   if (endings.length) journal.continuations = [...endings];
+  /* A world whose investigation goes on after an acceptance (Lab.goesOnAfterAcceptance), in a run that starts with it: every
+     model accepted, in order - the last is the run's. */
+  const goesOn = Boolean(lab.goesOnAfterAcceptance) && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.goes_on === 0;
+  const modelsAccepted: { law: Law; round: number }[] = [];
   for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
     /* Where the run's history had an ending (it used up its rounds and was given more): that ending, as it was. */
     if (endings.includes(attempt - 1)) {
@@ -1683,10 +1687,23 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       log('accepted', { round: record.round });
       /* Its history accepted here and is continued: on to the new stage. */
       if (cfg.continued_after_acceptance === attempt) continue;
+      /* A world whose investigation goes on: a new stage now, and on until the budget ends. */
+      if (goesOn) {
+        modelsAccepted.push(accepted);
+        acceptedBefore = accepted;
+        accepted = null;
+        protocol.restart();
+        log('stage_after_acceptance', { accepted_round: acceptedBefore.round, round: session.currentRound, goes_on: true });
+        say('  the investigation goes on: a new stage, its checks start afresh');
+        channelNow()?.publish('harness', { kind: 'notice', body: { model_accepted: { round: record.round }, new_stage: 'the investigation goes on until your budget ends: from now on, nothing checked before counts and your validations are given back' } });
+        continue;
+      }
       break;
     }
   }
   if (!accepted && !satisfied) accepted = settleWaiting();
+  /* Going on after acceptances: the run's is the latest model accepted. */
+  if (!accepted && modelsAccepted.length) { accepted = modelsAccepted[modelsAccepted.length - 1]; acceptedBefore = modelsAccepted.length > 1 ? modelsAccepted[modelsAccepted.length - 2] : null; }
   /* What the instrument was suspected of, and what the operator found (SPEC-CALIBRACION-INSTRUMENTOS §5): an acceptance still
      waiting at the end is not one - the run ends not accepted, and says why. */
   const reports = reportStates(reportsOf(journal.events), run.verdicts(session.currentRound));

@@ -724,3 +724,34 @@ aceptarse nunca.
 
 **Prueba** (`test/artifacts-lab.test.ts`): una comprobación en un lugar ciego extrae episodios con puntos que juzgar, y
 la misma familia sigue cerrada para el investigador.
+
+### 18.7 La investigación sigue tras aceptar el modelo (15/10/2026)
+
+**De dónde sale.** En `artifacts-threesum-senior`, el modelo de tiempos se aceptó en la ronda 5 de 12 y el run terminó
+ahí, como termina cualquier run al aceptar su modelo. El aviso del operador (ronda 6) llegó en la reflexión final, sin
+ronda para intentarlo. En un mundo cuyo producto es el artefacto, "lo más rápido que puedas dentro de tu presupuesto"
+choca con esa regla: entender bien los tiempos de una versión no es el final de la investigación.
+
+**El cambio:**
+- **Un mundo puede declararlo** (`Lab.goesOnAfterAcceptance`); el de artefactos lo hace.
+- **Al aceptarse un modelo:**
+  - la aceptación se registra (`accepted`);
+  - empieza una etapa nueva, como en una continuación tras una aceptación (`stage_after_acceptance`, con
+    `goes_on: true`): lo comprobado antes no cuenta y se devuelven las validaciones;
+  - el arnés se lo dice por su canal, con un aviso: el modelo aceptado y que la investigación sigue hasta agotar el
+    presupuesto;
+  - el run sigue hasta su última ronda.
+- **El protocolo del artefacto no se reinicia:** sus versiones aceptadas siguen siéndolo.
+- **El modelo del run es el último aceptado,** y el finding da su ronda; antes tomaba la primera aceptación.
+- **Capacidad `goes_on`:** sólo los runs que empiezan con ella. Un mundo que no lo declara se detiene al aceptar, como
+  siempre.
+
+**Pruebas** (`test/goes-on.test.ts`):
+- **Un mundo que lo declara:** acepta, abre etapa nueva, se lo dice por el canal en la ronda siguiente y llega a su
+  última ronda. El finding da la última aceptación.
+- **Sin la declaración,** el run se detiene en su aceptación.
+
+**El lote** `lib/examples/batch.artifacts-threesum-subquadratic.json`:
+- un par junior/senior (8 órdenes del senior, presupuesto de ayuda 8);
+- leen la investigación anterior como experiencia (`--experience`, modo `meta`);
+- desde el principio se les pide descubrir la solución comprobada ligeramente por debajo de O(n²).

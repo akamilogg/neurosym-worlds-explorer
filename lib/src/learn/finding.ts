@@ -154,7 +154,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
   const end: J = [...events].reverse().find((e) => e.type === 'end') ?? {};
   const checks = events.filter((e) => e.type === 'check');
   const summary: J = end.operator_summary ?? {};
-  const acceptedRound: number | null = summary.accepted?.round ?? events.find((e) => e.type === 'accepted')?.round ?? null;
+  /* The run's acceptance: the latest (a run that goes on after an acceptance, or a continuation after one, accepts again). */
+  const acceptedRound: number | null = [...events].reverse().find((e) => e.type === 'accepted')?.round ?? summary.accepted?.round ?? null;
   /* An acceptance that waited for the operator's verdict is its check's, granted later. */
   const acceptance = acceptedRound !== null ? [...checks].reverse().find((c) => c.round === acceptedRound && (c.accepted || c.acceptance_held_for)) : undefined;
 

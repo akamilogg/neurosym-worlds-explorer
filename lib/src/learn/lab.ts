@@ -186,6 +186,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       learner's names, what its percept and what came - and how the interface words them (`seriesDoc`). None by default. */
   series?(episode: E): Record<string, unknown>;
   readonly seriesDoc?: string;
+  /** The investigation goes on after its model is accepted (a world whose product is not the model - an artifact made as
+      fast as it can be within the budget): the acceptance is kept, a new stage starts - nothing checked before counts, the
+      validations are given back - and the run ends when its budget does. */
+  readonly goesOnAfterAcceptance?: boolean;
   /** The verdict on the ARTIFACT itself, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8): a version the researcher puts
       forward, judged in a place on fresh workloads - correct, and better than the reference (or not worse, where the place
       asks only that). Only a world of artifacts declares it; the runner gives it a protocol of its own. */
@@ -329,7 +333,9 @@ export const CAPABILITIES: readonly { readonly name: string; readonly since: str
   /* The visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the same as fixed_system, every journal before it lacks it. */
   { name: 'budget', since: 'c55cb53', inJournal: () => false },
   /* The channel (SPEC-CANAL-MENSAJES), likewise. */
-  { name: 'channel', since: 'c55cb53', inJournal: () => false }
+  { name: 'channel', since: 'c55cb53', inJournal: () => false },
+  /* Going on after an acceptance, in a world that declares it (Lab.goesOnAfterAcceptance), likewise. */
+  { name: 'goes_on', since: 'c55cb53', inJournal: () => false }
 ];
 
 /** The rounds a run had at an attempt: those of the stretch of its history it falls in (`rounds_before`), else its own. */
