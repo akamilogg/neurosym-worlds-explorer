@@ -1097,7 +1097,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       .map((p) => ({ ...p, id: 'artifact-' + p.id + '-' + (++artifactBlind), role: 'confirmation' as const, seen: false })),
     fingerprint: (v: string) => v, validations: cfg.validations, pairedRegression: false, quick: false
   }) : null;
-  let artifactAccepted: { version: string; round: number } | null = null;
+  /* Every version of the artifact accepted, in order: the last is the product (there is no bar raised: each is judged
+     against the reference, and how much better one is than another is the researcher's to measure). */
+  const artifactAccepted: { version: string; round: number }[] = [];
   const protocol = new Protocol(objective, {
     places: () => [...places.values()],
     blindPlaces: (set: number, round: number) => (team
@@ -1642,7 +1644,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         /* The protocol's words are a model's: here they are said of the artifact. */
         told = { version: record.artifact, ...JSON.parse(JSON.stringify(a.view).replace(/your_model/g, 'your_artifact').replace(/your model/g, 'your artifact')) };
         log('artifact_check', { version: record.artifact, told, ...a.journal });
-        if (a.accepted && !artifactAccepted) { artifactAccepted = { version: record.artifact, round: record.round }; log('artifact_accepted', artifactAccepted); say('  ARTIFACT ACCEPTED: ' + record.artifact); }
+        if (a.accepted && !artifactAccepted.some((x) => x.version === record.artifact)) {
+          const accepted = { version: record.artifact, round: record.round };
+          artifactAccepted.push(accepted);
+          log('artifact_accepted', accepted);
+          say('  ARTIFACT ACCEPTED: ' + record.artifact);
+          /* A fact of the world's verdict, published in the researcher's channel (SPEC-CANAL-MENSAJES §5). */
+          if (channelOn) channel.publish('world', { kind: 'notice', body: { artifact_accepted: accepted } });
+        }
       }
       protocol.lastView = { ...(protocol.lastView ?? {}), artifact: told };
     }
@@ -1699,7 +1708,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     final: final ? ownLaw(final) : null,
     ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownLaw(acceptedBefore.law) } } : {}),
     /* A world of artifacts: the artifact's own state, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8). */
-    ...(artifactProtocol ? { artifact: { accepted: artifactAccepted, protocol: artifactProtocol.summary() } } : {}),
+    ...(artifactProtocol ? { artifact: { accepted: artifactAccepted[artifactAccepted.length - 1] ?? null, chain: artifactAccepted, protocol: artifactProtocol.summary() } } : {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },

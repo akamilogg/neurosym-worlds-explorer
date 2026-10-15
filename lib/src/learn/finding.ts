@@ -56,7 +56,9 @@ export interface Finding {
   /** A world of artifacts (SPEC-MUNDO-ARTEFACTOS §8): the artifact's own state, apart from the model's - one may be accepted
       and the other not. The version accepted (or the last put forward), and what the researcher was told of its last check.
       The measures stay in the journal (`artifact_check`). */
-  readonly artifact?: { readonly status: 'accepted' | 'not accepted'; readonly version: string | null; readonly round: number | null; readonly checks: number; readonly last?: unknown };
+  readonly artifact?: { readonly status: 'accepted' | 'not accepted'; readonly version: string | null; readonly round: number | null; readonly checks: number; readonly last?: unknown;
+    /** Every version accepted, in order: the last is the product. */
+    readonly chain?: readonly { readonly version: string; readonly round: number }[] };
   readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[];
     /** Assisted researcher: where its evidence comes from - the world (points of episodes), the operator's messages, sources. */
     readonly grounded?: readonly ('world' | 'operator' | 'sources' | 'experience' | 'peers')[] }[];
@@ -142,7 +144,8 @@ function missed(p: J): number | null {
 function artifactState(end: J, checks: J[]): NonNullable<Finding['artifact']> {
   const last = checks[checks.length - 1];
   return { status: end.accepted ? 'accepted' : 'not accepted', version: end.accepted?.version ?? last?.version ?? null,
-    round: end.accepted?.round ?? null, checks: checks.length, ...(last?.told ? { last: last.told } : {}) };
+    round: end.accepted?.round ?? null, checks: checks.length, ...(last?.told ? { last: last.told } : {}),
+    ...(Array.isArray(end.chain) && end.chain.length ? { chain: end.chain.map((c: J) => ({ version: String(c.version), round: Number(c.round) })) } : {}) };
 }
 
 /** The finding of a journal (any world run through the protocol). `meta`: what the journal does not hold. */
@@ -332,7 +335,8 @@ export function findingText(f: Finding): string {
   lines.push(f.question.world + ': ' + (f.outcome.status === 'accepted' ? 'accepted in round ' + f.outcome.round : f.outcome.status)
     + (f.model?.fingerprint ? ' (model ' + f.model.fingerprint + ')' : '') + (f.outcome.open ? '; OPEN: it says it could go on' : ''));
   if (f.artifact) lines.push('  the artifact, apart: ' + (f.artifact.status === 'accepted' ? 'accepted in round ' + f.artifact.round : 'not accepted')
-    + (f.artifact.version ? ' (version ' + f.artifact.version + ')' : '') + '; ' + f.artifact.checks + ' check(s) of a version');
+    + (f.artifact.version ? ' (version ' + f.artifact.version + ')' : '') + '; ' + f.artifact.checks + ' check(s) of a version'
+    + ((f.artifact.chain?.length ?? 0) > 1 ? '; accepted in turn: ' + f.artifact.chain!.map((c) => c.version + ' (round ' + c.round + ')').join(', ') : ''));
   for (const q of f.limitations.learner?.open_questions ?? []) lines.push('  open [' + q.state + '] ' + q.question + (q.plan ? '  (plan: ' + q.plan + ')' : q.report ? '  (needs: ' + q.report + ')' : ''));
   if (f.parallel) lines.push('  in parallel (a separate condition):' + (f.parallel.exploration_places ? ' ' + f.parallel.exploration_places + ' board(s) to explore (' + f.parallel.concurrency + ')' : '')
     + (f.parallel.team ? ' member ' + f.parallel.team.member + ' of team ' + f.parallel.team.id + ' (' + f.parallel.team.members.length + ' members, ' + (f.parallel.team.exchange ? 'board every ' + f.parallel.team.window + ' round(s): ' + f.parallel.team.published.length + ' published, ' + f.parallel.team.read.length + ' read(s)' : 'no board') + ')' : ''));

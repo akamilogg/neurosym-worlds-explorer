@@ -177,3 +177,44 @@ test('a run: it pins its own task list and a text, and they reach it every round
   await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--no-pins', '--out', path.join(dir, 'nopins.json')], root: dir, llm, fetch: counting });
   assert.ok(without.every((m) => !m[0].content.includes(PINS_SECTION) && parts(m).every((p) => !p.channel?.pinned)));
 });
+
+/* --- Step 3: the world publishes; the finding keeps the chain (SPEC-CANAL-MENSAJES §5, plan step 3). */
+
+test('every version of the artifact accepted reaches the researcher as a notice of the world, and the finding keeps the chain: the last is the product', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'channel-artifact-'));
+  /* A world with an artifact of its own: a version holds where its name begins with "good" (the verdict is the world's). */
+  const lab = { ...(cellsLab as LawLab),
+    blindPlaces: (spec: unknown, set: number) => [{ id: 'blind' + set, spec }],
+    artifact: {
+      known: () => true,
+      check: async (_spec: unknown, version: string) => ({ holds: version.startsWith('good'), view: { correct: true, better: version.startsWith('good') }, journal: { version } })
+    } } as unknown as LawLab;
+  const asked: Message[][] = [];
+  const answers: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const messages = b.messages as Message[];
+    const grading = messages[0].content.startsWith('You grade');
+    if (!grading) asked.push(messages);
+    const first = parts(messages)[0] ?? {};
+    const round = first.round;
+    const content = grading ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in first ? { rationale: 'r', beliefs: [{ id: 'same', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false,
+        beliefs: [{ id: 'same', stance: round === 1 ? 'new' : 'keep', statement: 'the row repeats', evidence: [] }], lessons: ['l'], next_experiment: 'n',
+        ...(round === 1 ? { artifact: 'good1', validate_artifact: true } : round === 2 ? { artifact: 'good2', validate_artifact: true } : {}) };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const r = await runLaboratory(lab, { args: [...ARGS, '--researcher', 'assisted', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch: answers });
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  assert.deepEqual(events.filter((e) => e.type === 'artifact_accepted').map((e) => e.version), ['good1', 'good2'], 'each version accepted, against the reference');
+  /* The notice of the first acceptance opens round 2; of the second, round 3. */
+  const opening = (round: number) => asked.find((m) => parts(m)[0].round === round && !('task' in parts(m)[0]))!;
+  const notices = (m: Message[]) => parts(m).filter((p) => p.channel?.notices).flatMap((p) => p.channel.notices);
+  assert.deepEqual(notices(opening(2)).map((n: any) => [n.from, n.body.artifact_accepted.version]), [['world', 'good1']]);
+  assert.deepEqual(notices(opening(3)).map((n: any) => n.body.artifact_accepted.version), ['good2']);
+  /* The finding: the last version is the product, and the chain in order. */
+  assert.equal(r.finding.artifact?.status, 'accepted');
+  assert.equal(r.finding.artifact?.version, 'good2');
+  assert.deepEqual(r.finding.artifact?.chain, [{ version: 'good1', round: 1 }, { version: 'good2', round: 2 }]);
+});

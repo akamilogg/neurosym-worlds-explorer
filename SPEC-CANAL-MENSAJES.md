@@ -250,4 +250,21 @@ que empieza con la capacidad `channel`. El de mundo desconocido no tiene canal.
   Además, la conversación sólo crece, y un run cortado y reanudado no diverge. `--no-pins` no tiene ni la línea ni los
   fijados.
 
-**Siguiente:** paso 3, el mundo publica (el de artefactos, cada versión aceptada) y el finding guarda la cadena.
+### 13.3 Paso 3: el mundo publica, y la cadena de versiones (15/10/2026)
+
+- **Cada versión aceptada.** En un mundo con artefacto, cada versión que el protocolo del artefacto acepta se registra
+  (`artifact_accepted`) y se publica en el canal como aviso del mundo: `{"artifact_accepted": {"version", "round"}}`.
+  - Llega al investigador al abrir la ronda siguiente.
+  - Una versión ya aceptada no se registra dos veces.
+- **No hay listón que suba.** Cada versión se juzga contra la referencia. Que una sea más rápida que otra lo mide el
+  investigador con sus ejecuciones; el entorno sólo dice si se sostiene.
+- **El fin del run y el finding** guardan la cadena (`artifact.chain`): todas las versiones aceptadas, en orden. La última
+  es el producto (`artifact.version`).
+- **La interfaz del mundo de artefactos** lo dice: cada versión se juzga contra la referencia, puede aceptarse más de una
+  y la última aceptada es su producto.
+- **Pruebas** (`test/channel.test.ts`), con un mundo de prueba con artefacto: dos versiones aceptadas en las rondas 1 y 2.
+  - El aviso de cada una abre la ronda siguiente, con autor `world`.
+  - El finding da la segunda como producto y la cadena completa.
+
+**Siguiente:** paso 4, migrar lo que hay (§7) — presupuesto, tarea, fuentes, instrucciones, mensajes del operador y
+directivas.
