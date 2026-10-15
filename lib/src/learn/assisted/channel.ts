@@ -60,7 +60,9 @@ export class Channel {
     const id = 'm' + (++this.seq);
     this.waiting.push({ id, from, body: m.body });
     this.notices.set(id, { from, body: m.body });
-    this.log('channel_published', { from, kind: 'notice', id });
+    /* The body of the environment's and the harness's notices goes to the journal (for the operator and for a senior); an
+       operator's or an agent's message is there already, as it was delivered (operator_message). */
+    this.log('channel_published', { from, kind: 'notice', id, ...(from === 'world' || from === 'harness' ? { body: m.body } : {}) });
     return { id };
   }
 

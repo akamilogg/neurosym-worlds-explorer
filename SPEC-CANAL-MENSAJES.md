@@ -329,4 +329,34 @@ lugar de como aviso, y llega en cada ronda.
   cada ronda siguiente, y la conversación que sólo crece.
 - `test/parallel.test.ts`: cada miembro reconoce su papel en todas las rondas.
 
-**Siguiente:** paso 6, el senior como segundo destinatario.
+### 13.6 Paso 6: el senior, segundo destinatario (15/10/2026)
+
+**El senior tiene su propio canal.** Vive mientras corre su proceso y se entrega antes de cada pregunta suya, como parte
+añadida a su conversación, que sigue sólo creciendo.
+- **Al abrirse su conversación,** o al consolidarla o reiniciarla, recibe todo lo fijado otra vez.
+- **Lo entrega primero en cada vuelta:** si se le pide consolidar, ese aviso es lo último que lee.
+
+**Lo que le llega:**
+- **Los avisos del mundo al junior** (una versión del artefacto aceptada…), leídos del diario: cada uno una vez.
+  - Para eso el diario guarda el cuerpo de los avisos del mundo y del arnés.
+  - Los mensajes del operador y de los agentes ya están en el diario como `operator_message`.
+- **El presupuesto del junior,** fijado (`harness:junior_budget`) y calculado de su diario:
+  - las rondas que le quedan;
+  - con presupuesto de ayuda, la ayuda que le queda.
+
+  Así una recomendación sabe cuánto queda.
+- **Lo que fija él mismo,** con `"pins"`, como el junior: una nota de su cuaderno (llega en su último texto), un aviso
+  que recibió o un texto.
+  - Lo fijado queda en su estado (`pins`): en un run reanudado se vuelve a fijar.
+
+**Su prompt** (`SENIOR_ROLE`) lleva una línea que dice qué es su canal y cómo fijar.
+
+**Pruebas:**
+- `test/orchestra-senior-memory.test.ts`:
+  - el aviso del mundo al junior le llega una vez;
+  - el presupuesto del junior, calculado de su diario;
+  - la nota que fija le llega en su siguiente pregunta, y queda en su estado;
+  - su conversación sólo crece.
+- Las que contaban posiciones fijas en su conversación cuentan ahora la parte del canal.
+
+**Siguiente:** paso 7, el piloto en artefactos ("lo más rápido que puedas con tu presupuesto"), con y sin `--no-pins`.

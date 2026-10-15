@@ -7,6 +7,7 @@ import { orderOutcome, runStatus, send } from '../runtime/control.ts';
 import { researcherEvents, runDigest } from './view.ts';
 import { followUpDue, journalReader, juniorBrief, juniorInstruments, juniorPercept, juniorTests, stuckSignals, type StuckSignals } from './reader.ts';
 import { UserParts } from '../learn/system2.ts';
+import { Channel, applyPins, parsePins } from '../learn/assisted/channel.ts';
 import { emptySeniorState, keepNotebook, notebookBrief, seniorMemory, seniorNotebook, tokensOf, writeNotebook, type SeniorState } from './senior.ts';
 
 /* ============================================================================
@@ -44,6 +45,7 @@ export const SENIOR_ROLE = [
   'You are called because the junior shows signs of being stuck (`signals`). Review its record as a demanding senior would. Read its notes and the answers it got, and look for what it has not interpreted: a regularity in the answers it did not connect; a fact it recorded and did not build on; a clue it dismissed or held as "only an association"; an alternative it wrote down and never tested; a reading that its own data contradict.',
   'Your instruments read the junior\'s record and your own (they ask nothing of the environment): {"investigate": [{"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks" | "my_beliefs" | "my_notes" | "my_methods" | "my_decisions"}, {"memory": "open", "items": ["<id>", ...]}, {"memory": "find", "words": "...", "of": "<kind>" (optional)}]}. Ids of the junior\'s record: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it was answered), "check:r<round>". Ids of yours: "my_belief:<id>", "my_note:<id>", "my_method:<id>", "my_decision:<n>" (what you decided, what you read for it, and what came of it). Each of your reading answers comes back, with what it read, as a part of its own (`investigation_step`), and `steps_left` says how many such answers you have; `memory` how many items of each kind there are. A large item comes clipped (its beginning and its size): add \"whole\": true to the open request to read it entire.',
   'YOUR CONVERSATION lasts the whole run: you are called many times, and what you read and decided before is above, as it was. Each call adds only what is new: the junior\'s rounds completed since your last call (`new_rounds`) and why you are called now (`call`). Do not read again what is above: read what is new, or what you have not read yet.',
+  'YOUR CHANNEL. Some of your questions carry a part "channel": "notices" of the environment to the junior (an artifact accepted...), each once, and "pinned" messages at every call with their value then - the junior\'s budget (`harness:junior_budget`) and what you pin yourself. In any of your answers: "pins": [{"do": "pin", "id": "<lowercase_snake_case>", "document": "<the id of a note of yours>" | "message": "<the id of a notice you received>" | "text": "..."}, {"do": "unpin", "id": "..."}] - a note reaches you in its latest text.',
   'YOUR NOTEBOOK is yours - the junior never sees it; only your messages reach it. In ANY of your answers (while you read, when you decide, when you consolidate) you may add "beliefs": [{"id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "...", "why": "...", "evidence": ["<items or points of the junior\'s record>"]}], "notes": [{"do": "write" | "forget" | "archive", "id": "<id>", "text": "..."}] and "methods": [{"do": "write" | "forget", "id": "<id>", "text": "how you read and cross the record"}]. Write in it what you understand of the environment, what you ruled out and why, which of your hypotheses the junior tested and what came of them: it is what you keep when your conversation is consolidated, and what you start from in a run resumed. Ids are lowercase snake_case.',
   'When your conversation has grown long and you have taken from it what you need, CONSOLIDATE it: answer {"consolidate": {"summary": "what you understand so far and what you are doing, in your words", "keep": ["<ids of investigation steps above to keep whole, e.g. d3.2>"]}} - write first in your notebook what you want to keep. Your conversation then goes on from your notebook as it is, the junior\'s latest rounds, your summary and the steps you kept; the rest is gone from it (your memory still holds the junior\'s record and your decisions). At most twice a call; when you are told your conversation is too long, consolidate before anything else.',
   'You may be called at the end of one of its rounds, or during a round (`during_round`), when it keeps looking without testing anything or keeps asking to investigate with no steps left: your message then reaches it within that round, before it answers again. Then help it commit: point to the hypothesis its own record supports best and tell it to propose a model that tests it now - a model that fails also teaches.',
@@ -187,6 +189,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   /* Each of its messages is followed up once: when the junior, having got it, runs an experiment. */
   const followedUp = new Set<number>();
   const maxOrders = o.maxOrders ?? 6;
+  /* The senior's channel (SPEC-CANAL-MENSAJES §9): the environment's notices to the junior, the junior's budget, its pins. */
+  const seniorChannel = new Channel();
   while (!o.signal?.aborted) {
     const status = fs.existsSync(o.journal) ? runStatus(o.journal) : null;
     const journal = readJson(o.journal);
@@ -203,6 +207,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
           record.earlier = { decisions: [...(earlier.earlier?.decisions ?? []), ...(earlier.decisions ?? [])] };
           for (const k of record.senior.followed_up ?? []) followedUp.add(k);
           for (const r of record.senior.called_in_round ?? []) calledInRound.add(r);
+          /* What it had pinned, pinned again in its channel (which lives as long as this process). */
+          applyPins(seniorChannel, record.senior.pins ?? [], (id) => noteOf(record.senior!, id));
           orders = record.earlier.decisions.filter((d) => d.decision === 'message' || d.decision === 'stop').length;
           seenRounds = Math.max(-1, ...record.earlier.decisions.map((d) => Number(d.rounds) || 0));
           say('agent:' + o.id + ' goes on from ' + path.basename(from!) + ' (' + record.earlier.decisions.length + ' decisions, ' + orders + ' orders)');
@@ -236,7 +242,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       seenRounds = Math.max(seenRounds, rounds);
       let d: AgentDecision | null;
       if (role === 'senior') {
-        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening));
+        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel);
         record.senior!.followed_up = [...followedUp];
         record.senior!.called_in_round = [...calledInRound];
       }
@@ -285,8 +291,22 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
 /** The senior's turn: nothing unless the run shows signs of being stuck (and it has left the junior time since its last
     message); then it reads the junior's record and decides. Null: it was not called (nothing is recorded). Its conversation
     is the state's: it only grows (SPEC-ORQUESTADOR §3.3.1), and what it writes in its notebook is kept there. */
+/** A note of the senior's, as a pinned value reads it (its latest text). */
+function noteOf(state: SeniorState, id: string): { text: string; versions: number } | undefined {
+  const n = state.notebook.notes.find((x) => x.id === id);
+  return n ? { text: n.text, versions: 1 } : undefined;
+}
+
+/** The junior's budget as its journal says (SPEC-INVESTIGADOR-ASISTIDO §15): its rounds left, and its help left. */
+function juniorBudget(journal: Record<string, any>, round: number): Record<string, number> {
+  const attempts = Number(journal.config?.attempts) || 0;
+  const help = typeof journal.help_budget === 'number' ? journal.help_budget : null;
+  const given = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'operator_message').reduce((n, e) => n + (e.messages?.length ?? 0), 0);
+  return { rounds_left: Math.max(0, attempts - round + 1), ...(help !== null ? { help_left: Math.max(0, help - given) } : {}) };
+}
+
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
-  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false): Promise<AgentDecision | null> {
+  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel()): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
      to have had time with its last message. */
@@ -324,6 +344,13 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
     orders_left: ordersLeft, memory: memory.counts(), steps_left: limit } });
   state.conversation.push(callPart());
+  /* Its channel: the notices the environment gave the junior since its latest call, and the junior's budget as it stands. */
+  const notices = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'channel_published' && e.from === 'world' && e.kind === 'notice');
+  for (const n of notices.slice(state.notices_seen ?? 0)) channel.publish('world', { kind: 'notice', body: n.body });
+  state.notices_seen = notices.length;
+  channel.publish('harness', { kind: 'pinned', key: 'junior_budget', body: juniorBudget(journal, latestRound()) });
+  /* A conversation opened (or restarted, or consolidated) in this call is given every pinned message again. */
+  let channelOpening = opened;
   const read: { step: string; requests: Record<string, unknown>[]; results: unknown[] }[] = [];
   const at = () => new Date().toISOString();
   const asked = () => read.map((r) => r.requests);
@@ -336,10 +363,17 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const done = (d: AgentDecision): AgentDecision => { keepNotebook(state, nb); return d; };
   try {
     for (let turn = 0; turn <= limit + 7; turn++) {
+      /* What its channel brings, first: a reminder to consolidate, if it comes, is the last thing it reads. */
+      const brought = channel.deliver({ round: latestRound(), question: call * 1000 + turn, opening: channelOpening });
+      channelOpening = false;
+      if (brought) state.conversation.push(brought);
       /* Too long: it is asked to consolidate; asked twice and it did not, its conversation restarts from its notebook. */
       if (sizeOf() > maxTokens) {
         if (toldToConsolidate >= 2) {
           state.conversation = [opening(), { restarted: 'your conversation outgrew ' + maxTokens + ' tokens and you did not consolidate it: it goes on from your notebook' }, callPart()];
+          /* Restarted: its channel from the start again. */
+          const again = channel.deliver({ round: latestRound(), question: call * 1000 + turn, opening: true });
+          if (again) state.conversation.push(again);
           state.consolidations++;
         } else {
           toldToConsolidate++;
@@ -351,6 +385,14 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       measured = Number((answer.raw as { usage?: { prompt_tokens?: number } } | null)?.usage?.prompt_tokens) || measured;
       const parsed = (parseJsonLoose(answer.content) ?? {}) as Record<string, any>;
       const { wrote, warnings } = writeNotebook(nb, rounds, parsed);
+      /* What it pins, in any answer: to its channel, and kept in its state for a run resumed. */
+      const pinOps = parsePins(parsed.pins, warnings);
+      if (pinOps.length) {
+        keepNotebook(state, nb);
+        warnings.push(...applyPins(channel, pinOps, (id) => noteOf(state, id)));
+        state.pins = [...(state.pins ?? []).filter((p) => !pinOps.some((q) => q.id === p.id)), ...pinOps.filter((p) => p.do === 'pin')];
+        wrote.pins = pinOps.map((p) => p.do + ' ' + p.id);
+      }
       suspicions.push(...instrumentReports(parsed));
       const written = { ...(Object.keys(wrote).length ? { you_wrote: wrote } : {}), ...(warnings.length ? { notebook_warnings: warnings } : {}) };
       if (parsed.consolidate && typeof parsed.consolidate === 'object' && consolidated < 2) {
@@ -358,6 +400,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
         const keep = new Set((Array.isArray(parsed.consolidate.keep) ? parsed.consolidate.keep : []).map(String));
         const kept = state.conversation.map((p) => (p as Record<string, any>).investigation_step).filter((s) => s && keep.has(String(s.step)));
         keepNotebook(state, nb);
+        channelOpening = true;
         state.conversation = [opening(), { consolidated: { summary: String(parsed.consolidate.summary ?? ''), kept_steps: kept }, ...written }, callPart()];
         state.consolidations++;
         continue;

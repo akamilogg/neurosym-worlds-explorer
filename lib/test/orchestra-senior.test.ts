@@ -338,11 +338,13 @@ test('the senior\'s reading grows by messages (its context unchanged within a de
   await agent;
   assert.equal(calls.length, 3);
   assert.ok(calls.every((u) => u instanceof UserParts));
-  assert.deepEqual(calls[1].parts.slice(0, 2), calls[0].parts, 'its opening and its call, unchanged');
-  assert.deepEqual(calls[2].parts.slice(0, 3), calls[1].parts.slice(0, 3), 'the earlier messages repeated');
-  const clipped = (calls[1].parts[2] as any).investigation_step.results[0].items[0];
+  /* Its opening, its call and its channel (SPEC-CANAL-MENSAJES §9), then each reading. */
+  assert.ok((calls[0].parts[2] as any).channel, 'its channel, after its call');
+  assert.deepEqual(calls[1].parts.slice(0, 3), calls[0].parts, 'its opening, its call and its channel, unchanged');
+  assert.deepEqual(calls[2].parts.slice(0, 4), calls[1].parts.slice(0, 4), 'the earlier messages repeated');
+  const clipped = (calls[1].parts[3] as any).investigation_step.results[0].items[0];
   assert.ok(clipped.clipped && clipped.clipped.size > 9000 && clipped.clipped.beginning.length === 4000);
-  const whole = (calls[2].parts[3] as any).investigation_step.results[0].items[0];
+  const whole = (calls[2].parts[4] as any).investigation_step.results[0].items[0];
   assert.equal(whole.item.results[0].pictures, big, 'asked whole: entire');
 });
 
