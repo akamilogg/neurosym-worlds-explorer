@@ -42,6 +42,7 @@ export type RunOrder =
   | { readonly kind: 'stop'; readonly by?: string }
   | { readonly kind: 'message'; readonly text: string; readonly by?: string; /** A senior's: an order, not a suggestion (SPEC-ORQUESTADOR §3.3.3). */ readonly directive?: boolean;
       /** Pinned in the researcher's channel under this key (SPEC-CANAL-MENSAJES): reaches it every round, not once. */ readonly pin?: string;
+      /** Held until this round begins (a message scheduled in advance, e.g. by a batch): delivered with its first question. */ readonly round?: number;
       /** A senior's order to register a test of the junior's own, with its message (SPEC-PRUEBAS-PROPIAS §8). */ readonly test?: Readonly<Record<string, unknown>> }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string }

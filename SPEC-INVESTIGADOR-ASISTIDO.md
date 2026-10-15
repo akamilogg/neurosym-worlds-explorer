@@ -860,3 +860,30 @@ Un run aceptado y continuado repite su historial sin divergir (`test/review.test
 - que el senior vea los contadores del junior;
 - medir cómo reparte las rondas con presupuesto visible y sin él;
 - el piloto emparejado en artefactos, que necesita el listón que sube.
+
+## 16. Mensajes programados (15/10/2026)
+
+**De dónde sale.** En el primer run de 3SUM, el investigador se quedó en O(n²) y no intentó bajar. El autor quiere poder
+darle un empujón como operador, pero automatizado: un mensaje que llegue en una ronda elegida de antemano.
+
+**Cómo funciona:**
+- **Una orden de mensaje admite `round`.** El run la acepta al leerla de su bandeja, como siempre, pero la retiene hasta
+  que empieza esa ronda, y la entrega con su primera pregunta.
+  - En los mundos de leyes, la ronda es la de la sesión.
+  - En la cuadrícula, la siguiente a su última propuesta.
+- **Un lote la declara** por run (`messages: [{round, text, pin?}]`). Se deja en la bandeja al arrancar el run, y no al
+  reanudarlo.
+- **Es ayuda como cualquier otro mensaje:**
+  - va por el canal;
+  - queda en el diario (`operator_message`, con su pregunta y su ronda);
+  - cuenta en el presupuesto de ayuda y en el finding.
+
+  Un run reanudado la entrega en la misma pregunta.
+- **No es condicional.** Decidir si el investigador ya lo intentó sería interpretar su trabajo, y eso no le corresponde
+  al arnés. Basta con elegir bien la ronda.
+
+**Prueba** (`test/scheduled.test.ts`): un lote programa un mensaje para la ronda 3. Llega con la primera pregunta de la
+ronda 3 y no antes, queda registrado con su ronda y cuenta como ayuda.
+
+**Primer uso:** `lib/examples/batch.artifacts-threesum.json` (`artifacts-threesum-2`). En la ronda 6 de 12, el operador
+dice que hay una solución comprobada ligeramente por debajo de O(n²) y le pide que intente descubrirla.

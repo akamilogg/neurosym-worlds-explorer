@@ -1,6 +1,6 @@
 {
   "format": "batch@1",
-  "id": "artifacts-threesum",
+  "id": "artifacts-threesum-2",
   "concurrency": 1,
   "budget": {
     "tokens_per_run": 4000000
@@ -9,7 +9,7 @@
     {
       "id": "threesum-pins",
       "lab": "artifacts",
-      "condition": "3SUM from its simplest program (cubic), as fast as it can within its budget, with its channel and its own pins",
+      "condition": "3SUM from its simplest program (cubic), as fast as it can within its budget, with its channel and its own pins; at round 6 the operator says a verified solution slightly below O(n^2) exists",
       "researcher": "assisted",
       "args": [
         "--artifact",
@@ -26,6 +26,12 @@
         "240",
         "--task",
         "Make this artifact as fast as you can within your budget, without changing what it answers, and understand why: build and test an executable model of its run time from what is known before a run, put forward each version you can defend, and record the evidence of each change, the failed alternatives, the limitations and the open questions so another team can reconstruct your work."
+      ],
+      "messages": [
+        {
+          "round": 6,
+          "text": "A note from the operator: a solution to this problem slightly below O(n^2) has been found and verified. Try to discover it."
+        }
       ]
     }
   ]

@@ -39,6 +39,10 @@ export interface BatchRun {
   readonly fork?: { readonly journal: string; readonly attempts: number; readonly message?: string;
     /** Tests of its own required from its new rounds on (SPEC-PRUEBAS-PROPIAS §13): `--own-tests N` given to the continuation. */
     readonly own_tests?: number };
+  /** Messages of the operator scheduled in advance (SPEC-INVESTIGADOR-ASISTIDO §6.1): each held until its round begins,
+      then delivered with its first question - a nudge given at a round chosen beforehand, the same for every run that
+      declares it. Help like any other message: in the finding, and in the help budget. */
+  readonly messages?: readonly { readonly round: number; readonly text: string; readonly pin?: string }[];
 }
 
 export interface BatchDefinition {
@@ -242,6 +246,8 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
         : [...own, ...(r.researcher ? ['--researcher', r.researcher] : []), ...control, ...opening, '--out', out];
     /* A branch's first message waits in its inbox for its first new round. */
     if (!known && r.fork?.message) send(out, { kind: 'message', text: r.fork.message, by: 'agent:planner' });
+    /* Messages scheduled in advance wait in its inbox, each for its round. */
+    if (!known) for (const m of r.messages ?? []) send(out, { kind: 'message', text: m.text, by: 'operator', round: m.round, ...(m.pin ? { pin: m.pin } : {}) });
     latest.set(r.id, out);
     save();
     say('batch ' + def.id + ': ' + r.id + ' [' + r.condition + '] ' + (known ? 'resumed' : 'started'));

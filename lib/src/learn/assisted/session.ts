@@ -47,6 +47,8 @@ export interface OperatorMessage {
   readonly test?: Readonly<Record<string, unknown>>;
   /** Pinned in its channel under this key (SPEC-CANAL-MENSAJES): a standing message (a member's role), sent every round. */
   readonly pin?: string;
+  /** Held until this round begins: a message scheduled in advance. */
+  readonly round?: number;
 }
 
 /** What it is told once a directive has reached it: what an order of its senior is, how it reports it, how it disagrees. */
@@ -107,7 +109,7 @@ export const assistedSystem = (common: string): string => common + '\n\n' + ASSI
 
 export interface OperatorChannel {
   /** Messages the operator sent that have not been delivered yet (taken: they will be). */
-  take(): OperatorMessage[];
+  take(round?: number): OperatorMessage[];
   /** Resuming: the messages the run it resumes delivered, by the question they went with. */
   readonly scheduled?: ReadonlyMap<number, readonly OperatorMessage[]>;
   /** The system prompt now (it changes with a focus); default: the one the session was given. */
@@ -186,7 +188,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       question++;
       /* Resuming, up to where the run it resumes went: exactly what it delivered, at the same questions. Then, live. */
       const fresh = channel.scheduled?.has(question) ? [...channel.scheduled.get(question)!]
-        : question <= lastScheduled ? [] : channel.take();
+        : question <= lastScheduled ? [] : channel.take(channel.round?.());
       if (fresh.length) log('operator_message', { question, messages: fresh });
       for (const m of fresh) await channel.onDeliver?.(m, question);
       const task = channel.task?.() ?? null;

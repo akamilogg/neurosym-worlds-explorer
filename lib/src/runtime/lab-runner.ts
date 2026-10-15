@@ -465,7 +465,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   const gridChannel = isGameLab(lab) && researcher === 'assisted' && capabilitiesFrom.channel === 0 ? new Channel(run.log) : null;
   const services = { ...(isGameLab(lab) && researcher === 'assisted'
     ? { ...run.services, operatorLlm: run.services.llm, ...(gridChannel ? { channel: gridChannel } : {}),
-      llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous), fixedSystem: () => capabilitiesFrom.fixed_system === 0,
+      /* The round in course, for a message held until its round: the one after the latest proposal. */
+      llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take(1 + Math.max(0, ...(run.journal.events as Record<string, any>[]).filter((e) => e.type === 'proposal').map((e) => Number(e.round) || 0)))), scheduled: deliveredMessages(previous), fixedSystem: () => capabilitiesFrom.fixed_system === 0,
         ...(gridChannel ? { messages: () => gridChannel } : {}) }, run.log),
       assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) },
       awaitOpening: () => run.awaitOpening() }
@@ -574,7 +575,8 @@ interface OpenRun {
   /** What the laboratory computes itself and must be given again when resumed (`LabContext.recorded`). */
   readonly recorded: <T>(route: string, body: unknown, compute: () => Promise<T>) => Promise<T>;
   /** The operator's messages accepted and not yet delivered (the assisted researcher takes them). */
-  readonly operator: { take(): OperatorMessage[] };
+  /** `round`: the round in course - a message held for a later round stays (with none known, everything is taken). */
+  readonly operator: { take(round?: number): OperatorMessage[] };
   /** The agent whose first hypothesis the run waits for (SPEC-ORQUESTADOR §3.3.4), and for how long; null when none, or
       when the run resumes a history that had it. */
   readonly opening: { readonly agent: string; readonly ms: number } | null;
@@ -729,6 +731,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
         waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}),
           ...((order as { directive?: unknown }).directive === true ? { directive: true } : {}),
+          ...(typeof (order as { round?: unknown }).round === 'number' && (order as { round: number }).round > 0 ? { round: Math.floor((order as { round: number }).round) } : {}),
           ...(typeof (order as { pin?: unknown }).pin === 'string' && /^[a-z][a-z0-9_]*$/.test((order as { pin: string }).pin) ? { pin: (order as { pin: string }).pin } : {}),
           ...((order as { test?: unknown }).test && typeof (order as { test?: unknown }).test === 'object' ? { test: (order as { test: Record<string, unknown> }).test } : {}), at: new Date().toISOString() });
         log('operator_command', { ...who, accepted: true }); helpUsed++;
@@ -910,7 +913,11 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     return JSON.parse(await r.text()) as T;
   };
   return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), recorded, finish, diverged, verdicts,
-    operator: { take: () => waiting.splice(0, waiting.length) },
+    operator: { take: (round?: number) => {
+      const due = waiting.filter((m) => m.round === undefined || round === undefined || m.round <= round);
+      for (const m of due) waiting.splice(waiting.indexOf(m), 1);
+      return due;
+    } },
     opening, awaitOpening,
     sourceFetch: replay.wrap('source', sourceFetch(network)) };
 }
@@ -1473,7 +1480,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
          sent meanwhile waits for its first new round. */
       /* A message sent while a resumed run still replays its history waits: delivered then, the question would differ from
          the one its log answers, and the run would diverge. It goes with the first question asked live. */
-      take: () => (helping && run.replay.pending() === 0 ? run.operator.take() : []), scheduled: deliveredMessages(previous),
+      take: (round?: number) => (helping && run.replay.pending() === 0 ? run.operator.take(round) : []), scheduled: deliveredMessages(previous),
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
