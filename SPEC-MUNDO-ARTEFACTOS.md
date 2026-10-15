@@ -671,3 +671,37 @@ exploratorio (`why` y `exploratory: true`).
 - **Medir en el banco de pruebas.** `test/artifact-world.test.ts` mide tiempos reales. Con la suite en paralelo, la familia
   `duplicates` (unos 0,17 s, casi todo arranque de Python) puede salir peor que la tolerancia por ruido de la máquina.
   Corrida sola, pasa.
+
+### 18.5 El segundo caso: 3SUM (15/10/2026)
+
+**La tarea** (`lib/src/artifacts/tasks/threesum.ts`, `--artifact threesum`): decidir si entre n enteros hay tres, en
+posiciones distintas, que sumen cero.
+- **Su base** (`lib/examples/artifacts/threesum/base/main.py`) es el programa más simple: tres bucles anidados que paran
+  en la primera terna, cúbico en n.
+- **Hasta dónde puede bajar** lo encuentra el investigador. La tarea no lo sugiere.
+- **Por qué se eligió.** El autor la propuso porque hace poco fue noticia un algoritmo por debajo de O(n²). Aquí se ve
+  hasta dónde llega el investigador partiendo de lo cúbico.
+
+**Se decide, no se encuentra.** `out.txt` es `yes` o `no`: es correcta si responde lo mismo que la referencia en la
+misma carga. Dos programas pueden encontrar ternas distintas, pero coinciden en si hay una. Algunas cargas llevan una
+terna plantada, para que una respuesta fija de antemano no pase.
+
+**Familias** (los tiempos de la base, en la máquina del autor):
+
+| Familia | Papel | Cargas | Base | Exige |
+|---|---|---|---|---|
+| `mixed` | laboratorio | 300 números en ±10⁹, terna plantada en una de cada dos | ~0,5 s | mejor |
+| `large` | familia | 600 números en ±10⁹, sin terna plantada: todo el trabajo cúbico | ~3 s | mejor |
+| `dense` | familia | 600 números en ±50: la base encuentra una terna casi al instante | ~0,14 s | no peor |
+| `late` | ciega | 600 números en ±10⁹, la terna plantada al final del todo | ~3 s | mejor |
+
+La referencia se ejecuta en cada carga de una comprobación, así que n se queda en cientos.
+
+**Pruebas** (`test/threesum.test.ts`, sólo corrección: los tiempos dependen de la máquina):
+- la terna plantada está donde se pide;
+- la base es su propia referencia;
+- una versión cuadrática (ordenar y dos punteros) responde lo mismo en todas las familias;
+- un `no` fijo se detecta;
+- la familia ciega no la puede ejecutar el investigador.
+
+**El lote** es `lib/examples/batch.artifacts-threesum.json`.

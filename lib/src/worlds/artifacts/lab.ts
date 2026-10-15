@@ -6,6 +6,7 @@ import type { World } from '../../core/types.ts';
 import { ArtifactWorld, type Episode as RunsData } from '../../artifacts/world.ts';
 import { processSandbox } from '../../artifacts/sandbox.ts';
 import { dedupTask } from '../../artifacts/tasks/dedup.ts';
+import { threesumTask } from '../../artifacts/tasks/threesum.ts';
 import type { ArtifactTask } from '../../artifacts/task.ts';
 
 /* ============================================================================
@@ -51,7 +52,7 @@ export type ArtifactAct =
   | { readonly change: { readonly from: string; readonly files: Readonly<Record<string, string | null>> } & Reason }
   | { readonly run: { readonly version: string; readonly workloads: number; readonly repetitions: number }; readonly place?: string };
 
-const TASKS: Readonly<Record<string, (scale: number) => ArtifactTask>> = { dedup: (scale) => dedupTask({ scale }) };
+const TASKS: Readonly<Record<string, (scale: number) => ArtifactTask>> = { dedup: (scale) => dedupTask({ scale }), threesum: (scale) => threesumTask({ scale }) };
 /** The worlds of the specs generated in this process: the latest version made in each (what the checks run). */
 const latest = new WeakMap<ArtifactWorld, string>();
 const seedOf = (text: string): number => parseInt(createHash('sha256').update(text).digest('hex').slice(0, 8), 16);
