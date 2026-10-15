@@ -76,11 +76,12 @@ test('the junior\'s conversation is never rewritten: one system prompt for the w
     assert.equal(issue, null, 'question ' + i + ' rewrote the conversation: ' + issue);
   }
   assert.ok(rounds >= 3, 'several rounds were compared: ' + rounds);
-  /* What a directive is, told as a message added when the first came - and again in every later round, after its first part. */
-  const told = asked.findIndex((m) => m.some((x) => x.content.includes('"instructions_added"') && x.content.includes('directive')));
+  /* What a directive is, told in its channel when the first came (the instructions, pinned by the harness: SPEC-CANAL-MENSAJES)
+     - and again in every later round, after its first part. */
+  const told = asked.findIndex((m) => m.some((x) => x.content.includes('"harness:instructions"') && x.content.includes('directive')));
   assert.ok(told > 0, "a directive's section came as a message");
   const later = asked.slice(told + 1).filter((m, i, all) => i === 0 || m[1]?.content !== all[i - 1][1]?.content);
-  assert.ok(later.length > 0 && later.every((m) => m.slice(2).some((x) => x.content.includes('"instructions_added"'))), 'and again in every later round');
+  assert.ok(later.length > 0 && later.every((m) => m.slice(2).some((x) => x.content.includes('"harness:instructions"'))), 'and again in every later round');
 });
 
 test('a focus sent during the run rewrites no earlier message: the new instructions come as a message, the system prompt stays', async () => {
@@ -107,7 +108,7 @@ test('a focus sent during the run rewrites no earlier message: the new instructi
     root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, onJournal: (f) => { journal = f; }, fetch: junior });
   assert.equal(new Set(asked.map((m) => m[0].content)).size, 1, 'its system prompt never changed');
   assert.ok(!asked[0][0].content.includes(cellsFocusLine('even')!));
-  const at = asked.findIndex((m) => m.some((x) => x.content.includes('"instructions_now"')));
+  const at = asked.findIndex((m) => m.some((x) => x.content.includes('"harness:instructions"') && x.content.includes('"now"')));
   assert.ok(at > 0 && JSON.stringify(asked[at]).includes(JSON.stringify(cellsFocusLine('even')!).slice(1, -1)), 'the focused instructions came as a message');
   for (let i = 1; i < asked.length; i++) if (asked[i][1]?.content === asked[i - 1][1]?.content) assert.equal(prefixIssue(asked[i - 1], asked[i]), null, 'question ' + i);
 });

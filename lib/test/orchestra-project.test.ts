@@ -7,7 +7,7 @@ import { projectFiles, projectStatus, runProject, sendProject, compileCriterion,
 import { generateScene, type SceneSpec } from '../src/worlds/particles3d/scene.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
-import { userOf } from './support.ts';
+import { heardOf, userOf } from './support.ts';
 
 
 /* SPEC-ORQUESTADOR R3, R3b, R4: the project planner - its loop to a computable criterion, the operator's approvals,
@@ -52,7 +52,7 @@ function world(llmCalls: { n: number } = { n: 0 }): FetchLike {
     const b = JSON.parse(String(init.body));
     const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
-    const law = user.operator_messages || 'steps_left' in user ? knownLaw(generateScene(1, 1, 'A')) : NAIVE;
+    const law = heardOf(user).length || 'steps_left' in user ? knownLaw(generateScene(1, 1, 'A')) : NAIVE;
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
       : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'test whether the acceleration depends on where a column is' }
       : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: law, validate: true,

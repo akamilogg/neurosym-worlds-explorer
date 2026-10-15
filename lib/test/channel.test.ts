@@ -175,7 +175,7 @@ test('a run: it pins its own task list and a text, and they reach it every round
   const without: Message[][] = [];
   const counting: FetchLike = async (u, init) => { without.push(JSON.parse(String(init.body)).messages); return answers(u, init); };
   await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--no-pins', '--out', path.join(dir, 'nopins.json')], root: dir, llm, fetch: counting });
-  assert.ok(without.every((m) => !m[0].content.includes(PINS_SECTION) && parts(m).every((p) => !p.channel?.pinned)));
+  assert.ok(without.every((m) => !m[0].content.includes(PINS_SECTION) && parts(m).every((p) => !(p.channel?.pinned ?? []).some((x: any) => x.from === 'self'))), 'nothing of its own pinned');
 });
 
 /* --- Step 3: the world publishes; the finding keeps the chain (SPEC-CANAL-MENSAJES §5, plan step 3). */

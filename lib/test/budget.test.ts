@@ -16,8 +16,12 @@ import type { FetchLike } from '../src/core/net.ts';
 type Message = { role: string; content: string };
 const llm = { url: 'http://system2.test/chat', model: 'stand-in' };
 const parts = (m: Message[]): Record<string, any>[] => m.slice(1).map((x) => { try { return JSON.parse(x.content); } catch { return {}; } });
-/** The counters as they stand at a question: the latest part that carries them. */
-const latest = (m: Message[]): Record<string, any> => [...parts(m)].reverse().find((p) => 'rounds_left' in p) ?? {};
+/** The budget as it stands at a question: pinned in its channel (SPEC-CANAL-MENSAJES), the latest value - or, where there
+    is no channel (the grid, until it has one), the latest part whose counters carry it. */
+const latest = (m: Message[]): Record<string, any> => {
+  const pinned = parts(m).flatMap((p) => p.channel?.pinned ?? []).filter((x: any) => x.key === 'harness:budget');
+  return pinned.length ? pinned[pinned.length - 1].value : [...parts(m)].reverse().find((p) => 'rounds_left' in p) ?? {};
+};
 
 /** The junior standing in: it looks once a round, then proposes the same model. */
 function junior(asked: Message[][], hook: (n: number) => void = () => {}): FetchLike {

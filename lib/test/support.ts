@@ -115,8 +115,16 @@ export function userOf(body: { messages: { role: string; content: string }[] }):
     let part: Record<string, unknown>;
     try { part = JSON.parse(text); } catch { return users[users.length - 1]; }
     /* A step goes back into `investigation`; what else a part carries (the counters after it) is the latest. */
-    const { investigation_step: step, operator_messages: said, ...rest } = part as Record<string, any>;
+    const { investigation_step: step, operator_messages: said, channel, ...rest } = part as Record<string, any>;
     if (step !== undefined) ((merged.investigation ??= []) as unknown[]).push(step);
+    /* The channel (SPEC-CANAL-MENSAJES), as it reached it in the round: every notice, and each pinned message by its key with
+       its latest value. */
+    if (channel) {
+      const c = (merged.channel ??= { notices: [], pinned: {} }) as { notices: unknown[]; pinned: Record<string, unknown> };
+      c.notices.push(...(channel.notices ?? []));
+      for (const p of channel.pinned ?? []) c.pinned[p.key] = p.value;
+      for (const k of channel.unpinned ?? []) delete c.pinned[k];
+    }
     /* The operator's messages, where they arrived in the round: all of them, the new and the earlier. */
     if (said) {
       const all = (merged.operator_messages ??= { new: [], earlier: [] }) as { new: unknown[]; earlier: unknown[] };
@@ -132,3 +140,16 @@ export function payloadOf(user: unknown): Record<string, any> {
   const parts = user && typeof user === 'object' && Array.isArray((user as { parts?: unknown }).parts) ? (user as { parts: unknown[] }).parts : [user];
   return JSON.parse(userOf({ messages: parts.map((p) => ({ role: 'user', content: JSON.stringify(p) })) }));
 }
+
+/** What the operator and the agents told it in a question (merged by `userOf`), through its channel (SPEC-CANAL-MENSAJES):
+    their notices, then the directives pinned - each as the message it was. */
+export function heardOf(user: Record<string, any>): Record<string, any>[] {
+  const c = user?.channel;
+  if (!c) return [];
+  const notices = (c.notices ?? []).filter((n: any) => n.from === 'operator' || String(n.from).startsWith('agent:')).map((n: any) => n.body);
+  const directives = Object.entries(c.pinned ?? {}).filter(([k]) => /:directive:/.test(k)).map(([, v]) => v as Record<string, any>);
+  return [...notices, ...directives];
+}
+
+/** The operator's task as its channel holds it, pinned (or null). */
+export const taskOf = (user: Record<string, any>): string | null => (user?.channel?.pinned?.['operator:task'] as string | undefined) ?? null;

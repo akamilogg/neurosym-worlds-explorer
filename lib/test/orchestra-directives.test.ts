@@ -10,7 +10,7 @@ import { cellsLab } from '../src/worlds/cells/lab.ts';
 import { agentFile, runAgentOperator } from '../src/orchestra/agent-operator.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
-import { userOf } from './support.ts';
+import { heardOf, userOf } from './support.ts';
 
 /* SPEC-ORQUESTADOR §3.3.3: the senior's messages are DIRECTIVES - orders the junior carries out and reports, saying where it
    disagrees; a proposal made while one is open is returned to it once; the senior reads what it reported. */
@@ -48,7 +48,7 @@ function junior(asked: Record<string, any>[]): FetchLike {
     const returned = JSON.stringify(user).includes('directives are still open');
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
       : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'same', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
-      : returned ? PROPOSAL({ beliefs: [{ id: 'same', stance: 'new', statement: 'the row repeats' }], directives: [{ id: user.operator_messages?.new?.[0]?.id ?? user.operator_messages?.earlier?.[0]?.id, done: 'tested it' }], to_senior: 'it did not hold' })
+      : returned ? PROPOSAL({ beliefs: [{ id: 'same', stance: 'new', statement: 'the row repeats' }], directives: [{ id: heardOf(user).find((m) => m.directive)?.id, done: 'tested it' }], to_senior: 'it did not hold' })
       : PROPOSAL();
     const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
     return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
@@ -118,8 +118,8 @@ test('the opening: the run waits for its senior, whose first hypothesis goes wit
   assert.ok(types.indexOf('awaiting_opening') > types.lastIndexOf('exploration_episode'), 'after the first episodes');
   assert.ok(types.indexOf('opening_received') < types.indexOf('operator_message'));
   const first = asked[0].user;
-  assert.equal(first.operator_messages.new[0].directive, true, 'its very first question carries it, as an order');
-  assert.match(first.operator_messages.new[0].text, /copies its left neighbour/);
+  assert.equal(heardOf(first)[0].directive, true, 'its very first question carries it, as an order (pinned in its channel until it reports it)');
+  assert.match(heardOf(first)[0].text, /copies its left neighbour/);
   assert.match(JSON.stringify(seniorAsked[0]), /"opening"/, 'the senior is told it opens');
   const record = JSON.parse(fs.readFileSync(agentFile(out, 'senior'), 'utf8'));
   assert.equal(record.decisions[0].opening, true);
@@ -132,7 +132,7 @@ test('the opening never comes: the run waits as long as it was told, then the ju
     '--agents', 'senior=message', '--opening', 'senior', '--opening-minutes', '0.005', '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior(asked) });
   const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
   assert.ok(events.some((e) => e.type === 'opening_missing'));
-  assert.equal(asked[0].user.operator_messages, undefined);
+  assert.deepEqual(heardOf(asked[0].user), []);
 });
 
 test('the senior reads the junior\'s whole model and its methods in each round: its code, what it asks the Judge, its output', async () => {

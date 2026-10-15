@@ -925,6 +925,17 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The researcher's channel (SPEC-CANAL-MENSAJES): the assisted researcher's, in a run that starts with it. */
   const channelOn = run.journal.researcher === 'assisted' && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.channel === 0;
   const channel = new Channel(run.log);
+  /* The channel is the assisted researcher's from its first question (after a hand-over, from then): its budget is pinned by
+     the harness then, read as it stands when delivered (SPEC-INVESTIGADOR-ASISTIDO §15). */
+  let channelOpened = false;
+  const channelNow = (): Channel | null => {
+    if (!channelOn || !helping) return null;
+    if (!channelOpened) {
+      channelOpened = true;
+      if (run.services.budget) channel.publish('harness', { kind: 'pinned', key: 'budget', body: () => run.services.budget!(attemptNow, roundsAt(cfg, attemptNow)) });
+    }
+    return channel;
+  };
   /* What it pins itself, with --no-pins the condition without. */
   const pinning = (): boolean => channelOn && helping && (cfg as { pins?: boolean }).pins !== false;
   const applyPins = (ops: readonly PinOp[]): string[] => {
@@ -947,7 +958,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     return warnings;
   };
   const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, episodeOf: (id: string) => episodes.get(id)?.data,
-    ...(channelOn ? { publish: (m: ChannelPublication) => { channel.publish('world', m); } } : {}) };
+    ...(channelOn ? { publish: (m: ChannelPublication) => { channelNow()?.publish('world', m); } } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
   if (assistedAfter !== null) journal.assisted_after_attempts = assistedAfter;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
@@ -1330,10 +1341,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): the assisted researcher, in the rounds this code reviews. */
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
     /* Its visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the assisted researcher's, once it is helped. */
-    channel: (at) => (channelOn && helping ? channel.deliver(at) : null),
     /* What it pins itself (SPEC-CANAL-MENSAJES §6): a document in its latest version, a notice it received, or a text. */
     pins: () => (pinning() ? { apply: (round: number, ops: readonly PinOp[]) => applyPins(ops) } : null),
-    budget: () => (run.services.budget && journal.researcher === 'assisted' && helping ? run.services.budget(attemptNow, roundsAt(cfg, attemptNow)) : {}),
+    /* Its budget: pinned in its channel when it has one (below), else counters with its others. */
+    budget: () => (run.services.budget && journal.researcher === 'assisted' && helping && !channelOn ? run.services.budget(attemptNow, roundsAt(cfg, attemptNow)) : {}),
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
     instruments: () => (journal.researcher === 'assisted' && helping && reviewing && instrumenting() ? instruments : null),
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
@@ -1482,6 +1493,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
         + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '') : promptFor(focus)),
       task: () => (helping ? task : null),
+      /* Its channel (SPEC-CANAL-MENSAJES): the client delivers it, and everything it placed itself goes through it. */
+      ...(channelOn ? { messages: channelNow } : {}),
       /* Its conversation only grows: its system prompt fixed from its first question, what changes added as messages. */
       fixedSystem: () => helping && cfg.capabilities_from?.fixed_system === 0,
       /* A focus is applied when it is delivered: the checks from here on are of the new facet, from a fresh stage. */
@@ -1650,7 +1663,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
           log('artifact_accepted', accepted);
           say('  ARTIFACT ACCEPTED: ' + record.artifact);
           /* A fact of the world's verdict, published in the researcher's channel (SPEC-CANAL-MENSAJES §5). */
-          if (channelOn) channel.publish('world', { kind: 'notice', body: { artifact_accepted: accepted } });
+          channelNow()?.publish('world', { kind: 'notice', body: { artifact_accepted: accepted } });
         }
       }
       protocol.lastView = { ...(protocol.lastView ?? {}), artifact: told };

@@ -266,5 +266,46 @@ que empieza con la capacidad `channel`. El de mundo desconocido no tiene canal.
   - El aviso de cada una abre la ronda siguiente, con autor `world`.
   - El finding da la segunda como producto y la cadena completa.
 
-**Siguiente:** paso 4, migrar lo que hay (§7) — presupuesto, tarea, fuentes, instrucciones, mensajes del operador y
-directivas.
+### 13.4 Paso 4: lo que había pasa por el canal (15/10/2026)
+
+**Quién entrega.** El canal lo entrega ahora el cliente del junior (`operatorClient`), no la sesión.
+- Ese cliente ya era por donde pasaba todo lo del operador. Recibe el canal (`OperatorChannel.messages`) y deja de
+  colocar nada por su cuenta.
+- La sesión de los mundos de leyes ya no tiene gancho propio (`LawSessionHost.channel`, del paso 1, se retira).
+- La cuadrícula, que pregunta por el mismo cliente, lo tendrá con sólo darle un canal (paso 5).
+
+**Qué se publica:**
+
+| Antes | Ahora |
+|---|---|
+| `operator_messages.new` | un aviso del operador o del agente (su mensaje tal cual) |
+| `operator_messages.earlier`, repetidos cada ronda | nada: están en su historia y su memoria; si quiere uno presente, lo fija |
+| una directiva | fijada por su agente (`agent:<id>:directive:<id>`) hasta que la rinde; entonces se retira |
+| `operator_task` en la primera parte | fijado `operator:task` (y retirado si deja de haber tarea) |
+| `sources.origins` en la primera parte | fijado `harness:sources` |
+| `instructions_added` / `instructions_now` | fijado `harness:instructions`: lo añadido, o el prompt entero tras un foco |
+| `rounds_left` / `help_left` entre los contadores | fijado `harness:budget`, leído al entregarse |
+
+**Sin cambios:** los contadores de la ronda (`steps_left`, `acts_left`, `memory_answers_left`) siguen en las partes de
+la conversación, y el diario sigue registrando `operator_message` con su pregunta (para la reanudación y para contar la
+ayuda).
+
+**El canal es del investigador asistido desde que ayuda.** En una continuación que pasa del investigador de mundo
+desconocido al asistido:
+- el canal se abre en el relevo, y el presupuesto se fija entonces;
+- hasta ese momento no se publica ni se entrega nada.
+
+Así, el historial que se repite es el que vivió el otro investigador.
+
+**Los diarios hechos antes** (sin la capacidad `channel`) siguen por el camino de antes, que se conserva tal cual.
+
+**Pruebas.** Las que leían las formas antiguas leen ahora el canal. `test/support.ts` junta las partes del canal en
+`user.channel` y da dos ayudantes:
+- `heardOf`: los avisos del operador y de los agentes, y las directivas fijadas;
+- `taskOf`: la tarea fijada.
+
+Se adaptaron `assisted`, `focus`, `append-only`, `budget`, `channel`, `orchestra-directives`, `orchestra-senior`,
+`orchestra-project` y `sources`. Las pruebas de continuación (`continuation`, `review`) encontraron el fallo del relevo,
+ya corregido.
+
+**Siguiente:** paso 5, la cuadrícula.

@@ -116,6 +116,11 @@ export interface OperatorChannel {
       Off: the system prompt is rewritten (journals made before, replayed as they were). While it returns false (the
       unknown-world researcher's rounds, before a hand-over) nothing is fixed yet. */
   fixedSystem?(): boolean;
+  /** The researcher's channel (SPEC-CANAL-MENSAJES): when there is one, all this client used to place on its own goes
+      through it - the operator's and the agents' messages as notices (a directive pinned until it is reported), the task and
+      the sources' origins pinned, what changes of its instructions pinned - and this client delivers it, in a part added
+      to the question. Absent, or null now (before a hand-over): as before it (journals made before, replayed as they were). */
+  messages?(): import('./channel.ts').Channel | null;
   /** What the operator wants understood, if they said: sent with every question as `operator_task`. */
   task?(): string | null;
   /** Told of each message as it is delivered, with its question (a focus is applied, a source read, then). */
@@ -170,8 +175,10 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
   /* With the system prompt fixed: the one kept, the latest it would have been, and what was added since as messages. */
   let fixedPrompt: string | null = null, lastPrompt = '';
   let announced: Record<string, unknown>[] = [];
+  /* With a channel: what of the task and the origins is pinned now. */
+  let pinnedTask: string | null = null, pinnedOrigins = '';
   const lastScheduled = Math.max(0, ...(channel.scheduled ? [...channel.scheduled.keys()] : []));
-  return {
+  const client: OperatorClient = {
     openDirectives: () => [...open.values()],
     async complete(request) {
       question++;
@@ -182,6 +189,46 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       for (const m of fresh) await channel.onDeliver?.(m, question);
       const task = channel.task?.() ?? null;
       const origins = channel.sources?.origins() ?? [];
+      const ch = channel.messages?.() ?? null;
+      if (ch) {
+        /* Everything goes through the channel: messages, task, origins, instructions; then it delivers. */
+        for (const m of fresh) {
+          const author = (m.by?.startsWith('agent:') ? m.by : 'operator') as 'operator';
+          if (m.directive) { open.set(m.id, { ...m, ...(channel.round ? { round: channel.round() } : {}) }); directed = true; ch.publish(author, { kind: 'pinned', key: 'directive:' + m.id, body: m }); }
+          else ch.publish(author, { kind: 'notice', body: m });
+        }
+        if (task !== pinnedTask) { ch.publish('operator', task ? { kind: 'pinned', key: 'task', body: task } : { kind: 'pinned', key: 'task', unpin: true }); pinnedTask = task; }
+        const originsNow = origins.join('|');
+        if (originsNow !== pinnedOrigins) { ch.publish('harness', { kind: 'pinned', key: 'sources', body: { origins } }); pinnedOrigins = originsNow; }
+        const base = channel.system ? channel.system() : request.system;
+        const wanted = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '');
+        if (fixedPrompt === null) fixedPrompt = lastPrompt = wanted;
+        else if (wanted !== lastPrompt) {
+          /* What changed of its instructions: what was added at the end, or (a focus rewrites the interface) all of it now - pinned. */
+          if (wanted.startsWith(lastPrompt)) announced.push({ added: wanted.slice(lastPrompt.length).trim() }); else announced = [{ now: wanted }];
+          lastPrompt = wanted;
+          ch.publish('harness', { kind: 'pinned', key: 'instructions', body: [...announced] });
+        }
+        let user: unknown = request.user;
+        if (request.user instanceof UserParts) {
+          const parts = request.user.parts as Record<string, unknown>[];
+          const key = JSON.stringify(parts[0]);
+          const opening = key !== roundKey;
+          if (opening) { roundKey = key; placed = []; }
+          const part = ch.deliver({ round: channel.round?.() ?? 0, question, opening });
+          if (part) placed.push({ after: parts.length, part });
+          const out: unknown[] = [];
+          parts.forEach((p, i) => { out.push(p); for (const x of placed) if (x.after === i + 1) out.push(x.part); });
+          user = new UserParts(out);
+        } else {
+          roundKey = '';
+          const part = ch.deliver({ round: channel.round?.() ?? 0, question, opening: true });
+          if (part && user && typeof user === 'object' && !Array.isArray(user)) user = { ...(user as Record<string, unknown>), ...part };
+        }
+        const answer = await llm.complete({ ...request, system: fixedPrompt, user });
+        report(answer.content);
+        return answer;
+      }
       const standing = { ...(task ? { operator_task: task } : {}), ...(origins.length ? { sources: { origins } } : {}) };
       let user: unknown;
       if (request.user instanceof UserParts) {
@@ -218,21 +265,28 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
         system = fixedPrompt;
       } else fixedPrompt = null;
       const answer = await llm.complete({ ...request, system, user });
-      /* What it reports to its senior, in any answer: kept for the senior, and a directive carried out is closed. */
-      const said = parseJsonLoose(answer.content) as Record<string, unknown> | null;
-      if (said && typeof said === 'object') {
-        if (typeof said.to_senior === 'string' && said.to_senior.trim()) log('junior_report', { question, text: said.to_senior.trim() });
-        for (const r of instrumentReports(said)) log('instrument_report', { question, ...(channel.round ? { round: channel.round() } : {}), id: 'ir' + (++reported), by: 'junior', ...r });
-        for (const d of (Array.isArray(said.directives) ? said.directives : []) as Record<string, unknown>[]) {
-          const id = typeof d?.id === 'string' ? d.id : '';
-          if (!id) continue;
-          log('directive_report', { question, id, ...(typeof d.done === 'string' ? { done: d.done } : {}), ...(open.has(id) ? {} : { not_open: true }) });
-          open.delete(id);
-        }
-      }
+      report(answer.content);
       return answer;
     }
   };
+  return client;
+  /** What it reports to its senior, in any answer: kept for the senior, and a directive carried out is closed. */
+  function report(content: string): void {
+    const said = parseJsonLoose(content) as Record<string, unknown> | null;
+    if (said && typeof said === 'object') {
+      if (typeof said.to_senior === 'string' && said.to_senior.trim()) log('junior_report', { question, text: said.to_senior.trim() });
+      for (const r of instrumentReports(said)) log('instrument_report', { question, ...(channel.round ? { round: channel.round() } : {}), id: 'ir' + (++reported), by: 'junior', ...r });
+      for (const d of (Array.isArray(said.directives) ? said.directives : []) as Record<string, unknown>[]) {
+        const id = typeof d?.id === 'string' ? d.id : '';
+        if (!id) continue;
+        log('directive_report', { question, id, ...(typeof d.done === 'string' ? { done: d.done } : {}), ...(open.has(id) ? {} : { not_open: true }) });
+        const was = open.get(id);
+        open.delete(id);
+        /* Reported: no longer pinned in its channel. */
+        if (was && channel.messages?.()) channel.messages()!.publish((was.by?.startsWith('agent:') ? was.by : 'operator') as 'operator', { kind: 'pinned', key: 'directive:' + id, unpin: true });
+      }
+    }
+  }
 }
 
 /** The assisted researcher's session: the shared session with its own prompt and its own client (nothing of it changes). */

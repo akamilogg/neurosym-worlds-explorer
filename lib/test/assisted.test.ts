@@ -13,7 +13,7 @@ import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import { system2Prompt } from '../src/learn/prompt.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
-import { userOf } from './support.ts';
+import { heardOf, userOf } from './support.ts';
 
 
 /* SPEC-INVESTIGADOR-ASISTIDO A4: the assisted researcher - its own prompt, the operator's messages with its questions. */
@@ -64,7 +64,7 @@ function system2(asked: Record<string, any>[], hook: (n: number) => void = () =>
     const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     if (!sys.startsWith('You grade')) { asked.push({ system: sys, user }); hook(asked.length); }
-    const cited = user.operator_messages ? [...user.operator_messages.earlier, ...user.operator_messages.new].map((m: { id: string }) => 'operator:' + m.id) : [];
+    const cited = [...(user.operator_messages ? [...user.operator_messages.earlier, ...user.operator_messages.new] : []), ...heardOf(user)].map((m: { id: string }) => 'operator:' + m.id);
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
       : /"task"/.test(raw) ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'confirm', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
       : !user.investigation && user.round % 2 === 1 ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }
@@ -84,10 +84,11 @@ test('an assisted run: a message sent while it goes reaches the next question, a
     fetch: system2(asked, (n) => { if (n === 2) send(journal, { kind: 'message', text: 'look at step 0', by: 'operator' }); }) });
   assert.equal(r.researcherUsed, 'assisted');
   assert.ok(asked.every((q) => q.system.includes(ASSISTED_SECTION) && q.system.includes(INSTRUMENT_SECTION) && q.system.includes('TESTS OF YOUR OWN')), 'its own prompt');
-  assert.equal(asked[0].user.operator_messages, undefined);
-  const first = asked.findIndex((q) => q.user.operator_messages);
+  /* Through its channel (SPEC-CANAL-MENSAJES): a notice of the operator's. */
+  assert.deepEqual(heardOf(asked[0].user), []);
+  const first = asked.findIndex((q) => heardOf(q.user).length);
   assert.equal(first, 2, 'read before the third question, delivered with it');
-  assert.equal(asked[first].user.operator_messages.new[0].text, 'look at step 0');
+  assert.equal(heardOf(asked[first].user)[0].text, 'look at step 0');
   const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events;
   assert.equal(events.find((e: { type: string }) => e.type === 'operator_command').accepted, true);
   assert.equal(events.find((e: { type: string }) => e.type === 'operator_message').question, 3);

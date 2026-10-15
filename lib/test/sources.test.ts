@@ -95,7 +95,8 @@ function system2(asked: { system: string; user: Record<string, any> }[] = [], ho
     const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
     if (!sys.startsWith('You grade')) { asked.push({ system: sys, user }); hook(asked.length); }
-    const origins: string[] = user.sources?.origins ?? [];
+    /* The origins, pinned by the harness in its channel (SPEC-CANAL-MENSAJES). */
+    const origins: string[] = user.channel?.pinned?.['harness:sources']?.origins ?? user.sources?.origins ?? [];
     const inv: Record<string, any>[] = user.investigation ?? [];
     const doc = inv[0]?.results?.[0]?.documents?.find((d: string) => d.endsWith('notes.md')) ?? origins[0];
     const stance = user.round === 1 ? 'new' : 'revise';
@@ -122,7 +123,7 @@ test('--sources-allow: it lists, opens and finds by itself and cites what it rea
   const asked: { system: string; user: Record<string, any> }[] = [];
   const r = await runLaboratory(cellsLab, { args: [...ARGS, '--sources-allow', 'lib', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch: system2(asked) });
   assert.notEqual(r.stoppedBy, 'accepted', 'the source proposes, the world decides');
-  assert.ok(asked.every((q) => q.system.endsWith(SOURCES_SECTION) && q.user.sources.origins[0] === lib));
+  assert.ok(asked.every((q) => q.system.endsWith(SOURCES_SECTION) && q.user.channel.pinned['harness:sources'].origins[0] === lib));
   const inv = eventsOf(r.journal).filter((e) => e.type === 'investigation');
   assert.ok(inv[0].results[0].documents.includes(lib + '/notes.md'));
   assert.match(inv[1].results[0].text, /^1: # Notes on the cells/);

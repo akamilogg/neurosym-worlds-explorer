@@ -13,7 +13,7 @@ import { explorerSystem } from '../src/learn/explorer.ts';
 import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import type { ChatClient } from '../src/learn/system2.ts';
 import type { FetchLike } from '../src/core/net.ts';
-import { payloadOf, userOf } from './support.ts';
+import { heardOf, payloadOf, userOf } from './support.ts';
 
 
 /* SPEC-ORQUESTADOR §3.3: the senior - it reads the junior's record (exactly what the junior saw) when the junior is stuck,
@@ -170,7 +170,7 @@ test('the senior is called during a round in which the junior only looks, and it
     const b = JSON.parse(String(init.body));
     const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
-    const told = Boolean(user.operator_messages?.new?.length || user.operator_messages?.earlier?.length);
+    const told = heardOf(user).length > 0;
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
       : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'same', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
       : user.round >= 2 && !told ? { investigate: [{ view: 'ep1', from: 0, to: 3 }] }
@@ -269,7 +269,7 @@ test('the senior follows up its message within the round: the junior ran the exp
     const b = JSON.parse(String(init.body));
     const sys = b.messages[0].content as string, raw = userOf(b);
     const user = sys.startsWith('You grade') ? {} : JSON.parse(raw);
-    const heard = [...(user.operator_messages?.earlier ?? []), ...(user.operator_messages?.new ?? [])].length;
+    const heard = heardOf(user).length;
     const tabled = (user.investigation ?? []).some((s: { requests: Record<string, unknown>[] }) => s.requests.some((q) => 'table' in q));
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
       : 'task' in user ? { rationale: 'r', beliefs: [{ id: 'same', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }

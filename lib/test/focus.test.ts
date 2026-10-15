@@ -10,7 +10,7 @@ import { cellsInterface } from '../src/worlds/cells/interface.ts';
 import { cellsFocusLine, differences } from '../src/worlds/cells/objective.ts';
 import { generateCells, stepCells } from '../src/worlds/cells/world.ts';
 import type { FetchLike } from '../src/core/net.ts';
-import { userOf } from './support.ts';
+import { heardOf, taskOf, userOf } from './support.ts';
 
 
 /* SPEC-INVESTIGADOR-ASISTIDO A5: a FACET of the task - what of the answer counts - at the start (either researcher) and,
@@ -99,13 +99,14 @@ test('assisted: a task goes with every question; a focus sent during the run is 
     onJournal: (f) => { journal = f; },
     fetch: system2(asked, (n) => { if (n === 2) { send(journal, { kind: 'focus', facet: 'middle', by: 'operator' }); send(journal, { kind: 'focus', facet: 'even', task: 'the even layer', by: 'operator' }); } }) });
   assert.equal(r.stoppedBy, 'accepted');
-  assert.ok(asked.every((q) => q.user.operator_task), 'the task, with every question');
-  assert.equal(asked[0].user.operator_task, 'how the even cells change');
+  /* The task pinned in its channel (SPEC-CANAL-MENSAJES): with every question, in its value then. */
+  assert.ok(asked.every((q) => taskOf(q.user)), 'the task, with every question');
+  assert.equal(taskOf(asked[0].user), 'how the even cells change');
   /* Its system prompt is never rewritten (test/append-only.test.ts): what counts now comes as a message, with the question it went with. */
   assert.ok(!asked[1].system.includes('WHAT COUNTS') && asked[2].system === asked[1].system, 'the system prompt stays');
-  assert.ok(!JSON.stringify(asked[1].user).includes('WHAT COUNTS') && JSON.stringify(asked[2].user.instructions_now).includes(JSON.stringify(cellsFocusLine('even')!).slice(1, -1)), 'what counts, from the question it went with');
-  assert.equal(asked[2].user.operator_task, 'the even layer');
-  assert.match(asked[2].user.operator_messages.new[0].text, /facet "even"/);
+  assert.ok(!JSON.stringify(asked[1].user).includes('WHAT COUNTS') && JSON.stringify(asked[2].user.channel.pinned['harness:instructions']).includes(JSON.stringify(cellsFocusLine('even')!).slice(1, -1)), 'what counts, from the question it went with');
+  assert.equal(taskOf(asked[2].user), 'the even layer');
+  assert.match(heardOf(asked[2].user)[0].text, /facet "even"/);
   const events = eventsOf(r.journal);
   assert.match(events.find((e) => e.type === 'operator_command_refused')!.reason, /no facet "middle"/);
   assert.deepEqual(events.filter((e) => e.type === 'focus_changed').map(({ t: _t, ...e }) => e), [{ type: 'focus_changed', question: 3, facet: 'even', task: 'the even layer' }]);
