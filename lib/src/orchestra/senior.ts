@@ -34,10 +34,10 @@ export interface SeniorState {
   called_in_round: number[];
   /** The junior's reports (directives carried out, disagreements) already given to it. */
   reports_seen?: number;
-  /** Its channel (SPEC-CANAL-MENSAJES §9): what it pinned (to pin it again in a run resumed), and how many of the notices
-      the environment gave the junior it has been given. */
+  /** Its channel (SPEC-CANAL-MENSAJES §9): what it pinned (to pin it again in a run resumed), and how many of the deliveries
+      to the junior's channel it has mirrored. */
   pins?: import('../learn/assisted/channel.ts').PinOp[];
-  notices_seen?: number;
+  deliveries_seen?: number;
 }
 
 export const emptySeniorState = (): SeniorState => ({ notebook: { beliefs: [], notes: [], methods: [] }, conversation: [], since: 0, consolidations: 0, followed_up: [], called_in_round: [] });

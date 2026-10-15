@@ -84,8 +84,7 @@ test('it consolidates its conversation itself; grown too long, it is asked to', 
   assert.equal(after[1].consolidated.summary, 'three checks failed alike');
   assert.equal(after[1].consolidated.kept_steps[0].step, 'd1.1', 'with the steps it kept');
   assert.ok(after[2].call, 'and why it was called');
-  assert.ok(after[3].channel?.about, 'its channel, given again from the start (SPEC-CANAL-MENSAJES §9)');
-  assert.equal(after.length, 4, 'the rest is gone from it');
+  assert.equal(after.length, 3, 'the rest is gone from it');
 
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-mem-'));
   const out2 = journal(dir2, 'run', [check(1), check(2), check(3)]);
@@ -175,13 +174,14 @@ test('how large its conversation is: the provider\'s own count, when it gives on
   assert.match(JSON.stringify(calls[1].parts.at(-1)), /consolidate it now/, 'by the provider\'s count it was too long');
 });
 
-/* SPEC-CANAL-MENSAJES §9: the senior as a second recipient of the channel. */
-test('its channel: the environment\'s notices to the junior, once; the junior\'s budget pinned; a note it pins, at its next call - and pinned again in a run resumed', async () => {
+/* SPEC-CANAL-MENSAJES §9: the senior's channel mirrors the junior's - everything the junior was told between its answers,
+   as it was delivered (its journal's `channel_delivered`), with nothing chosen on the way; and what it pins itself. */
+test('its channel mirrors the junior: the task, the messages, the budget, the environment notices, as delivered - a notice once; a note it pins, at its next call', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'senior-channel-'));
-  const accepted = { type: 'channel_published', from: 'world', kind: 'notice', id: 'm1', body: { artifact_accepted: { version: 'v1', round: 2 } } };
-  const out = journal(dir, 'run', [check(1), check(2), accepted, check(3)]);
-  const j = JSON.parse(fs.readFileSync(out, 'utf8'));
-  fs.writeFileSync(out, JSON.stringify({ ...j, config: { attempts: 8, task: 'Make it run below O(n^2).' }, help_budget: 3 }));
+  const delivered = (round: number, part: Record<string, unknown>) => ({ type: 'channel_delivered', round, question: round * 2, opening: true, delivered: part });
+  const first = delivered(1, { pinned: [{ key: 'operator:task', from: 'operator', value: 'Make it run below O(n^2).' }, { key: 'harness:budget', from: 'harness', value: { rounds_left: 8 } }] });
+  const second = delivered(2, { pinned: [{ key: 'harness:budget', from: 'harness', value: { rounds_left: 7 } }], notices: [{ id: 'm1', from: 'world', body: { artifact_accepted: { version: 'v1', round: 1 } } }, { id: 'm2', from: 'operator', body: { id: 'o1', text: 'look at the sorted values' } }] });
+  const out = journal(dir, 'run', [first, check(1), second, check(2), check(3)]);
   const { calls, llm } = scripted((n) => n === 1 ? { notes: [{ do: 'write', id: 'plan', text: 'ask for the neighbours next' }], pins: [{ do: 'pin', id: 'plan', document: 'plan' }] }
     : { decision: 'wait', why: 'nothing yet' });
   const controller = new AbortController();
@@ -194,15 +194,16 @@ test('its channel: the environment\'s notices to the junior, once; the junior\'s
   controller.abort();
   await agent;
   const channelOf = (u: UserParts) => (u.parts as Record<string, any>[]).filter((p) => p.channel).map((p) => p.channel);
-  const first = channelOf(calls[0])[0];
-  assert.deepEqual(first.notices.map((n: any) => [n.from, n.body.artifact_accepted.version]), [['world', 'v1']], 'the environment\'s notice to the junior');
-  assert.deepEqual(first.pinned.find((p: any) => p.key === 'harness:junior_budget').value, { rounds_left: 6, help_left: 3 }, 'the junior\'s budget, from its journal');
-  assert.equal(first.pinned.find((p: any) => p.key === 'operator:task').value, 'Make it run below O(n^2).', 'the operator\'s task: the junior\'s, and so its own');
-  const second = channelOf(calls[1]).at(-1);
-  assert.equal(second.pinned.find((p: any) => p.key === 'self:plan').value.text, 'ask for the neighbours next', 'the note it pinned, at its next question');
+  const opening = channelOf(calls[0])[0];
+  const pinned = Object.fromEntries(opening.pinned.map((p: any) => [p.key, p.value]));
+  assert.equal(pinned['operator:task'], 'Make it run below O(n^2).', 'the operator task, as the junior was told it');
+  assert.deepEqual(pinned['harness:budget'], { rounds_left: 7 }, 'its budget, as it was last delivered');
+  assert.deepEqual(opening.notices.map((n: any) => n.from), ['world', 'operator'], 'the environment and the operator notices');
+  const second2 = channelOf(calls[1]).at(-1);
+  assert.equal(second2.pinned.find((p: any) => p.key === 'self:plan').value.text, 'ask for the neighbours next', 'the note it pinned, at its next question');
   assert.ok(!channelOf(calls[2]).slice(channelOf(calls[1]).length).some((c: any) => (c.notices ?? []).length), 'a notice once');
-  /* The conversation only grows. */
-  assert.deepEqual(calls[2].parts.slice(0, calls[1].parts.length), calls[1].parts);
+  assert.deepEqual(calls[2].parts.slice(0, calls[1].parts.length), calls[1].parts, 'its conversation only grows');
   const record = JSON.parse(fs.readFileSync(agentFile(out, 'senior'), 'utf8'));
   assert.deepEqual(record.senior.pins, [{ do: 'pin', id: 'plan', document: 'plan' }], 'kept for a run resumed');
+  assert.equal(record.senior.deliveries_seen, 2);
 });

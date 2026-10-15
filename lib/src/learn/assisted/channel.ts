@@ -71,6 +71,22 @@ export class Channel {
     return this.waiting.some((w) => w.id === id) ? null : this.notices.get(id) ?? null;
   }
 
+  /** Takes in, as they were, the deliveries of another researcher's channel (its journal's `channel_delivered`): its pinned
+      messages under their keys, its notices, what it took away. A senior's channel mirrors its junior's this way: everything
+      the junior is told between its answers reaches the senior too, with nothing chosen on the way. */
+  mirror(delivered: { readonly pinned?: readonly { key: string; from: string; value: unknown }[]; readonly unpinned?: readonly string[];
+    readonly notices?: readonly { id?: string; from: string; body: unknown }[] }, options: { readonly notices?: boolean } = {}): void {
+    for (const p of delivered.pinned ?? []) this.pins.set(p.key, { from: p.from, body: p.value });
+    for (const k of delivered.unpinned ?? []) this.pins.delete(k);
+    /* Rebuilding what is pinned (a channel made again, in a run resumed) gives no notice twice. */
+    if (options.notices === false) return;
+    for (const n of delivered.notices ?? []) {
+      const id = 'm' + (++this.seq);
+      this.waiting.push({ id, from: n.from, body: n.body });
+      this.notices.set(id, { from: n.from, body: n.body });
+    }
+  }
+
   /** What is pinned now: keys and authors. */
   pinned(): { key: string; from: string }[] { return [...this.pins].map(([key, p]) => ({ key, from: p.from })); }
 
@@ -91,9 +107,11 @@ export class Channel {
     for (const k of unpinned) this.given.delete(k);
     const notices = this.waiting.splice(0, this.waiting.length);
     if (!pinned.length && !unpinned.length && !notices.length) return null;
-    this.log('channel_delivered', { round: at.round, question: at.question, ...(notices.length ? { notices: notices.map((n) => n.id) } : {}),
-      ...(pinned.length ? { pinned: pinned.map((p) => p.key) } : {}), ...(unpinned.length ? { unpinned } : {}) });
-    return { channel: { ...(at.opening ? { about: CHANNEL_ABOUT } : {}), ...(pinned.length ? { pinned } : {}), ...(unpinned.length ? { unpinned } : {}), ...(notices.length ? { notices } : {}) } };
+    const part = { ...(pinned.length ? { pinned } : {}), ...(unpinned.length ? { unpinned } : {}), ...(notices.length ? { notices } : {}) };
+    /* What was delivered, whole: the record of what its researcher was told between its answers - what a senior, the
+       other half of the same researcher, is given as it was (SPEC-CANAL-MENSAJES §9). */
+    this.log('channel_delivered', { round: at.round, question: at.question, opening: at.opening, delivered: part });
+    return { channel: { ...(at.opening ? { about: CHANNEL_ABOUT } : {}), ...part } };
   }
 }
 

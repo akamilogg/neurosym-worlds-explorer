@@ -113,7 +113,8 @@ test('an assisted run cut and resumed receives each message at the same question
   const strip = (f: string) => JSON.parse(fs.readFileSync(f, 'utf8')).events.filter((e: { type: string }) => !['start', 'end', 'operator_command'].includes(e.type))
     .map(({ t: _t, ...e }: Record<string, any>) => (e.type === 'operator_message' ? { ...e, messages: e.messages.map(({ at: _a, ...m }: Record<string, unknown>) => m) } : e));
   /* ...and for the order's id: each of the two runs was sent a message of its own (same text, same question). */
-  const same = (f: string) => JSON.stringify(strip(f)).replace(/order-[a-z0-9]+-\d+-\d+/g, 'order');
+  /* (What its channel delivered holds the messages whole, with their time: dropped the same way.) */
+  const same = (f: string) => JSON.stringify(strip(f)).replace(/order-[a-z0-9]+-\d+-\d+/g, 'order').replace(/"at":"[^"]*",?/g, '');
   assert.equal(same(resumed.journal), same(whole.journal));
   assert.deepEqual(resumed.finding.assistance!.messages.map((m) => m.question), [3]);
 });

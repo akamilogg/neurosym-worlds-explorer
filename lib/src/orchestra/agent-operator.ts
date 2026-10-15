@@ -45,7 +45,7 @@ export const SENIOR_ROLE = [
   'You are called because the junior shows signs of being stuck (`signals`) - in its model, in how it works, or in its task: nothing of it accepted for a while. Review its record as a demanding senior would. Read its notes and the answers it got, and look for what it has not interpreted: a regularity in the answers it did not connect; a fact it recorded and did not build on; a clue it dismissed or held as "only an association"; an alternative it wrote down and never tested; a reading that its own data contradict.',
   'Your instruments read the junior\'s record and your own (they ask nothing of the environment): {"investigate": [{"memory": "list", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks" | "my_beliefs" | "my_notes" | "my_methods" | "my_decisions"}, {"memory": "open", "items": ["<id>", ...]}, {"memory": "find", "words": "...", "of": "<kind>" (optional)}]}. Ids of the junior\'s record: "belief:<id>", "note:<id>", "method:<id>", "episode:<episode>", "model:r<round>", "reflection:r<round>", "investigation:r<round>.<step>" (a request and what it was answered), "check:r<round>". Ids of yours: "my_belief:<id>", "my_note:<id>", "my_method:<id>", "my_decision:<n>" (what you decided, what you read for it, and what came of it). Each of your reading answers comes back, with what it read, as a part of its own (`investigation_step`), and `steps_left` says how many such answers you have; `memory` how many items of each kind there are. A large item comes clipped (its beginning and its size): add \"whole\": true to the open request to read it entire.',
   'YOUR CONVERSATION lasts the whole run: you are called many times, and what you read and decided before is above, as it was. Each call adds only what is new: the junior\'s rounds completed since your last call (`new_rounds`) and why you are called now (`call`). Do not read again what is above: read what is new, or what you have not read yet.',
-  'YOUR CHANNEL. Some of your questions carry a part "channel": "notices" of the environment to the junior (an artifact accepted...), each once, and "pinned" messages at every call with their value then - the junior\'s budget (`harness:junior_budget`), the operator\'s task (`operator:task`: what the junior is asked to do, and so what you are) and what you pin yourself. In any of your answers: "pins": [{"do": "pin", "id": "<lowercase_snake_case>", "document": "<the id of a note of yours>" | "message": "<the id of a notice you received>" | "text": "..."}, {"do": "unpin", "id": "..."}] - a note reaches you in its latest text.',
+  'YOUR CHANNEL mirrors the junior\'s: everything the junior is told between its answers reaches you too, as it was - the operator\'s task (`operator:task`: what the junior is asked to do, and so what you are), the operator\'s and the agents\' messages, changes of its instructions, its budget, the environment\'s notices (an artifact accepted...). Some of your questions carry a part "channel": "notices", each once, and "pinned" messages at every call with their value then, besides what you pin yourself. In any of your answers: "pins": [{"do": "pin", "id": "<lowercase_snake_case>", "document": "<the id of a note of yours>" | "message": "<the id of a notice you received>" | "text": "..."}, {"do": "unpin", "id": "..."}] - a note reaches you in its latest text.',
   'YOUR NOTEBOOK is yours - the junior never sees it; only your messages reach it. In ANY of your answers (while you read, when you decide, when you consolidate) you may add "beliefs": [{"id": "<id>", "stance": "new" | "keep" | "revise" | "confirm" | "drop", "statement": "...", "why": "...", "evidence": ["<items or points of the junior\'s record>"]}], "notes": [{"do": "write" | "forget" | "archive", "id": "<id>", "text": "..."}] and "methods": [{"do": "write" | "forget", "id": "<id>", "text": "how you read and cross the record"}]. Write in it what you understand of the environment, what you ruled out and why, which of your hypotheses the junior tested and what came of them: it is what you keep when your conversation is consolidated, and what you start from in a run resumed. Ids are lowercase snake_case.',
   'When your conversation has grown long and you have taken from it what you need, CONSOLIDATE it: answer {"consolidate": {"summary": "what you understand so far and what you are doing, in your words", "keep": ["<ids of investigation steps above to keep whole, e.g. d3.2>"]}} - write first in your notebook what you want to keep. Your conversation then goes on from your notebook as it is, the junior\'s latest rounds, your summary and the steps you kept; the rest is gone from it (your memory still holds the junior\'s record and your decisions). At most twice a call; when you are told your conversation is too long, consolidate before anything else.',
   'You may be called at the end of one of its rounds, or during a round (`during_round`), when it keeps looking without testing anything or keeps asking to investigate with no steps left: your message then reaches it within that round, before it answers again. Then help it commit: give it the hypothesis its record (or your own reading of the task) supports best and tell it to test it now - with a model, or with a change of what it makes, as the task asks; one that fails also teaches.',
@@ -210,6 +210,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
           for (const r of record.senior.called_in_round ?? []) calledInRound.add(r);
           /* What it had pinned, pinned again in its channel (which lives as long as this process). */
           applyPins(seniorChannel, record.senior.pins ?? [], (id) => noteOf(record.senior!, id));
+          /* And what the junior's channel had pinned up to there, mirrored again - its notices were given already. */
+          for (const d of ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'channel_delivered' && e.delivered).slice(0, record.senior.deliveries_seen ?? 0))
+            seniorChannel.mirror(d.delivered, { notices: false });
           orders = record.earlier.decisions.filter((d) => d.decision === 'message' || d.decision === 'stop').length;
           seenRounds = Math.max(-1, ...record.earlier.decisions.map((d) => Number(d.rounds) || 0));
           say('agent:' + o.id + ' goes on from ' + path.basename(from!) + ' (' + record.earlier.decisions.length + ' decisions, ' + orders + ' orders)');
@@ -298,21 +301,6 @@ function noteOf(state: SeniorState, id: string): { text: string; versions: numbe
   return n ? { text: n.text, versions: 1 } : undefined;
 }
 
-/** The operator's task as the junior has it now: the run's (`--task`), or the latest one a change of focus set. */
-export function operatorTask(journal: Record<string, any>): string | null {
-  const focused = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'focus_changed' && typeof e.task === 'string');
-  const task = focused.length ? focused[focused.length - 1].task : journal.config?.task;
-  return typeof task === 'string' && task.trim() ? task : null;
-}
-
-/** The junior's budget as its journal says (SPEC-INVESTIGADOR-ASISTIDO §15): its rounds left, and its help left. */
-function juniorBudget(journal: Record<string, any>, round: number): Record<string, number> {
-  const attempts = Number(journal.config?.attempts) || 0;
-  const help = typeof journal.help_budget === 'number' ? journal.help_budget : null;
-  const given = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'operator_message').reduce((n, e) => n + (e.messages?.length ?? 0), 0);
-  return { rounds_left: Math.max(0, attempts - round + 1), ...(help !== null ? { help_left: Math.max(0, help - given) } : {}) };
-}
-
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
   duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel()): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
@@ -352,14 +340,12 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
     orders_left: ordersLeft, memory: memory.counts(), steps_left: limit } });
   state.conversation.push(callPart());
-  /* Its channel: the notices the environment gave the junior since its latest call, and the junior's budget as it stands. */
-  const notices = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'channel_published' && e.from === 'world' && e.kind === 'notice');
-  for (const n of notices.slice(state.notices_seen ?? 0)) channel.publish('world', { kind: 'notice', body: n.body });
-  state.notices_seen = notices.length;
-  channel.publish('harness', { kind: 'pinned', key: 'junior_budget', body: juniorBudget(journal, latestRound()) });
-  /* The operator's task, as the junior has it now (the run's, or the latest a focus set): the task is yours too. */
-  const task = operatorTask(journal);
-  if (task) channel.publish('operator', { kind: 'pinned', key: 'task', body: task });
+  /* Its channel mirrors the junior's (SPEC-CANAL-MENSAJES §9): everything the junior was told between its answers since this
+     channel's latest look - the operator's task, its messages, the instructions, the budget, the environment's notices -
+     as it was delivered, with nothing chosen on the way. Two halves of one researcher know the same task. */
+  const deliveries = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'channel_delivered' && e.delivered);
+  for (const d of deliveries.slice(state.deliveries_seen ?? 0)) channel.mirror(d.delivered);
+  state.deliveries_seen = deliveries.length;
   /* A conversation opened (or restarted, or consolidated) in this call is given every pinned message again. */
   let channelOpening = opened;
   const read: { step: string; requests: Record<string, unknown>[]; results: unknown[] }[] = [];

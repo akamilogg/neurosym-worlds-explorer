@@ -127,7 +127,7 @@ test('assisted, cut and resumed: the focus is applied again at the same question
   assert.equal(resumed.stoppedBy, 'accepted', 'it did not diverge, and the focus holds after the resume');
   const strip = (f: string) => JSON.stringify(eventsOf(f).filter((e) => !['start', 'end', 'operator_command'].includes(e.type))
     .map(({ t: _t, ...e }) => (e.type === 'operator_message' ? { ...e, messages: e.messages.map(({ at: _a, ...m }: Record<string, unknown>) => m) } : e)))
-    .replace(/order-[a-z0-9]+-\d+-\d+/g, 'order');
+    .replace(/order-[a-z0-9]+-\d+-\d+/g, 'order').replace(/"at":"[^"]*",?/g, '');
   assert.equal(strip(resumed.journal), strip(whole.journal));
 });
 

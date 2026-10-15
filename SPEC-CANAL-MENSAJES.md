@@ -360,3 +360,20 @@ añadida a su conversación, que sigue sólo creciendo.
 - Las que contaban posiciones fijas en su conversación cuentan ahora la parte del canal.
 
 **Siguiente:** paso 7, el piloto en artefactos ("lo más rápido que puedas con tu presupuesto"), con y sin `--no-pins`.
+
+### 13.7 El canal del senior es un espejo del del junior (15/10/2026)
+
+**El paso 6 se quedaba corto.** El canal del senior recibía piezas elegidas a mano: los avisos del mundo y el
+presupuesto, y después la tarea. Nunca recibió la tarea del operador desde el principio. Su prompt es el brief del junior,
+que no la lleva, y en un run de 3SUM dijo que bajar de O(n²) "no se pedía" hasta que el junior se lo contó.
+
+**El principio:** dos mitades de un mismo investigador saben lo mismo del encargo.
+
+**Por tanto:**
+- **El diario registra cada entrega al junior entera** (`channel_delivered`: ronda, pregunta, si fue apertura, y
+  `delivered` con lo fijado, lo retirado y los avisos).
+- **El canal del senior refleja esas entregas tal cual** (`Channel.mirror`), además de lo que fija él. No hay selección:
+  lo que el canal del junior entregue en el futuro llega también al senior.
+- **Al reanudar un senior,** lo fijado se reconstruye sin repetir avisos.
+- **Lo que deja de existir:** las publicaciones propias del senior del paso 6 (`harness:junior_budget`, los avisos del mundo
+  leídos aparte y la tarea).

@@ -689,9 +689,21 @@ en la ronda 6 que la tarea pedía ir "lo más rápido posible" y que bajar de O(
 corrigió: "me equivoqué, tu informe dice que el operador lo exige".
 - **La causa:** su prompt es el brief del junior, que no lleva la tarea. La tarea le llega al junior con cada pregunta
   (ahora, fijada en su canal), nunca al senior. Sólo la conocía por lo que el junior contaba.
-- **El arreglo:** el canal del senior fija la tarea del operador (`operator:task`), tomada del diario: la del run
-  (`--task`) o la última que fijó un cambio de foco (`operatorTask`). Su papel dice que esa tarea es la suya.
-- **Prueba** (`test/orchestra-senior-memory.test.ts`): la tarea del diario llega fijada al senior.
+- **El principio, que se había perdido:** el senior es la otra mitad del mismo investigador. Todo lo que define la tarea
+  y su contexto para el junior tiene que llegarle igual, sin selección por medio. La diferencia entre ambos está en qué
+  hacen, no en qué saben del encargo.
+- **El primer arreglo fue un parche más:** fijar la tarea en el canal del senior, como antes el presupuesto y los avisos
+  del mundo. Se sustituye por el de raíz.
+- **El arreglo de raíz:** el canal del senior es un ESPEJO del canal del junior.
+  - El diario registra cada entrega al junior con su contenido completo (`channel_delivered.delivered`).
+  - El canal del senior las toma tal cual (`Channel.mirror`): la tarea, los mensajes del operador y de los agentes, las
+    instrucciones, el presupuesto, los avisos del mundo. Nada se elige a mano: lo que se publique para el junior en el
+    futuro le llega también al senior.
+  - Al reanudar un senior se reconstruye lo fijado sin volver a darle los avisos.
+- **Pruebas:**
+  - `test/channel.test.ts`, en un run de verdad con un senior: todo lo fijado y todo aviso entregado al junior antes de
+    una llamada del senior le llega al senior, y la tarea palabra por palabra;
+  - `test/orchestra-senior-memory.test.ts`, el espejo con entregas dadas.
 
 ### 5.1 El objetivo grande
 

@@ -250,3 +250,45 @@ test('the grid has the channel too: its budget pinned, what it pins at every rou
   for (let i = 1; i < asked.length; i++) if (asked[i][1].content === asked[i - 1][1].content)
     assert.deepEqual(asked[i].slice(0, asked[i - 1].length), asked[i - 1], 'question ' + i);
 });
+
+/* The senior is the other half of the same researcher: everything the junior was told between its answers reaches it too,
+   as it was delivered - with nothing chosen on the way (SPEC-CANAL-MENSAJES §9). */
+test('in a run with a senior: every pinned message and every notice delivered to the junior before a call of the senior reaches the senior', async () => {
+  const { runAgentOperator } = await import('../src/orchestra/agent-operator.ts');
+  const { send } = await import('../src/runtime/control.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'channel-mirror-'));
+  const out = path.join(dir, 'run.json');
+  let n = 0;
+  const stuck: FetchLike = async (u, init) => {
+    await new Promise((r) => setTimeout(r, 40));
+    if (++n === 2) send(out, { kind: 'message', text: 'look at the borders', by: 'operator' });
+    return junior([])(u, init);
+  };
+  const seen: Record<string, any>[][] = [];
+  const senior = { complete: async (r: any) => {
+    seen.push([...r.user.parts]);
+    return { content: JSON.stringify({ decision: 'wait', why: 'reading' }), latencyMs: 0, raw: null };
+  } };
+  const controller = new AbortController();
+  const run = runLaboratory(publishing(), { args: [...ARGS, '--researcher', 'assisted', '--task', 'Find the rule of the rows.', '--agents', 'senior=message', '--out', out], root: dir, llm, fetch: stuck });
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', patience: 1, journal: out, llm: senior as never, pollMs: 10, maxOrders: 3, signal: controller.signal });
+  await run;
+  controller.abort();
+  await agent;
+  assert.ok(seen.length >= 1, 'the senior was called');
+  const toSenior = seen.flat().filter((p) => p.channel).map((p) => p.channel);
+  const pinnedToSenior = new Map<string, string>();
+  for (const c of toSenior) for (const p of c.pinned ?? []) pinnedToSenior.set(p.key + '=' + JSON.stringify(p.value), p.key);
+  const noticesToSenior = new Set(toSenior.flatMap((c) => (c.notices ?? []).map((x: any) => JSON.stringify(x.body))));
+  /* What the junior was delivered before the senior's last call. */
+  const record = JSON.parse(fs.readFileSync(out, 'utf8'));
+  const agentRecord = JSON.parse(fs.readFileSync(out.replace(/\.json$/, '.agent-senior.json'), 'utf8'));
+  const lastCall = Math.max(...agentRecord.decisions.map((d: any) => d.rounds));
+  const before = record.events.filter((e: any) => e.type === 'channel_delivered' && e.round <= lastCall);
+  assert.ok(before.length >= 1);
+  const keys = new Set(before.flatMap((e: any) => (e.delivered.pinned ?? []).map((p: any) => p.key)));
+  assert.ok(keys.has('operator:task') && keys.has('harness:budget') && keys.has('world:drawn'), [...keys].join(', '));
+  for (const k of keys) assert.ok([...pinnedToSenior.values()].includes(k as string), 'pinned "' + k + '" reached the senior');
+  for (const e of before) for (const x of e.delivered.notices ?? []) assert.ok(noticesToSenior.has(JSON.stringify(x.body)), 'a notice reached the senior: ' + JSON.stringify(x.body).slice(0, 80));
+  assert.ok(toSenior.some((c) => (c.pinned ?? []).some((p: any) => p.key === 'operator:task' && p.value === 'Find the rule of the rows.')), 'the task, word for word');
+});
