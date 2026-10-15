@@ -379,3 +379,21 @@ test('a follow-up allows one reading; asked to read again, the senior is reminde
   const reminder = (calls[2] as { parts: Record<string, unknown>[] }).parts.at(-1)!;
   assert.match(String(reminder.reminder), /not to do the junior's work/);
 });
+
+/* The senior's part is the whole task (its role: hypotheses, the method to test them, a review of the junior's work), and
+   a run that accepts nothing of its task for a while is a sign - in any world. */
+test('the senior proposes hypotheses and the method to test them for the whole task; nothing of the task accepted for a while is a sign', () => {
+  assert.match(SENIOR_ROLE, /PROPOSE HYPOTHESES/);
+  assert.match(SENIOR_ROLE, /METHOD the junior should use to test them/);
+  assert.match(SENIOR_ROLE, /REVIEW its work/);
+  assert.match(SENIOR_ROLE, /to make or improve something/);
+  const round = (r: number, extra: Record<string, unknown>[] = []) => [{ type: 'proposal', round: r }, { type: 'check', round: r, laboratories: [{ place: 'lab1', holds: true }] }, ...extra];
+  const journal = (events: Record<string, unknown>[]) => ({ events });
+  /* Its model holds everywhere, but nothing was accepted since round 2: four rounds without, a sign. */
+  const stalled = stuckSignals(journal([...round(1), ...round(2, [{ type: 'artifact_accepted', round: 2 }]), ...round(3), ...round(4), ...round(5), ...round(6)]), 3);
+  assert.equal(stalled.rounds_without_acceptance, 4);
+  assert.ok(stalled.signs.some((s) => /nothing of its task accepted/.test(s)), JSON.stringify(stalled.signs));
+  const moving = stuckSignals(journal([...round(1), ...round(2), ...round(3), ...round(4, [{ type: 'accepted', round: 4 }])]), 3);
+  assert.ok(!moving.signs.some((s) => /nothing of its task accepted/.test(s)), 'an acceptance lately: no sign');
+  assert.ok(!stuckSignals(journal([...round(1), ...round(2), ...round(3)]), 3).signs.some((s) => /nothing of its task/.test(s)), 'too early to tell');
+});

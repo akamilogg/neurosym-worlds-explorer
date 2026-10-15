@@ -628,6 +628,34 @@ No se le da un catálogo de métodos: la idea es que tire de su propio conocimie
 
 ## 5. Nivel 3: el planificador de proyecto
 
+### 3.3.6 El senior sirve a toda la tarea (corrección del autor, 15/10/2026)
+
+**Qué pasó.** En `artifacts-threesum-subquadratic`, el enunciado pedía al junior bajar de O(n²). Todas las hipótesis del
+senior (y fueron buenas: concretas, con la evidencia del registro y su experimento) trataban del modelo de tiempos del
+junior; ninguna trataba de cómo bajar de O(n²). Llegó a pedir "informa de los residuos antes de intentar otro algoritmo".
+
+**La causa,** en su papel y en cuándo se le llama:
+- su papel decía "TU TAREA es la del junior: entender este entorno";
+- sus señales de atasco eran todas del modelo.
+
+**El autor:** el senior tiene, desde siempre y en todos los mundos, tres funciones: proponer hipótesis, proponer el
+método con que el junior debe comprobarlas, y revisar su trabajo. No es algo de este mundo.
+
+**El cambio (general):**
+- **Su papel** (`SENIOR_ROLE`). Su tarea es la del junior tal como la enuncian su brief y su operador, sea cual sea:
+  entender el entorno, modelarlo, hacer o mejorar algo en él.
+  - Sus tres funciones, dichas así.
+  - Sus hipótesis sirven a toda la tarea: si pide hacer o mejorar algo, también sobre cómo hacerlo mejor, con el
+    experimento que lo mostraría. El modelo del entorno es entonces una de las preguntas de la tarea, no siempre la
+    principal.
+- **Una señal nueva** (`stuckSignals`): nada de su tarea aceptado (un modelo, o una versión de lo que hace) en sus
+  últimas rondas (al menos `max(patience, 3)`, y no antes de esa ronda). Queda en las señales como
+  `rounds_without_acceptance`.
+
+**Prueba** (`test/orchestra-senior.test.ts`):
+- el papel dice las tres funciones y la tarea entera;
+- la señal aparece tras varias rondas sin aceptar nada, no tras una aceptación reciente, y no demasiado pronto.
+
 ### 5.1 El objetivo grande
 
 Lo define el operador, en palabras y con un **criterio computable**:
