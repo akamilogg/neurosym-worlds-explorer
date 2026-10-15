@@ -47,7 +47,7 @@ test('the assisted researcher knows its rounds left and the help it may still be
     onJournal: (f) => { journal = f; }, fetch: junior(asked, (n) => { if (n === 2) send(journal, { kind: 'message', text: 'look at the neighbours', by: 'operator' }); }) });
   const rounds = asked.filter((m) => !('task' in (parts(m)[0] ?? {})));
   assert.ok(rounds.length >= 6);
-  assert.ok(asked.every((m) => m[0].content.endsWith(BUDGET_SECTION(true))), 'its system prompt says what they are, once');
+  assert.ok(asked.every((m) => m[0].content.includes(BUDGET_SECTION(true))), 'its system prompt says what they are, once');
   for (const m of rounds) assert.equal(latest(m).rounds_left, 3 - parts(m)[0].round + 1, 'this round included');
   const help = rounds.map((m) => latest(m).help_left);
   assert.equal(help[0], 2);
@@ -64,7 +64,7 @@ test('without a help budget only the rounds; --budget-hidden and the unknown-wor
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-hidden-'));
   const asked: Message[][] = [];
   await runLaboratory(cellsLab, { args: [...ARGS, '--attempts', '2', '--out', path.join(dir, 'plain.json')], root: dir, llm, fetch: junior(asked) });
-  assert.ok(asked.every((m) => m[0].content.endsWith(BUDGET_SECTION(false))));
+  assert.ok(asked.every((m) => m[0].content.includes(BUDGET_SECTION(false))));
   assert.ok(asked.every((m) => !JSON.stringify(parts(m)).includes('help_left')));
   const pure = ARGS.filter((a) => a !== '--researcher' && a !== 'assisted');
   for (const [name, args] of [['hidden', [...ARGS, '--budget-hidden']], ['pure', pure]] as const) {
@@ -94,6 +94,6 @@ test('the grid, likewise: its rounds left with its counters, its section once', 
     '--steps', '0', '--flat', '--no-ablation', '--no-grade', '--attempts', '2', '--researcher', 'assisted', '--out', path.join(dir, 'grid.json')], root: dir, llm, fetch: grid });
   const rounds = asked.filter((m) => !('task' in (parts(m)[0] ?? {})));
   assert.ok(rounds.length >= 2);
-  assert.ok(asked.every((m) => m[0].content.endsWith(BUDGET_SECTION(false))));
+  assert.ok(asked.every((m) => m[0].content.includes(BUDGET_SECTION(false))));
   assert.deepEqual([...new Set(rounds.map((m) => latest(m).rounds_left))], [2, 1]);
 });

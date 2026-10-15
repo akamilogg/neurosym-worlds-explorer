@@ -98,6 +98,9 @@ export interface LawSessionHost<A> {
   halt?(): string | null;
   /** Its budget (SPEC-INVESTIGADOR-ASISTIDO §15): counters that go with its others (rounds left, help left). Empty: none. */
   budget?(): Record<string, number>;
+  /** The channel (SPEC-CANAL-MENSAJES): what it delivers before a question, as a part added to the conversation - at a
+      conversation's opening every pinned message, then only what is new. Null: nothing. */
+  channel?(at: { round: number; question: number; opening: boolean }): Record<string, unknown> | null;
   /** Told when a round begins (a member of a team tells its board where it is). */
   onRound?(round: number): void;
 }
@@ -236,6 +239,8 @@ export class LawSession<A> {
     /* The verdicts it was given on its latest model, kept in its memory by that model's round. */
     if (memory && b) memory.recordCheck(b.round, h.lastCheck());
     let talk = new RoundConversation();
+    /* Whether the channel has delivered in this conversation (a consolidation opens another). */
+    let channelOpen = false;
     const counters = (): Record<string, unknown> => ({ ...(h.budget?.() ?? {}), ...(h.investigative ? { steps_left: Math.max(0, h.steps - (steps - free)) } : {}),
       ...(h.acts !== undefined ? { acts_left: budget.acts } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
     let told: string[] = refused;
@@ -254,6 +259,10 @@ export class LawSession<A> {
       if (refused !== told && refused.length) { talk.add({ your_previous_answer_was_refused: refused, ...written, ...counters() }); written = {}; }
       told = refused;
       talk.open(context);
+      /* What the channel brings, added before the question (never into a part already there). */
+      const brought = h.channel?.({ round, question: steps, opening: !channelOpen }) ?? null;
+      channelOpen = true;
+      if (brought) talk.add(brought);
       const payload = talk.question();
       h.say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;
@@ -296,6 +305,7 @@ export class LawSession<A> {
         consolidated++;
         const keep = [...new Set(turn.keep)].filter((k) => k >= 1 && k <= investigation.length).sort((x, y) => x - y);
         talk = new RoundConversation();
+        channelOpen = false;
         talk.open(context);
         talk.add({ consolidated: { summary: turn.summary, kept_steps: keep.map((k) => investigation[k - 1]) }, ...written, ...counters() });
         written = {};

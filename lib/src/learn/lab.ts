@@ -70,6 +70,9 @@ export interface LabContext {
       artifact: SPEC-MUNDO-ARTEFACTOS §11): computed once and logged as the environment's answer, so a run resumed is
       given what it was given. The same `route` and `body` in the same order are the same answer. */
   readonly recorded?: <T>(route: string, body: unknown, compute: () => Promise<T>) => Promise<T>;
+  /** Publishes in the researcher's channel (SPEC-CANAL-MENSAJES), as the world: facts of its verdicts, never an analysis.
+      Absent: the researcher has no channel (the unknown-world researcher, a journal made before it). */
+  readonly publish?: (m: import('./assisted/channel.ts').ChannelPublication) => void;
 }
 
 /** One point of a check: its name, the state perceived there, and what happened next (the laboratory's). */
@@ -324,7 +327,9 @@ export const CAPABILITIES: readonly { readonly name: string; readonly since: str
      Every journal made before it either keeps `capabilities_from` without it or predates `capabilities_from` (and c55cb53). */
   { name: 'fixed_system', since: 'c55cb53', inJournal: () => false },
   /* The visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the same as fixed_system, every journal before it lacks it. */
-  { name: 'budget', since: 'c55cb53', inJournal: () => false }
+  { name: 'budget', since: 'c55cb53', inJournal: () => false },
+  /* The channel (SPEC-CANAL-MENSAJES), likewise. */
+  { name: 'channel', since: 'c55cb53', inJournal: () => false }
 ];
 
 /** The rounds a run had at an attempt: those of the stretch of its history it falls in (`rounds_before`), else its own. */

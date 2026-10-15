@@ -187,3 +187,44 @@ Son del operador:
 5. **La cuadrícula,** a la par.
 6. **El senior** como segundo destinatario.
 7. **Un piloto en artefactos** con "lo más rápido que puedas con tu presupuesto", con y sin `--no-pins`.
+
+## 13. Implementado
+
+### 13.1 Paso 1: el canal y su entrega (15/10/2026)
+
+**El canal** (`lib/src/learn/assisted/channel.ts`, `Channel`):
+- `publish(from, {kind, key?, body?, unpin?})`: un aviso recibe un id; un fijado, su clave (`<autor>:<key>`).
+- **El valor de un fijado puede ser una función:** se lee al entregarlo, así un documento llega en su última versión.
+- `deliver({round, question, opening})`:
+  - en una apertura, todos los fijados y los avisos pendientes;
+  - después, sólo lo nuevo: avisos, fijados cuyo valor cambió y los retirados (`unpinned`);
+  - si no hay nada, ninguna parte.
+- **El orden es fijo:** por autor (operador, agentes, arnés, mundo, self) y luego por clave.
+- **El diario registra** `channel_published` y `channel_delivered` (ronda, pregunta, ids de los avisos y claves de los
+  fijados).
+
+**La entrega en los mundos de leyes** (`LawSessionHost.channel`): antes de cada pregunta, lo que trae el canal se añade
+como parte nueva.
+- La primera pregunta de una conversación es apertura: la de cada ronda, y la que sigue a una consolidación.
+- Una ronda abre así: su primera parte (el contexto) y, justo detrás, la del canal.
+
+**El canal se explica a sí mismo.** Cada parte de apertura lleva `about`, con lo que es el canal; el prompt de sistema
+no tiene nada de él.
+- **Por qué:** un run en el que nadie publica pregunta exactamente lo que preguntaba antes, y nada del prompt fijo cambia
+  por el canal.
+- **El coste** es una frase al abrir cada ronda en que hay algo que entregar.
+
+**El mundo publica** por `LabContext.publish`, como autor `world`. Sólo existe para el investigador asistido de un run
+que empieza con la capacidad `channel`. El de mundo desconocido no tiene canal.
+
+**Pruebas** (`test/channel.test.ts`):
+- **La clase:** un aviso una vez, el fijado en cada apertura, nada si nada cambió, el valor vivo leído al entregarse, la
+  retirada, el orden y el diario.
+- **Un run con un mundo que publica** (cada episodio que extrae, un aviso; cuántos lleva, fijado):
+  - cada aviso llega una vez en todo el run;
+  - el fijado llega justo detrás de la primera parte de cada ronda, con `about`;
+  - la conversación sólo crece;
+  - un run cortado y reanudado entrega lo mismo en las mismas preguntas.
+- **El investigador de mundo desconocido** no recibe nada.
+
+**Siguiente:** paso 2, los `pins` de System 2.
