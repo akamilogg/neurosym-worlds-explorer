@@ -705,3 +705,22 @@ La referencia se ejecuta en cada carga de una comprobación, así que n se queda
 - la familia ciega no la puede ejecutar el investigador.
 
 **El lote** es `lib/examples/batch.artifacts-threesum.json`.
+
+### 18.6 Un fallo del primer run de 3SUM: la confirmación a ciegas del modelo (15/10/2026)
+
+**El fallo.** En `artifacts-threesum`, el modelo de tiempos se sostuvo en sus tres laboratorios en la ronda 12 y pidió
+validarse. La confirmación a ciegas no tuvo ningún punto que juzgar (`judged: 0` en `late`), así que el modelo no podía
+aceptarse nunca.
+- **La causa:** las comprobaciones del laboratorio pasaban por el mismo `ArtifactWorld.run` que las ejecuciones del
+  investigador, y ese `run` rechaza la familia ciega. El rechazo se tragaba sin ruido: ningún episodio.
+- **Por qué no se vio antes:** en el piloto de `dedup` el modelo nunca llegó a esa fase.
+
+**El arreglo:**
+- `run` sabe quién ejecuta (`by`).
+  - **El entorno** (las comprobaciones, también a ciegas) puede ejecutar la familia ciega.
+  - **El investigador** (sus actos) sigue sin poder.
+- Una comprobación que no puede ejecutarse ya no se traga: es un error visible.
+- El registro de repetición no cambia: el cuerpo registrado es el mismo.
+
+**Prueba** (`test/artifacts-lab.test.ts`): una comprobación en un lugar ciego extrae episodios con puntos que juzgar, y
+la misma familia sigue cerrada para el investigador.

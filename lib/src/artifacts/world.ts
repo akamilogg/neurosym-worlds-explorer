@@ -105,10 +105,11 @@ export class ArtifactWorld {
 
   /** `run`: a version on n workloads of a family, each run judged correct or not against the reference's run there. An
       episode of the researcher's. Only the places it may act in: a blind family is never run for it. */
-  async run(version: string, family: string, n: number, seed: number, repetitions = 1, record: Recorder = direct): Promise<Episode | { error: string }> {
+  async run(version: string, family: string, n: number, seed: number, repetitions = 1, record: Recorder = direct, by: 'researcher' | 'environment' = 'researcher'): Promise<Episode | { error: string }> {
     const f = this.task.families.find((x) => x.id === family);
     if (!f) return { error: 'no family "' + family + '" (' + this.task.families.filter((x) => x.role !== 'blind').map((x) => x.id).join(', ') + ')' };
-    if (f.role === 'blind') return { error: 'family "' + family + '" is not yours to run' };
+    /* A blind family is the environment's: its checks run there (a blind confirmation), the researcher never does. */
+    if (f.role === 'blind' && by !== 'environment') return { error: 'family "' + family + '" is not yours to run' };
     if (!this.store.get(version)) return { error: 'no version "' + version + '"' };
     return record('/run', { task: this.task.id, version, family, n, seed, repetitions }, () => this.measureRun(version, f.workloads(seed, n), family, repetitions));
   }

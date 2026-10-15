@@ -197,12 +197,14 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
     return [{ place: id, episode: versionEpisode(spec.world, spec.world.reference) }, { place: id, episode: runsEpisode(spec.world, data) }];
   },
   /* A check: the reference and the latest version, on fresh workloads of the place. */
+  /* The environment's: in a blind place too (a blind confirmation of the model), where the researcher never runs. */
   checkEpisodes: async (spec, c, ctx) => {
     const versions = [...new Set([spec.world.reference, latest.get(spec.world) ?? spec.world.reference])];
     const out: ArtifactEpisode[] = [];
     for (const v of versions) {
-      const data = await spec.world.run(v, spec.family, spec.workloads, seedOf(c.purpose + c.round + ':' + (c.set ?? 0) + ':' + c.index + ':' + spec.family + ':' + v), 1, ctx.recorded);
-      if (!('error' in data)) out.push(runsEpisode(spec.world, data));
+      const data = await spec.world.run(v, spec.family, spec.workloads, seedOf(c.purpose + c.round + ':' + (c.set ?? 0) + ':' + c.index + ':' + spec.family + ':' + v), 1, ctx.recorded, 'environment');
+      if ('error' in data) throw new Error('a check could not run: ' + data.error);
+      out.push(runsEpisode(spec.world, data));
     }
     return out;
   },

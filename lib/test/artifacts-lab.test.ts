@@ -110,6 +110,12 @@ test('artifacts: its contract - acts echoed and refused as the others, a change 
   assert.equal(typeof lab.placeInfo(spec), 'object');
   assert.deepEqual(lab.places!(spec, {} as never).laboratories.map((p) => p.id), ['mixed']);
   assert.deepEqual(lab.blindPlaces!(spec, 0, 1, {} as never).map((p) => p.id), ['wide-0']);
+  /* A blind place is the environment's: its checks run there (the model's blind confirmation), the researcher's runs do not. */
+  const blind = lab.blindPlaces!(spec, 0, 1, {} as never)[0];
+  const direct = { recorded: (_r: string, _b: unknown, compute: () => Promise<unknown>) => compute() } as never;
+  const blindEpisodes = await lab.checkEpisodes!(blind.spec, { round: 1, attempt: 1, purpose: 'blind', set: 0, index: 0 }, direct);
+  assert.ok(blindEpisodes.length >= 1 && blindEpisodes.every((ep) => lab.cases(blind.spec, 'b', ep, 1).length > 0), 'a check runs in a blind place, with points to judge');
+  assert.match(String((await spec.world.run(spec.world.reference, blind.spec.family, 1, 1) as { error?: string }).error), /not yours/, 'the researcher never runs there');
   assert.equal(lab.answerIssue(120), null);
   assert.notEqual(lab.answerIssue({ not: 'a number' }), null);
 });
