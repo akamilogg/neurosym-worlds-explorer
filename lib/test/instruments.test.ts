@@ -219,9 +219,9 @@ test('a journal made before the instruments (review_from 0, no capabilities_from
   const llm = { url: 'http://system2.test/chat', model: 'stand-in' };
   const args = ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--steps', '2', '--no-grade'];
   /* Made as before them: no section, no switch, no capabilities_from - only review_from 0. */
-  const first = await runLaboratory(cellsLab, { args: [...args, '--attempts', '2', '--max-tokens', '350', '--no-instruments', '--out', path.join(dir, 'old.json')], root: dir, llm, fetch: system2([]) });
+  const first = await runLaboratory(cellsLab, { args: [...args, '--attempts', '2', '--max-tokens', '350', '--no-instruments', '--budget-hidden', '--out', path.join(dir, 'old.json')], root: dir, llm, fetch: system2([]) });
   const j = JSON.parse(fs.readFileSync(first.journal, 'utf8'));
-  assert.deepEqual(j.config.capabilities_from, { instruments: 0, fixed_system: 0 }, 'a new journal says where its capabilities start');
+  assert.deepEqual(j.config.capabilities_from, { instruments: 0, fixed_system: 0, budget: 0 }, 'a new journal says where its capabilities start');
   delete j.config.capabilities_from;
   delete j.config.instruments;
   j.argv = j.argv.filter((a: string) => a !== '--no-instruments');
@@ -239,4 +239,6 @@ test('a journal made before the instruments (review_from 0, no capabilities_from
   assert.notEqual(more.stoppedBy, 'diverged');
   assert.equal(JSON.parse(fs.readFileSync(more.journal, 'utf8')).config.capabilities_from.instruments, 2);
   assert.ok(seen2.some((q) => q.system.includes('YOUR OWN INSTRUMENTS')), 'its new rounds have them');
+  /* The visible budget (SPEC-INVESTIGADOR-ASISTIDO §15) only in a run made with it: neither resumed nor continued here. */
+  assert.ok([...seen, ...seen2].every((q) => !q.system.includes('YOUR BUDGET') && !JSON.stringify(q.user).includes('"budget"')), 'no budget in a journal made before it');
 });

@@ -74,6 +74,12 @@ export const SOURCES_SECTION = [
 ].join('\n');
 
 /** Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): kept as it likes, next to the notebook the operator reads. */
+/** Its budget (SPEC-INVESTIGADOR-ASISTIDO §15): what its two counters are and what happens when the rounds run out - never
+    how to spend them. */
+export const BUDGET_SECTION = (help: boolean): string => 'YOUR BUDGET: `rounds_left` says how many rounds remain, this one included'
+  + (help ? ', and `help_left` how many more messages of help (your senior\'s or the operator\'s) this run may still give you' : '')
+  + '. When your rounds run out the investigation ends, and you are only asked to reflect on it. How you spend them is yours to decide.';
+
 export const OWN_DOCUMENTS_SECTION = (memory: boolean): string => [
   'YOUR OWN DOCUMENTS. Your notebook (beliefs, notes, methods) is the record everyone reads, and it stays as it is. Besides it you may keep documents of your own, in whatever form serves you: an account of your task question by question, a table of what you fitted, a plan of experiments, anything. In any of your answers: "documents": [{"do": "write" | "forget", "id": "<lowercase_snake_case>", "text": "..."}] - a write replaces the whole text (at most ' + DOCUMENT_MAX + ' characters); every version is kept in your record.',
   memory

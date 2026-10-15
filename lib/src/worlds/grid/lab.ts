@@ -40,11 +40,11 @@ import { variantStarts } from './variants.ts';
 import { reflectionTask, toolOf } from '../../learn/prompt.ts';
 import { EXPLORER_TOOLS, INVESTIGATION_TOOLS, buildFormula, explorerSystem, type ExplorerTool, explorerPayload, obj, ownFormula, parseExplorerTurn, parseReflection, type ExplorerProposal, type ExplorerRequest } from '../../learn/explorer.ts';
 import { Notebook, parseDocuments, type GameRecord } from '../../learn/notebook.ts';
-import { OPEN_QUESTIONS_TASK, OVERREACH, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, assistedSystem } from '../../learn/assisted/session.ts';
+import { BUDGET_SECTION, OPEN_QUESTIONS_TASK, OVERREACH, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, assistedSystem } from '../../learn/assisted/session.ts';
 import { formulaFingerprint, openQuestions } from '../../learn/law-session.ts';
 import { experimentStates } from '../../orchestra/view.ts';
 import { OwnTests, ownTestsSection, type OwnTestsWords } from '../../learn/assisted/own-tests.ts';
-import { capabilityAt } from '../../learn/lab.ts';
+import { capabilityAt, roundsAt } from '../../learn/lab.ts';
 import { Instruments, instrumentsSection, parseInstruments } from '../../learn/assisted/instruments.ts';
 import { RoundConversation } from '../../learn/system2.ts';
 
@@ -170,7 +170,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */
   const systemPrompt = (): string => SYSTEM_PROMPT + (assisted && reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(Boolean(assisted.memory)) + '\n\n' + TASK_COVERAGE_SECTION
     + (ownTests ? '\n\n' + ownTestsSection([], true, ownTestsRequired(), GRID_TEST_WORDS) : '')
-    + (instrumenting() ? '\n\n' + instrumentsSection(null, GRID_INSTRUMENT_WORDS) : '') : '');
+    + (instrumenting() ? '\n\n' + instrumentsSection(null, GRID_INSTRUMENT_WORDS) : '') : '') + (s.budget ? '\n\n' + BUDGET_SECTION('help_left' in s.budget(1, 1)) : '');
   /* Tests of its own (SPEC-PRUEBAS-PROPIAS, the grid's), for the assisted researcher that replays: required with --own-tests. */
   const ownTestsNeed = Number((s.cfg as { ownTests?: number }).ownTests ?? 0);
   if (ownTestsNeed > 0 && !(assisted && tools.has('replay'))) throw new Error('--own-tests needs the assisted researcher, with replay among its tools');
@@ -1004,7 +1004,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     /* The round's conversation only grows (see RoundConversation): what changes from one answer to the next goes in the
        part added for that answer. */
     let talk = new RoundConversation();
-    const counters = (): Record<string, unknown> => ({ ...(investigative ? { steps_left: Math.max(0, cfg.steps - (steps - free)) } : {}),
+    const counters = (): Record<string, unknown> => ({ ...(s.budget ? s.budget(attemptNow, roundsAt(s.cfg, attemptNow)) : {}), ...(investigative ? { steps_left: Math.max(0, cfg.steps - (steps - free)) } : {}),
       ...(tools.has('replay') ? { replays_left: plays.left } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
     let told: string[] = refused;
     let written: Record<string, unknown> = {};

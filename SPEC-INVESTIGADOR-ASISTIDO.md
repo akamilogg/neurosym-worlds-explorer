@@ -819,134 +819,44 @@ tienen ninguna.
 
 ## 15. Presupuesto visible (idea del autor, 14/10/2026)
 
-### 15.1 De dónde sale
+**De dónde sale.** En el primer piloto del mundo de artefactos (`artifacts-dedup-pilot`), el investigador hizo un solo
+cambio. Lo aceptaron en la ronda 3, y dedicó el resto al modelo de tiempo sin volver al artefacto. Sólo sabía los
+presupuestos de su ronda (`steps_left`, `acts_left`) y las validaciones; no cuántas rondas le quedaban ni cuánta ayuda.
+El autor: que lo sepa, porque gestionar recursos también es investigar.
 
-En el primer piloto del mundo de artefactos (`artifacts-dedup-pilot`), el investigador hizo un solo cambio. Lo aceptaron
-en la ronda 3 y dedicó las siete rondas restantes al modelo de tiempo, sin volver a tocar el artefacto. No hizo nada mal:
-no sabía cuánto le quedaba.
+**Qué ve: dos contadores más,** con los de siempre, en las partes que su conversación añade (nunca en una anterior):
+- `rounds_left`: las rondas que quedan, contando la actual;
+- `help_left`: cuántos mensajes de ayuda (de su senior o del operador) puede recibir todavía. Sólo aparece con
+  `--help-budget`, y se cuenta por los mensajes que le llegaron.
 
-Hoy sólo ve presupuestos locales:
-- los actos de esta ronda (`acts_left`);
-- las validaciones (`validations_left`);
-- las respuestas de su memoria (`memory_answers_left`).
+Una frase en su prompt de sistema, fija desde la primera pregunta (`BUDGET_SECTION`), dice qué son y que al acabarse las
+rondas sólo queda la reflexión. No dice cómo gastarlos.
 
-No sabe en qué ronda está respecto al total, ni cuántos tokens o minutos le quedan. Sin eso no puede decidir si le
-compensa otro cambio arriesgado, una réplica más o consolidar lo que tiene.
+**Lo justo para que el replay no cambie:**
+- **Ni tokens ni minutos.** Rondas y ayuda salen igual al reconstruir el historial, sin registrar nada aparte.
+- **La ayuda se conserva al reanudar.** Un run reanudado mantiene su presupuesto de ayuda si no se le da otro, y mientras
+  repite su historial ve el que tenía entonces.
+- **Las rondas que tuvo cada tramo** se guardan en `rounds_before`. Un run continuado, después de agotar sus rondas o de
+  una aceptación, ve en su historial las rondas que tenía entonces.
 
-La propuesta del autor: que sea consciente de su presupuesto, porque **aprender a gestionar recursos es parte de
-investigar** y algo que merece medirse.
+**Condiciones:**
+- la capacidad `budget`, sólo en runs que empiezan con ella;
+- `--budget-hidden` lo oculta, para comparar;
+- el investigador de mundo desconocido no lo ve.
 
-### 15.2 Principios
+Implementado en los mundos de leyes y en la cuadrícula.
 
-- **Lo que ve es exactamente lo que le para.** El mismo contador que corta el run, ni una estimación ni otro distinto.
-- **Sólo lo que el operador limitó.** Un límite que no existe no aparece.
-- **El presupuesto es suyo, y cómo repartirlo también.** El entorno dice cuánto hay y cuánto lleva, nunca cómo gastarlo:
-  ni "te queda poco, valida ya" ni ritmos recomendados (sin investigación precocinada, sin métrica para System 2).
-- **Genérico.** El mismo bloque en todos los mundos de leyes y en la cuadrícula. Ningún mundo lo redefine.
-- **Sólo el investigador asistido.** El de mundo desconocido sigue congelado, byte a byte.
-- **Es una condición declarada.** Con presupuesto visible o sin él, y el finding lo dice. Así se puede medir si aprende a
-  gestionar recursos.
+**Pruebas** (`test/budget.test.ts`):
+- en cada pregunta, las rondas que quedan y la ayuda, que baja al llegar un mensaje;
+- continuado, no diverge;
+- sin presupuesto de ayuda, sólo las rondas;
+- oculto o en el investigador de mundo desconocido, ninguno de los dos;
+- la cuadrícula, igual.
 
-### 15.3 Qué ve, y dónde
+Un run aceptado y continuado repite su historial sin divergir (`test/review.test.ts`). Un diario anterior no lo recibe
+(`test/instruments.test.ts`).
 
-**La conversación con System 2 sólo crece** (`RoundConversation`, `lib/src/learn/system2.ts`):
-- la primera parte de una ronda no cambia;
-- cada paso añade un mensaje al final, nunca reescribe uno anterior.
-
-Así, la caché del proveedor reutiliza todo lo anterior. **El presupuesto respeta eso:**
-- **No va en el prompt de sistema ni en la primera parte de la ronda.** Ninguna sección fija se reescribe con él, y lo
-  que la caché reutiliza no cambia.
-- **Va en un mensaje propio, añadido al final:** uno al abrir la ronda, detrás de su primera parte, y uno nuevo con cada
-  paso de investigación y con la propuesta, con los valores de ese momento. Los mensajes anteriores se quedan como
-  estaban, con sus valores de entonces.
-
-```json
-{ "budget": {
-  "rounds":  { "this": 4, "of": 10 },
-  "tokens":  { "spent": 412000, "of": 3000000 },
-  "minutes": { "elapsed": 37, "of": 180 }
-} }
-```
-
-- **`rounds`:** la ronda actual y el número de rondas (`--attempts`).
-- **`tokens`:** los tokens de System 2 contados por el mismo contador que el tope (`--max-tokens`, o el `tokens_per_run`
-  de un lote). Incluye lo gastado antes de una reanudación, porque ese contador lo incluye.
-- **`minutes`:** el tiempo desde que arrancó este proceso, y el tope (`--max-minutes`). Es lo que corta hoy (§15.5).
-
-Los contadores locales de siempre (`steps_left`, `acts_left`, `validations_left`, `memory_answers_left`) siguen donde
-están y como están. Se refieren a cosas distintas.
-
-**En la interfaz,** una línea, fija desde el principio del run como el resto del prompt de sistema, dice:
-- qué es cada campo;
-- que al acabarse las rondas, los tokens o los minutos la investigación termina y sólo queda el cierre (la reflexión,
-  §14.9);
-- que repartirlo es decisión suya.
-
-No dice nada más. Con `--budget-hidden` esa línea no está, y el prompt de sistema es el de antes.
-
-**El senior** (SPEC-ORQUESTADOR §3.3), cuando revisa a un junior atascado, recibe el último bloque del junior en el
-mensaje de su revisión, también añadido: una recomendación que no sabe cuánto queda puede ser imposible de seguir.
-
-### 15.4 Repetición y diarios antiguos
-
-**El bloque varía con el tiempo y con los tokens,** así que al reanudar no saldría igual: una reanudación divergiría.
-- **El valor se registra como una respuesta del entorno** (`LabContext.recorded`, la ruta `/budget`) y se sirve del log
-  al reanudar.
-- **Pasado el final del log, se toma vivo.**
-
-**Es una capacidad con su propio inicio** (`CAPABILITIES`, `capabilities_from`). Un diario hecho antes se reanuda sin el
-bloque, como era.
-
-### 15.5 La condición y su interruptor
-
-- **Por omisión, visible** en el investigador asistido.
-- **`--budget-hidden`** lo oculta: es la condición de comparación.
-- **Queda en el diario** (`config.budget_visible`) y en el finding, como procedencia (`assistance.budget_visible`).
-
-**Los minutos son de este proceso,** igual que el corte hoy. Un run reanudado recibe el tiempo que le dé el operador al
-reanudar, y lo ve así. Si algún día el corte pasa a ser de todo el run (sumando los tramos vivos), lo visible cambia con
-él: siempre lo que le para.
-
-### 15.6 Medidas y evaluación
-
-Son del operador; van al diario y al finding, nunca a System 2.
-- **El reparto:** qué fracción de cada presupuesto llevaba gastada en cada hito:
-  - el primer modelo que se sostuvo;
-  - cada validación;
-  - cada aceptación, del modelo y, en un mundo de artefactos, del artefacto;
-  - y lo que gastó después de la última aceptación.
-- **En qué lo gastó:** pasos por clase (ver, actuar, medir, tablas, memoria, documentos, instrumentos) por tramo del
-  presupuesto: primer tercio, segundo y último.
-- **Cómo terminó:**
-  - si dejó presupuesto sin usar;
-  - si el tope le cortó con una línea de trabajo abierta: lo dice su cierre (§14.3), con preguntas investigables aquí.
-- **La comparación:** visible frente a oculto, con el mismo mundo, semilla y modelo:
-  - si con presupuesto visible llega a más (más escalones aceptados, otra validación) o reparte de otra manera;
-  - si cambia el método, que es lo que se juzga (no ganar).
-
-### 15.7 Riesgos y preguntas abiertas
-
-- **Prisa.** Que valide antes de tiempo porque queda poco: puede ser una buena decisión o una mala. El método lo juzga Jev
-  y la auditoría, no una regla del entorno.
-- **Gastar por gastar.** El presupuesto no es un objetivo: no hay premio por agotarlo ni por ahorrarlo.
-- **Terminar antes.** Con presupuesto visible, quizá quiera darlo por terminado antes de agotarlo. Hoy no puede: sólo
-  propone hasta que se acaba. ¿Debe poder cerrar por su cuenta? Queda abierto. Si se permite, su cierre dice por qué, y el
-  dato es una medida más.
-- **Tokens de quién.** El tope cuenta los de System 2. Los de Jev y los del senior no cuentan. Si el operador limitara
-  también esos, el bloque los mostraría con el mismo principio.
-
-### 15.8 Plan
-
-1. El bloque `budget`, en mensajes añadidos de la conversación del investigador asistido de los mundos de leyes, y su
-   línea en la interfaz. Registrado al reanudar, con su capacidad. Pruebas:
-   - lo que muestra coincide con lo que corta;
-   - cada pregunta es la anterior con algo añadido al final: ninguna parte anterior cambia;
-   - una reanudación no diverge;
-   - un diario anterior se reanuda sin él;
-   - el de mundo desconocido no cambia.
-2. La cuadrícula, a la par.
-3. `--budget-hidden` y la procedencia en el finding.
-4. Las medidas de §15.6 en el resumen del operador y en el finding.
-5. Un piloto emparejado, visible frente a oculto, en el mundo de artefactos con un enunciado de "lo más rápido que puedas".
-   Va junto con el listón que sube (SPEC-MUNDO-ARTEFACTOS), que es lo que hace que quede algo por ganar después de una
-   aceptación.
+**Queda para más adelante, si hace falta:**
+- que el senior vea los contadores del junior;
+- medir cómo reparte las rondas con presupuesto visible y sin él;
+- el piloto emparejado en artefactos, que necesita el listón que sube.

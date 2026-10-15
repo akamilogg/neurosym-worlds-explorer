@@ -322,8 +322,14 @@ export const CAPABILITIES: readonly { readonly name: string; readonly since: str
   { name: 'instruments', since: '7fc7cb4', inJournal: (config) => typeof config.instruments === 'boolean' },
   /* The assisted researcher's system prompt fixed for the whole run, what changes later added as messages (14/10/2026).
      Every journal made before it either keeps `capabilities_from` without it or predates `capabilities_from` (and c55cb53). */
-  { name: 'fixed_system', since: 'c55cb53', inJournal: () => false }
+  { name: 'fixed_system', since: 'c55cb53', inJournal: () => false },
+  /* The visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the same as fixed_system, every journal before it lacks it. */
+  { name: 'budget', since: 'c55cb53', inJournal: () => false }
 ];
+
+/** The rounds a run had at an attempt: those of the stretch of its history it falls in (`rounds_before`), else its own. */
+export const roundsAt = (cfg: { readonly attempts: number; readonly rounds_before?: readonly (readonly [number, number])[] }, attempt: number): number =>
+  cfg.rounds_before?.find(([until]) => attempt <= until)?.[1] ?? cfg.attempts;
 
 /** Whether a capability applies at an attempt of a run whose configuration is `cfg`. */
 export const capabilityAt = (cfg: { readonly capabilities_from?: Readonly<Record<string, number>> }, name: string, attempt: number): boolean => {
@@ -341,6 +347,10 @@ export interface LabServices {
       no section of the researcher's prompt, not one of its questions. Default: `llm`. */
   readonly operatorLlm?: import('./system2.ts').ChatClient;
   readonly llmUse: { readonly calls: number; readonly tokens: number };
+  /** The assisted researcher's budget (SPEC-INVESTIGADOR-ASISTIDO §15), when it is shown: counters that go with its others
+      in every question - the rounds left (this one included, of the `rounds` it had then: a continuation's history had
+      fewer) and, with a help budget, the help it may still be given. */
+  readonly budget?: (attempt: number, rounds: number) => Record<string, number>;
   /** The Judge (the flat one with --flat; its answers logged for --resume). */
   readonly judge: import('../core/jev.ts').JevJudge;
   /** A runner for the learner's code. */

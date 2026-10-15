@@ -14,7 +14,7 @@ import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/promp
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
 import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { FINGERPRINT_VERSION, LawSession, lawFingerprint } from '../learn/law-session.ts';
-import { CAPABILITIES, capabilityAt } from '../learn/lab.ts';
+import { CAPABILITIES, capabilityAt, roundsAt } from '../learn/lab.ts';
 import { experimentStates } from '../orchestra/view.ts';
 import { Protocol } from '../learn/protocol.ts';
 import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
@@ -25,7 +25,7 @@ import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, ty
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
-import { assistedSession, assistedSystem, deliveredMessages, operatorClient, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
+import { assistedSession, assistedSystem, deliveredMessages, operatorClient, BUDGET_SECTION, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
 import { Instruments, instrumentsSection } from '../learn/assisted/instruments.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
@@ -76,6 +76,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'no-ablation', help: 'skip the operator\'s ablation of the Judge' },
   { name: 'no-grade', help: 'skip the operator-only grading of the recovered rule (one LLM call)' },
   { name: 'no-reflection', help: 'skip the final reflection round' },
+  { name: 'budget-hidden', help: 'the assisted researcher is not shown its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the condition without it' },
   { name: 'no-instruments', help: 'the assisted researcher writes no instruments of its own (SPEC-INSTRUMENTOS-PROPIOS): the condition without them' },
   { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
 ];
@@ -358,6 +359,9 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     seed: Number(arg('seed')),
     ...Object.fromEntries(Object.entries(worldOptions).map(([k, v]) => [camel(k), v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v])),
     attempts: Number(arg('attempts')),
+    /* The rounds each stretch of its history had, [until attempt, rounds], for what it was told of them (§15). */
+    ...(() => { const before = [...((previous?.config?.rounds_before as [number, number][] | undefined) ?? []), ...(continuedFrom !== null ? [[continuedFrom, Number(previous!.config?.attempts)] as [number, number]] : [])];
+      return before.length ? { rounds_before: before } : {}; })(),
     explore: Number(arg('explore')),
     steps: Number(arg('steps')),
     checkEpisodes: Math.max(1, Number(arg('check-episodes'))),
@@ -378,6 +382,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ablation: !flag('no-ablation') && !flag('quick'),
     grade: !flag('no-grade'),
     instruments: !flag('no-instruments'),
+    budget_visible: !flag('budget-hidden'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
     ...(arg('focus') ? { focus: arg('focus') } : {}),
@@ -641,8 +646,10 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   };
   /* Once a divergence has ended the run where it was, the loop left behind writes nothing more. */
   let closed = false;
+  let helpDelivered = 0;
   const log = (type: string, data: Record<string, unknown> = {}): void => {
     if (closed) return;
+    if (type === 'operator_message' && Array.isArray(data.messages)) helpDelivered += data.messages.length;
     journal.events.push({ t: Math.round((Date.now() - started.getTime()) / 1000), type, ...data });
     fs.writeFileSync(outFile, JSON.stringify(journal, null, 2));
     writeStatus();
@@ -657,7 +664,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   /* Who may help and how much (SPEC-ORQUESTADOR R1): the agents allowed and their orders, and the run's help budget. A
      person's orders are never refused for being a person's; an agent's are, outside its policy. */
   const agentPolicy = parseAgentPolicy(arg('agents', ''));
-  const helpBudget = Number(arg('help-budget', '')) > 0 ? Number(arg('help-budget', '')) : null;
+  /* A run keeps its help budget when resumed, unless it is given another. */
+  const helpBudget = Number(arg('help-budget', '')) > 0 ? Number(arg('help-budget', '')) : typeof previous?.help_budget === 'number' ? previous.help_budget as number : null;
   if (agentPolicy.size) journal.agents = Object.fromEntries([...agentPolicy].map(([id, kinds]) => [id, [...kinds]]));
   if (helpBudget !== null) journal.help_budget = helpBudget;
   const HELP = new Set(['message', 'focus', 'source']);
@@ -831,7 +839,16 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   if (previous?.commit && commit && previous.commit !== commit) say('WARNING: resuming a run made from ' + previous.commit + ' with ' + commit + ': if the code changed what it asks, the replay diverges');
   /* A loop of its own closes after a budget as a world of laws does (§14.9). */
   let closingAll = false;
+  /* Its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the rounds left, this one included, and - with a help budget - the help it
+     may still be given, counted by the messages delivered to it (delivered again at the same questions on a resume). */
+  const budgetAt = (attempt: number, rounds: number): Record<string, number> => ({ rounds_left: Math.max(0, rounds - attempt + 1),
+    ...(helpShown() !== null ? { help_left: Math.max(0, helpShown()! - helpDelivered) } : {}) });
+  /* While a resumed run repeats its history, the help budget it had then. */
+  function helpShown(): number | null { return replay.pending() > 0 && previous ? (typeof previous.help_budget === 'number' ? previous.help_budget : null) : helpBudget; }
+  const budgetShown = researcher === 'assisted' && (cfg as { budget_visible?: boolean }).budget_visible !== false
+    && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.budget === 0;
   const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say,
+    ...(budgetShown ? { budget: budgetAt } : {}),
     halt: () => { const h = halt(); return closingAll && (h === 'token_budget' || h === 'time_budget') ? null : h; },
     closing: () => { closingAll = true; replay.closing = true; } };
   writeStatus();
@@ -1282,6 +1299,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     fingerprint: (law) => lawFingerprint(law, cfg.fingerprint as number),
     /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): the assisted researcher, in the rounds this code reviews. */
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
+    /* Its visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the assisted researcher's, once it is helped. */
+    budget: () => (run.services.budget && journal.researcher === 'assisted' && helping ? run.services.budget(attemptNow, roundsAt(cfg, attemptNow)) : {}),
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
     instruments: () => (journal.researcher === 'assisted' && helping && reviewing && instrumenting() ? instruments : null),
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
@@ -1427,7 +1446,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
-        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '') : promptFor(focus)),
+        + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
+        + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* Its conversation only grows: its system prompt fixed from its first question, what changes added as messages. */
       fixedSystem: () => helping && cfg.capabilities_from?.fixed_system === 0,

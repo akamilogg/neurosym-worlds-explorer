@@ -96,6 +96,8 @@ export interface LawSessionHost<A> {
   say(text: string): void;
   /** Asked before each consultation of System 2: a reason to stop now (cancelled, a budget spent), or null. */
   halt?(): string | null;
+  /** Its budget (SPEC-INVESTIGADOR-ASISTIDO §15): counters that go with its others (rounds left, help left). Empty: none. */
+  budget?(): Record<string, number>;
   /** Told when a round begins (a member of a team tells its board where it is). */
   onRound?(round: number): void;
 }
@@ -234,7 +236,7 @@ export class LawSession<A> {
     /* The verdicts it was given on its latest model, kept in its memory by that model's round. */
     if (memory && b) memory.recordCheck(b.round, h.lastCheck());
     let talk = new RoundConversation();
-    const counters = (): Record<string, unknown> => ({ ...(h.investigative ? { steps_left: Math.max(0, h.steps - (steps - free)) } : {}),
+    const counters = (): Record<string, unknown> => ({ ...(h.budget?.() ?? {}), ...(h.investigative ? { steps_left: Math.max(0, h.steps - (steps - free)) } : {}),
       ...(h.acts !== undefined ? { acts_left: budget.acts } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
     let told: string[] = refused;
     let written: Record<string, unknown> = {};
