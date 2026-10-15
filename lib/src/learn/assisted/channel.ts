@@ -130,3 +130,25 @@ export const PINS_SECTION = 'PINNED. To keep something before you, in any answer
   + '"document": "<a document of yours>" | "message": "<the id of a notice you received>" | "text": "..."}, {"do": "unpin", "id": "..."}]. '
   + 'What you pin reaches you in the channel at the start of every round (a document in its latest version) and within a round when it changes; '
   + 'pinning the same id again replaces it. You cannot unpin what others pinned.';
+
+/** Applies its pins to its channel, as `self` (SPEC-CANAL-MENSAJES §6): a document is a live value - its latest version when
+    delivered, or that it is gone -, a notice only one that reached it, a text as it is. Answers the refusals, with why. */
+export function applyPins(channel: Channel, ops: readonly PinOp[], documentOf: (id: string) => { readonly text: string; readonly versions: number } | undefined): string[] {
+  const warnings: string[] = [];
+  for (const op of ops) {
+    let r: { id: string } | { refused: string };
+    if (op.do === 'unpin') r = channel.publish('self', { kind: 'pinned', key: op.id, unpin: true });
+    else if (op.document !== undefined) {
+      const doc = op.document;
+      r = channel.publish('self', { kind: 'pinned', key: op.id, body: () => {
+        const d = documentOf(doc);
+        return d ? { document: doc, version: d.versions, text: d.text } : { document: doc, absent: 'no document "' + doc + '" now' };
+      } });
+    } else if (op.message !== undefined) {
+      const n = channel.notice(op.message);
+      r = n ? channel.publish('self', { kind: 'pinned', key: op.id, body: { message: op.message, from: n.from, body: n.body } }) : { refused: 'no notice "' + op.message + '" reached you' };
+    } else r = channel.publish('self', { kind: 'pinned', key: op.id, body: op.text });
+    if ('refused' in r) warnings.push('pin "' + op.id + '": ' + r.refused);
+  }
+  return warnings;
+}

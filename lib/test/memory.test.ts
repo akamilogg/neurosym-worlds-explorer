@@ -9,7 +9,7 @@ import { explorerSystem, parseExplorerTurn } from '../src/learn/explorer.ts';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { gridLab } from '../src/worlds/grid/lab.ts';
 import type { FetchLike } from '../src/core/net.ts';
-import { userOf } from './support.ts';
+import { heardOf, userOf } from './support.ts';
 
 
 /* SPEC-INVESTIGADOR-ASISTIDO §13: the assisted researcher's selective memory over its own record. */
@@ -234,6 +234,6 @@ test('the grid opens with its senior\'s first hypothesis too', async () => {
   const types = (JSON.parse(fs.readFileSync(out, 'utf8')).events as Record<string, any>[]).map((e) => e.type);
   assert.ok(types.indexOf('awaiting_opening') > types.lastIndexOf('exploration_game'), 'after its first games');
   assert.ok(types.includes('opening_received'));
-  assert.equal(asked[0].user.operator_messages.new[0].directive, true, 'its first question carries it, as an order');
-  assert.match(asked[0].user.operator_messages.new[0].text, /reaches row 0/);
+  assert.equal(heardOf(asked[0].user)[0].directive, true, 'its first question carries it, as an order');
+  assert.match(heardOf(asked[0].user)[0].text, /reaches row 0/);
 });

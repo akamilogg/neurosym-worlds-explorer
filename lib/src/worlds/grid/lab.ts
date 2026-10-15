@@ -46,6 +46,7 @@ import { experimentStates } from '../../orchestra/view.ts';
 import { OwnTests, ownTestsSection, type OwnTestsWords } from '../../learn/assisted/own-tests.ts';
 import { capabilityAt, roundsAt } from '../../learn/lab.ts';
 import { Instruments, instrumentsSection, parseInstruments } from '../../learn/assisted/instruments.ts';
+import { PINS_SECTION, applyPins, parsePins } from '../../learn/assisted/channel.ts';
 import { RoundConversation } from '../../learn/system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
@@ -163,6 +164,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   let reviewing = reviewFrom === 0;
   /* The attempt now, and whether its instruments apply then (their own start: `capabilities_from`). */
   let attemptNow = 1;
+  /* Its channel (SPEC-CANAL-MENSAJES): its budget pinned by the harness, read as it stands when delivered; and what it pins. */
+  if (s.channel && s.budget) s.channel.publish('harness', { kind: 'pinned', key: 'budget', body: () => s.budget!(attemptNow, roundsAt(s.cfg, attemptNow)) });
+  const pinning = Boolean(s.channel) && (s.cfg as { pins?: boolean }).pins !== false;
   const instrumenting = (): boolean => s.cfg.instruments !== false && capabilityAt(s.cfg, 'instruments', attemptNow);
   const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '')
     + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '')
@@ -170,7 +174,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */
   const systemPrompt = (): string => SYSTEM_PROMPT + (assisted && reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(Boolean(assisted.memory)) + '\n\n' + TASK_COVERAGE_SECTION
     + (ownTests ? '\n\n' + ownTestsSection([], true, ownTestsRequired(), GRID_TEST_WORDS) : '')
-    + (instrumenting() ? '\n\n' + instrumentsSection(null, GRID_INSTRUMENT_WORDS) : '') : '') + (s.budget ? '\n\n' + BUDGET_SECTION('help_left' in s.budget(1, 1)) : '');
+    + (instrumenting() ? '\n\n' + instrumentsSection(null, GRID_INSTRUMENT_WORDS) : '') : '') + (s.budget ? '\n\n' + BUDGET_SECTION('help_left' in s.budget(1, 1)) : '') + (pinning ? '\n\n' + PINS_SECTION : '');
   /* Tests of its own (SPEC-PRUEBAS-PROPIAS, the grid's), for the assisted researcher that replays: required with --own-tests. */
   const ownTestsNeed = Number((s.cfg as { ownTests?: number }).ownTests ?? 0);
   if (ownTestsNeed > 0 && !(assisted && tools.has('replay'))) throw new Error('--own-tests needs the assisted researcher, with replay among its tools');
@@ -1004,7 +1008,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     /* The round's conversation only grows (see RoundConversation): what changes from one answer to the next goes in the
        part added for that answer. */
     let talk = new RoundConversation();
-    const counters = (): Record<string, unknown> => ({ ...(s.budget ? s.budget(attemptNow, roundsAt(s.cfg, attemptNow)) : {}), ...(investigative ? { steps_left: Math.max(0, cfg.steps - (steps - free)) } : {}),
+    const counters = (): Record<string, unknown> => ({ ...(s.budget && !s.channel ? s.budget(attemptNow, roundsAt(s.cfg, attemptNow)) : {}), ...(investigative ? { steps_left: Math.max(0, cfg.steps - (steps - free)) } : {}),
       ...(tools.has('replay') ? { replays_left: plays.left } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
     let told: string[] = refused;
     let written: Record<string, unknown> = {};
@@ -1059,8 +1063,11 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       /* Its own instruments, in any answer: compiled now, run when it uses them. */
       const ins = assisted && reviewing && instrumenting() ? parseInstruments(obj(parseJsonLoose(content))?.instruments, noteWarnings) : [];
       if (ins.length) { noteWarnings.push(...instruments.apply(round, ins)); say('  instruments: ' + ins.map((d) => d.do + ' ' + d.id).join(', ')); }
+      /* What it pins, in any answer: to its channel. */
+      const pinOps = pinning ? parsePins(obj(parseJsonLoose(content))?.pins, noteWarnings) : [];
+      if (pinOps.length) { noteWarnings.push(...applyPins(s.channel!, pinOps, (id) => notebook.documents.get(id))); say('  pins: ' + pinOps.map((d) => d.do + ' ' + d.id).join(', ')); }
       written = { ...(turn.notes.length ? { your_notes: turn.notes } : {}), ...(turn.methods.length ? { your_methods: turn.methods } : {}), ...(docs.length ? { your_documents: docs.map((d) => d.do + ' ' + d.id) } : {}),
-        ...(ins.length ? { your_instruments: ins.map((d) => d.do + ' ' + d.id) } : {}) };
+        ...(ins.length ? { your_instruments: ins.map((d) => d.do + ' ' + d.id) } : {}), ...(pinOps.length ? { your_pins: pinOps.map((d) => d.do + ' ' + d.id) } : {}) };
       if (turn.notes.length) say('  notes: ' + turn.notes.map((n) => n.do + ' ' + n.id).join(', '));
       if (turn.methods.length) {
         say('  methods: ' + turn.methods.map((m) => m.do + ' ' + m.id).join(', '));

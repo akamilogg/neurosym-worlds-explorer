@@ -27,7 +27,7 @@ import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
 import { assistedSession, assistedSystem, deliveredMessages, operatorClient, BUDGET_SECTION, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
 import { Instruments, instrumentsSection } from '../learn/assisted/instruments.ts';
-import { Channel, PINS_SECTION, type ChannelPublication, type PinOp } from '../learn/assisted/channel.ts';
+import { Channel, PINS_SECTION, applyPins, type ChannelPublication, type PinOp } from '../learn/assisted/channel.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
 import { createHash } from 'node:crypto';
@@ -461,8 +461,12 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     onSelect: (record) => run.log('peer_select', record) }) } : null;
   if (team) run.log('team', { id: team.board.spec.id, member: team.member, members: team.board.spec.members, window: team.board.spec.window,
     exchange: team.board.spec.exchange, confirmations: team.board.spec.confirmations });
+  /* The channel of a laboratory with a loop of its own (the grid), the assisted researcher's in a run that starts with it. */
+  const gridChannel = isGameLab(lab) && researcher === 'assisted' && capabilitiesFrom.channel === 0 ? new Channel(run.log) : null;
   const services = { ...(isGameLab(lab) && researcher === 'assisted'
-    ? { ...run.services, operatorLlm: run.services.llm, llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous), fixedSystem: () => capabilitiesFrom.fixed_system === 0 }, run.log),
+    ? { ...run.services, operatorLlm: run.services.llm, ...(gridChannel ? { channel: gridChannel } : {}),
+      llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take()), scheduled: deliveredMessages(previous), fixedSystem: () => capabilitiesFrom.fixed_system === 0,
+        ...(gridChannel ? { messages: () => gridChannel } : {}) }, run.log),
       assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) },
       awaitOpening: () => run.awaitOpening() }
     : run.services), ...(endings.length ? { endings } : {}), ...(team ? { team } : {}) };
@@ -725,6 +729,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
         waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}),
           ...((order as { directive?: unknown }).directive === true ? { directive: true } : {}),
+          ...(typeof (order as { pin?: unknown }).pin === 'string' && /^[a-z][a-z0-9_]*$/.test((order as { pin: string }).pin) ? { pin: (order as { pin: string }).pin } : {}),
           ...((order as { test?: unknown }).test && typeof (order as { test?: unknown }).test === 'object' ? { test: (order as { test: Record<string, unknown> }).test } : {}), at: new Date().toISOString() });
         log('operator_command', { ...who, accepted: true }); helpUsed++;
       } else if (researcher === 'assisted' && order.kind === 'focus') {
@@ -938,25 +943,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   };
   /* What it pins itself, with --no-pins the condition without. */
   const pinning = (): boolean => channelOn && helping && (cfg as { pins?: boolean }).pins !== false;
-  const applyPins = (ops: readonly PinOp[]): string[] => {
-    const warnings: string[] = [];
-    for (const op of ops) {
-      let r: { id: string } | { refused: string };
-      if (op.do === 'unpin') r = channel.publish('self', { kind: 'pinned', key: op.id, unpin: true });
-      else if (op.document !== undefined) {
-        const doc = op.document;
-        r = channel.publish('self', { kind: 'pinned', key: op.id, body: () => {
-          const d = session.notebook.documents.get(doc);
-          return d ? { document: doc, version: d.versions, text: d.text } : { document: doc, absent: 'no document "' + doc + '" now' };
-        } });
-      } else if (op.message !== undefined) {
-        const n = channel.notice(op.message);
-        r = n ? channel.publish('self', { kind: 'pinned', key: op.id, body: { message: op.message, from: n.from, body: n.body } }) : { refused: 'no notice "' + op.message + '" reached you' };
-      } else r = channel.publish('self', { kind: 'pinned', key: op.id, body: op.text });
-      if ('refused' in r) warnings.push('pin "' + op.id + '": ' + r.refused);
-    }
-    return warnings;
-  };
+  const applyPinsNow = (ops: readonly PinOp[]): string[] => applyPins(channel, ops, (id) => session.notebook.documents.get(id));
   const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, episodeOf: (id: string) => episodes.get(id)?.data,
     ...(channelOn ? { publish: (m: ChannelPublication) => { channelNow()?.publish('world', m); } } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
@@ -1342,7 +1329,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
     /* Its visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the assisted researcher's, once it is helped. */
     /* What it pins itself (SPEC-CANAL-MENSAJES §6): a document in its latest version, a notice it received, or a text. */
-    pins: () => (pinning() ? { apply: (round: number, ops: readonly PinOp[]) => applyPins(ops) } : null),
+    pins: () => (pinning() ? { apply: (_round: number, ops: readonly PinOp[]) => applyPinsNow(ops) } : null),
     /* Its budget: pinned in its channel when it has one (below), else counters with its others. */
     budget: () => (run.services.budget && journal.researcher === 'assisted' && helping && !channelOn ? run.services.budget(attemptNow, roundsAt(cfg, attemptNow)) : {}),
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */

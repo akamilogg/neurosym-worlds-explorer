@@ -45,6 +45,8 @@ export interface OperatorMessage {
   readonly directive?: boolean;
   /** A test the senior orders it to register (SPEC-PRUEBAS-PROPIAS §8). */
   readonly test?: Readonly<Record<string, unknown>>;
+  /** Pinned in its channel under this key (SPEC-CANAL-MENSAJES): a standing message (a member's role), sent every round. */
+  readonly pin?: string;
 }
 
 /** What it is told once a directive has reached it: what an order of its senior is, how it reports it, how it disagrees. */
@@ -195,6 +197,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
         for (const m of fresh) {
           const author = (m.by?.startsWith('agent:') ? m.by : 'operator') as 'operator';
           if (m.directive) { open.set(m.id, { ...m, ...(channel.round ? { round: channel.round() } : {}) }); directed = true; ch.publish(author, { kind: 'pinned', key: 'directive:' + m.id, body: m }); }
+          else if (m.pin) ch.publish(author, { kind: 'pinned', key: m.pin, body: m });
           else ch.publish(author, { kind: 'notice', body: m });
         }
         if (task !== pinnedTask) { ch.publish('operator', task ? { kind: 'pinned', key: 'task', body: task } : { kind: 'pinned', key: 'task', unpin: true }); pinnedTask = task; }

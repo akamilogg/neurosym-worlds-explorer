@@ -170,7 +170,8 @@ export async function runTeam(def: TeamDefinition, options: BatchOptions): Promi
       : [...(def.args ?? []), ...(m.args ?? []), '--researcher', researcher, '--team', dir, '--member', m.id,
         ...(places ? ['--explore-places', String(places), '--explore-offset', String(i * MEMBER_STRETCH)] : []), ...control, '--out', out];
     /* Its role waits in its inbox for its first question (E5: decided above, never on the board). */
-    if (!known && m.role) send(out, { kind: 'message', text: m.role, by: 'agent:team' });
+    /* Its role, a standing message: pinned in its channel, it reaches it every round (SPEC-CANAL-MENSAJES). */
+    if (!known && m.role) send(out, { kind: 'message', text: m.role, by: 'agent:team', pin: 'role' });
     latest.set(m.id, out);
     save();
     say('team ' + def.id + ': ' + m.id + ' ' + (known ? 'resumed' : 'started'));

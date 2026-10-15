@@ -308,4 +308,25 @@ Se adaptaron `assisted`, `focus`, `append-only`, `budget`, `channel`, `orchestra
 `orchestra-project` y `sources`. Las pruebas de continuación (`continuation`, `review`) encontraron el fallo del relevo,
 ya corregido.
 
-**Siguiente:** paso 5, la cuadrícula.
+### 13.5 Paso 5: la cuadrícula, y los mensajes fijados de otros (15/10/2026)
+
+**La cuadrícula** tiene el canal (`LabServices.channel`) en un run del investigador asistido que empieza con la
+capacidad.
+- Su cliente, el mismo que el de los mundos de leyes, lo entrega.
+- La cuadrícula publica su presupuesto fijado (`harness:budget`, y deja de ponerlo entre los contadores) y los `pins` de
+  su investigador, con la misma función (`applyPins`, compartida con los mundos de leyes).
+- Su prompt lleva `PINS_SECTION` salvo con `--no-pins`.
+
+**Un mensaje puede pedir ir fijado.** Una orden de mensaje admite `pin: "<clave>"`: se publica fijado bajo esa clave, en
+lugar de como aviso, y llega en cada ronda.
+- **De dónde sale:** el papel de cada miembro de un equipo (SPEC-INVESTIGACION-PARALELA) se mandaba como mensaje al
+  empezar. Antes se repetía en cada ronda porque se repetían los mensajes anteriores; con el canal, un aviso llega una
+  vez y el papel se perdía en la segunda ronda.
+- **Ahora el equipo lo fija** (`pin: "role"`), porque un papel es una asignación permanente, no un aviso.
+
+**Pruebas:**
+- `test/channel.test.ts`: en la cuadrícula, el presupuesto fijado desde la primera ronda, lo que fija su investigador en
+  cada ronda siguiente, y la conversación que sólo crece.
+- `test/parallel.test.ts`: cada miembro reconoce su papel en todas las rondas.
+
+**Siguiente:** paso 6, el senior como segundo destinatario.

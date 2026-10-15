@@ -218,3 +218,35 @@ test('every version of the artifact accepted reaches the researcher as a notice 
   assert.equal(r.finding.artifact?.version, 'good2');
   assert.deepEqual(r.finding.artifact?.chain, [{ version: 'good1', round: 1 }, { version: 'good2', round: 2 }]);
 });
+
+/* --- Step 5: the grid, likewise (its client delivers the channel; it publishes its budget and its researcher's pins). */
+
+test('the grid has the channel too: its budget pinned, what it pins at every round, the conversation only growing', async () => {
+  const { gridLab } = await import('../src/worlds/grid/lab.ts');
+  const { PINS_SECTION } = await import('../src/learn/assisted/channel.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'channel-grid-'));
+  const asked: Message[][] = [];
+  const grid: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const messages = b.messages as Message[];
+    const grading = messages[0].content.startsWith('You grade');
+    if (!grading) asked.push(messages);
+    const first = parts(messages)[0] ?? {};
+    const content = grading ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in first ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: first.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'],
+        ...(first.round === 1 ? { pins: [{ do: 'pin', id: 'note', text: 'the other side moves first' }] } : {}) };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  await runLaboratory(gridLab, { args: ['--seed', '22', '--explore', '1', '--variants', '1', '--family', '1', '--family-variants', '1', '--confirm-places', '1', '--levels', '2', '--depth', '1',
+    '--steps', '0', '--flat', '--no-ablation', '--no-grade', '--attempts', '3', '--researcher', 'assisted', '--out', path.join(dir, 'grid.json')], root: dir, llm, fetch: grid });
+  assert.ok(asked.every((m) => m[0].content.includes(PINS_SECTION)));
+  const opening = (round: number) => asked.find((m) => parts(m)[0].round === round && !('task' in parts(m)[0]))!;
+  const keys = (m: Message[]) => parts(m).flatMap((p) => p.channel?.pinned ?? []).map((p: any) => p.key);
+  assert.ok(keys(opening(1)).includes('harness:budget'));
+  assert.ok(!keys(opening(1)).includes('self:note'));
+  assert.ok(keys(opening(2)).includes('self:note') && keys(opening(3)).includes('self:note'), 'what it pinned, at every round after');
+  for (let i = 1; i < asked.length; i++) if (asked[i][1].content === asked[i - 1][1].content)
+    assert.deepEqual(asked[i].slice(0, asked[i - 1].length), asked[i - 1], 'question ' + i);
+});

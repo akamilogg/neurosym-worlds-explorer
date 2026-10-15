@@ -10,7 +10,7 @@ import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { PLACES_SECTION, gridLab } from '../src/worlds/grid/lab.ts';
 import type { FetchLike } from '../src/core/net.ts';
 import type { Objective, Place } from '../src/learn/objective.ts';
-import { userOf } from './support.ts';
+import { heardOf, userOf } from './support.ts';
 
 /* SPEC-INVESTIGACION-PARALELA: boards to explore (modality A) and a team with a board (modality B). */
 
@@ -239,7 +239,7 @@ test('team@1: members at once, each its role and its stretch; the budget declare
   const { runTeam, checkTeam, perMemberTokens } = await import('../src/orchestra/team.ts');
   const root = tmp('team@1-');
   /* One System 2 for the whole team: which member asks is in its role, the first message it was given. */
-  const roleOf = (user: Record<string, any>): string => [...(user.operator_messages?.new ?? []), ...(user.operator_messages?.earlier ?? [])].map((m: { text: string }) => m.text).join(' ');
+  const roleOf = (user: Record<string, any>): string => heardOf(user).map((m) => m.text).join(' ');
   const both: Script = (user, done) => {
     const a = /refute/.test(roleOf(user));
     if (user.round === 1 && done === 0) return { investigate: [{ act: 'g1@0', from: [0, 0], to: [1, 1] }] };

@@ -142,12 +142,12 @@ export function payloadOf(user: unknown): Record<string, any> {
 }
 
 /** What the operator and the agents told it in a question (merged by `userOf`), through its channel (SPEC-CANAL-MENSAJES):
-    their notices, then the directives pinned - each as the message it was. */
+    their notices, then their messages pinned (a directive, a role) - each as the message it was. */
 export function heardOf(user: Record<string, any>): Record<string, any>[] {
   const c = user?.channel;
   if (!c) return [];
   const notices = (c.notices ?? []).filter((n: any) => n.from === 'operator' || String(n.from).startsWith('agent:')).map((n: any) => n.body);
-  const directives = Object.entries(c.pinned ?? {}).filter(([k]) => /:directive:/.test(k)).map(([, v]) => v as Record<string, any>);
+  const directives = Object.entries(c.pinned ?? {}).filter(([k, v]) => /^(operator|agent):/.test(k) && v && typeof v === 'object' && 'text' in (v as object)).map(([, v]) => v as Record<string, any>);
   return [...notices, ...directives];
 }
 

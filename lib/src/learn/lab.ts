@@ -356,6 +356,9 @@ export interface LabServices {
       in every question - the rounds left (this one included, of the `rounds` it had then: a continuation's history had
       fewer) and, with a help budget, the help it may still be given. */
   readonly budget?: (attempt: number, rounds: number) => Record<string, number>;
+  /** The assisted researcher's channel (SPEC-CANAL-MENSAJES), in a run that starts with it: its client delivers it; the
+      laboratory publishes in it (its budget, the pins of its researcher). */
+  readonly channel?: import('./assisted/channel.ts').Channel;
   /** The Judge (the flat one with --flat; its answers logged for --resume). */
   readonly judge: import('../core/jev.ts').JevJudge;
   /** A runner for the learner's code. */
