@@ -885,5 +885,8 @@ darle un empujón como operador, pero automatizado: un mensaje que llegue en una
 **Prueba** (`test/scheduled.test.ts`): un lote programa un mensaje para la ronda 3. Llega con la primera pregunta de la
 ronda 3 y no antes, queda registrado con su ronda y cuenta como ayuda.
 
-**Primer uso:** `lib/examples/batch.artifacts-threesum.json` (`artifacts-threesum-2`). En la ronda 6 de 12, el operador
-dice que hay una solución comprobada ligeramente por debajo de O(n²) y le pide que intente descubrirla.
+**Primer uso:** `lib/examples/batch.artifacts-threesum.json`, ahora `artifacts-threesum-senior`. En la ronda 6 de 12,
+el operador dice que hay una solución comprobada ligeramente por debajo de O(n²) y le pide que intente descubrirla.
+- **El par junior/senior:** el senior abre con la primera hipótesis y ayuda cuando el junior se atasca, con 8 órdenes
+  como máximo.
+- **El presupuesto de ayuda es 9:** las 8 del senior más el mensaje programado, porque cuenta la ayuda de todos.
