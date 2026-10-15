@@ -181,7 +181,7 @@ test('its channel: the environment\'s notices to the junior, once; the junior\'s
   const accepted = { type: 'channel_published', from: 'world', kind: 'notice', id: 'm1', body: { artifact_accepted: { version: 'v1', round: 2 } } };
   const out = journal(dir, 'run', [check(1), check(2), accepted, check(3)]);
   const j = JSON.parse(fs.readFileSync(out, 'utf8'));
-  fs.writeFileSync(out, JSON.stringify({ ...j, config: { attempts: 8 }, help_budget: 3 }));
+  fs.writeFileSync(out, JSON.stringify({ ...j, config: { attempts: 8, task: 'Make it run below O(n^2).' }, help_budget: 3 }));
   const { calls, llm } = scripted((n) => n === 1 ? { notes: [{ do: 'write', id: 'plan', text: 'ask for the neighbours next' }], pins: [{ do: 'pin', id: 'plan', document: 'plan' }] }
     : { decision: 'wait', why: 'nothing yet' });
   const controller = new AbortController();
@@ -197,6 +197,7 @@ test('its channel: the environment\'s notices to the junior, once; the junior\'s
   const first = channelOf(calls[0])[0];
   assert.deepEqual(first.notices.map((n: any) => [n.from, n.body.artifact_accepted.version]), [['world', 'v1']], 'the environment\'s notice to the junior');
   assert.deepEqual(first.pinned.find((p: any) => p.key === 'harness:junior_budget').value, { rounds_left: 6, help_left: 3 }, 'the junior\'s budget, from its journal');
+  assert.equal(first.pinned.find((p: any) => p.key === 'operator:task').value, 'Make it run below O(n^2).', 'the operator\'s task: the junior\'s, and so its own');
   const second = channelOf(calls[1]).at(-1);
   assert.equal(second.pinned.find((p: any) => p.key === 'self:plan').value.text, 'ask for the neighbours next', 'the note it pinned, at its next question');
   assert.ok(!channelOf(calls[2]).slice(channelOf(calls[1]).length).some((c: any) => (c.notices ?? []).length), 'a notice once');

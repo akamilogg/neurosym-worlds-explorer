@@ -684,6 +684,15 @@ a inducir es el de dos hemisferios de un mismo cerebro: uno operativo y otro tá
 - **Nunca un mensaje que sólo prohíbe.** Si el junior mira donde no debe, se corrige en una frase y el mensaje se dedica
   al camino: una hipótesis propia sobre lo que pide la tarea y el método para comprobarla.
 
+**Tercera: el senior no veía la tarea del operador (15/10/2026).** En `artifacts-threesum-subquadratic-3`, el senior dijo
+en la ronda 6 que la tarea pedía ir "lo más rápido posible" y que bajar de O(n²) "no se pedía". En la ronda 10 se
+corrigió: "me equivoqué, tu informe dice que el operador lo exige".
+- **La causa:** su prompt es el brief del junior, que no lleva la tarea. La tarea le llega al junior con cada pregunta
+  (ahora, fijada en su canal), nunca al senior. Sólo la conocía por lo que el junior contaba.
+- **El arreglo:** el canal del senior fija la tarea del operador (`operator:task`), tomada del diario: la del run
+  (`--task`) o la última que fijó un cambio de foco (`operatorTask`). Su papel dice que esa tarea es la suya.
+- **Prueba** (`test/orchestra-senior-memory.test.ts`): la tarea del diario llega fijada al senior.
+
 ### 5.1 El objetivo grande
 
 Lo define el operador, en palabras y con un **criterio computable**:
