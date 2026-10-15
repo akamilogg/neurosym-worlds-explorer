@@ -146,7 +146,7 @@ test('the senior reads the junior\'s whole model and its methods in each round: 
   assert.deepEqual(r.model.rules_for_the_judge.level, { type: 'score', asks: 'Estimate the command from {{drive}}' });
   assert.match(r.model.output, /m\.rules\.level/);
   assert.deepEqual(r.methods, [{ id: 'pairs', do: 'write', text: 'compare matched pairs' }]);
-  assert.match(SENIOR_ROLE, /REVIEW ITS WORK FIRST/);
+  assert.match(SENIOR_ROLE, /READ WHAT IT DID, as the input to your next move/);
 });
 
 test('the senior is told the junior\'s own instruments: its sources (with their origins) and its selective memory', async () => {

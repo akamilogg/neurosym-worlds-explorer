@@ -385,8 +385,13 @@ test('a follow-up allows one reading; asked to read again, the senior is reminde
 test('the senior proposes hypotheses and the method to test them for the whole task; nothing of the task accepted for a while is a sign', () => {
   assert.match(SENIOR_ROLE, /PROPOSE HYPOTHESES/);
   assert.match(SENIOR_ROLE, /METHOD the junior should use to test them/);
-  assert.match(SENIOR_ROLE, /REVIEW its work/);
+  assert.match(SENIOR_ROLE, /in service of that, to REVIEW its work/);
+  assert.match(SENIOR_HEAD, /ONE RESEARCHER THINKING IN TWO WAYS/);
+  assert.match(SENIOR_HEAD, /You are not its boss/);
   assert.match(SENIOR_ROLE, /to make or improve something/);
+  assert.match(SENIOR_ROLE, /Put first what the task asks first/);
+  assert.match(SENIOR_ROLE, /Never send a message that only tells the junior what to stop doing/);
+  assert.match(SENIOR_ROLE, /never "only a lead"/);
   const round = (r: number, extra: Record<string, unknown>[] = []) => [{ type: 'proposal', round: r }, { type: 'check', round: r, laboratories: [{ place: 'lab1', holds: true }] }, ...extra];
   const journal = (events: Record<string, unknown>[]) => ({ events });
   /* Its model holds everywhere, but nothing was accepted since round 2: four rounds without, a sign. */

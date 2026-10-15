@@ -656,6 +656,34 @@ método con que el junior debe comprobarlas, y revisar su trabajo. No es algo de
 - el papel dice las tres funciones y la tarea entera;
 - la señal aparece tras varias rondas sin aceptar nada, no tras una aceptación reciente, y no demasiado pronto.
 
+**Segunda corrección: dos hemisferios, no un jefe (el autor, 15/10/2026).** En `artifacts-threesum-subquadratic-2`, ya
+con el papel corregido, el senior abrió con una hipótesis sobre el algoritmo, pero luego volvió a lo de antes:
+- dedicó todos sus mensajes a arreglar el modelo de tiempos;
+- llamó a la meta principal "una pista abierta, no un requisito";
+- respondía al junior que buscaba en el sitio equivocado con "deja de buscar", sin darle otro sitio.
+
+El autor: le da más peso a revisar el trabajo del junior que a pensar estratégicamente, y actúa como un jefe. El modelo
+a inducir es el de dos hemisferios de un mismo cerebro: uno operativo y otro táctico.
+
+**El cambio** (`SENIOR_HEAD`, `SENIOR_ROLE`), general:
+- **Los dos son un mismo investigador que piensa de dos maneras.**
+  - El junior es la mitad operativa: actúa, ejecuta los experimentos, mide, construye los modelos y lo que la tarea pide
+    hacer.
+  - El senior es la mitad estratégica y táctica: piensa por delante qué merece intentarse y por qué, con qué hipótesis,
+    con qué método, en qué orden de ataque.
+  - "No eres su jefe."
+- **Su parte:** proponer hipótesis y el método para comprobarlas, que es el plan de ataque. La revisión está al servicio
+  de eso: leer lo que hizo el junior vale un mensaje cuando cambia lo que conviene intentar después.
+  - "REVIEW ITS WORK FIRST" pasa a "READ WHAT IT DID, as the input to your next move".
+  - Sus mensajes son el plan que la mitad operativa ejecuta. Siguen siendo directivas, con su rendición de cuentas.
+- **La prioridad la marca la tarea:**
+  - si pide entender el entorno, primero sus reglas;
+  - si pide hacer o mejorar algo, primero hipótesis sobre cómo hacerlo, con su experimento.
+
+  Lo que la tarea pide expresamente nunca es "sólo una pista".
+- **Nunca un mensaje que sólo prohíbe.** Si el junior mira donde no debe, se corrige en una frase y el mensaje se dedica
+  al camino: una hipótesis propia sobre lo que pide la tarea y el método para comprobarla.
+
 ### 5.1 El objetivo grande
 
 Lo define el operador, en palabras y con un **criterio computable**:
