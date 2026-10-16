@@ -42,6 +42,8 @@ export interface ValidationManifest {
   readonly use_context: string;
   /** Every content the report rests on, by its role, its name in the run and its sha256 (its copy in the evidence store). */
   readonly evidence: readonly { readonly role: string; readonly file: string; readonly sha256: string; readonly bytes: number }[];
+  /** What it rests on that was not found whole when it was closed: its evidence then does not hold. */
+  readonly unkept?: readonly string[];
 }
 
 export interface Approval {
@@ -283,20 +285,25 @@ export async function reviseRun(journalFile: string, options: { readonly evidenc
   const files: [string, string][] = [['journal', base + '.json'], ['replay_log', base + '.replay.jsonl'], ['finding', base + '.finding.json'],
     ['finding_researcher', base + '.finding.researcher.json'], ['method_audit', base + '.method.json'], ['operator_verdicts', base + '.anomalies.jsonl'],
     ['independence_declarations', independenceFile(journal)],
-    ...reevaluationFiles(base).map((f) => ['reevaluation', f] as [string, string]),
+    /* A re-evaluation whole: its journal, and its log - where its measured runs are - so that it can be computed again. */
+    ...reevaluationFiles(base).flatMap((f) => [['reevaluation', f], ['reevaluation_replay_log', f.replace(/\.json$/, '.replay.jsonl')]] as [string, string][]),
     ...fs.readdirSync(path.dirname(journal)).filter((f) => f.startsWith(path.basename(base) + '.agent-') && f.endsWith('.json')).map((f) => ['agent_record', path.join(path.dirname(journal), f)] as [string, string])];
-  const blobsDir = path.join(path.dirname(journal), 'blobs');
   const evidence: { role: string; file: string; sha256: string; bytes: number }[] = [];
   for (const [role, file] of files) if (fs.existsSync(file)) { const c = fs.readFileSync(file); evidence.push({ role, file: path.basename(file), sha256: store(options.evidenceDir, c), bytes: c.length }); }
-  for (const b of verification.integrity.missing_blobs.length || verification.integrity.corrupt_blobs.length ? [] : citedBlobs(journal)) {
-    const c = fs.readFileSync(path.join(blobsDir, b));
-    evidence.push({ role: 'blob', file: 'blobs/' + b, sha256: store(options.evidenceDir, c), bytes: c.length });
+  /* The texts each journal kept whole by their content (the run's, and its re-evaluations'): each copied if it is the content
+     its name says; one missing or altered is said in the manifest, and the revision's evidence then does not hold. */
+  const unkept: string[] = [];
+  for (const j of [journal, ...reevaluationFiles(base)]) for (const b of citedBlobs(j)) {
+    const at = path.join(path.dirname(j), 'blobs', b), name = path.relative(path.dirname(journal), at).split(path.sep).join('/');
+    const c = fs.existsSync(at) ? fs.readFileSync(at) : null;
+    if (!c || sha(c) !== b) { unkept.push(name + (c ? ': its content is not the one it names' : ': missing')); continue; }
+    if (!evidence.some((e) => e.sha256 === b)) evidence.push({ role: 'blob', file: name, sha256: store(options.evidenceDir, c), bytes: c.length });
   }
   const useBytes = Buffer.from(JSON.stringify(use));
   const end = [...(JSON.parse(fs.readFileSync(journal, 'utf8')).events ?? [])].reverse().find((e: Record<string, unknown>) => e.type === 'end') ?? {};
   const manifest: ValidationManifest = { format: 'validation_manifest@1', run: path.basename(base), report: store(options.evidenceDir, reportBytes),
     artifact: { model_sha256: end.final ? sha(JSON.stringify(end.final)) : null, ...(report.description.artifact ? { version: report.description.artifact.version } : {}) },
-    use_context: store(options.evidenceDir, useBytes), evidence };
+    use_context: store(options.evidenceDir, useBytes), evidence, ...(unkept.length ? { unkept } : {}) };
   const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2));
   const revision = store(options.evidenceDir, manifestBytes);
   if (revision === previous) return { revision, created: false, report };
@@ -344,6 +351,7 @@ export function openRevision(journalFile: string, revision: string, evidenceDir:
   const r = copy(manifest.report, 'the report');
   for (const e of manifest.evidence) copy(e.sha256, e.role + ' (' + e.file + ')');
   copy(manifest.use_context, 'the context of use');
+  for (const u of manifest.unkept ?? []) problems.push('not kept when it was closed: ' + u);
   const localReport = path.join(validationDir(journal), short(full), 'report.json');
   if (fs.existsSync(localReport) && sha(fs.readFileSync(localReport)) !== manifest.report) problems.push('the report beside the run is not the revision\'s: the store\'s copy is what counts');
   const report = JSON.parse((r ?? fs.readFileSync(localReport)).toString('utf8'));
@@ -379,6 +387,10 @@ export function validationState(journalFile: string, evidenceDir: string): { sta
   let signed = history.length - 1;
   while (signed >= 0 && !(history[signed].event === 'approval' && history[signed].revision === approval.revision)) signed--;
   const since = history.slice(signed + 1);
+  /* Its evidence, opened again: a signature stays as it was signed, but it is in force only while what it signed holds. */
+  const signedRevision = revisions.find((r) => r.revision === approval.revision);
+  if (signedRevision && !signedRevision.integrity.holds) return { status: 'revalidate', approval, latest,
+    note: 'the evidence of the signed revision ' + short(approval.revision) + ' does not hold: ' + signedRevision.integrity.problems.join('; '), revisions, history };
   const suspended = since.find((e) => e.event === 'approval_suspended');
   if (suspended) return { status: 'revalidate', approval, latest, note: 'suspended by revision ' + short(suspended.revision) + ': ' + [...suspended.no_longer_met.map((k: string) => k + ' no longer holds'), ...suspended.new_limitations.map((l: string) => 'new: ' + l)].join('; '), revisions, history };
   return { status: approval.conclusion, approval, latest, ...(latest && latest !== approval.revision ? { note: 'a later revision, unsigned, contradicts nothing: ' + short(latest) } : {}), revisions, history };

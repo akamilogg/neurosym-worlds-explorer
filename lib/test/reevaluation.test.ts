@@ -67,6 +67,7 @@ test('a synthetic re-evaluation: the frozen model and its artifact on new places
   assert.match(rev.report.robustness.within, /not the real system/);
   const roles = JSON.parse(fs.readFileSync(path.join(evidenceDir, rev.revision), 'utf8')).evidence.map((e: any) => e.role);
   assert.equal(roles.filter((r: string) => r === 'reevaluation').length, 2);
+  assert.equal(roles.filter((r: string) => r === 'reevaluation_replay_log').length, 2, 'with their measured runs, to compute them again');
 
   /* A dependency not as inventoried: refused - it would evaluate something else. */
   const inv = readInventory(root);

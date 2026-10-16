@@ -53,6 +53,35 @@ test('content is not provenance: base->A, base->B, B->A - A was last made from B
     'the first way to A is not in the line of the latest: another change made it');
 });
 
+test('an accepted artifact keeps the way it was made when it was accepted: a later way back to the same content is not its provenance', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-accepted-way-'));
+  let made = '', note = '';
+  const answers: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string;
+    const user = sys.startsWith('You grade') ? {} : JSON.parse(userOf(b));
+    for (const i of user.investigation ?? []) for (const x of i.results ?? []) if (x.accepted && typeof x.version === 'string' && !('runs' in x)) { if (!made) made = x.version; else if (x.version !== made) note = x.version; }
+    const done = (user.investigation ?? []).length;
+    const base = (user.notebook?.episodes ?? []).find((e: any) => e.version)?.version;
+    const proposal = (extra: Record<string, unknown>) => ({ rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => 100', validate: false, lessons: ['l'], next_experiment: 'n', beliefs: [], ...extra });
+    const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in user ? { rationale: 'r', beliefs: [], lessons: ['l'], next_experiment: 'n' }
+      : user.round === 1 && done === 0 ? { investigate: [{ act: { change: { from: base, files: { 'main.py': QUADRATIC }, why: 'the way it was accepted', expect: 'faster' } } }] }
+      : user.round === 1 ? proposal({ artifact: made, validate_artifact: true })
+      : user.round === 2 && done === 0 ? { investigate: [{ act: { change: { from: made, files: { 'NOTE.md': 'a detour' }, why: 'a detour', exploratory: true } } }] }
+      : user.round === 2 && done === 1 ? { investigate: [{ act: { change: { from: note, files: { 'NOTE.md': null }, why: 'back again by another way', exploratory: true } } }] }
+      : proposal({});
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const r = await runLaboratory(artifactsLab, { args: ['--artifact', 'threesum', '--scale', '0.5', '--seed', '1', '--researcher', 'assisted', '--attempts', '2', '--flat', '--no-grade', '--no-reflection', '--no-ablation', '--out', path.join(dir, 'run.json')],
+    root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  if (!events.some((e) => e.type === 'artifact_accepted' && e.version === made)) { t.skip('the artifact was not accepted this time (a real measurement): nothing to fix its provenance to'); return; }
+  const lineage = r.finding.artifact!.lineage as any[];
+  assert.deepEqual(lineage.map((x) => x.reason?.why), ['the way it was accepted'], 'the way it was accepted, not the later one: ' + JSON.stringify(lineage));
+});
+
 test('in a run: a dropped belief is told with the changes that rested on it; the product\'s chain in the finding - reasons, beliefs as they stand, its tests', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-because-'));
   let made = '';

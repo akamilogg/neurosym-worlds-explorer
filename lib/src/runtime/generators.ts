@@ -37,7 +37,10 @@ export function generatorOf(journal: J, folder: string, base: string): { id: str
   const world = new Set(['seed', ...(lab ? Object.keys(worldOptionsIn(lab.options, config)) : [])]);
   const harness = Object.fromEntries(Object.entries(config).filter(([k]) => !world.has(k) && !/^(llm_|jev_)/.test(k)).sort(([a], [b]) => a.localeCompare(b)));
   const agents = fs.existsSync(folder) ? fs.readdirSync(folder).filter((f) => f.startsWith(base + '.agent-') && f.endsWith('.json')).map((f) => readJson(path.join(folder, f)))
-    .filter(Boolean).map((a) => ({ role: a!.role, model: a!.llm_config?.model ?? null, provider: a!.llm_provider ?? null })).sort((a, b) => String(a.role).localeCompare(String(b.role))) : [];
+    .filter(Boolean).map((a) => ({ role: a!.role, model: a!.llm_config?.model ?? null, provider: a!.llm_provider ?? null,
+      /* Every setting of its requests (its reasoning effort, temperature...) and of its role (orders, patience...): a senior
+         at low and one at high are two conditions (an external review, 16/10/2026). */
+      llm_config: a!.llm_config ?? null, settings: a!.settings ?? null })).sort((a, b) => String(a.role).localeCompare(String(b.role))) : [];
   const configuration = { llm_model: config.llm_model ?? null, llm_provider: config.llm_provider ?? null, llm_tuning: config.llm_tuning ?? null,
     jev_model: config.jev_model ?? null, researcher: journal.researcher ?? null, agents, harness };
   const hash = createHash('sha256').update(JSON.stringify(configuration)).digest('hex').slice(0, 10);

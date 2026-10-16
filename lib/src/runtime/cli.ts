@@ -391,8 +391,10 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const { packRun } = await import('./package.ts');
         const outDir = take(args, 'out');
         const { dir, manifest } = packRun(journal, outDir ? path.resolve(outDir) : undefined);
-        out('packed ' + manifest.files.length + ' files into ' + dir + (manifest.missing_blobs.length ? '; ' + manifest.missing_blobs.length + ' cited blobs not found: the package is not whole' : ''));
-        return manifest.missing_blobs.length ? 1 : 0;
+        out('packed ' + manifest.files.length + ' files into ' + dir + (manifest.missing_blobs.length ? '; ' + manifest.missing_blobs.length + ' cited blobs not found' : '')
+          + (manifest.corrupt_blobs.length ? '; ' + manifest.corrupt_blobs.length + ' cited blobs whose content is not the one they name, left out' : '')
+          + (manifest.missing_blobs.length || manifest.corrupt_blobs.length ? ': the package is not whole' : ''));
+        return manifest.missing_blobs.length || manifest.corrupt_blobs.length ? 1 : 0;
       }
       case 'verify': {
         const dir = path.resolve(args[0] ?? '');

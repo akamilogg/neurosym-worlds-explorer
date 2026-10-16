@@ -177,9 +177,12 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   const file = agentFile(o.journal, o.id);
   const role: AgentRole = o.role ?? 'coach';
   const record: { format: string; agent: string; role: AgentRole; run: string; started: string; decisions: AgentDecision[]; usage?: Usage;
-    llm_config?: Readonly<Record<string, unknown>>; llm_provider?: string;
+    llm_config?: Readonly<Record<string, unknown>>; llm_provider?: string; settings?: Record<string, unknown>;
     continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
   if (o.llm.configuration) record.llm_config = o.llm.configuration;
+  /* The settings of its role, as given: they make it the agent it is (a characterization tells one from another). */
+  record.settings = Object.fromEntries(Object.entries({ maxOrders: o.maxOrders, patience: o.patience, looking: o.looking, readSteps: o.readSteps, cooldown: o.cooldown,
+    digestRounds: o.digestRounds, openLimit: o.openLimit }).filter(([, v]) => v !== undefined));
   /* Its provider, as an identity (never its address): whether a validator shares it (SPEC-RIESGO-MODELOS §7.2). */
   if (providerOf(o.llm.endpoint)) record.llm_provider = providerOf(o.llm.endpoint)!;
   const save = () => fs.writeFileSync(file, JSON.stringify(record, null, 2));

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { blobsOf, runLaboratory } from './lab-runner.ts';
 import { LABS } from '../worlds/labs.ts';
+import { JEV_DEFAULT_URL } from '../core/jev.ts';
 import type { FetchLike } from '../core/net.ts';
 
 /* ============================================================================
@@ -176,7 +177,7 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
       const r = await runLaboratory(lab, { args: ['--resume', path.join(scratch, journalName), '--out', path.join(scratch, 'rebuilt.json')], root: scratch,
         llm: offlineConnection(original.config ?? {}, options.llmPath), fetch: offline, signal: controller.signal, print: () => {},
         /* The Judge as the run had it, answering only from the record: no key is needed where nothing goes out. */
-        ...(original.config?.flat ? {} : { judge: { url: 'http://offline.invalid/judge', key: 'offline', provider: original.config?.jev_provider ?? null, ...(original.config?.jev_model ? { model: String(original.config.jev_model) } : {}) } }),
+        ...(original.config?.flat ? {} : { judge: { url: 'http://offline.invalid' + (original.config?.jev_path ?? new URL(JEV_DEFAULT_URL).pathname), key: 'offline', provider: original.config?.jev_provider ?? null, ...(original.config?.jev_model ? { model: String(original.config.jev_model) } : {}) } }),
         /* Where the record stopped short - a budget, a cancellation - the reconstruction stops there too, never goes on. */
         ...(recordedStop && STOPS_SHORT.has(recordedStop) ? { stopAsRecorded: recordedStop } : {}) });
       stoppedBy = r.stoppedBy;

@@ -53,4 +53,13 @@ test('characterized per configuration and population; its world never part of it
   characterize(root, [batch]);
   assert.equal(JSON.parse(fs.readFileSync(made.find((g) => g.runs === 2)!.file, 'utf8')).characterizations.length, 2);
   assert.throws(() => characterize(root, [runs[0]]), /not a batch report/);
+
+  /* The same junior with a senior at low and one at high: two configurations. */
+  const s1 = await aRun(root, 's1', 'model-a', 3), s2 = await aRun(root, 's2', 'model-a', 4);
+  const senior = (effort: string) => JSON.stringify({ format: 'agent@1', agent: 'agent:senior', role: 'senior', llm_config: { model: 'senior-model', reasoning_effort: effort }, settings: { maxOrders: 6 }, decisions: [] });
+  fs.writeFileSync(s1.replace(/\.json$/, '.agent-senior.json'), senior('low'));
+  fs.writeFileSync(s2.replace(/\.json$/, '.agent-senior.json'), senior('high'));
+  const batch2 = path.join(root, 'batch2.json');
+  fs.writeFileSync(batch2, JSON.stringify({ format: 'batch@1', id: 'b2', runs: [s1, s2].map((journal, i) => ({ id: 's' + i, condition: 'c', journal })) }));
+  assert.equal(characterize(root, [batch2]).length, 2, 'its reasoning effort tells one generator from the other');
 });

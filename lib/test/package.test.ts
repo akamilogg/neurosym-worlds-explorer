@@ -7,6 +7,7 @@ import path from 'node:path';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { artifactsLab } from '../src/worlds/artifacts/lab.ts';
 import { packRun, verifyPackage } from '../src/runtime/package.ts';
+import { labCli } from '../src/runtime/cli.ts';
 import type { FetchLike } from '../src/core/net.ts';
 import { userOf } from './support.ts';
 
@@ -115,6 +116,9 @@ test('a blob is evidence only if its content is the one its name says: corrupt b
   fs.writeFileSync(path.join(dir, 'blobs', name), 'something else');
   const { dir: pack, manifest } = packRun(journal);
   assert.deepEqual(manifest.corrupt_blobs, [name], 'not packed as if it were the evidence');
+  const said: string[] = [];
+  assert.equal(await labCli(['pack', journal], { root: dir, out: (l) => said.push(l) }), 1, 'and the command says it failed');
+  assert.match(said.join(' '), /not the one they name.*not whole/);
   assert.equal((await verifyPackage(pack)).integrity.holds, false);
   /* Forged in the package with its manifest made to agree: the reference still names another content. */
   fs.writeFileSync(path.join(dir, 'blobs', name), kept);

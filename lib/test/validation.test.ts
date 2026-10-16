@@ -99,4 +99,13 @@ test('a revision with nothing contradicted leaves the approval standing, with a 
   const state = validationState(journal, evidenceDir);
   assert.equal(state.status, 'approved_with_limitations');
   assert.match(String(state.note), /later revision, unsigned, contradicts nothing/);
+  /* Its evidence altered in the store: the signature stays as signed, and is no longer in force. */
+  const m = JSON.parse(fs.readFileSync(path.join(evidenceDir, first.revision), 'utf8'));
+  const copy = path.join(evidenceDir, m.evidence.find((e: any) => e.role === 'journal').sha256);
+  fs.chmodSync(copy, 0o644);
+  fs.writeFileSync(copy, '{}');
+  const broken = validationState(journal, evidenceDir);
+  assert.equal(broken.status, 'revalidate');
+  assert.match(String(broken.note), /evidence of the signed revision .* does not hold/);
+  assert.equal(broken.approval?.conclusion, 'approved_with_limitations', 'what was signed, as it was');
 });

@@ -650,3 +650,30 @@ tres dimensiones por separado y sin ningún «independiente: sí o no» (`lib/sr
 - **La adecuación por población,** cuando los runs declaren criterios.
 - **Medir la insubordinación.**
 - **Reevaluar en otras familias del uso y con intervenciones.**
+
+### 15.7 Revisión externa de M1–M5 (16/10/2026)
+
+Una revisión externa encontró seis fallos. Todos están corregidos, cada uno con su test. El hilo común es que las
+garantías deben mantenerse **entre componentes y a lo largo del tiempo**.
+
+1. **Una aprobación seguía vigente con su evidencia corrupta.** `validationState` lo detectaba, pero mantenía el estado
+   firmado. Ahora la firma se conserva tal como se hizo, pero sólo está vigente mientras lo firmado se sostenga. Si la
+   evidencia de la revisión firmada no se sostiene al abrirla, el estado pasa a `revalidate` con esa causa, y el
+   inventario lo sigue.
+2. **La reconstrucción de runs que consultaron al Judge divergía.** La ruta del endpoint forma parte de la identidad de la
+   petición, y el verificador usaba otra. Ahora el diario guarda `config.jev_path` (nunca el host) y la reconstrucción la
+   usa. Un diario anterior toma la ruta por defecto del Judge. El test anterior no lo detectaba porque sus reglas vacías
+   nunca llegaban a consultar al Judge; el nuevo sí lo consulta.
+3. **La procedencia de un artefacto aceptado podía cambiar después.** Ejemplo: A se acepta en la ronda 1 y en la ronda 2
+   se vuelve a A por otro camino. Ahora el camino por el que se hizo la versión queda fijado en el momento de aceptarla,
+   y el linaje del producto aceptado es ése. El test confirma que sin el arreglo falla.
+4. **Las revisiones guardaban la conclusión de cada reevaluación, pero no sus mediciones.** Ahora copian también el
+   registro de repetición de cada reevaluación (donde están sus ejecuciones medidas) y los blobs que cita cada diario
+   (el del run y los de sus reevaluaciones).
+   - Un blob que falta o cuyo contenido no es el que nombra se anota en el manifiesto (`unkept`).
+   - Esa revisión deja de sostenerse, así que no puede firmarse.
+5. **La caracterización mezclaba configuraciones del senior.** La identidad de un agente incluye ahora toda la
+   configuración de sus peticiones (`llm_config`: esfuerzo de razonamiento, temperatura...) y los ajustes de su rol, que
+   el registro del agente guarda en `settings`. Un senior en `low` y otro en `high` son dos generadores.
+6. **`lab pack` daba éxito con blobs corruptos.** La CLI miraba sólo los que faltaban. Ahora también los corruptos dan
+   código de error, con su aviso.

@@ -700,7 +700,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     argv: experimentArgs(argv),
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
     config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), llm_provider: options.llm.provider ?? providerOf(options.llm.url), ...llmTuningRecord(options.llm),
-      jev_model: cfg.flat ? null : options.judge?.model ?? null, ...(cfg.flat ? {} : { jev_provider: options.judge?.provider ?? providerOf(options.judge?.url) }) },
+      jev_model: cfg.flat ? null : options.judge?.model ?? null, ...(cfg.flat ? {} : { jev_provider: options.judge?.provider ?? providerOf(options.judge?.url), ...jevPathRecord(options.judge?.url || JEV_DEFAULT_URL) }) },
     /* Filled by the laboratory: what the learner is never told. */
     hidden_from_the_learner: {},
     events: [] as unknown[]
@@ -1715,10 +1715,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* How the product was reached, as a chain to consult: each change with its reason, the beliefs it rested on as they stand at
      the end, and the tests of its own registered on that version with what came of them (an external audit, 16/10/2026: a
      chain between claim, evidence and solution). The record's facts, put side by side - never a judgment of them. */
+  const acceptedLineage = new Map<string, ReturnType<NonNullable<typeof lab.lineage>>>();
   const productLineage = (product: string): Record<string, unknown>[] => {
     const events = journal.events as Record<string, any>[];
     const results = new Map(events.filter((e) => e.type === 'test_result').map((e) => [e.test, e]));
-    return (lab.lineage!(spec, product)).map((t) => {
+    return (acceptedLineage.get(product) ?? lab.lineage!(spec, product)).map((t) => {
       const reason = (t.reason ?? {}) as { because?: string[] };
       const tests = events.filter((e) => e.type === 'test_registered' && JSON.stringify(e.protocol ?? {}).includes('"' + t.to + '"'))
         .map((e) => { const r = results.get(e.test); const { type: _t, t: _s, test: _i, claim: _c, round: _r, by: _b, ...outcome } = r ?? {}; return { test: e.test, claim: e.claim, round: e.round, ...(r ? { result: outcome } : { result: 'not run' }) }; });
@@ -1790,6 +1791,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         if (a.accepted && !artifactAccepted.some((x) => x.version === record.artifact)) {
           const accepted = { version: record.artifact, round: record.round };
           artifactAccepted.push(accepted);
+          /* The way it had been made when it was accepted: a later change that reaches the same content is another way. */
+          if (lab.lineage) acceptedLineage.set(record.artifact, lab.lineage(spec, record.artifact));
           log('artifact_accepted', accepted);
           say('  ARTIFACT ACCEPTED: ' + record.artifact);
           /* A fact of the world's verdict, published in the researcher's channel (SPEC-CANAL-MENSAJES §5). */
@@ -1923,6 +1926,11 @@ export function llmTuning(env: NodeJS.ProcessEnv, prefix = 'LLM'): Pick<LabConne
     record with no network (lab verify) - never its host or its parameters, where an address or a key may travel. */
 function llmPathRecord(url: string | undefined): Record<string, unknown> {
   try { return url ? { llm_path: new URL(url).pathname } : {}; } catch { return {}; }
+}
+
+/** The path of the Judge's endpoint, for the same reason as System 2's (never its host). */
+function jevPathRecord(url: string): Record<string, unknown> {
+  try { return { jev_path: new URL(url).pathname }; } catch { return {}; }
 }
 
 /** What the journal keeps of System 2's tuning (the model's behaviour depends on it): only what was set. */
