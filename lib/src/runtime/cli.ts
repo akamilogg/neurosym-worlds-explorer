@@ -72,6 +72,8 @@ export const CLI_USAGE = [
   '                                                           the model of a run in the inventory (runs/models/inventory.json), its execution dependencies as they are now',
   'lab model independence <run> --by "<person>" --validator "<who>" [--reports-to ..] [--separate yes|no] [--can-challenge yes|no]',
   '                                                           a person declares the organisational independence of its validation (the harness never computes it)',
+  'lab model characterize <batch.json> [...]                 the generating configurations of the runs of batches: rates with their 95% intervals, cost, failure modes (§8.2)',
+  'lab model reevaluate <id> [--places N]                    its model frozen, its dependencies as inventoried, checked on new places of its family (§9)',
   'lab model list | check [<id>] | retire <id> --by "<person>"   the inventory; what changed since (dependencies, instrument, context, date, verdicts) and each state with its cause',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
@@ -303,6 +305,24 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const sub = args.shift();
         const evidenceDir = path.join(ctx.root, 'runs', 'models', 'evidence');
         /* The inventory (M3): its models, their dependencies and their state. */
+        if (sub === 'characterize') {
+          if (!args.length) { out('lab model characterize <batch.json> [<batch.json> ...]'); return 2; }
+          const { characterize } = await import('./generators.ts');
+          for (const g of characterize(ctx.root, args.map((a) => path.resolve(a)))) out(g.id + ': ' + g.runs + ' runs -> ' + path.relative(ctx.root, g.file));
+          return 0;
+        }
+        if (sub === 'reevaluate') {
+          const inv = await import('./inventory.ts');
+          const id = args.shift(), places = take(args, 'places');
+          if (!id) { out('lab model reevaluate <id> [--places N]'); return 2; }
+          const env = ctx.env ?? process.env;
+          const { JEV_DEFAULT_URL } = await import('../core/jev.ts');
+          const r = await inv.reevaluateModel(ctx.root, id, { evidenceDir, ...(Number(places) > 0 ? { places: Number(places) } : {}),
+            ...(env.JEV_KEY ? { judge: { url: env.JEV_URL || JEV_DEFAULT_URL, key: env.JEV_KEY, ...(env.JEV_MODEL ? { model: env.JEV_MODEL } : {}) } } : {}) });
+          const said = (x: { holds_in: number; places: number } | undefined, what: string) => (x ? what + ' holds in ' + x.holds_in + ' of ' + x.places + ' new places' : '');
+          out([said(r.reevaluation.model, 'its model'), said(r.reevaluation.artifact, 'its artifact')].filter(Boolean).join('; ') + ' -> ' + r.entry.status);
+          return r.entry.status === 'revalidate' ? 1 : 0;
+        }
         if (sub === 'list' || sub === 'check' || sub === 'retire') {
           const inv = await import('./inventory.ts');
           const line = (m: import('./inventory.ts').InventoryEntry) => m.id + '  ' + m.status.padEnd(26) + m.experiment + '  ' + m.run + '  owner ' + m.owner + '  use: ' + m.use_context;

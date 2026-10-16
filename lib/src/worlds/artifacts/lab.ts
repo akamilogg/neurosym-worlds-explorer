@@ -158,6 +158,16 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
   goesOnAfterAcceptance: true,
   /* Its base, whole, in the journal: a resumed run is rebuilt from it, whatever its directory holds now, or if it is gone. */
   archive: (spec) => spec.world.archiveBase(),
+  /* Its versions made again from the changes its record holds, in order (a change that failed then fails again, and is left). */
+  rebuild: (spec, events) => {
+    for (const e of events) if (e.type === 'investigation') for (const r of (e.requests ?? []) as Record<string, any>[]) {
+      const c = r?.act?.change;
+      if (!c || typeof c.from !== 'string' || !c.files || typeof c.files !== 'object') continue;
+      const { from: _f, files: _x, ...reason } = c;
+      const made = spec.world.change(c.from, { files: c.files }, reason);
+      if (!('error' in made)) latest.set(spec.world, made.version);
+    }
+  },
   /* Its versions run on a machine and runtimes: the environment its runs are measured on, as it is now. */
   dependencies: async (spec) => { const e = await spec.world.environment(); return { environment: e.fingerprint, environment_facts: e.facts }; },
   /* The changes that rested on beliefs that fell, and whether each is still in the line of the latest version (§9). */

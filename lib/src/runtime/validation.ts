@@ -138,7 +138,7 @@ function validationReport(journalFile: string, verification: PackageVerification
     results: { source: 'finding', ...packaged.results },
     process_verification: { source: 'a package of the run, verified (lab verify)', ...process, instrument_reports: finding.instrument?.reports ?? [] },
     references: { source: 'finding', baselines: finding.tested?.places?.filter((p: Record<string, unknown>) => p.role === 'reference') ?? [] },
-    robustness: { done: false, needs: 'the model, its dependencies frozen, evaluated on new episodes, other families of its use and interventions (synthetic re-evaluation, §9, M5)' },
+    robustness: robustnessOf(base),
     limitations: { source: 'finding', ...packaged.limitations },
     independence: independenceOf(journal, audit, base),
     ...(audit ? { method_audit: { source: path.basename(base) + '.method.json', measures: audit.measures ?? null } } : {}),
@@ -147,6 +147,25 @@ function validationReport(journalFile: string, verification: PackageVerification
   };
   report.proposed_conclusion = proposed(report);
   return report;
+}
+
+/* --- Robustness (§6.5, R8): the same model, frozen, on places it never saw - its synthetic re-evaluations ------------------- */
+
+const reevaluationFiles = (base: string): string[] => {
+  const dir = path.join(base + '.validation', 'reevaluations');
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /^r\d+\.json$/.test(f)).sort((a, b) => Number(a.slice(1, -5)) - Number(b.slice(1, -5))).map((f) => path.join(dir, f)) : [];
+};
+
+function robustnessOf(base: string): Record<string, unknown> {
+  const done = reevaluationFiles(base).map((f) => {
+    const end = [...(JSON.parse(fs.readFileSync(f, 'utf8')).events ?? [])].reverse().find((e: Record<string, unknown>) => e.type === 'end')?.reevaluation ?? {};
+    return { source: path.basename(base) + '.validation/reevaluations/' + path.basename(f), set: end.set, ...(end.model ? { model: { holds_in: end.model.holds_in, places: end.model.places } } : {}),
+      ...(end.artifact ? { artifact: { version: end.artifact.version, holds_in: end.artifact.holds_in, places: end.artifact.places } } : {}) };
+  });
+  return done.length
+    ? { synthetic_reevaluations: done, within: 'places of its own family, new to it, the distribution frozen: not the real system it is used on (monitoring)' ,
+      not_done: 'other families of its use, interventions' }
+    : { done: false, needs: 'the model, its dependencies frozen, evaluated on new episodes, other families of its use and interventions (lab model reevaluate, §9)' };
 }
 
 /* --- Independence, in its three dimensions (§7.2), apart - never summed up as "independent: yes or no" ------------------- */
@@ -264,6 +283,7 @@ export async function reviseRun(journalFile: string, options: { readonly evidenc
   const files: [string, string][] = [['journal', base + '.json'], ['replay_log', base + '.replay.jsonl'], ['finding', base + '.finding.json'],
     ['finding_researcher', base + '.finding.researcher.json'], ['method_audit', base + '.method.json'], ['operator_verdicts', base + '.anomalies.jsonl'],
     ['independence_declarations', independenceFile(journal)],
+    ...reevaluationFiles(base).map((f) => ['reevaluation', f] as [string, string]),
     ...fs.readdirSync(path.dirname(journal)).filter((f) => f.startsWith(path.basename(base) + '.agent-') && f.endsWith('.json')).map((f) => ['agent_record', path.join(path.dirname(journal), f)] as [string, string])];
   const blobsDir = path.join(path.dirname(journal), 'blobs');
   const evidence: { role: string; file: string; sha256: string; bytes: number }[] = [];

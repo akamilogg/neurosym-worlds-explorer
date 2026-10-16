@@ -229,10 +229,24 @@ export interface LabRunOptions {
   readonly researcher?: Researcher;
   /** The operator's policy: the researchers allowed, or the one forced (`--policy` in the arguments says the same). */
   readonly policy?: ResearcherPolicy;
+  /** A synthetic re-evaluation (SPEC-RIESGO-MODELOS §9, `lab model reevaluate`): no System 2 - the model a run ended with
+      (and its artifact's version), frozen, checked by its world's protocol on places of its family it never saw. */
+  readonly reevaluate?: Reevaluation;
   /** A reconstruction, not a continuation (lab verify): with --resume, once the record it resumes has no answer left waiting,
       the run stops as that record stopped - a budget (its closing then served from the record), a cancellation - where it
       would otherwise go on asking. Only from code: a run on the command line resumes to go on. */
   readonly stopAsRecorded?: string;
+}
+
+/** What a re-evaluation takes: the run's model as its journal keeps it, its artifact's version, the record its products are
+    made again from, and which stretch of new places (`set`: each re-evaluation of a model its own). */
+export interface Reevaluation {
+  readonly run: string;
+  readonly model: Record<string, unknown> | null;
+  readonly version?: string | null;
+  readonly events: readonly Record<string, any>[];
+  readonly set: number;
+  readonly places?: number;
 }
 
 /** The two researchers (SPEC-INVESTIGADOR-ASISTIDO): the one that learns only from what the world answers, and the one the
@@ -511,7 +525,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       return finished;
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
-      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team });
+      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team, reevaluate: options.reevaluate ?? null });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]).finally(() => { if (team) team.board.end(team.member); });
 }
@@ -969,7 +983,7 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * ========================================================================== */
 
 async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[]; assistedAfter: number | null;
-  team: { board: TeamBoard; member: string; channel: PeerChannel } | null }): Promise<LabResult> {
+  team: { board: TeamBoard; member: string; channel: PeerChannel } | null; reevaluate?: Reevaluation | null }): Promise<LabResult> {
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
@@ -1631,6 +1645,29 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       say('operator: recovery ' + score + (grades.length ? ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')' : ''));
     } catch (e) { log(event, { truth, error: String((e as Error).message ?? e) }); }
   };
+
+  /* --- A synthetic re-evaluation (SPEC-RIESGO-MODELOS §9): no System 2, no exploration ------------------------------ */
+  if (o.reevaluate) {
+    const r = o.reevaluate;
+    log('start', { reevaluation_of: r.run, set: r.set });
+    const built = r.model ? buildLaw(r.model, { world: world.id }) : null;
+    if (built?.errors.length) return run.finish({ stoppedBy: 'reevaluation_refused', halted: null }, { reevaluation: { refused: 'its model does not build: ' + built.errors.join('; ') } });
+    if (lab.rebuild) lab.rebuild(spec, r.events);
+    /* Places of its family it never saw: a stretch of their own, past any a run takes. */
+    const fresh = (lab.blindPlaces ? lab.blindPlaces(spec, r.set, 0, ctx)
+      : Array.from({ length: r.places ?? cfg.confirmPlaces }, (_, k) => ({ id: 'new' + (k + 1), spec: lab.placeOf(spec, 500000 + r.set * 1000 + k, worldOptions) })))
+      .map((p, k) => ({ ...p, id: 'reevaluation' + r.set + '-' + (k + 1), role: 'confirmation' as const, seen: false }));
+    const context = { round: 0, attempt: 0, purpose: 'blind' as const, set: r.set };
+    const summarize = (outcomes: readonly { place: { id: string }; holds: boolean }[]) => ({ places: outcomes.length, holds_in: outcomes.filter((x) => x.holds).length,
+      by_place: outcomes.map((x) => ({ place: x.place.id, holds: x.holds })) });
+    const model = built ? summarize((await protocol.checkIn(built.law, fresh, context)).outcomes) : null;
+    const artifact = r.version && artifactProtocol ? summarize((await artifactProtocol.checkIn(r.version, fresh.map((p) => ({ ...p, id: 'artifact-' + p.id })), context)).outcomes) : null;
+    const reevaluation = { of: r.run, set: r.set, places: fresh.map((p) => ({ id: p.id, ...lab.placeInfo(p.spec) })), ...(model ? { model } : {}), ...(artifact ? { artifact: { version: r.version, ...artifact } } : {}),
+      rule: 'below its criteria if it fails to hold in any new place: its acceptance asked it to hold in every one' };
+    log('reevaluation', reevaluation);
+    say('re-evaluated: ' + (model ? 'its model holds in ' + model.holds_in + ' of ' + model.places : '') + (artifact ? (model ? '; ' : '') + 'its artifact in ' + artifact.holds_in + ' of ' + artifact.places : ''));
+    return run.finish({ stoppedBy: 'reevaluated', halted: null }, { reevaluation });
+  }
 
   /* --- The run ------------------------------------------------------------------------------- */
   say(lab.id + ' seed ' + cfg.seed + ' ' + lab.headline(spec) + '; journal ' + outFile);

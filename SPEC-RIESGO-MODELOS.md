@@ -506,7 +506,7 @@ nuevo. Es la opción prudente.
 - ~~el inventario y el historial de estados por modelo (M3)~~: hecho en §15.4;
 - los informes de lote como evidencia, cuando las estadísticas salgan de ellos (M2);
 - ~~la separación del proceso de evaluación (M4)~~: hecho en §15.5;
-- la reevaluación sintética (M5).
+- ~~la reevaluación sintética (M5)~~: hecho en §15.6.
 
 ### 15.4 El inventario y las dependencias de ejecución: M3 (16/10/2026)
 
@@ -554,7 +554,7 @@ El código está en `lib/src/runtime/inventory.ts` y las pruebas en `test/invent
 **Pendiente:**
 - **El simulador de los mundos c302** es un servicio externo. No forma parte de su instrumento mientras el mundo no
   declare su versión en `dependencies`.
-- **La reevaluación sintética como disparador** (§9, M5).
+- ~~**La reevaluación sintética como disparador** (§9, M5)~~: hecho en §15.6.
 - **Las medidas de §11** sobre el inventario.
 
 ### 15.5 Las tres dimensiones de independencia: M4 (16/10/2026)
@@ -601,3 +601,52 @@ tres dimensiones por separado y sin ningún «independiente: sí o no» (`lib/sr
   (por ejemplo, `saw`) no cuenta como diferencia. Sin esta regla, ningún run anterior a un campo nuevo se podría
   verificar con el código actual.
   - La reconstrucción sin red conserva además el proveedor que tuvo el run.
+
+### 15.6 Reevaluación sintética y caracterización de la configuración generadora: M5 (16/10/2026)
+
+**Reevaluación sintética (§9).** `lab model reevaluate <id> [--places N]` (`lib/src/runtime/inventory.ts`,
+`test/reevaluation.test.ts`).
+
+- **Qué se reevalúa:** el modelo con el que terminó el run, congelado (`end.final`, reconstruido con `buildLaw`), y, si lo
+  hay, la versión de su artefacto.
+- **Cómo:** con el protocolo del propio mundo, en lugares nuevos de su familia y sin System 2. Es un modo del runner
+  (`LabRunOptions.reevaluate`) que se salta la exploración y las preguntas.
+  - Cada reevaluación toma un tramo de lugares propio (`set` 9000 + n).
+  - Las versiones del artefacto se rehacen desde el registro, cambio a cambio, mediante un gancho nuevo y opcional del
+    laboratorio: `Lab.rebuild(spec, events)`. Como el contenido va por hash, salen las mismas versiones.
+- **Con sus dependencias tal como se inventariaron.** Si una no lo está, la reevaluación se rechaza, porque evaluaría otra
+  cosa: eso es revalidar.
+  - Si la ley tiene reglas, hace falta el Judge con el modelo inventariado.
+  - Si no las tiene, la reevaluación no pide nada a la red.
+- **Por debajo de sus criterios:** si no se sostiene en alguno de los lugares nuevos (su aceptación pedía todos), el
+  modelo pasa a `revalidate` por el arnés, con la causa `reevaluation`. Si se sostiene, queda anotado en el historial.
+- **Cada reevaluación queda guardada:** su diario va a `<run>.validation/reevaluations/r<n>.json` y su resumen al
+  inventario.
+- **En el informe de validación entran como robustez** (§6.5, R8), con su fuente y como evidencia de la revisión. Se lee
+  así: «dentro de la distribución congelada, no el sistema real». Constan como no hechas otras familias del uso y las
+  intervenciones.
+
+**Caracterización de la configuración generadora (§8.2).** `lab model characterize <batch.json> [...]`
+(`lib/src/runtime/generators.ts`, `test/generators.test.ts`) escribe
+`runs/models/generators/<proveedor>-<modelo>-<config>.json` (`generator_characterization@1`).
+
+- **La configuración** es el LLM con su ajuste y su proveedor, el modelo del Judge, el investigador, los agentes con su
+  modelo y su proveedor, y los ajustes del arnés. **Nunca el mundo:** su semilla y sus opciones son la población.
+- **Por población** (mundo y versión del código) da:
+  - la aceptación predictiva del modelo y la del artefacto;
+  - la evidencia discriminante: pruebas propias severas sin contraejemplos abiertos;
+  - cada tasa con su intervalo del 95% (Wilson, correcto con pocos runs y en los extremos);
+  - el coste: mediana y cuartiles de tokens y llamadas;
+  - los modos de fallo, cada uno con su tasa (`llm_error`, `diverged`, presupuesto agotado, cancelación). La
+    insubordinación consta como «no medida».
+
+  También lista los runs medidos y los lotes de los que salen.
+- **Medir de nuevo añade una caracterización,** y las anteriores se quedan.
+- **Se lee como control interno del proceso:** nunca es evidencia sobre ninguno de sus modelos (R8).
+
+**Pendiente:**
+- **Exigir la caracterización antes de producir modelos con una configuración nueva** (§8.1). Hoy se mide, pero no se
+  exige.
+- **La adecuación por población,** cuando los runs declaren criterios.
+- **Medir la insubordinación.**
+- **Reevaluar en otras familias del uso y con intervenciones.**

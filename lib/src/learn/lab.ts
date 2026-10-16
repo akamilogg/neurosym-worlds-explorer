@@ -203,6 +203,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       runtimes its runs are measured on, as they are now (SPEC-RIESGO-MODELOS §4, §8.1: a dependency that changes calls
       for validating again). */
   readonly dependencies?: (spec: S) => Promise<Record<string, unknown>>;
+  /** Makes again, from a run's record, what its acts made of its world (an artifact's versions: each change applied again -
+      content by its hash, so the very same versions), for its products to be evaluated again without the run. */
+  readonly rebuild?: (spec: S, events: readonly Record<string, any>[]) => void;
   /** What of its world rests on beliefs that fell (an artifact's changes that declared them in their `because`), and
       whether it is still in the line of what is current - a fact of the record, published to the researcher; deciding what
       to undo stays its own (SPEC-MUNDO-ARTEFACTOS §9). Null: nothing rests on them. */

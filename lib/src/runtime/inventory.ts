@@ -8,6 +8,7 @@ import { isGameLab } from '../learn/lab.ts';
 import { worldOptionsIn } from '../orchestra/reader.ts';
 import { readVerdicts } from '../learn/anomalies.ts';
 import { openRevision, validationState } from './validation.ts';
+import { experimentArgs, runLaboratory, type LabConnection } from './lab-runner.ts';
 
 /* ============================================================================
  * THE INVENTORY OF MODELS (SPEC-RIESGO-MODELOS M3, §4, §5, §8.1): runs/models/inventory.json (model_inventory@1).
@@ -53,6 +54,8 @@ export interface InventoryEntry {
   readonly review_days: number | null;
   /** The operator's verdicts of `bug` known when inventoried (a new one is a change of the instrument, §8.1). */
   bugs_known: number;
+  /** Its synthetic re-evaluations (§9), each with its journal and what came of it. */
+  reevaluations?: { readonly at: string; readonly journal: string; readonly set: number; readonly model?: unknown; readonly artifact?: unknown; readonly below_criteria: boolean }[];
 }
 
 interface Inventory { readonly format: 'model_inventory@1'; models: InventoryEntry[] }
@@ -231,6 +234,49 @@ export async function checkModels(root: string, o: { id?: string; evidenceDir: s
   }
   writeInventory(root, inv);
   return out;
+}
+
+/** A SYNTHETIC RE-EVALUATION (§9, `lab model reevaluate`): the model frozen, with its dependencies as inventoried, checked by
+    its world's protocol on new places of its family - each re-evaluation a stretch of its own. Measured within that frozen
+    distribution only: it says nothing of the real system it is used on (that is monitoring, which the harness cannot do).
+    A dependency that is not as inventoried makes it a validation of something else: refused. Below its criteria - not holding
+    in some new place, where its acceptance asked every one - the model is to validate again, the cause said. */
+export async function reevaluateModel(root: string, id: string, o: { evidenceDir: string; judge?: LabConnection; places?: number; fetch?: import('../core/net.ts').FetchLike }): Promise<{ entry: InventoryEntry; reevaluation: Record<string, any> }> {
+  const inv = readInventory(root);
+  const m = inv.models.find((x) => x.id === id || x.id.startsWith(id));
+  if (!m) throw new Error('no model ' + id + ' in the inventory');
+  if (m.status === 'retired') throw new Error(m.id + ' is retired');
+  const journalFile = path.resolve(root, m.run);
+  const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
+  const lab = Object.values(LABS).find((l) => l.id === journal.experiment);
+  if (!lab || isGameLab(lab)) throw new Error('re-evaluation is for the worlds whose model is a law: ' + journal.experiment + ' is not one');
+  const deps = await dependenciesNow(journal);
+  const changed = changedDependencies(m.layers.execution_dependencies, deps);
+  if (changed.length) throw new Error('its dependencies are not as inventoried (' + changed.join(', ') + '): a re-evaluation now would evaluate something else - check it (lab model check) and validate it again');
+  const end = [...(journal.events ?? [])].reverse().find((e: Record<string, unknown>) => e.type === 'end') ?? {};
+  const rules = end.final?.rules && Object.keys(end.final.rules).length;
+  const inventoriedJudge = (m.layers.execution_dependencies.judge as { model?: string | null } | string);
+  if (rules) {
+    if (!o.judge?.key) throw new Error('its law has rules: the Judge is needed (JEV_KEY), with the model it was inventoried with');
+    const want = typeof inventoriedJudge === 'object' ? inventoriedJudge.model ?? null : null;
+    if ((o.judge.model ?? null) !== want) throw new Error('the Judge configured (' + (o.judge.model ?? 'its default') + ') is not the one inventoried (' + (want ?? 'its default') + ')');
+  }
+  const n = m.reevaluations?.length ?? 0;
+  const out = path.join(journalFile.replace(/\.json$/, '') + '.validation', 'reevaluations', 'r' + (n + 1) + '.json');
+  const args = experimentArgs(journal.argv ?? []).filter((a) => a !== '--flat');
+  const r = await runLaboratory(lab, { args: [...args, ...(rules ? [] : ['--flat']), '--no-grade', '--out', out], root,
+    llm: { url: 'http://offline.invalid/v1/chat/completions', model: 'none' }, ...(rules ? { judge: o.judge } : {}), ...(o.fetch ? { fetch: o.fetch } : {}),
+    reevaluate: { run: m.run, model: end.final ?? null, version: (m.layers.artifact.version ?? null) as string | null, events: journal.events ?? [], set: 9000 + n, ...(o.places ? { places: o.places } : {}) } });
+  const rec = [...(JSON.parse(fs.readFileSync(r.journal, 'utf8')).events ?? [])].reverse().find((e: Record<string, unknown>) => e.type === 'end')?.reevaluation ?? {};
+  if (rec.refused) throw new Error('re-evaluation refused: ' + rec.refused);
+  const below = [rec.model, rec.artifact].some((x) => x && x.holds_in < x.places);
+  const at = new Date().toISOString();
+  const said = [rec.model ? 'its model holds in ' + rec.model.holds_in + ' of ' + rec.model.places + ' new places' : '', rec.artifact ? 'its artifact in ' + rec.artifact.holds_in + ' of ' + rec.artifact.places : ''].filter(Boolean).join('; ');
+  (m.reevaluations ??= []).push({ at, journal: path.relative(root, r.journal).split(path.sep).join('/'), set: 9000 + n, ...(rec.model ? { model: rec.model } : {}), ...(rec.artifact ? { artifact: rec.artifact } : {}), below_criteria: below });
+  if (below) { m.history.push({ at, status: 'revalidate', by: 'harness', cause: 'reevaluation: ' + said + ' - below its criteria', trigger: true }); m.status = 'revalidate'; }
+  else m.history.push({ at, status: m.status, by: 'harness', cause: 'reevaluation: ' + said });
+  writeInventory(root, inv);
+  return { entry: m, reevaluation: rec };
 }
 
 /** A model no longer in use: a person says so. */
