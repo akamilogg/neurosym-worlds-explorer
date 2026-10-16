@@ -1,6 +1,6 @@
 {
   "format": "batch@1",
-  "id": "artifacts-threesum-subquadratic-5",
+  "id": "artifacts-threesum-subquadratic-7",
   "concurrency": 1,
   "budget": {
     "tokens_per_run": 4000000
@@ -9,7 +9,7 @@
     {
       "id": "threesum-subquadratic",
       "lab": "artifacts",
-      "condition": "3SUM below O(n^2): a junior and a senior (the strategic half), with the earlier investigation of this artifact as experience, asked only for a solution below O(n^2); the investigation goes on after its model is accepted, until its budget ends",
+      "condition": "3SUM below O(n^2): a junior whose task is the one stated (a model is part of it) and a senior who knows the same task (the strategic half), with the earlier investigation of this artifact as experience, asked only for a solution below O(n^2); the investigation goes on after its model is accepted, until its budget ends",
       "researcher": "assisted",
       "args": [
         "--artifact",
