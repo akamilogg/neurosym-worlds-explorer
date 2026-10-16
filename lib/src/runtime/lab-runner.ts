@@ -1663,6 +1663,23 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   if (endings.length) journal.continuations = [...endings];
   /* A world whose investigation goes on after an acceptance (Lab.goesOnAfterAcceptance), in a run that starts with it: every
      model accepted, in order - the last is the run's. */
+  /* The beliefs already known to have fallen (their dependents told once). */
+  const fallenSeen = new Set<string>();
+  /* How the product was reached, as a chain to consult: each change with its reason, the beliefs it rested on as they stand at
+     the end, and the tests of its own registered on that version with what came of them (an external audit, 16/10/2026: a
+     chain between claim, evidence and solution). The record's facts, put side by side - never a judgment of them. */
+  const productLineage = (product: string): Record<string, unknown>[] => {
+    const events = journal.events as Record<string, any>[];
+    const results = new Map(events.filter((e) => e.type === 'test_result').map((e) => [e.test, e]));
+    return (lab.lineage!(spec, product)).map((t) => {
+      const reason = (t.reason ?? {}) as { because?: string[] };
+      const tests = events.filter((e) => e.type === 'test_registered' && JSON.stringify(e.protocol ?? {}).includes('"' + t.to + '"'))
+        .map((e) => { const r = results.get(e.test); const { type: _t, t: _s, test: _i, claim: _c, round: _r, by: _b, ...outcome } = r ?? {}; return { test: e.test, claim: e.claim, round: e.round, ...(r ? { result: outcome } : { result: 'not run' }) }; });
+      return { from: t.from, to: t.to, ...(t.reason !== undefined ? { reason: t.reason } : {}),
+        ...(reason.because?.length ? { beliefs: reason.because.map((id) => ({ id, status: session.notebook.beliefs.get(id)?.status ?? 'never written' })) } : {}),
+        ...(tests.length ? { tests } : {}) };
+    });
+  };
   const goesOn = Boolean(lab.goesOnAfterAcceptance) && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.goes_on === 0;
   const modelsAccepted: { law: Law; round: number }[] = [];
   for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
@@ -1695,6 +1712,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     accepted = settleWaiting();
     if (accepted) break;
     const record = await session.consult('propose');
+    /* Beliefs it dropped since: what of its world rested on them, as a fact of the record (SPEC-MUNDO-ARTEFACTOS §9). */
+    if (lab.dependents) {
+      const fallen = [...session.notebook.beliefs.values()].filter((b) => b.status === 'dropped' && !fallenSeen.has(b.id)).map((b) => b.id);
+      for (const id of fallen) fallenSeen.add(id);
+      const resting = fallen.length ? lab.dependents(spec, fallen) : null;
+      if (resting) { log('beliefs_fell', { round: session.currentRound, ...resting }); channelNow()?.publish('world', { kind: 'notice', body: resting }); }
+    }
     if (!record) { if (session.fatal) break; continue; }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });
     record.accepted = outcome.accepted;
@@ -1789,7 +1813,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     final: final ? ownLaw(final) : null,
     ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownLaw(acceptedBefore.law) } } : {}),
     /* A world of artifacts: the artifact's own state, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8). */
-    ...(artifactProtocol ? { artifact: { accepted: artifactAccepted[artifactAccepted.length - 1] ?? null, chain: artifactAccepted, protocol: artifactProtocol.summary() } } : {}),
+    ...(artifactProtocol ? { artifact: { accepted: artifactAccepted[artifactAccepted.length - 1] ?? null, chain: artifactAccepted, protocol: artifactProtocol.summary(),
+      ...(artifactAccepted.length && lab.lineage ? { product_lineage: productLineage(artifactAccepted[artifactAccepted.length - 1].version) } : {}) } } : {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },

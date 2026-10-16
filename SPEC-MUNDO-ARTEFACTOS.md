@@ -869,3 +869,45 @@ CONTROL-ARNES K1–K3).
 - un `stderr` de 30.000 caracteres, guardado entero;
 - `carryBlobs` con un blob bueno, uno manipulado y uno citado que falta;
 - un run reanudado en otra carpeta que se lleva sus blobs y lo registra.
+
+### 18.11 Volver atrás por creencias y la cadena del producto (16/10/2026; §9, plan paso 4)
+
+Implementa §9 y el vínculo que pedía la auditoría externa: una cadena consultable entre afirmación, evidencia y solución.
+No impone estrategia: conserva las relaciones, las muestra y deja decidir al investigador.
+
+**`because`.** Un `change` puede declarar en qué creencias de su cuaderno se apoya (`"because": ["<belief id>", ...]`).
+Queda con la razón del cambio, en su transición (`ArtifactTransition.reason`).
+
+**Cuando cae una creencia** (el investigador la descarta):
+- **el entorno lista los cambios que se apoyaban en ella** (`Lab.dependents`): para cada uno, su versión, su origen, su
+  razón y si sigue en la línea de la última versión hecha (`ArtifactStore.ancestry`);
+- **llega como aviso del mundo** en el canal, en la ronda siguiente, y queda en el diario (`beliefs_fell`). El senior lo
+  recibe por el espejo;
+- **es un hecho del registro, no un análisis.** Qué revertir, o si el cambio se queda con su razón corregida, lo decide el
+  investigador.
+
+**La cadena del producto.** El fin del run y el finding (`artifact.lineage`) enlazan el artefacto entregado (la última
+versión aceptada) con el camino que lo hizo desde la base (`Lab.lineage`, `ArtifactStore.lineage`). Cada cambio aparece
+con:
+- su razón (`why`, `expect` o `exploratory`, `because`);
+- las creencias en que se apoyaba, con su estado al final del run: mantenida, confirmada, descartada o nunca escrita;
+- las pruebas propias registradas sobre esa versión, con su resultado o "not run".
+
+Así, una mejora aceptada cuya razón se descartó se ve tal cual: un cambio que funciona por otra razón, o sin una
+comprobada.
+
+**La interfaz del mundo de artefactos lo dice:** qué es `because` y que, si cae una creencia, se le dice qué cambios se
+apoyaban en ella.
+
+**Pruebas** (`test/artifacts-because.test.ts`):
+- `because` se valida; cuando cae una creencia, los cambios afectados, dentro y fuera de la línea de la última versión;
+  y el linaje desde la base;
+- un run de 3SUM en el que el investigador simulado hace la versión cuadrática apoyada en una creencia, la valida, registra
+  una prueba propia sobre ella y descarta la creencia. El aviso llega en la ronda siguiente, y el finding da el producto
+  con su cadena: razón, la creencia descartada y la prueba con su resultado.
+
+**Pendiente:**
+- **Una predicción sobre un cambio como prueba propia ligada a él al hacerlo** (registrarla junto al `change`). Hoy se
+  liga por la versión que nombra la prueba.
+- **Que el senior revise expresamente** los cambios que sobreviven a la caída de su razón: recibe el aviso, pero su papel
+  no lo nombra.

@@ -58,7 +58,10 @@ export interface Finding {
       The measures stay in the journal (`artifact_check`). */
   readonly artifact?: { readonly status: 'accepted' | 'not accepted'; readonly version: string | null; readonly round: number | null; readonly checks: number; readonly last?: unknown;
     /** Every version accepted, in order: the last is the product. */
-    readonly chain?: readonly { readonly version: string; readonly round: number }[] };
+    readonly chain?: readonly { readonly version: string; readonly round: number }[];
+    /** How the product was reached: each change with its reason, the beliefs it rested on as they stand at the end, and the
+        tests of its own registered on that version with what came of them - the record's facts side by side. */
+    readonly lineage?: readonly Record<string, unknown>[] };
   readonly claims: readonly { readonly id: string; readonly statement: string; readonly status: string; readonly since?: number; readonly evidence: readonly string[];
     /** Assisted researcher: where its evidence comes from - the world (points of episodes), the operator's messages, sources. */
     readonly grounded?: readonly ('world' | 'operator' | 'sources' | 'experience' | 'peers')[] }[];
@@ -145,7 +148,8 @@ function artifactState(end: J, checks: J[]): NonNullable<Finding['artifact']> {
   const last = checks[checks.length - 1];
   return { status: end.accepted ? 'accepted' : 'not accepted', version: end.accepted?.version ?? last?.version ?? null,
     round: end.accepted?.round ?? null, checks: checks.length, ...(last?.told ? { last: last.told } : {}),
-    ...(Array.isArray(end.chain) && end.chain.length ? { chain: end.chain.map((c: J) => ({ version: String(c.version), round: Number(c.round) })) } : {}) };
+    ...(Array.isArray(end.chain) && end.chain.length ? { chain: end.chain.map((c: J) => ({ version: String(c.version), round: Number(c.round) })) } : {}),
+    ...(Array.isArray(end.product_lineage) && end.product_lineage.length ? { lineage: end.product_lineage } : {}) };
 }
 
 /** The finding of a journal (any world run through the protocol). `meta`: what the journal does not hold. */

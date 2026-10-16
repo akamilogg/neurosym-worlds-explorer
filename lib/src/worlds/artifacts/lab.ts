@@ -46,7 +46,7 @@ export interface ArtifactCase { readonly point: string; readonly state: Artifact
 
 /** Why a change was made, written before anything of it is measured (SPEC-MUNDO-ARTEFACTOS §3): the hypothesis, and what it
     expects - or that it is exploratory, its expectation declared uncertain. */
-export type Reason = { readonly why: string } & ({ readonly expect: string } | { readonly exploratory: true });
+export type Reason = { readonly why: string; readonly because?: readonly string[] } & ({ readonly expect: string } | { readonly exploratory: true });
 
 export type ArtifactAct =
   | { readonly change: { readonly from: string; readonly files: Readonly<Record<string, string | null>> } & Reason }
@@ -133,6 +133,7 @@ function artifactInterface(task: ArtifactTask, tolerance: number, regression?: b
       [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   a stretch of one of your episodes (at most 60 rows): of a VERSION, its files\' lines; of RUNS, each run - the workload, the version, what was measured and whether it was correct'],
       [['act'], '  {"act": {"change": {"from": "<version>", "files": {"<path>": "<the file\'s whole new text>" | null}, "why": "<the hypothesis it tests>", "expect": "<what you expect of it>" | "exploratory": true}}}   a new version: the given files replaced (or removed, with null); you get it as an episode of its lines and its version name. '
         + 'Its reason is written with it, before anything of it is measured: why, and what you expect - or, when you cannot say, that it is exploratory. '
+        + 'Add "because": ["<belief id>", ...] to say which of your beliefs it rests on: when one of them is dropped, you are told which changes rested on it and whether they are still in the line of your latest version - what to undo is yours to decide. '
         + 'Or {"act": {"run": {"version": "<version>", "workloads": <1-4>, "repetitions": <1-3>}, "place": "<laboratory>"}}   that version on fresh workloads of one of your laboratories (default: the first): an episode of runs, each judged correct or not against the reference on the same workload. '
         + 'It may be refused, and you are not told why. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at a run, part by part, and what was measured there'],
@@ -157,6 +158,17 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
   goesOnAfterAcceptance: true,
   /* Its base, whole, in the journal: a resumed run is rebuilt from it, whatever its directory holds now, or if it is gone. */
   archive: (spec) => spec.world.archiveBase(),
+  /* The changes that rested on beliefs that fell, and whether each is still in the line of the latest version (§9). */
+  dependents: (spec, fallen) => {
+    const current = latest.get(spec.world) ?? spec.world.reference;
+    const line = spec.world.store.ancestry(current);
+    const resting = spec.world.store.transitions.flatMap((t) => {
+      const because = ((t.reason as Reason | undefined)?.because ?? []).filter((b) => fallen.includes(b));
+      return because.length ? [{ version: t.to, from: t.from, why: (t.reason as Reason).why, because, in_line_of_latest: line.has(t.to) }] : [];
+    });
+    return resting.length ? { beliefs_fell: [...fallen], latest_version: current, changes_resting_on_them: resting } : null;
+  },
+  lineage: (spec, product) => spec.world.store.lineage(product).map((t) => ({ from: t.from, to: t.to, ...(t.reason !== undefined ? { reason: t.reason } : {}) })),
   about: 'System 2 changes an artifact and runs its versions, and writes a model of its behaviour: the metric of a run, from what is known before it.',
   options: [
     { name: 'artifact', default: 'dedup', help: 'the artifact and its task: ' + Object.keys(TASKS).join(', ') },
@@ -254,13 +266,15 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
       const c = raw.change as Record<string, unknown> | undefined, r = raw.run as Record<string, unknown> | undefined;
       if (c && typeof c === 'object') {
         const form = '"change": {"from": "<version>", "files": {"<path>": "<text>" | null}, "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true}';
-        const extra = unknownFields(c, ['from', 'files', 'why', 'expect', 'exploratory']);
+        const extra = unknownFields(c, ['from', 'files', 'why', 'expect', 'exploratory', 'because']);
         if (extra) return extra;
         if (typeof c.from !== 'string' || !c.files || typeof c.files !== 'object') return form;
         if (typeof c.why !== 'string' || !c.why.trim()) return 'a change says why: ' + form;
         const expect = typeof c.expect === 'string' && c.expect.trim() ? c.expect : null;
         if (!expect && c.exploratory !== true) return 'a change says what it expects, or that it is exploratory: ' + form;
-        return { change: { from: c.from, files: c.files as Record<string, string | null>, why: c.why, ...(expect ? { expect } : { exploratory: true as const }) } };
+        if (c.because !== undefined && (!Array.isArray(c.because) || !c.because.every((b) => typeof b === 'string' && b.trim()))) return '"because": the ids of the beliefs the change rests on, ["<belief id>", ...]';
+        const because = Array.isArray(c.because) && c.because.length ? { because: [...new Set(c.because as string[])] } : {};
+        return { change: { from: c.from, files: c.files as Record<string, string | null>, why: c.why, ...because, ...(expect ? { expect } : { exploratory: true as const }) } };
       }
       if (r && typeof r === 'object') {
         if (typeof r.version !== 'string') return '"run": {"version": "<version>", "workloads": <1-4>, "repetitions": <1-3>}';
@@ -272,10 +286,10 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
     place: (a) => ('place' in a ? a.place : undefined),
     async start(spec, a, id, ctx?: LabContext) {
       if ('change' in a) {
-        const made = spec.world.change(a.change.from, { files: a.change.files });
+        const { from: _f, files: _x, ...reason } = a.change;
+        const made = spec.world.change(a.change.from, { files: a.change.files }, reason);
         if ('error' in made) return null;
         latest.set(spec.world, made.version);
-        const { from: _f, files: _x, ...reason } = a.change;
         return versionEpisode(spec.world, made.version, reason, made.parent);
       }
       const data = await spec.world.run(a.run.version, spec.family, a.run.workloads, seedOf(id + ':' + a.run.version + ':' + spec.family), a.run.repetitions, ctx?.recorded);

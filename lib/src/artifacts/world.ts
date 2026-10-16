@@ -139,8 +139,8 @@ export class ArtifactWorld {
   get reference(): string { return this.store.base; }
 
   /** `change`: a new version from a patch on another. */
-  change(from: string, patch: Patch): { version: string; parent: string } | { error: string } {
-    const v = this.store.apply(from, patch);
+  change(from: string, patch: Patch, reason?: unknown): { version: string; parent: string } | { error: string } {
+    const v = this.store.apply(from, patch, reason);
     /* Its parent is where THIS change came from, not where the same content was first reached. */
     return typeof v === 'string' ? { error: v } : { version: v.hash, parent: from };
   }

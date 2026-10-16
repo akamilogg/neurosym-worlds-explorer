@@ -60,6 +60,8 @@ export interface ArtifactTransition {
   readonly from: string;
   readonly to: string;
   readonly patch: Patch;
+  /** Why it was made, as its researcher wrote it before anything of it was measured (its world's own shape). */
+  readonly reason?: unknown;
 }
 
 export class ArtifactStore {
@@ -98,10 +100,33 @@ export class ArtifactStore {
   }
 
   get(hash: string): ArtifactVersion | null { return this.versions.get(hash) ?? null; }
+
+  /** The versions a version comes from - itself and every version a chain of transitions leads from to it. */
+  ancestry(hash: string): Set<string> {
+    const seen = new Set<string>([hash]);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const t of this.transitions) if (seen.has(t.to) && !seen.has(t.from)) { seen.add(t.from); grew = true; }
+    }
+    return seen;
+  }
+
+  /** A way from the base to a version: the transitions that first reached each version on it, base first. */
+  lineage(hash: string): ArtifactTransition[] {
+    const out: ArtifactTransition[] = [];
+    let at = hash;
+    while (at !== this.base) {
+      const t = this.transitions.find((x) => x.to === at);
+      if (!t) break;
+      out.unshift(t);
+      at = t.from;
+    }
+    return out;
+  }
   all(): ArtifactVersion[] { return [...this.versions.values()]; }
 
   /** A new version: `parent` with `patch` applied - or why not. The same content is the same version (its hash). */
-  apply(parent: string, patch: Patch): ArtifactVersion | string {
+  apply(parent: string, patch: Patch, reason?: unknown): ArtifactVersion | string {
     const from = this.versions.get(parent);
     if (!from) return 'no version "' + parent + '"';
     const entries = Object.entries(patch?.files ?? {});
@@ -123,7 +148,7 @@ export class ArtifactStore {
     const hash = hashOf(files);
     if (hash === from.hash) return 'the patch changes nothing';
     const clean: Patch = { files: Object.fromEntries(entries.map(([p, c]) => [cleanPath(p)!, c])) };
-    this.transitions.push({ from: parent, to: hash, patch: clean });
+    this.transitions.push({ from: parent, to: hash, patch: clean, ...(reason !== undefined ? { reason } : {}) });
     const known = this.versions.get(hash);
     if (known) return known;
     /* `parent` is the transition that first reached this content; the transitions say every way it was reached. */
