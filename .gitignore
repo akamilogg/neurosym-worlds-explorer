@@ -29,3 +29,9 @@ lib/*.sh
 !lib/*.example.ps1
 !lib/*.example.sh
 !lib/eval-runs.ps1
+
+# generated locally: test outputs, Python bytecode, editor settings
+lib/*.tap
+__pycache__/
+*.pyc
+.vscode/
