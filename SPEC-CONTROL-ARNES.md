@@ -269,3 +269,50 @@ En el orden que propone la auditoría:
     el modelo y un rival genuino predigan distinto (§5);
   - de `c302nav` hay evidencia favorable para anticipar señales en las condiciones evaluadas, e insuficiente para
     diseñar intervenciones (§1.3).
+
+## 12. Implementado
+
+### 12.1 K1: resultados separados, coste total y estadística con incertidumbre (16/10/2026)
+
+Es M2 de SPEC-RIESGO-MODELOS. El código está en `lib/src/runtime/statistics.ts` y `lib/src/orchestra/results.ts`, y las
+pruebas en `test/results.test.ts`.
+
+- **Por run** (`runResults`), cada resultado por su nombre:
+  - **O1:** la aceptación del modelo y, si hay artefacto, la del artefacto.
+  - **O2:** las pruebas severas que el modelo final superó como prerregistradas, cada una con la respuesta del Judge de la
+    auditoría sobre si su rival era genuino, o «no juzgado».
+  - **O3:** sí, no o no evaluable por cada criterio declarado.
+  - **O4:** la recuperación, continua y con la versión del calificador, o «sin verdad / sin calificar».
+  - **O1 junto a O4,** como hecho, cuando hay las dos.
+- **El coste de un run** suma todas sus partes:
+  - tokens del junior y de sus agentes, con el total como cota inferior;
+  - dinero conocido (el que informan los proveedores de los agentes) y lo desconocido nombrado: el del junior, que no
+    tiene precio registrado, nunca cuenta como cero;
+  - segundos y llamadas al Judge.
+- **Los criterios de adecuación se declaran antes del lote,** en su definición: `"criteria": { "<id>": { "require":
+  [...] } }`. Las condiciones posibles son `model_accepted`, `artifact_accepted`, `{"severe_tests_at_least": n}` y
+  `{"recovery_at_least": x}`.
+  - Un criterio mal declarado impide arrancar el lote.
+  - Basta una condición falsa para que sea «no». Una sin dato, sin ninguna falsa, lo deja «no evaluable».
+- **Por grupo de runs comparables** (§6.1): misma condición, mundo, versión del código, configuración generadora y
+  criterios. Un run con senior es otra configuración y nunca se agrega con uno sin él.
+  - Las proporciones llevan su denominador y su intervalo de Wilson al 95%. Así se da O1, y O3 sobre los evaluables, con
+    los no evaluables y la cobertura aparte.
+  - Los recuentos y valores continuos (O2, O4, tokens, segundos) llevan mediana, cuartiles e intervalo de la mediana por
+    bootstrap con semilla fija, que da lo mismo al recalcular. Con menos de 3 valores, o todos iguales, se dan los valores
+    observados y la etiqueta «evidencia insuficiente».
+  - La eficiencia se calcula para cada criterio (O1 siempre) como runs que lo cumplen por millón de tokens, nombrando el
+    criterio.
+  - No hay ningún rótulo de control.
+- **Los tiempos del lote,** tres por separado (§4.2): la duración en reloj, los segundos hasta el primer run que cumple
+  cada criterio y los segundos acumulados de los runs.
+- **Dónde aparece:** en el informe del lote (`batch.json`: `results`; `batch.txt`: «RESULTS APART»), que es vista del
+  operador porque incluye O4. `lab batch results <batch.json>` lo recalcula sin ejecutar nada, por ejemplo tras una
+  recalificación o una auditoría.
+- **En el finding,** O1–O4 ya estaban por separado: `outcome`, `artifact`, `own_tests` y `operator.rule_recovery`. Los
+  criterios y el coste de los agentes no son del run, sino del lote, y viven en su informe.
+
+**Pendiente:**
+- **El dinero del junior.** Hace falta un precio registrado, o un proveedor que lo informe.
+- **K2–K5:** las referencias congeladas y las comparaciones emparejadas por semilla (§6.2.1, §6.4), las trazas del
+  proceso y el control estadístico.

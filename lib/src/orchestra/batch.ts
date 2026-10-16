@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { batchTimes, criteriaProblems, groupResults, type Criteria, type GroupResults } from './results.ts';
 import path from 'node:path';
 import type { ChatClient } from '../learn/system2.ts';
 import type { Finding } from '../learn/finding.ts';
@@ -53,6 +54,9 @@ export interface BatchDefinition {
   readonly concurrency?: number;
   /** The budget in System 2's tokens: in all (shared out equally), or per run. */
   readonly budget?: { readonly tokens?: number; readonly tokens_per_run?: number };
+  /** Criteria of adequacy to a use, declared BEFORE the batch (SPEC-CONTROL-ARNES §4.1 O3): each run is yes, no or not
+      evaluable by each, and each has its own efficiency. */
+  readonly criteria?: Criteria;
 }
 
 export interface BatchOptions {
@@ -116,6 +120,9 @@ export interface BatchReport {
   table: ConditionRow[];
   /** AUDIT (the operator's view): never shown to a researcher, nor to an agent that helps one. */
   audit: { readonly condition: string; readonly rule_recovery: Spread }[];
+  /** Its results apart and their cost, by group of comparable runs, with their uncertainty (SPEC-CONTROL-ARNES K1); the
+      operator's view too (mechanistic recovery is in it). */
+  results?: { readonly groups: GroupResults[]; readonly times: Record<string, unknown>; readonly reading: string };
 }
 
 const readJson = (file: string): any => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
@@ -149,6 +156,28 @@ function agentRow(def: BatchRun, journal: string | null): { agent?: BatchRunRow[
   return { agent: { id: def.agent.id, decisions: u.decisions, calls: u.calls, tokens_in: u.tokens_in, cached_share: u.cached_share, cost: u.cost } };
 }
 
+/** A batch's results apart and their cost, by group of comparable runs (SPEC-CONTROL-ARNES K1, §6.1-§6.2), and its times. */
+export function batchResults(report: BatchReport): NonNullable<BatchReport['results']> {
+  const rows = report.runs.filter((r) => r.journal && fs.existsSync(r.journal)).map((r) => ({ condition: r.condition, journal: r.journal! }));
+  return { groups: groupResults(rows, report.definition.criteria), times: batchTimes(report.started, report.ended, rows, report.definition.criteria),
+    reading: 'each result apart, none called correct; groups only of comparable runs; proportions with their denominator and Wilson\'s interval, the rest with a bootstrap interval or "insufficient evidence"; no label of control' };
+}
+
+/** The lines of the results for a person. */
+function resultsText(results: NonNullable<BatchReport['results']>): string[] {
+  const p = (r: { k: number; n: number; interval95: [number, number] | null }) => r.k + '/' + r.n + (r.interval95 ? ' [' + r.interval95.join(', ') + ']' : '');
+  const d = (x: Record<string, any>) => x.n === 0 ? 'none' : x.evidence === 'insufficient evidence' ? 'insufficient evidence (' + x.values.join(', ') + ')' : 'median ' + x.median + ' [' + x.median_interval95.join(', ') + '], q ' + x.q1 + '-' + x.q3 + ', n ' + x.n;
+  return ['  RESULTS APART (K1; the operator\'s view), by group of comparable runs:',
+    ...results.groups.flatMap((g) => ['    ' + g.group.condition + ' (' + g.group.world + ', code ' + String(g.group.code_version ?? 'unknown').slice(0, 10) + ', generator ' + g.group.generator + '): ' + g.runs + ' runs',
+      '      O1 model accepted ' + p(g.o1_predictive_acceptance.model) + (g.o1_predictive_acceptance.artifact ? '; artifact ' + p(g.o1_predictive_acceptance.artifact) : ''),
+      '      O2 severe tests passed as preregistered: ' + d(g.o2_severe_passed_as_preregistered as Record<string, any>),
+      '      O3 ' + (typeof g.o3_adequacy === 'string' ? g.o3_adequacy : Object.entries(g.o3_adequacy).map(([id, x]) => id + ' ' + p(x.yes) + ' of the evaluable (' + x.not_evaluable + ' not evaluable, coverage ' + x.coverage + ')').join('; ')),
+      '      O4 mechanistic recovery: ' + d(g.o4_mechanistic_recovery as Record<string, any>),
+      '      cost: tokens at least ' + g.cost.tokens_sum_at_least + ' in all, per run ' + d(g.cost.tokens_total_at_least as Record<string, any>) + '; money known ' + g.cost.money_known_sum + (g.cost.money_unknown_in ? ' (unknown in ' + g.cost.money_unknown_in + ' runs: a lower bound)' : ''),
+      '      efficiency: ' + Object.entries(g.efficiency).map(([id, e]) => id + ' ' + e.runs_meeting + ' runs, ' + e.per_million_tokens + ' per million tokens').join('; ')]),
+    '    times: ' + JSON.stringify(results.times)];
+}
+
 /** The table by condition, from the rows (researchers' findings only). */
 export function batchTable(rows: readonly BatchRunRow[]): ConditionRow[] {
   const conditions = [...new Set(rows.map((r) => r.condition))];
@@ -174,7 +203,8 @@ export function batchText(report: BatchReport): string {
       + (r.own_tests ? '; tests ' + r.own_tests.registered + ' (' + r.own_tests.severe + ' severe, ' + r.own_tests.by_senior + ' by the senior), counterexamples ' + r.own_tests.counterexamples + ' (' + r.own_tests.closed + ' closed)' : '')
       + (r.agent ? '; agent:' + r.agent.id + ' ' + r.agent.decisions + ' decisions, ' + r.agent.calls + ' calls, ' + Math.round(r.agent.tokens_in / 1000) + 'k tokens in'
         + (r.agent.cached_share !== null ? ' (' + Math.round(r.agent.cached_share * 100) + '% cached)' : '') + ', $' + r.agent.cost : '')),
-    ...(report.audit.length ? ['  AUDIT (operator only): ' + report.audit.map((a) => a.condition + ' recovery ' + s(a.rule_recovery)).join('; ')] : [])].join('\n');
+    ...(report.audit.length ? ['  AUDIT (operator only): ' + report.audit.map((a) => a.condition + ' recovery ' + s(a.rule_recovery)).join('; ')] : []),
+    ...(report.results ? resultsText(report.results) : [])].join('\n');
 }
 
 /** Runs a batch (or resumes it): the runs not ended yet, a few at a time; then the table and the audit. */
@@ -187,6 +217,8 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     if (!LABS[r.lab]) throw new LabError('batch ' + def.id + ', run ' + r.id + ': no laboratory ' + r.lab + ' (' + Object.keys(LABS).join(', ') + ')');
     if (!r.condition) throw new LabError('batch ' + def.id + ', run ' + r.id + ': which condition does it stand for?');
   }
+  const wrong = criteriaProblems(def.criteria);
+  if (wrong.length) throw new LabError('batch ' + def.id + ': ' + wrong.join('; '));
   const dir = options.dir ?? path.join(options.root, 'runs', 'batches', def.id);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'batch.json');
@@ -283,6 +315,7 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     rule_recovery: spread(report.runs.filter((r) => r.condition === condition && r.journal && fs.existsSync(r.journal))
       .map((r) => Number((findingOfRun(r.journal!, 'operator').operator?.rule_recovery as { score?: number } | undefined)?.score))) }));
   if (!options.signal?.aborted && report.runs.every((r) => r.status !== 'not run' && (r.error || (r.journal && ended(r.journal))))) report.ended = new Date().toISOString();
+  report.results = batchResults(report);
   save();
   fs.writeFileSync(path.join(dir, 'batch.txt'), batchText(report) + '\n');
   return report;

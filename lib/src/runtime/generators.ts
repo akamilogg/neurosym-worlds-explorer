@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { LABS } from '../worlds/labs.ts';
 import { worldOptionsIn } from '../orchestra/reader.ts';
-import { spread, type BatchReport } from '../orchestra/batch.ts';
+import type { BatchReport } from '../orchestra/batch.ts';
+import { describe } from './statistics.ts';
 
 /* ============================================================================
  * THE CHARACTERIZATION OF A GENERATING CONFIGURATION (SPEC-RIESGO-MODELOS §8.2, M5): what a configuration of the harness
@@ -20,14 +21,8 @@ import { spread, type BatchReport } from '../orchestra/batch.ts';
 type J = Record<string, any>;
 const readJson = (file: string): J | null => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
-/** A proportion with its 95% interval (Wilson's score interval: sound with few runs, and with none or all of them). */
-export function rate(k: number, n: number): { k: number; n: number; rate: number | null; interval95: [number, number] | null } {
-  if (!n) return { k, n, rate: null, interval95: null };
-  const z = 1.96, p = k / n, d = 1 + z * z / n;
-  const centre = (p + z * z / (2 * n)) / d, half = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
-  const r = (x: number) => Math.round(x * 1000) / 1000;
-  return { k, n, rate: r(p), interval95: [r(Math.max(0, centre - half)), r(Math.min(1, centre + half))] };
-}
+export { rate } from './statistics.ts';
+import { rate } from './statistics.ts';
 
 /** What makes a configuration that generates models: its LLM and how it is tuned, the Judge, the researcher, its agents and
     their models, and the harness's settings - never the world it ran on (its seed, its options): that is its population. */
@@ -91,7 +86,7 @@ export function characterize(root: string, batchFiles: readonly string[]): { fil
         ...(withArtifact.length ? { predictive_acceptance_of_the_artifact: rate(withArtifact.filter((r) => r.finding.artifact.status === 'accepted').length, withArtifact.length) } : {}),
         discriminating_evidence: { ...rate(discriminating.length, rs.length), meaning: 'severe tests of its own, and no counterexample left open' },
         adequacy_to_a_use: 'no use and no criteria declared for these runs',
-        cost: { tokens_total: spread(rs.map((r) => Number(r.finding.cost?.total?.llm_tokens) || null)), llm_calls: spread(rs.map((r) => Number(r.finding.cost?.total?.llm_calls) || null)) },
+        cost: { tokens_total: describe(rs.map((r) => Number(r.finding.cost?.total?.llm_tokens) || null)), llm_calls: describe(rs.map((r) => Number(r.finding.cost?.total?.llm_calls) || null)) },
         failure_modes: Object.fromEntries(Object.entries(FAILURES).map(([k, f]) => [k, rate(rs.filter((r) => f(r.end)).length, rs.length)])),
         insubordination: 'not measured',
         runs_measured: rs.map((r) => r.journal)

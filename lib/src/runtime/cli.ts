@@ -76,6 +76,7 @@ export const CLI_USAGE = [
   'lab model reevaluate <id> [--places N]                    its model frozen, its dependencies as inventoried, checked on new places of its family (§9)',
   'lab model list | check [<id>] | retire <id> --by "<person>"   the inventory; what changed since (dependencies, instrument, context, date, verdicts) and each state with its cause',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
+  'lab batch results <runs/batches/<id>/batch.json>           its results apart (O1-O4) and their cost by group of comparable runs, with their uncertainty, computed again',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
   'lab project list | status <id>                            the projects; one\'s state and report',
@@ -478,6 +479,18 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         return 0;
       }
       case 'batch': {
+        /* Its results computed again from its runs as they are (a regrade, an audit since): nothing is run. */
+        if (args[0] === 'results') {
+          const reportFile = path.resolve(args[1] ?? '');
+          const { batchResults, batchText } = await import('../orchestra/batch.ts');
+          const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+          if (report.format !== 'batch@1') { out('not a batch report (batch.json): ' + reportFile); return 2; }
+          report.results = batchResults(report);
+          fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
+          fs.writeFileSync(path.join(path.dirname(reportFile), 'batch.txt'), batchText(report) + '\n');
+          out(batchText(report));
+          return 0;
+        }
         const file = args[0];
         if (!file) { out('lab batch <batch.json>'); return 2; }
         const env = ctx.env ?? process.env;

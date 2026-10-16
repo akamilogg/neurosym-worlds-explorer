@@ -677,3 +677,7 @@ garantías deben mantenerse **entre componentes y a lo largo del tiempo**.
    el registro del agente guarda en `settings`. Un senior en `low` y otro en `high` son dos generadores.
 6. **`lab pack` daba éxito con blobs corruptos.** La CLI miraba sólo los que faltaban. Ahora también los corruptos dan
    código de error, con su aviso.
+
+### 15.8 Métricas descriptivas con incertidumbre: M2, que es K1 de SPEC-CONTROL-ARNES (16/10/2026)
+
+Detalle en SPEC-CONTROL-ARNES §12.
