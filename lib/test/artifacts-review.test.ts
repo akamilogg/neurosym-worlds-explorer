@@ -46,6 +46,14 @@ test('a check keeps its evidence: every run of reference and candidate, interlea
     assert.ok(e.candidate.every((c) => typeof c.metrics?.wall_ms === 'number' && c.output && 'text' in c.output), 'its measures and its (short) output');
     assert.deepEqual(e.reference.map((c) => c.first), e.candidate.map((c) => !c.first), 'who went first, alternating');
   }
+  /* What is too long to hold inline is kept whole, by its content, where the run keeps it. */
+  const kept = new Map<string, string>();
+  const source = 'import sys\nsys.stderr.write("x" * 3000)\n' + world.store.get(world.reference)!.files.get('main.py');
+  const noisy = world.change(world.reference, { files: { 'main.py': source } }) as { version: string };
+  const [loud] = await world.check(noisy.version, ['mixed'], 1, 2, undefined, (text) => { const sha = 'h' + kept.size; kept.set(sha, text); return sha; });
+  const whole = loud.evidence[0].candidate[0].stderr_whole!;
+  assert.equal(whole.kept, true);
+  assert.equal(kept.get(whole.sha256)!.length, whole.chars, 'the whole stderr, read again');
 });
 
 test('a resumed run is rebuilt from the base its journal archived, whatever its directory holds now', async () => {
@@ -53,9 +61,9 @@ test('a resumed run is rebuilt from the base its journal archived, whatever its 
   const base = path.join(dir, 'base');
   fs.cpSync(path.join(here, '..', 'examples', 'artifacts', 'threesum', 'base'), base, { recursive: true });
   /* The artifacts' world, on a base of its own (a copy of 3SUM's). */
-  const lab = { ...artifactsLab, generate: (seed: number, o: Record<string, string>) => {
-    const spec = artifactsLab.generate(seed, o) as ArtifactSpec;
-    return { ...spec, world: new ArtifactWorld({ ...threesumTask({ scale: 0.1 }), base }, processSandbox()) };
+  const lab = { ...artifactsLab, generate: (seed: number, o: Record<string, string>, archived?: unknown) => {
+    const spec = artifactsLab.generate(seed, o, archived) as ArtifactSpec;
+    return archived ? spec : { ...spec, world: new ArtifactWorld({ ...threesumTask({ scale: 0.1 }), base }, processSandbox()) };
   } } as unknown as LawLab;
   const answers: FetchLike = async (_url, init) => {
     const b = JSON.parse(String(init.body));
@@ -78,6 +86,10 @@ test('a resumed run is rebuilt from the base its journal archived, whatever its 
   const resumed = await runLaboratory(lab, { args: ['--resume', cut.journal, '--out', path.join(dir, 'resumed.json')], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
   assert.notEqual(resumed.stoppedBy, 'diverged', 'rebuilt from its archive');
   assert.equal(JSON.parse(fs.readFileSync(resumed.journal, 'utf8')).world_archive.base, archived.base);
+  /* And with its directory gone. */
+  fs.rmSync(base, { recursive: true, force: true });
+  const again = await runLaboratory(lab, { args: ['--resume', cut.journal, '--out', path.join(dir, 'again.json')], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
+  assert.notEqual(again.stoppedBy, 'diverged', 'its directory gone: rebuilt from its archive alone');
 });
 
 test('a place the artifact\'s validation opened is open to experiment in: the two protocols keep their verdicts, experimenting is shared', async () => {
@@ -100,7 +112,8 @@ test('a place the artifact\'s validation opened is open to experiment in: the tw
     const opened = told.flatMap((u) => u.last_check?.artifact?.validation?.now_your_laboratories ?? []);
     const done = (user.investigation ?? []).length;
     const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
-      : user.round === 2 && done === 0 && opened.length ? { investigate: [{ act: { place: opened[0] } }] }
+      : user.round === 2 && done === 0 && opened.length ? { investigate: [{ act: { place: opened[0] } },
+        { register_test: { protocol: { place: opened[0] }, model: 1, rival: { observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[0]' }, claim: 'it repeats there too', kind: 'new' } }] }
       : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false, beliefs: [], lessons: ['l'], next_experiment: 'n',
         ...(user.round === 1 ? { artifact: 'v1', validate_artifact: true } : {}) };
     const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
@@ -113,4 +126,7 @@ test('a place the artifact\'s validation opened is open to experiment in: the tw
   assert.ok(opened.length >= 1, 'the artifact\'s validation opened a place: ' + JSON.stringify(opened));
   const act = events.filter((e) => e.type === 'investigation' && e.round === 2).flatMap((e) => e.results)[0];
   assert.equal(act?.accepted, true, 'it may experiment there: ' + JSON.stringify(act));
+  const registered = events.filter((e) => e.type === 'investigation' && e.round === 2).flatMap((e) => e.results)[1];
+  assert.ok(registered, 'it asked to register a test there');
+  assert.doesNotMatch(String(registered.error ?? ''), /a test runs in one of your laboratories/, 'and may register a test of its own there: ' + JSON.stringify(registered));
 });

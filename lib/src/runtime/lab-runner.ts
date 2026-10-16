@@ -953,7 +953,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* What it pins itself, with --no-pins the condition without. */
   const pinning = (): boolean => channelOn && helping && (cfg as { pins?: boolean }).pins !== false;
   const applyPinsNow = (ops: readonly PinOp[]): string[] => applyPins(channel, ops, (id) => session.notebook.documents.get(id));
-  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, episodeOf: (id: string) => episodes.get(id)?.data,
+  /* Texts kept whole by their content, beside the journal (shared by the runs of its folder: the same content, one file). */
+  const keep = (text: string): string => {
+    const sha = createHash('sha256').update(text).digest('hex');
+    const file = path.join(path.dirname(run.outFile), 'blobs', sha);
+    if (!fs.existsSync(file)) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); }
+    return sha;
+  };
+  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, keep, episodeOf: (id: string) => episodes.get(id)?.data,
     ...(channelOn ? { publish: (m: ChannelPublication) => { channelNow()?.publish('world', m); } } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
   if (assistedAfter !== null) journal.assisted_after_attempts = assistedAfter;
@@ -979,12 +986,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   type Point = unknown;
   type Case = LabCase<Point> & Record<string, unknown>;
   interface LabPlace extends Place { readonly spec: Spec }
-  const spec: Spec = lab.generate(cfg.seed, worldOptions);
-  /* What its world must keep to be rebuilt: given back from the journal it resumes, or archived now. */
-  if (lab.archive) {
-    if (previous?.world_archive !== undefined && lab.restore) lab.restore(spec, previous.world_archive);
-    journal.world_archive = lab.archive(spec);
-  }
+  /* Its world made from what the run it resumes archived, if it did; and what it must keep to be rebuilt, archived. */
+  const spec: Spec = lab.generate(cfg.seed, worldOptions, previous?.world_archive);
+  if (lab.archive) journal.world_archive = lab.archive(spec);
   const places = new Map<string, LabPlace>();
   const start = lab.places ? lab.places(spec, ctx) : {
     laboratories: [{ id: 'lab1', spec }],
@@ -1094,6 +1098,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const artifactPlaces = new Map<string, LabPlace>();
   /* Experimenting in the artifact's laboratories too, in a run that starts with it (journals before acted as they did). */
   const artifactShares = (): boolean => (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.shared_laboratories === 0;
+  /* Where it may experiment, one set for every way of experimenting (an act, a test of its own...): the laboratories of its
+     model's protocol and, in a run that starts with it, those its artifact's protocol opened. The verdicts stay apart. */
+  const actablePlace = (id: string): LabPlace | undefined => (places.get(id)?.role === 'laboratory' ? places.get(id)
+    : artifactShares() && artifactPlaces.get(id)?.role === 'laboratory' ? artifactPlaces.get(id) : undefined);
+  const actable = (): string[] => [...new Set([...labs().map((l) => l.id), ...(artifactShares() ? [...artifactPlaces.values()].filter((p) => p.role === 'laboratory').map((p) => p.id) : [])])];
   for (const p of start.laboratories) artifactPlaces.set(p.id, { ...p, role: 'laboratory', seen: true });
   for (const p of start.family) artifactPlaces.set(p.id, { ...p, role: 'family', seen: false });
   const artifactObjective: Objective<string, LabPlace, ArtifactMark[], ArtifactResult> | null = lab.artifact ? {
@@ -1178,12 +1187,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       /* Its laboratories are where it may experiment: those of its model's protocol and - where the artifact's own protocol
          opened one, by a validation that did not hold there - those of its artifact's (an external review, 16/10/2026: the
          place of a counterexample must be open to study). The two keep their verdicts apart; experimenting is shared. */
-      const shared = artifactShares();
-      const where = lab.act.place(req.act) ?? labs()[0]?.id ?? 'lab1';
-      const place = places.get(where)?.role === 'laboratory' ? places.get(where)
-        : shared && artifactPlaces.get(where)?.role === 'laboratory' ? artifactPlaces.get(where) : undefined;
-      const open = [...new Set([...labs().map((l) => l.id), ...(shared ? [...artifactPlaces.values()].filter((p) => p.role === 'laboratory').map((p) => p.id) : [])])];
-      if (!place) return { act: req.act, error: 'you can act only in your laboratories: ' + open.join(', ') };
+      const place = actablePlace(lab.act.place(req.act) ?? labs()[0]?.id ?? 'lab1');
+      if (!place) return { act: req.act, error: 'you can act only in your laboratories: ' + actable().join(', ') };
       const id = 'act' + (counter + 1);
       const data = await lab.act.start(place.spec, req.act, id, ctx);
       /* The environment answers only whether it accepted: never why not. */
@@ -1450,7 +1455,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     parseAct: (raw) => actLab.parse(raw),
     asWritten: (a) => (actLab.asWritten ? actLab.asWritten(a) : a),
     placeOf: (a) => actLab.place(a) ?? labs()[0]?.id ?? 'lab1',
-    laboratories: () => labs().map((l) => l.id),
+    /* Where it may experiment - the same places its acts may go (an external review, 16/10/2026). */
+    laboratories: () => actable(),
     identity: (place, a) => actLab.identity?.(specOf(place), a) ?? null,
     identities: Boolean(actLab.identity && lab.episodeIdentity),
     seen: () => {

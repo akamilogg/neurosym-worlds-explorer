@@ -155,9 +155,8 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
   id: 'artifacts@1',
   /* Its product is the artifact, as good as the budget allows: an accepted model of it does not end the investigation. */
   goesOnAfterAcceptance: true,
-  /* Its base, whole, in the journal: a resumed run is rebuilt from it, whatever its directory holds now. */
+  /* Its base, whole, in the journal: a resumed run is rebuilt from it, whatever its directory holds now, or if it is gone. */
   archive: (spec) => spec.world.archiveBase(),
-  restore: (spec, archived) => spec.world.restoreBase(archived as ReturnType<ArtifactWorld['archiveBase']>),
   about: 'System 2 changes an artifact and runs its versions, and writes a model of its behaviour: the metric of a run, from what is known before it.',
   options: [
     { name: 'artifact', default: 'dedup', help: 'the artifact and its task: ' + Object.keys(TASKS).join(', ') },
@@ -166,13 +165,15 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
     { name: 'tolerance', default: '0.25', help: 'how far from what was measured an answer may be, relative' },
     { name: 'workloads', default: '2', help: 'fresh workloads per family in a check' }
   ],
-  generate: (seed, o) => {
+  /* Made from the base a run archived, when it is rebuilt: its directory is never read again. */
+  generate: (seed, o, archived) => {
     const make = TASKS[o.artifact];
     if (!make) throw new Error('--artifact: no artifact task "' + o.artifact + '" (' + Object.keys(TASKS).join(', ') + ')');
     const task = make(Number(o.scale) || 1);
     const lab = task.families.find((f) => f.role === 'laboratory');
     if (!lab) throw new Error('the task has no laboratory family');
-    return { world: new ArtifactWorld(task, processSandbox()), family: lab.id, workloads: Math.max(1, Math.floor(Number(o.workloads) || 2)) };
+    const store = archived ? ArtifactWorld.storeFromArchive(archived as ReturnType<ArtifactWorld['archiveBase']>) : undefined;
+    return { world: new ArtifactWorld(task, processSandbox(), store), family: lab.id, workloads: Math.max(1, Math.floor(Number(o.workloads) || 2)) };
   },
   placeOf: (spec, index) => { const fam = spec.world.task.families.filter((f) => f.role === 'family'); return { ...spec, family: fam[index % Math.max(1, fam.length)]?.id ?? spec.family }; },
   places: (spec) => ({
@@ -221,7 +222,7 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
     known: (spec, version) => spec.world.store.get(version) !== null,
     async check(spec, version, c, ctx) {
       const fam = spec.world.task.families.find((f) => f.id === spec.family);
-      const [r] = await spec.world.check(version, [spec.family], spec.workloads, seedOf('artifact:' + c.purpose + c.round + ':' + (c.set ?? 0) + ':' + c.index + ':' + spec.family + ':' + version), ctx.recorded);
+      const [r] = await spec.world.check(version, [spec.family], spec.workloads, seedOf('artifact:' + c.purpose + c.round + ':' + (c.set ?? 0) + ':' + c.index + ':' + spec.family + ':' + version), ctx.recorded, ctx.keep);
       const v = r.verdict;
       const broken = v.constraints.filter((x) => !x.ok).map((x) => x.metric);
       return {

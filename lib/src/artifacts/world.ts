@@ -43,8 +43,10 @@ export interface CheckRun {
   readonly exitCode: number | null;
   readonly timedOut: boolean;
   readonly metrics: Readonly<Record<string, number>> | null;
-  readonly output: { readonly text: string } | { readonly sha256: string; readonly chars: number } | null;
+  readonly output: { readonly text: string } | { readonly sha256: string; readonly chars: number; readonly kept?: boolean } | null;
   readonly stderr?: string;
+  /** The whole stderr, when it was longer than what is held inline: its digest, and whether it was kept. */
+  readonly stderr_whole?: { readonly sha256: string; readonly chars: number; readonly kept?: boolean };
 }
 
 /** A check's evidence in one family: per workload, the reference's runs and the candidate's, interleaved as they ran. */
@@ -55,11 +57,17 @@ export interface CheckEvidence {
   readonly candidate: readonly CheckRun[];
 }
 
-const OUTPUT_KEPT = 2000;
-const evidenceOf = (o: RunOutcome, repetition: number, first: boolean): CheckRun => ({
+const OUTPUT_KEPT = 2000, STDERR_KEPT = 500;
+/** Keeps a text whole by its content, answering its sha256 (`LabContext.keep`): where a run keeps what is too long inline. */
+export type Keeper = (text: string) => string;
+const digest = (text: string): string => createHash('sha256').update(text).digest('hex');
+/* A long output or stderr is kept whole by `keep` and named by its digest (an external review, 16/10/2026: a digest alone
+   proves identity but cannot be read again); without a keeper, only its digest. */
+const evidenceOf = (o: RunOutcome, repetition: number, first: boolean, keep?: Keeper): CheckRun => ({
   repetition, first, exitCode: o.exitCode, timedOut: o.timedOut, metrics: o.metrics,
-  output: o.output === null ? null : o.output.length <= OUTPUT_KEPT ? { text: o.output } : { sha256: createHash('sha256').update(o.output).digest('hex'), chars: o.output.length },
-  ...(o.stderr ? { stderr: o.stderr.slice(0, 500) } : {})
+  output: o.output === null ? null : o.output.length <= OUTPUT_KEPT ? { text: o.output }
+    : { sha256: keep ? keep(o.output) : digest(o.output), chars: o.output.length, ...(keep ? { kept: true } : {}) },
+  ...(o.stderr ? { stderr: o.stderr.slice(0, STDERR_KEPT), ...(o.stderr.length > STDERR_KEPT ? { stderr_whole: { sha256: keep ? keep(o.stderr) : digest(o.stderr), chars: o.stderr.length, ...(keep ? { kept: true } : {}) } } : {}) } : {})
 });
 
 /** The machine and runtime a measure was taken on: what it is, and its fingerprint (a hash of it). */
@@ -74,8 +82,7 @@ const direct: Recorder = (_route, _body, compute) => compute();
 
 export class ArtifactWorld {
   readonly task: ArtifactTask;
-  /** Its versions. Replaced only by `restoreBase`, before anything was made (a run resumed from its archived base). */
-  store: ArtifactStore;
+  readonly store: ArtifactStore;
   private readonly sandbox: Sandbox;
   private environmentOnce: Promise<Environment> | null = null;
 
@@ -111,13 +118,12 @@ export class ArtifactWorld {
     return { base: this.store.base, files: Object.fromEntries(this.store.get(this.store.base)!.files) };
   }
 
-  /** The base a run archived, given back when it is resumed: the run is rebuilt from it, whatever its directory holds now.
-      Refused if the archive does not hash to the base it names, or if versions were made already. */
-  restoreBase(archived: { readonly base: string; readonly files: Readonly<Record<string, string>> }): void {
-    if (this.store.all().length > 1) throw new Error('the base is restored before any version is made');
+  /** The store of a base a run archived: what a resumed run is made from, whatever its directory holds now, or if it is
+      gone. Refused if the archive does not hash to the base it names. */
+  static storeFromArchive(archived: { readonly base: string; readonly files: Readonly<Record<string, string>> }): ArtifactStore {
     const store = new ArtifactStore(new Map(Object.entries(archived.files)));
     if (store.base !== archived.base) throw new Error('the archived base does not hash to ' + archived.base + ' (it hashes to ' + store.base + ')');
-    this.store = store;
+    return store;
   }
 
   /** The reference every candidate is compared with: the base. */
@@ -173,11 +179,11 @@ export class ArtifactWorld {
 
   /** The verdict (§8) on a candidate in some families, on n fresh workloads each: reference and candidate interleaved,
       repetition by repetition, so a drift of the machine falls on both. */
-  async check(candidate: string, families: readonly string[], n: number, seed: number, record: Recorder = direct): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment; readonly evidence: readonly CheckEvidence[] }[]> {
-    return record('/check', { task: this.task.id, candidate, reference: this.reference, families, n, seed }, () => this.measureCheck(candidate, families, n, seed));
+  async check(candidate: string, families: readonly string[], n: number, seed: number, record: Recorder = direct, keep?: Keeper): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment; readonly evidence: readonly CheckEvidence[] }[]> {
+    return record('/check', { task: this.task.id, candidate, reference: this.reference, families, n, seed }, () => this.measureCheck(candidate, families, n, seed, keep));
   }
 
-  private async measureCheck(candidate: string, families: readonly string[], n: number, seed: number): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment; readonly evidence: readonly CheckEvidence[] }[]> {
+  private async measureCheck(candidate: string, families: readonly string[], n: number, seed: number, keep?: Keeper): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment; readonly evidence: readonly CheckEvidence[] }[]> {
     const reps = this.task.objective.repetitions;
     const environment = await this.environment();
     const out: { family: string; verdict: Verdict; environment: Environment; evidence: CheckEvidence[] }[] = [];
@@ -198,7 +204,7 @@ export class ArtifactWorld {
             for (const who of first === 'ref' ? ['ref', 'cand'] : ['cand', 'ref']) {
               const o = await this.once(who === 'ref' ? dirs.ref : dirs.cand, p.workload, r);
               (who === 'ref' ? p.reference : p.candidate).push(o);
-              (who === 'ref' ? kept[i].reference : kept[i].candidate).push(evidenceOf(o, r, who === first));
+              (who === 'ref' ? kept[i].reference : kept[i].candidate).push(evidenceOf(o, r, who === first, keep));
             }
           }
         }

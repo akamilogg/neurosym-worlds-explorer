@@ -155,7 +155,7 @@ export function juniorTests(journal: J): string | null {
     ? ownTestsSection([], true, Number(config.ownTests) || 0, GRID_TEST_WORDS) : null;
   if (!lab.act) return null;
   if (Array.isArray(config.tools) && !config.tools.includes('act')) return null;
-  const spec = lab.generate(Number(config.seed) || 1, worldOptionsIn(lab.options, config));
+  const spec = lab.generate(Number(config.seed) || 1, worldOptionsIn(lab.options, config), journal?.world_archive);
   return ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act.identity && lab.episodeIdentity), Number(config.ownTests) || 0);
 }
 

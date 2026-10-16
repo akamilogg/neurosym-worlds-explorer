@@ -816,3 +816,32 @@ cuatro rompen lo mismo: que la investigación entera se pueda reconstruir y revi
   - la restricción de memoria del piloto;
   - la regresión emparejada del artefacto, desactivada en la implementación: cada comprobación usa cargas nuevas, y
     volver a ejecutar las de la comprobación anterior aún no está.
+
+### 18.9 Segunda revisión (16/10/2026): las garantías, enteras
+
+La revisión de `35ad463` encontró que dos arreglos resolvían el caso reproducido y no la garantía entera, y una
+limitación de conservación. Los tres se arreglan desde su principio:
+
+**1. Un run reanudado no lee nada de disco que no guardara él mismo.**
+- **El fallo:** se generaba el mundo desde el directorio y luego se reponía la base archivada. Con el directorio
+  borrado o movido fallaba (`ENOENT`) antes de usar el archivo.
+- **El arreglo:** `Lab.generate` recibe lo archivado (`archived`) y el mundo se construye directamente desde ahí
+  (`ArtifactWorld.storeFromArchive`, que comprueba el hash). El directorio no se vuelve a leer. Desaparece `Lab.restore`.
+
+**2. Dónde puede experimentar es un único conjunto, para cualquier camino.**
+- **El fallo:** `act` ya consultaba los laboratorios de los dos protocolos, pero `register_test` seguía mirando sólo los
+  del modelo.
+- **El arreglo:** el runner tiene un solo conjunto de lugares habilitados (`actable`), que consultan tanto los actos como
+  las pruebas propias.
+
+**3. Reconstruir íntegramente es conservar el contenido, no sólo su resumen.**
+- **El fallo:** las salidas de más de 2.000 caracteres quedaban sólo como hash, y `stderr` se recortaba a 500. Se podía
+  comprobar la identidad, pero no volver a leer el contenido.
+- **El arreglo:** lo que no cabe en línea se guarda entero, por su contenido (`LabContext.keep`), en `blobs/<sha256>`
+  junto al diario. La carpeta la comparten los runs de esa carpeta: el mismo contenido es el mismo archivo. La evidencia
+  nombra su hash y su tamaño, y dice que está guardado (`kept`).
+
+**Pruebas** (`test/artifacts-review.test.ts`):
+- un run reanudado con la base cambiada, y otra vez con su directorio borrado, sin divergir;
+- en un lugar que abrió la validación del artefacto, un acto aceptado y una prueba propia que no se rechaza por el lugar;
+- un `stderr` largo guardado entero y leído de nuevo.

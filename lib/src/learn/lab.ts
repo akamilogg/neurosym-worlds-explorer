@@ -70,6 +70,9 @@ export interface LabContext {
       artifact: SPEC-MUNDO-ARTEFACTOS §11): computed once and logged as the environment's answer, so a run resumed is
       given what it was given. The same `route` and `body` in the same order are the same answer. */
   readonly recorded?: <T>(route: string, body: unknown, compute: () => Promise<T>) => Promise<T>;
+  /** Keeps a text whole, by its content (a run's output too long to hold inline): answers its sha256. Kept beside the run's
+      journal, shared by the runs of its folder (the same content is the same file). */
+  readonly keep?: (text: string) => string;
   /** Publishes in the researcher's channel (SPEC-CANAL-MENSAJES), as the world: facts of its verdicts, never an analysis.
       Absent: the researcher has no channel (the unknown-world researcher, a journal made before it). */
   readonly publish?: (m: import('./assisted/channel.ts').ChannelPublication) => void;
@@ -136,7 +139,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   readonly facets?: readonly { readonly id: string; readonly help: string }[];
 
   /* --- The world ------------------------------------------------------------------------ */
-  generate(seed: number, options: LabOptions): S;
+  /** `archived`: what a run archived of its world (`archive`), when it is rebuilt - the world is then made from it, never
+      from what it was first made from (a file that changed, moved or is gone). */
+  generate(seed: number, options: LabOptions, archived?: unknown): S;
   /** Place `index` of the family of `spec`. */
   placeOf(spec: S, index: number, options: LabOptions): S;
   /** The places to start with, when the laboratory names them (default: lab1, then place1..N of the family). */
@@ -191,10 +196,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       validations are given back - and the run ends when its budget does. */
   readonly goesOnAfterAcceptance?: boolean;
   /** What of its world a run must keep to be rebuilt, whatever happens to the files it was made from (an artifact's base):
-      archived in the journal when the run starts, and given back to `restore` when it is resumed, before anything else -
-      a resumed run never depends on a file it read once (an external review, 16/10/2026). */
+      archived in the journal when the run starts, and given back to `generate` when it is resumed - a resumed run never
+      reads a file it read once (an external review, 16/10/2026). */
   readonly archive?: (spec: S) => unknown;
-  readonly restore?: (spec: S, archived: unknown) => void;
   /** The verdict on the ARTIFACT itself, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8): a version the researcher puts
       forward, judged in a place on fresh workloads - correct, and better than the reference (or not worse, where the place
       asks only that). Only a world of artifacts declares it; the runner gives it a protocol of its own. */
