@@ -503,7 +503,56 @@ contexto de uso". El arnés no puede juzgar si le afecta, así que suspende y de
 nuevo. Es la opción prudente.
 
 **Pendiente:**
-- el inventario y el historial de estados por modelo (M3), del que esto es la base por run;
+- ~~el inventario y el historial de estados por modelo (M3)~~: hecho en §15.4;
 - los informes de lote como evidencia, cuando las estadísticas salgan de ellos (M2);
 - la separación del proceso de evaluación (M4);
 - la reevaluación sintética (M5).
+
+### 15.4 El inventario y las dependencias de ejecución: M3 (16/10/2026)
+
+El código está en `lib/src/runtime/inventory.ts` y las pruebas en `test/inventory.test.ts`. El inventario vive en
+`runs/models/inventory.json` (`model_inventory@1`).
+
+- **`lab model register <run> --owner "<persona>"`** inventaría el modelo de un run. Opciones:
+  `--use "..."`, `--criteria "..."`, `--influence` y `--consequence` (low, medium o high), `--criticality "<la clase de
+  la organización>"`, `--review-days N` e `--id`.
+  - **El propietario es una persona,** nunca un agente.
+  - **El contexto de uso es obligatorio.** Se toma de `--use` o, si no se da, de la revisión que lo declare.
+  - **Las tres capas** (§4):
+    - la configuración generadora: investigador, modelo y ajuste del LLM, modelo del Judge, configuración del arnés,
+      agentes y presupuesto de ayuda;
+    - el artefacto, con la huella del modelo final y la versión del artefacto;
+    - las dependencias de ejecución tal como están al inventariar.
+  - **La criticidad,** en los dos ejes de V&V 40 o en la clase de la organización.
+  - **El historial de estados,** las fechas (registro, última validación, próxima revisión) y los fallos del instrumento
+    conocidos.
+- **Las dependencias de ejecución** son:
+  - el runtime que ejecuta el código del modelo;
+  - el Judge y su modelo, sólo cuando la ley tiene reglas;
+  - el instrumento del mundo;
+  - lo que el mundo declara necesitar, mediante un gancho nuevo y opcional del laboratorio: `Lab.dependencies(spec)`.
+    En el mundo de artefactos es el entorno donde se miden sus versiones, con su huella y sus hechos.
+- **El instrumento** es el código del mundo y el que usa fuera del arnés, encontrado por sus imports: en artefactos,
+  `lib/src/artifacts`. Nunca incluye el arnés (`learn`, `runtime`, `orchestra`, `core`, `audit`).
+  - Su huella se calcula sobre el contenido con finales de línea LF, así que da lo mismo en cualquier sistema.
+  - Si al inventariar git dice que cambió desde el commit del run, el modelo nace en `revalidate`.
+- **`lab model check [<id>]`** aplica los disparadores de §8.1:
+  - una dependencia distinta de la inventariada;
+  - el instrumento cambiado, o un fallo suyo (`bug`) confirmado por el operador después de inventariar;
+  - el contexto de uso o los criterios de la última revisión distintos de los del inventario;
+  - la fecha de revisión vencida;
+  - el run desaparecido.
+
+  Cada disparador pone el modelo en `revalidate`, por el arnés y con su causa, y la misma causa se registra una sola vez.
+  El modelo sigue ahí hasta que una persona firma una revisión **después** del disparador. Esa firma vuelve a inventariar
+  el modelo tal como está: sus dependencias, sus fallos conocidos y su contexto, y cuenta la próxima revisión desde ella.
+  Sin disparadores, el estado es el de su validación (M1): en validación, la conclusión firmada (por quien la firmó y con
+  su revisión) o suspendida por una revisión.
+- **`lab model list`** muestra los modelos con su estado. **`lab model retire <id> --by "<persona>"`** retira uno.
+- **Cambiar la configuración generadora** no pone un modelo en `revalidate` (§8.1): se guarda, pero no se compara.
+
+**Pendiente:**
+- **El simulador de los mundos c302** es un servicio externo. No forma parte de su instrumento mientras el mundo no
+  declare su versión en `dependencies`.
+- **La reevaluación sintética como disparador** (§9, M5).
+- **Las medidas de §11** sobre el inventario.

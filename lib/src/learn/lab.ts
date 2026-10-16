@@ -199,6 +199,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       archived in the journal when the run starts, and given back to `generate` when it is resumed - a resumed run never
       reads a file it read once (an external review, 16/10/2026). */
   readonly archive?: (spec: S) => unknown;
+  /** What a product of its world needs to give an answer, beyond the harness's runtime and the Judge: the machine and the
+      runtimes its runs are measured on, as they are now (SPEC-RIESGO-MODELOS §4, §8.1: a dependency that changes calls
+      for validating again). */
+  readonly dependencies?: (spec: S) => Promise<Record<string, unknown>>;
   /** What of its world rests on beliefs that fell (an artifact's changes that declared them in their `because`), and
       whether it is still in the line of what is current - a fact of the record, published to the researcher; deciding what
       to undo stays its own (SPEC-MUNDO-ARTEFACTOS §9). Null: nothing rests on them. */

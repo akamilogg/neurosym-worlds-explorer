@@ -68,6 +68,9 @@ export const CLI_USAGE = [
   'lab model show <run>                                      its revisions (each opened, its copies hashed again), its approvals, its state',
   'lab model approve <run> --revision <id> --by "<person>" --conclusion approved|approved_with_limitations|rejected [--note "..."]',
   '                                                           a person\'s conclusion on one revision, in a file of its own; refused if its evidence does not hold',
+  'lab model register <run> --owner "<person>" [--use ..] [--criteria ..] [--influence|--consequence low|medium|high] [--criticality ..] [--review-days N]',
+  '                                                           the model of a run in the inventory (runs/models/inventory.json), its execution dependencies as they are now',
+  'lab model list | check [<id>] | retire <id> --by "<person>"   the inventory; what changed since (dependencies, instrument, context, date, verdicts) and each state with its cause',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
@@ -296,8 +299,38 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       }
       case 'model': {
         const sub = args.shift();
-        const journal = resolveRun(ctx.root, args.shift());
         const evidenceDir = path.join(ctx.root, 'runs', 'models', 'evidence');
+        /* The inventory (M3): its models, their dependencies and their state. */
+        if (sub === 'list' || sub === 'check' || sub === 'retire') {
+          const inv = await import('./inventory.ts');
+          const line = (m: import('./inventory.ts').InventoryEntry) => m.id + '  ' + m.status.padEnd(26) + m.experiment + '  ' + m.run + '  owner ' + m.owner + '  use: ' + m.use_context;
+          if (sub === 'list') {
+            const models = inv.readInventory(ctx.root).models;
+            if (!models.length) out('no model in the inventory (lab model register <run> --owner "<person>" --use "<context>")');
+            for (const m of models) out(line(m));
+            return 0;
+          }
+          if (sub === 'retire') {
+            const id = args.shift(), by = take(args, 'by'), note = take(args, 'note');
+            if (!id || !by) { out('lab model retire <id> --by "<person>" [--note "..."]'); return 2; }
+            out(line(inv.retireModel(ctx.root, id, by, note ?? '')));
+            return 0;
+          }
+          const results = await inv.checkModels(ctx.root, { evidenceDir, ...(args[0] ? { id: args[0] } : {}) });
+          for (const r of results) out(line(r.entry) + (r.changed ? '  (changed)' : '') + (r.causes.length ? '\n    ' + r.causes.join('\n    ') : ''));
+          return results.some((r) => r.entry.status === 'revalidate') ? 1 : 0;
+        }
+        const journal = resolveRun(ctx.root, args.shift());
+        if (sub === 'register') {
+          const inv = await import('./inventory.ts');
+          const owner = take(args, 'owner'), id = take(args, 'id'), use = take(args, 'use'), criteria = take(args, 'criteria'), influence = take(args, 'influence'),
+            consequence = take(args, 'consequence'), criticality = take(args, 'criticality'), days = take(args, 'review-days');
+          if (!owner) { out('lab model register <run> --owner "<person>" [--use "..."] [--criteria "..."] [--influence low|medium|high] [--consequence low|medium|high] [--criticality "..."] [--review-days N] [--id ID]'); return 2; }
+          const m = await inv.registerModel(ctx.root, journal, { owner, evidenceDir, ...(id ? { id } : {}), ...(use ? { use } : {}), ...(criteria ? { criteria } : {}), ...(influence ? { influence } : {}),
+            ...(consequence ? { consequence } : {}), ...(criticality ? { criticality } : {}), ...(Number(days) > 0 ? { reviewDays: Number(days) } : {}) });
+          out(m.id + ' registered: ' + m.status + '; its execution dependencies as they are now: ' + JSON.stringify(Object.fromEntries(Object.entries(m.layers.execution_dependencies).filter(([k]) => !k.endsWith('_facts')))));
+          return 0;
+        }
         const v = await import('./validation.ts');
         if (sub === 'revise') {
           const use = take(args, 'use'), criteria = take(args, 'criteria');
@@ -321,7 +354,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           out(a.conclusion + ', by ' + a.by + ', on revision ' + a.revision.slice(0, 16));
           return 0;
         }
-        out('lab model revise|show|approve <run> ...');
+        out('lab model revise|show|approve|register <run> ... | list | check [<id>] | retire <id>');
         return 2;
       }
       case 'pack': {
