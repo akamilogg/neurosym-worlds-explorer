@@ -41,6 +41,10 @@ export interface RunResult {
   readonly timedOut: boolean;
   readonly stdout: string;
   readonly stderr: string;
+  /** What the command wrote, whole - up to a hard cap (`CAPTURE_MAX`), and how much beyond it was dropped: what is kept
+      as evidence, where `stdout`/`stderr` are what is shown (an external review, 16/10/2026: a clipped text was kept as
+      whole). */
+  readonly whole?: { readonly stdout: string; readonly stderr: string; readonly dropped: { readonly stdout: number; readonly stderr: number } };
   /** The files read back, or null where the command did not write them. */
   readonly outputs: Readonly<Record<string, string | null>>;
   /** Wall time of the command alone (ms). */
@@ -58,6 +62,8 @@ export interface Sandbox {
 }
 
 const OUTPUT_MAX = 20000;
+/** What a command's streams are captured whole up to (characters each); beyond it they are counted, not kept. */
+export const CAPTURE_MAX = 16 * 1024 * 1024;
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) + '\n[... ' + (s.length - n) + ' more characters]' : s);
 
 /** A fresh working directory with the workload's files, and the artifact beside it. */
@@ -76,18 +82,26 @@ const readBack = (dir: string, names: readonly string[] | undefined): Record<str
   Object.fromEntries((names ?? []).map((n) => { const f = path.join(dir, n); return [n, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null]; }));
 
 /** Runs a command with a timeout and what it reads; resolves with what came out. */
-function spawnWith(cmd: string, args: readonly string[], o: { cwd?: string; stdin?: string; timeoutMs: number; env?: NodeJS.ProcessEnv }): Promise<{ code: number | null; timedOut: boolean; stdout: string; stderr: string; ms: number }> {
+function spawnWith(cmd: string, args: readonly string[], o: { cwd?: string; stdin?: string; timeoutMs: number; env?: NodeJS.ProcessEnv }): Promise<{ code: number | null; timedOut: boolean; stdout: string; stderr: string; dropped: { stdout: number; stderr: number }; ms: number }> {
   return new Promise((resolve) => {
     const t0 = process.hrtime.bigint();
     const child = spawn(cmd, [...args], { cwd: o.cwd, env: o.env, windowsHide: true });
     let stdout = '', stderr = '', timedOut = false;
-    child.stdout.on('data', (d) => { if (stdout.length < 4 * OUTPUT_MAX) stdout += d; });
-    child.stderr.on('data', (d) => { if (stderr.length < 4 * OUTPUT_MAX) stderr += d; });
+    const dropped = { stdout: 0, stderr: 0 };
+    /* Whole up to the cap; what goes beyond it is counted, so that nothing is called whole that is not. */
+    const take = (have: string, d: Buffer, k: 'stdout' | 'stderr'): string => {
+      const text = String(d), room = CAPTURE_MAX - have.length;
+      if (room <= 0) { dropped[k] += text.length; return have; }
+      if (text.length > room) dropped[k] += text.length - room;
+      return have + text.slice(0, room);
+    };
+    child.stdout.on('data', (d) => { stdout = take(stdout, d, 'stdout'); });
+    child.stderr.on('data', (d) => { stderr = take(stderr, d, 'stderr'); });
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, o.timeoutMs);
     child.on('error', (e) => { stderr += String(e.message); });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code, timedOut, stdout, stderr, ms: Number(process.hrtime.bigint() - t0) / 1e6 });
+      resolve({ code, timedOut, stdout, stderr, dropped, ms: Number(process.hrtime.bigint() - t0) / 1e6 });
     });
     if (o.stdin !== undefined) child.stdin.end(o.stdin); else child.stdin.end();
   });
@@ -107,6 +121,7 @@ export function processSandbox(): Sandbox {
         const r = await spawnWith(cmd, args, { cwd: dir, stdin: execution.stdin, timeoutMs: limits.timeoutMs, env });
         const max = limits.outputMax ?? OUTPUT_MAX;
         return { backend: 'process', isolated: false, exitCode: r.timedOut ? null : r.code, timedOut: r.timedOut, stdout: clip(r.stdout, max), stderr: clip(r.stderr, max),
+          whole: { stdout: r.stdout, stderr: r.stderr, dropped: r.dropped },
           outputs: readBack(dir, execution.outputs), wallMs: r.ms, cpuMs: null, peakKb: null };
       } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     }

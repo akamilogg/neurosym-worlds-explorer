@@ -845,3 +845,27 @@ limitación de conservación. Los tres se arreglan desde su principio:
 - un run reanudado con la base cambiada, y otra vez con su directorio borrado, sin divergir;
 - en un lugar que abrió la validación del artefacto, un acto aceptado y una prueba propia que no se rechaza por el lugar;
 - un `stderr` largo guardado entero y leído de nuevo.
+
+### 18.10 Tercera revisión (16/10/2026): los huecos de la reconstrucción
+
+Una auditoría externa del arnés señaló dos huecos concretos en la promesa central, la reconstrucción íntegra (§11.1).
+Las demás conclusiones, ya definidas en otras specs, se recogen aparte (RIESGO-MODELOS M1, §9 de esta spec,
+CONTROL-ARNES K1–K3).
+
+**1. Lo que se guardaba "entero" ya venía recortado.**
+- **El fallo:** el sandbox recortaba stdout y stderr a 20.000 caracteres antes de que la evidencia los guardara.
+- **El arreglo:** el sandbox captura cada flujo entero hasta un tope duro (`CAPTURE_MAX`, 16 M caracteres) y cuenta lo que
+  pase de ahí (`whole`, con `dropped`). Lo que se muestra sigue recortado; lo que se guarda como evidencia es la captura.
+  Si la propia captura perdió algo, la evidencia lo dice (`stderr_whole.dropped`): nada se llama entero si no lo es.
+
+**2. Al reanudar en otra carpeta, los blobs se quedaban atrás.**
+- **El fallo:** las referencias viajaban con el diario y los contenidos se quedaban en la carpeta del run original.
+- **El arreglo:** un run reanudado se lleva los blobs de su historia a su propia carpeta (`carryBlobs`).
+  - Cada archivo se comprueba contra el hash que lo nombra: uno corrupto no se copia.
+  - Lo que el diario cita y no está se informa.
+  - El diario nuevo lo registra (`blobs_carried`: copiados, que faltan, corruptos).
+
+**Pruebas** (`test/artifacts-review.test.ts`):
+- un `stderr` de 30.000 caracteres, guardado entero;
+- `carryBlobs` con un blob bueno, uno manipulado y uno citado que falta;
+- un run reanudado en otra carpeta que se lleva sus blobs y lo registra.

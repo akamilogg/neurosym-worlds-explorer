@@ -130,3 +130,44 @@ test('a place the artifact\'s validation opened is open to experiment in: the tw
   assert.ok(registered, 'it asked to register a test there');
   assert.doesNotMatch(String(registered.error ?? ''), /a test runs in one of your laboratories/, 'and may register a test of its own there: ' + JSON.stringify(registered));
 });
+
+/* A third review (16/10/2026): the guarantee of reconstruction, where it still had gaps. */
+
+test('a stream is captured whole before it is clipped for display: a long stderr kept as evidence is the whole of it', async () => {
+  const world = new ArtifactWorld(threesumTask({ scale: 0.1 }), processSandbox());
+  const source = 'import sys\nsys.stderr.write("y" * 30000)\n' + world.store.get(world.reference)!.files.get('main.py');
+  const noisy = world.change(world.reference, { files: { 'main.py': source } }) as { version: string };
+  const kept = new Map<string, string>();
+  const [r] = await world.check(noisy.version, ['mixed'], 1, 3, undefined, (text) => { const sha = 'k' + kept.size; kept.set(sha, text); return sha; });
+  const whole = r.evidence[0].candidate[0].stderr_whole!;
+  assert.equal(whole.chars, 30000, 'not the 20000 shown');
+  assert.equal(kept.get(whole.sha256)!.length, 30000);
+  assert.equal(whole.dropped, undefined, 'nothing dropped by the capture');
+});
+
+test('a resumed run carries the blobs of its history into its own folder, each checked against its digest; what is cited and missing is said', async () => {
+  const { carryBlobs } = await import('../src/runtime/lab-runner.ts');
+  const { createHash } = await import('node:crypto');
+  const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+  const a = fs.mkdtempSync(path.join(os.tmpdir(), 'blobs-a-')), b = fs.mkdtempSync(path.join(os.tmpdir(), 'blobs-b-'));
+  fs.mkdirSync(path.join(a, 'blobs'));
+  fs.writeFileSync(path.join(a, 'blobs', sha('good')), 'good');
+  fs.writeFileSync(path.join(a, 'blobs', sha('meant')), 'tampered');
+  const gone = sha('gone');
+  fs.writeFileSync(path.join(a, 'run.json'), JSON.stringify({ events: [{ evidence: { stderr_whole: { sha256: sha('good'), chars: 4, kept: true } } }, { output: { sha256: gone, chars: 4, kept: true } }] }, null, 2));
+  const r = carryBlobs(path.join(a, 'run.json'), path.join(b, 'resumed.json'));
+  assert.equal(r.carried, 1);
+  assert.equal(fs.readFileSync(path.join(b, 'blobs', sha('good')), 'utf8'), 'good');
+  assert.deepEqual(r.corrupt, [sha('meant')], 'a file whose content is not its name is not carried');
+  assert.deepEqual(r.missing, [gone], 'cited, and not there');
+  /* In a run: resumed into another folder, its journal says what it carried. */
+  const cells = (await import('../src/worlds/cells/lab.ts')).cellsLab;
+  const answers: FetchLike = async () => { const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify({ rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[0]', validate: false, beliefs: [], lessons: ['l'], next_experiment: 'n' }) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } }; };
+  const args = ['--seed', '1', '--level', '1', '--flat', '--no-grade', '--no-reflection', '--tools', 'none', '--attempts', '3'];
+  const cut = await runLaboratory(cells, { args: [...args, '--max-tokens', '150', '--out', path.join(a, 'cut.json')], root: a, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
+  const resumed = await runLaboratory(cells, { args: ['--resume', cut.journal, '--out', path.join(b, 'later', 'resumed.json')], root: b, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
+  assert.notEqual(resumed.stoppedBy, 'diverged');
+  assert.ok(fs.existsSync(path.join(b, 'later', 'blobs', sha('good'))), 'carried into its own folder');
+  assert.equal(JSON.parse(fs.readFileSync(resumed.journal, 'utf8')).blobs_carried.carried, 1);
+});

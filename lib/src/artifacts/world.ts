@@ -45,8 +45,9 @@ export interface CheckRun {
   readonly metrics: Readonly<Record<string, number>> | null;
   readonly output: { readonly text: string } | { readonly sha256: string; readonly chars: number; readonly kept?: boolean } | null;
   readonly stderr?: string;
-  /** The whole stderr, when it was longer than what is held inline: its digest, and whether it was kept. */
-  readonly stderr_whole?: { readonly sha256: string; readonly chars: number; readonly kept?: boolean };
+  /** The whole stderr, when it was longer than what is held inline: its digest, whether it was kept, and how many characters
+      the capture itself dropped beyond its cap (then it is not whole, and says so). */
+  readonly stderr_whole?: { readonly sha256: string; readonly chars: number; readonly kept?: boolean; readonly dropped?: number };
 }
 
 /** A check's evidence in one family: per workload, the reference's runs and the candidate's, interleaved as they ran. */
@@ -63,12 +64,20 @@ export type Keeper = (text: string) => string;
 const digest = (text: string): string => createHash('sha256').update(text).digest('hex');
 /* A long output or stderr is kept whole by `keep` and named by its digest (an external review, 16/10/2026: a digest alone
    proves identity but cannot be read again); without a keeper, only its digest. */
-const evidenceOf = (o: RunOutcome, repetition: number, first: boolean, keep?: Keeper): CheckRun => ({
+const evidenceOf = (o: RunOutcome, repetition: number, first: boolean, keep?: Keeper, wholeStderr?: { text: string; dropped: number }): CheckRun => ({
   repetition, first, exitCode: o.exitCode, timedOut: o.timedOut, metrics: o.metrics,
   output: o.output === null ? null : o.output.length <= OUTPUT_KEPT ? { text: o.output }
     : { sha256: keep ? keep(o.output) : digest(o.output), chars: o.output.length, ...(keep ? { kept: true } : {}) },
-  ...(o.stderr ? { stderr: o.stderr.slice(0, STDERR_KEPT), ...(o.stderr.length > STDERR_KEPT ? { stderr_whole: { sha256: keep ? keep(o.stderr) : digest(o.stderr), chars: o.stderr.length, ...(keep ? { kept: true } : {}) } } : {}) } : {})
+  ...stderrEvidence(wholeStderr ?? { text: o.stderr, dropped: 0 }, keep)
 });
+/* The stderr as evidence: its beginning inline; whole (what the sandbox captured, before any clipping for display) by its
+   content when longer; and how much the capture itself dropped, if any - never called whole when it is not. */
+function stderrEvidence(s: { text: string; dropped: number }, keep?: Keeper): Record<string, unknown> {
+  if (!s.text && !s.dropped) return {};
+  const long = s.text.length > STDERR_KEPT || s.dropped > 0;
+  return { stderr: s.text.slice(0, STDERR_KEPT),
+    ...(long ? { stderr_whole: { sha256: keep ? keep(s.text) : digest(s.text), chars: s.text.length, ...(keep ? { kept: true } : {}), ...(s.dropped ? { dropped: s.dropped } : {}) } } : {}) };
+}
 
 /** The machine and runtime a measure was taken on: what it is, and its fingerprint (a hash of it). */
 export interface Environment {
@@ -148,10 +157,16 @@ export class ArtifactWorld {
   }
 
   private async once(dir: string, w: Workload, repetition: number): Promise<RunOutcome> {
+    return (await this.onceWhole(dir, w, repetition)).outcome;
+  }
+
+  /** One run, and its stderr whole (up to the sandbox's cap, with what was dropped beyond it): for a check's evidence. */
+  private async onceWhole(dir: string, w: Workload, repetition: number): Promise<{ outcome: RunOutcome; stderr: { text: string; dropped: number } }> {
     const t = this.task;
     const r = await this.sandbox.run(dir, { command: t.run.command(w, repetition), inputs: t.run.inputs(w), outputs: t.run.outputs }, { timeoutMs: t.run.timeoutMs });
     const read = r.exitCode === 0 && !r.timedOut ? t.read(r.outputs, { wallMs: r.wallMs, stdout: r.stdout }) : { metrics: null, output: null };
-    return { workload: w.id, exitCode: r.exitCode, timedOut: r.timedOut, metrics: read.metrics, output: read.output, stderr: r.stderr };
+    return { outcome: { workload: w.id, exitCode: r.exitCode, timedOut: r.timedOut, metrics: read.metrics, output: read.output, stderr: r.stderr },
+      stderr: { text: r.whole?.stderr ?? r.stderr, dropped: r.whole?.dropped.stderr ?? 0 } };
   }
 
   /** `run`: a version on n workloads of a family, each run judged correct or not against the reference's run there. An
@@ -202,9 +217,9 @@ export class ArtifactWorld {
             /* Interleaved, and alternating who goes first. */
             const first = r % 2 === 0 ? 'ref' : 'cand';
             for (const who of first === 'ref' ? ['ref', 'cand'] : ['cand', 'ref']) {
-              const o = await this.once(who === 'ref' ? dirs.ref : dirs.cand, p.workload, r);
+              const { outcome: o, stderr } = await this.onceWhole(who === 'ref' ? dirs.ref : dirs.cand, p.workload, r);
               (who === 'ref' ? p.reference : p.candidate).push(o);
-              (who === 'ref' ? kept[i].reference : kept[i].candidate).push(evidenceOf(o, r, who === first, keep));
+              (who === 'ref' ? kept[i].reference : kept[i].candidate).push(evidenceOf(o, r, who === first, keep, stderr));
             }
           }
         }

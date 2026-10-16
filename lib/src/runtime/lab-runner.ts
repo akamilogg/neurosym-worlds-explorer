@@ -115,6 +115,30 @@ function madeWith(made: unknown, commit: string, root: string): boolean | null {
   catch (e) { return (e as { status?: number }).status === 1 ? false : null; }
 }
 
+/** The texts a journal kept whole by their content (`"sha256": ..., "kept": true`), and where they are: `blobs/` beside it. */
+export const blobsOf = (journalFile: string): { dir: string; cited: string[] } => {
+  const text = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, 'utf8') : '';
+  const cited = [...new Set([...text.matchAll(/"sha256":\s*"([0-9a-f]{64})"[^}]*"kept":\s*true/g)].map((m) => m[1]))];
+  return { dir: path.join(path.dirname(journalFile), 'blobs'), cited };
+};
+
+/** Carries the blobs of the journal a run resumes into its own folder: every file of its `blobs/`, each checked against the
+    digest that names it; what its journal cites and is not there is reported, never silently assumed. */
+export function carryBlobs(fromJournal: string, toJournal: string): { carried: number; missing: string[]; corrupt: string[] } {
+  const from = blobsOf(fromJournal), to = path.join(path.dirname(toJournal), 'blobs');
+  const report = { carried: 0, missing: [] as string[], corrupt: [] as string[] };
+  const present = fs.existsSync(from.dir) ? fs.readdirSync(from.dir).filter((f) => /^[0-9a-f]{64}$/.test(f)) : [];
+  for (const sha of present) {
+    const text = fs.readFileSync(path.join(from.dir, sha), 'utf8');
+    if (createHash('sha256').update(text).digest('hex') !== sha) { report.corrupt.push(sha); continue; }
+    if (path.resolve(from.dir) === path.resolve(to)) continue;
+    const target = path.join(to, sha);
+    if (!fs.existsSync(target)) { fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(target, text); report.carried++; }
+  }
+  report.missing = from.cited.filter((sha) => !present.includes(sha));
+  return report;
+}
+
 /** The tests of its own a command line requires (0 without --own-tests). */
 const ownTestsIn = (argv: readonly string[]): number => { const i = argv.indexOf('--own-tests'); return i >= 0 ? Math.floor(Number(argv[i + 1])) || 0 : 0; };
 
@@ -619,6 +643,9 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const started = new Date();
   const outFile = arg('out') || path.join(options.root, 'runs', lab.runName(cfg.seed, worldOptionsOf(cfg)) + '-' + started.toISOString().replace(/[:.]/g, '-') + '.json');
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  /* A resumed run carries the texts its history kept whole (`blobs/`), wherever it is written: it is rebuilt from what it
+     holds, never from a folder it came from (an external review, 16/10/2026). */
+  const blobsCarried = previous && resumeFrom ? carryBlobs(resumeFrom, outFile) : null;
   const logOf = (journalFile: string) => journalFile.replace(/\.json$/, '') + '.replay.jsonl';
   /* A request the log of the resumed run does not answer, while answers still wait there: the run diverged. It stops. */
   let onDiverge: (d: { channel: string; pending: number }) => void = () => {};
@@ -645,6 +672,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const commit = commitOf(options.root);
   const journal: Record<string, any> = {
     experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}),
+    ...(blobsCarried && (blobsCarried.carried || blobsCarried.missing.length || blobsCarried.corrupt.length) ? { blobs_carried: blobsCarried } : {}),
     /* Who ran it, what was asked, and under which policy of the operator (SPEC-INVESTIGADOR-ASISTIDO §3.1). */
     researcher, researcher_requested: o.asked, researcher_policy: o.policy,
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
