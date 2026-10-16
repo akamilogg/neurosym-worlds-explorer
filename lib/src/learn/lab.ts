@@ -335,7 +335,10 @@ export const CAPABILITIES: readonly { readonly name: string; readonly since: str
   /* The channel (SPEC-CANAL-MENSAJES), likewise. */
   { name: 'channel', since: 'c55cb53', inJournal: () => false },
   /* Going on after an acceptance, in a world that declares it (Lab.goesOnAfterAcceptance), likewise. */
-  { name: 'goes_on', since: 'c55cb53', inJournal: () => false }
+  { name: 'goes_on', since: 'c55cb53', inJournal: () => false },
+  /* The assisted researcher's task as the environment and the operator state it, a model a part of it (prompt.ts
+     'stated_task'), and its prompt describing its channel as it works; likewise. */
+  { name: 'stated_task', since: 'c55cb53', inJournal: () => false }
 ];
 
 /** The rounds a run had at an attempt: those of the stretch of its history it falls in (`rounds_before`), else its own. */

@@ -890,3 +890,38 @@ el operador dice que hay una solución comprobada ligeramente por debajo de O(n�
 - **El par junior/senior:** el senior abre con la primera hipótesis y ayuda cuando el junior se atasca, con 8 órdenes
   como máximo.
 - **El presupuesto de ayuda es 9:** las 8 del senior más el mensaje programado, porque cuenta la ayuda de todos.
+
+## 17. La tarea del asistido es la que se enuncia, y su prompt describe su canal (16/10/2026)
+
+**De dónde sale.** En los runs de 3SUM, el junior aplicaba su capacidad analítica al modelo de tiempos y trataba los
+cambios del artefacto como experimentos sobre ese modelo. Las ideas algorítmicas le venían del senior.
+
+Su prompt lo tiene todo para investigar desde el 26/09: "You are a research scientist and mathematician…", hipótesis
+como afirmaciones comprobables, experimentos elegidos por la información que dan. Pero justo después fija la tarea:
+"YOUR TASK is to write a MODEL that gives the ANSWER the environment asks for". En la cuadrícula o en cells, entender el
+entorno es la tarea, y encaja. En el mundo de artefactos el operador pide otra cosa, y las dos compiten.
+
+Es el mismo principio roto que el del senior (SPEC-ORQUESTADOR §3.3.6): el prompt común fija un objetivo que no siempre
+es el que se pide.
+
+**El cambio:**
+- **La tarea enunciada** (característica `stated_task` del prompt común), sólo para el investigador asistido. Su tarea
+  es la que enuncian la interfaz de su mundo y su operador (`operator:task`, en su canal): entender el entorno, modelarlo,
+  hacer o mejorar algo en él, con todas sus disciplinas. Un MODELO que dé la respuesta que pide el entorno es parte de
+  ella en cada ronda.
+- **El investigador de mundo desconocido conserva su prompt congelado** ("tu tarea es un modelo").
+- **Su prompt describe el canal tal como funciona** (`ASSISTED_SECTION_CHANNEL`, `SOURCES_SECTION_CHANNEL`,
+  `DIRECTIVES_SECTION_CHANNEL`). Antes seguía hablando de `operator_messages` y `operator_task`, que desde el paso 4 del
+  canal ya no existen.
+  - Ahora los mensajes llegan como avisos o fijados del canal, la tarea fijada (`operator:task`) y los orígenes
+    (`harness:sources`).
+  - El senior se presenta como la mitad estratégica de la investigación, que planea con el junior qué intentar y por qué.
+- **El brief que recibe el senior** (`juniorBrief`) es el mismo que recibió el junior.
+- **Capacidad `stated_task`:** sólo los runs que empiezan con ella. `--task-as-model` mantiene el planteamiento anterior,
+  como condición de comparación.
+
+**Pruebas** (`test/stated-task.test.ts`):
+- el asistido recibe la tarea enunciada y su sección del canal, sin campos que ya no existen;
+- su senior lee ese mismo brief;
+- el investigador de mundo desconocido conserva su prompt;
+- las variantes con canal difieren de las de antes donde el canal cambia lo que dicen.

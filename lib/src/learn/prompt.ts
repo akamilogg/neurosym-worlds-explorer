@@ -29,7 +29,10 @@ export const TOOL_ALIASES: Readonly<Record<string, Tool>> = { try: 'act', launch
 /** What the environment gives besides the instruments. */
 export type Feature =
   /** The researcher's protocol: checks in laboratories, verdicts, "validate". */
-  | 'check';
+  | 'check'
+  /** Its task is the one the environment and its operator state (the assisted researcher): a model of the environment is
+      part of it, not the whole of it (the unknown-world researcher's prompt, frozen, keeps the task as a model). */
+  | 'stated_task';
 
 export interface WorldInterface {
   /** The instruments this world offers (a run may withhold some). */
@@ -51,7 +54,9 @@ const COMMON: (f: ReadonlySet<Feature>) => readonly PromptLine[] = (f) => [
   'You face an environment nobody has described to you. You perceive it ONLY through what it shows you (its form is described in `percept`) and through what your instruments return. You are told nothing else about it: not what it is, not what anything in it means, not what it allows, not how anything in it ends. Nobody will tell you what is right: everything you learn, you find out yourself.',
   'What you perceive is recorded in EPISODES; `<episode>@<step>` names a point of one (step 0 is its start), and `notebook.episodes` lists them.',
   '',
-  'YOUR TASK is to write a MODEL that gives the ANSWER the environment asks for; the form of that answer is stated in THIS ENVIRONMENT\'S INTERFACE, at the end. A model has these parts:',
+  f.has('stated_task')
+    ? 'YOUR TASK is the one this environment\'s interface and its operator state (the operator\'s, `operator:task`, reaches you in your channel): to understand the environment, to model it, to make or improve something in it - whatever they ask, with all your disciplines. Part of it, in every round, is a MODEL that gives the ANSWER the environment asks for; the form of that answer is stated in THIS ENVIRONMENT\'S INTERFACE, at the end. A model has these parts:'
+    : 'YOUR TASK is to write a MODEL that gives the ANSWER the environment asks for; the form of that answer is stated in THIS ENVIRONMENT\'S INTERFACE, at the end. A model has these parts:',
   '  - OBSERVATIONS: small deterministic JavaScript functions over what is perceived at a point (the object described in `percept`), each returning a number inside its declared range - or, declared without a range, a text for the judge. They can only compute from what is perceived.',
   '  - RULES: questions a semantic judge answers. The judge does NOT see what you perceive: it sees only the words of your rules and your observations (cite a number inside a rule as {{observation_id}}; a text observation reaches it as written, whether or not a rule cites it). Whatever the judge needs to know, an observation of yours must give it. A rule\'s answer is a number from 0 to 1. The judge knows nothing about this environment either.',
   '  - WEIGHTS over your rules: V = Σ w_i · r_i, the sum of your rules\' answers r_i, each weighted by w_i. Weights are non-negative and normalised to sum 1, so V is a number from 0 to 1.',

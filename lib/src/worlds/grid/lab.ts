@@ -168,7 +168,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   if (s.channel && s.budget) s.channel.publish('harness', { kind: 'pinned', key: 'budget', body: () => s.budget!(attemptNow, roundsAt(s.cfg, attemptNow)) });
   const pinning = Boolean(s.channel) && (s.cfg as { pins?: boolean }).pins !== false;
   const instrumenting = (): boolean => s.cfg.instruments !== false && capabilityAt(s.cfg, 'instruments', attemptNow);
-  const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '')
+  /* The assisted researcher's task as the world and the operator state it (in a run that starts so), and its channel described. */
+  const statedTask = Boolean(assisted) && (s.cfg as { stated_task?: boolean }).stated_task !== false && (s.cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.stated_task === 0;
+  const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools, statedTask), statedTask && Boolean(s.channel)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '')
     + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '')
     + (cfg.explorePlaces ? '\n\n' + PLACES_SECTION : '') + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : explorerSystem(tools);
   /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */

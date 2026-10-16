@@ -60,12 +60,23 @@ export const DIRECTIVES_SECTION = [
   'A directive is not evidence about the environment: the checks decide whether a model holds. A model that carries out a directive and fails also teaches - and tells your senior something.'
 ].join('\n');
 
+/** The same, with its channel: a directive stays pinned there until reported, from the strategic half of the research. */
+export const DIRECTIVES_SECTION_CHANNEL = DIRECTIVES_SECTION.replace('Messages marked "directive": true come from the senior researcher who reviews your work.', 'Messages marked "directive": true (pinned in your channel until you report them) come from your senior: the strategic half of this research, which plans with you what to try next and why.');
+
 /** What only the assisted researcher is told: that a person may write to it, and what that is worth. */
 export const ASSISTED_SECTION = [
   'THE OPERATOR. A person who runs this investigation may write to you. Their messages arrive in `operator_messages`: as `new` where they reach you, and at the start of each round as `earlier`.',
   'Read them as a colleague\'s suggestions: they may help you out of a dead end, and they may be wrong. They are not evidence about the environment: whether your model holds is decided only by the checks, from what the environment answers.',
   'When a message leads you to a belief, test it with your instruments, and cite the message in that belief\'s evidence as "operator:<id>" next to the points of your episodes that support it.',
   'The operator may also state what they want to understand (`operator_task`) and change what of your answer counts: the interface says what counts now.'
+].join('\n');
+
+/** The same, with its channel (SPEC-CANAL-MENSAJES): what the operator and the agents say, and the task, reach it there. */
+export const ASSISTED_SECTION_CHANNEL = [
+  'THE OPERATOR. A person who runs this investigation may write to you, and so may an agent that helps it. Their messages reach you in your channel: as a notice (its "body" is the message, with its "id"), once, where it arrives - or pinned, when it is meant to stay before you (a directive until you report it, a role).',
+  'Read them as a colleague\'s suggestions: they may help you out of a dead end, and they may be wrong. They are not evidence about the environment: whether your model holds is decided only by the checks, from what the environment answers.',
+  'When a message leads you to a belief, test it with your instruments, and cite the message in that belief\'s evidence as "operator:<id>" next to the points of your episodes that support it.',
+  'The operator states what they want of this investigation (`operator:task`, pinned in your channel) and may change what of your answer counts: the interface says what counts now.'
 ].join('\n');
 
 /** What it is told once it may read sources: its instruments to read them, and what a source is worth. */
@@ -76,6 +87,9 @@ export const SOURCES_SECTION = [
   'A source is a REFERENCE, never a truth: what someone wrote, an approximation of what they could see with their own instruments, and it may be wrong, partial, outdated or about something else. It is not evidence of what the environment does. Question it as you question your own beliefs: test what it says with your instruments, and open it again when you need to check it, when it contradicts what the environment answers or another source.',
   'When a source does not fit what you observe, refute it: the environment\'s answers weigh more than any text. Keep in your notes what you took from each source, and which sources (or parts) you refuted and why. When a belief rests on a source, cite it in that belief\'s evidence as "src:<document>#L<from>-<to>", next to the points of your episodes that support it.'
 ].join('\n');
+
+/** The same, with its channel: the origins it may read are pinned there (`harness:sources`). */
+export const SOURCES_SECTION_CHANNEL = SOURCES_SECTION.replace('(`sources.origins`:', '(pinned in your channel as `harness:sources`:');
 
 /** Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): kept as it likes, next to the notebook the operator reads. */
 /** Its budget (SPEC-INVESTIGADOR-ASISTIDO §15): what its two counters are and what happens when the rounds run out - never
@@ -105,7 +119,8 @@ export const OPEN_QUESTIONS_TASK = 'Add "open_questions": [{"question": "<a ques
 
 /** The assisted researcher's system prompt: the common one (as the unknown-world researcher's), then its own sections: the
     operator, and the instrument it may report (SPEC-CALIBRACION-INSTRUMENTOS §4). */
-export const assistedSystem = (common: string): string => common + '\n\n' + ASSISTED_SECTION + '\n\n' + INSTRUMENT_SECTION;
+/** `channel`: a run whose researcher has its channel - the operator's messages and task reach it there. */
+export const assistedSystem = (common: string, channel = false): string => common + '\n\n' + (channel ? ASSISTED_SECTION_CHANNEL : ASSISTED_SECTION) + '\n\n' + INSTRUMENT_SECTION;
 
 export interface OperatorChannel {
   /** Messages the operator sent that have not been delivered yet (taken: they will be). */
@@ -206,7 +221,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
         const originsNow = origins.join('|');
         if (originsNow !== pinnedOrigins) { ch.publish('harness', { kind: 'pinned', key: 'sources', body: { origins } }); pinnedOrigins = originsNow; }
         const base = channel.system ? channel.system() : request.system;
-        const wanted = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '');
+        const wanted = base + (directed ? '\n\n' + DIRECTIVES_SECTION_CHANNEL : '') + (origins.length ? '\n\n' + SOURCES_SECTION_CHANNEL : '');
         if (fixedPrompt === null) fixedPrompt = lastPrompt = wanted;
         else if (wanted !== lastPrompt) {
           /* What changed of its instructions: what was added at the end, or (a focus rewrites the interface) all of it now - pinned. */

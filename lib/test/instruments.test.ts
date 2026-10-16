@@ -219,9 +219,9 @@ test('a journal made before the instruments (review_from 0, no capabilities_from
   const llm = { url: 'http://system2.test/chat', model: 'stand-in' };
   const args = ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--steps', '2', '--no-grade'];
   /* Made as before them: no section, no switch, no capabilities_from - only review_from 0. */
-  const first = await runLaboratory(cellsLab, { args: [...args, '--attempts', '2', '--max-tokens', '350', '--no-instruments', '--budget-hidden', '--no-pins', '--out', path.join(dir, 'old.json')], root: dir, llm, fetch: system2([]) });
+  const first = await runLaboratory(cellsLab, { args: [...args, '--attempts', '2', '--max-tokens', '350', '--no-instruments', '--budget-hidden', '--no-pins', '--task-as-model', '--out', path.join(dir, 'old.json')], root: dir, llm, fetch: system2([]) });
   const j = JSON.parse(fs.readFileSync(first.journal, 'utf8'));
-  assert.deepEqual(j.config.capabilities_from, { instruments: 0, fixed_system: 0, budget: 0, channel: 0, goes_on: 0 }, 'a new journal says where its capabilities start');
+  assert.deepEqual(j.config.capabilities_from, { instruments: 0, fixed_system: 0, budget: 0, channel: 0, goes_on: 0, stated_task: 0 }, 'a new journal says where its capabilities start');
   delete j.config.capabilities_from;
   delete j.config.instruments;
   j.argv = j.argv.filter((a: string) => a !== '--no-instruments');

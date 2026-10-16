@@ -69,8 +69,8 @@ export function codeRequest(raw: unknown, kind: string): { source: string; range
 export const onOf = (q: Record<string, unknown>, inner: unknown): unknown => q.on ?? ((inner ?? {}) as Record<string, unknown>).on;
 
 /** The explorer's system prompt for the instruments it is given (all of them by default): the common prompt. */
-export function explorerSystem(tools: Tools = new Set(EXPLORER_TOOLS)): string {
-  return system2Prompt(GRID_INTERFACE, tools);
+export function explorerSystem(tools: Tools = new Set(EXPLORER_TOOLS), statedTask = false): string {
+  return system2Prompt(statedTask ? { ...GRID_INTERFACE, features: [...GRID_INTERFACE.features, 'stated_task'] } : GRID_INTERFACE, tools);
 }
 
 export const EXPLORER_SYSTEM = explorerSystem();

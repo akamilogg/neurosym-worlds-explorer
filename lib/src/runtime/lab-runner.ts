@@ -77,6 +77,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'no-ablation', help: 'skip the operator\'s ablation of the Judge' },
   { name: 'no-grade', help: 'skip the operator-only grading of the recovered rule (one LLM call)' },
   { name: 'no-reflection', help: 'skip the final reflection round' },
+  { name: 'task-as-model', help: 'the task of the assisted researcher framed as before: a model of the environment, not the task its world and its operator state (the comparison)' },
   { name: 'no-pins', help: 'the assisted researcher cannot pin messages of its own in its channel (SPEC-CANAL-MENSAJES §6): the condition without' },
   { name: 'budget-hidden', help: 'the assisted researcher is not shown its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the condition without it' },
   { name: 'no-instruments', help: 'the assisted researcher writes no instruments of its own (SPEC-INSTRUMENTOS-PROPIOS): the condition without them' },
@@ -386,6 +387,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     instruments: !flag('no-instruments'),
     budget_visible: !flag('budget-hidden'),
     pins: !flag('no-pins'),
+    stated_task: !flag('task-as-model'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
     ...(arg('focus') ? { focus: arg('focus') } : {}),
@@ -963,6 +965,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   let focus: string | null = (worldOptions.__focus as string | undefined) || null;
   let task: string | null = (worldOptions.__task as string | undefined) || null;
   const promptFor = (f: string | null) => system2Prompt(lab.interface({ regression: cfg.regression, world: worldOptions, ...(f ? { focus: f } : {}) }), tools);
+  /* The assisted researcher's: its task as the world and the operator state it, a model a part of it (in a run that starts so). */
+  const statedTask = journal.researcher === 'assisted' && (cfg as { stated_task?: boolean }).stated_task !== false && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.stated_task === 0;
+  const assistedPromptFor = (f: string | null): string => {
+    if (!statedTask) return promptFor(f);
+    const iface = lab.interface({ regression: cfg.regression, world: worldOptions, ...(f ? { focus: f } : {}) });
+    return system2Prompt({ ...iface, features: [...(iface.features ?? []), 'stated_task'] }, tools);
+  };
   const SYSTEM_PROMPT = promptFor(focus);
 
   /* --- The world, as the operator knows it and as the learner perceives it ------------- */
@@ -1481,7 +1490,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       /* A message sent while a resumed run still replays its history waits: delivered then, the question would differ from
          the one its log answers, and the run would diverge. It goes with the first question asked live. */
       take: (round?: number) => (helping && run.replay.pending() === 0 ? run.operator.take(round) : []), scheduled: deliveredMessages(previous),
-      system: () => (helping ? assistedSystem(promptFor(focus)) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
+      system: () => (helping ? assistedSystem(assistedPromptFor(focus), statedTask && channelOn) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ASSISTED_SECTION, assistedSystem, deliveredMessages, operatorClient } from '../src/learn/assisted/session.ts';
+import { ASSISTED_SECTION, ASSISTED_SECTION_CHANNEL, assistedSystem, deliveredMessages, operatorClient } from '../src/learn/assisted/session.ts';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { send } from '../src/runtime/control.ts';
 import { findingView } from '../src/learn/finding.ts';
@@ -83,7 +83,7 @@ test('an assisted run: a message sent while it goes reaches the next question, a
   const r = await runLaboratory(cellsLab, { args: [...ARGS, '--researcher', 'assisted', '--out', path.join(dir, 'run.json')], root: dir, llm, onJournal: (f) => { journal = f; },
     fetch: system2(asked, (n) => { if (n === 2) send(journal, { kind: 'message', text: 'look at step 0', by: 'operator' }); }) });
   assert.equal(r.researcherUsed, 'assisted');
-  assert.ok(asked.every((q) => q.system.includes(ASSISTED_SECTION) && q.system.includes(INSTRUMENT_SECTION) && q.system.includes('TESTS OF YOUR OWN')), 'its own prompt');
+  assert.ok(asked.every((q) => q.system.includes(ASSISTED_SECTION_CHANNEL) && q.system.includes(INSTRUMENT_SECTION) && q.system.includes('TESTS OF YOUR OWN')), 'its own prompt');
   /* Through its channel (SPEC-CANAL-MENSAJES): a notice of the operator's. */
   assert.deepEqual(heardOf(asked[0].user), []);
   const first = asked.findIndex((q) => heardOf(q.user).length);

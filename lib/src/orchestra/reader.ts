@@ -118,9 +118,12 @@ export function juniorBrief(journal: J): string | null {
   if (!lab) return null;
   const config = (journal?.config ?? {}) as J;
   const tools = new Set((Array.isArray(config.tools) ? config.tools : []) as Tool[]);
-  const prompt = isGameLab(lab) ? explorerSystem(tools as never)
-    : system2Prompt(lab.interface({ regression: config.regression !== false, world: worldOptionsIn(lab.options, config),
-      ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) }), tools);
+  /* An assisted run that starts with it: its task as the world and the operator state it, as the junior was told. */
+  const statedTask = journal?.researcher === 'assisted' && config.stated_task !== false && (config.capabilities_from as Record<string, number> | undefined)?.stated_task === 0;
+  const iface = isGameLab(lab) ? null : lab.interface({ regression: config.regression !== false, world: worldOptionsIn(lab.options, config),
+    ...(typeof config.focus === 'string' && config.focus ? { focus: config.focus } : {}) });
+  const prompt = isGameLab(lab) ? explorerSystem(tools as never, statedTask)
+    : system2Prompt(statedTask ? { ...iface!, features: [...(iface!.features ?? []), 'stated_task'] } : iface!, tools);
   const at = prompt.indexOf(ANSWER_SHAPE);
   return (at >= 0 ? prompt.slice(0, at) : prompt).trimEnd();
 }

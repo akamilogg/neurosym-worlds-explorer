@@ -7,7 +7,7 @@ import { LabError, runLaboratory } from '../src/runtime/lab-runner.ts';
 import { send } from '../src/runtime/control.ts';
 import { cellsLab } from '../src/worlds/cells/lab.ts';
 import { Sources, judgeSelector, sourceFetch, textOfHtml } from '../src/learn/assisted/sources.ts';
-import { SOURCES_SECTION } from '../src/learn/assisted/session.ts';
+import { SOURCES_SECTION, SOURCES_SECTION_CHANNEL } from '../src/learn/assisted/session.ts';
 import { findingView } from '../src/learn/finding.ts';
 import type { FetchLike } from '../src/core/net.ts';
 import { userOf } from './support.ts';
@@ -123,7 +123,7 @@ test('--sources-allow: it lists, opens and finds by itself and cites what it rea
   const asked: { system: string; user: Record<string, any> }[] = [];
   const r = await runLaboratory(cellsLab, { args: [...ARGS, '--sources-allow', 'lib', '--out', path.join(dir, 'run.json')], root: dir, llm, fetch: system2(asked) });
   assert.notEqual(r.stoppedBy, 'accepted', 'the source proposes, the world decides');
-  assert.ok(asked.every((q) => q.system.endsWith(SOURCES_SECTION) && q.user.channel.pinned['harness:sources'].origins[0] === lib));
+  assert.ok(asked.every((q) => q.system.endsWith(SOURCES_SECTION_CHANNEL) && q.user.channel.pinned['harness:sources'].origins[0] === lib));
   const inv = eventsOf(r.journal).filter((e) => e.type === 'investigation');
   assert.ok(inv[0].results[0].documents.includes(lib + '/notes.md'));
   assert.match(inv[1].results[0].text, /^1: # Notes on the cells/);
