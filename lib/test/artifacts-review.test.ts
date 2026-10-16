@@ -1,0 +1,116 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runLaboratory } from '../src/runtime/lab-runner.ts';
+import { artifactsLab, type ArtifactSpec } from '../src/worlds/artifacts/lab.ts';
+import { ArtifactWorld } from '../src/artifacts/world.ts';
+import { ArtifactStore } from '../src/artifacts/store.ts';
+import { processSandbox } from '../src/artifacts/sandbox.ts';
+import { dedupTask } from '../src/artifacts/tasks/dedup.ts';
+import { threesumTask } from '../src/artifacts/tasks/threesum.ts';
+import { cellsLab } from '../src/worlds/cells/lab.ts';
+import type { LawLab } from '../src/learn/lab.ts';
+import type { FetchLike } from '../src/core/net.ts';
+import { userOf } from './support.ts';
+
+/* An external review of the artifacts' world (16/10/2026): four guarantees of the harness, each as it reproduced its fault. */
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+test('provenance: the same content reached from another branch keeps the origin of that change - content once, every transition', () => {
+  const store = new ArtifactStore(new Map([['main.py', 'print(1)\n']]));
+  const a = store.apply(store.base, { files: { 'main.py': 'print(2)\n' } }) as { hash: string };
+  const b = store.apply(store.base, { files: { 'main.py': 'print(3)\n' } }) as { hash: string };
+  const again = store.apply(b.hash, { files: { 'main.py': 'print(2)\n' } }) as { hash: string };
+  assert.equal(again.hash, a.hash, 'the same content is the same version');
+  assert.deepEqual(store.transitions.map((t) => [t.from, t.to]), [[store.base, a.hash], [store.base, b.hash], [b.hash, a.hash]], 'every way it was reached');
+  const world = new ArtifactWorld(threesumTask({ scale: 0.1 }), processSandbox());
+  const x = world.change(world.reference, { files: { 'NOTE.md': 'x' } }) as { version: string; parent: string };
+  const y = world.change(world.reference, { files: { 'NOTE.md': 'y' } }) as { version: string; parent: string };
+  const back = world.change(y.version, { files: { 'NOTE.md': 'x' } }) as { version: string; parent: string };
+  assert.equal(back.version, x.version);
+  assert.equal(back.parent, y.version, 'its parent is where THIS change came from');
+});
+
+test('a check keeps its evidence: every run of reference and candidate, interleaved, with what it measured - hidden from the researcher', async () => {
+  const world = new ArtifactWorld(threesumTask({ scale: 0.1 }), processSandbox());
+  const [r] = await world.check(world.reference, ['mixed'], 2, 1);
+  assert.equal(r.evidence.length, 2, 'per workload');
+  const reps = world.task.objective.repetitions;
+  for (const e of r.evidence) {
+    assert.equal(e.reference.length, reps);
+    assert.equal(e.candidate.length, reps);
+    assert.ok(e.candidate.every((c) => typeof c.metrics?.wall_ms === 'number' && c.output && 'text' in c.output), 'its measures and its (short) output');
+    assert.deepEqual(e.reference.map((c) => c.first), e.candidate.map((c) => !c.first), 'who went first, alternating');
+  }
+});
+
+test('a resumed run is rebuilt from the base its journal archived, whatever its directory holds now', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-base-'));
+  const base = path.join(dir, 'base');
+  fs.cpSync(path.join(here, '..', 'examples', 'artifacts', 'threesum', 'base'), base, { recursive: true });
+  /* The artifacts' world, on a base of its own (a copy of 3SUM's). */
+  const lab = { ...artifactsLab, generate: (seed: number, o: Record<string, string>) => {
+    const spec = artifactsLab.generate(seed, o) as ArtifactSpec;
+    return { ...spec, world: new ArtifactWorld({ ...threesumTask({ scale: 0.1 }), base }, processSandbox()) };
+  } } as unknown as LawLab;
+  const answers: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string;
+    const user = sys.startsWith('You grade') ? {} : JSON.parse(userOf(b));
+    const done = (user.investigation ?? []).length;
+    const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : user.round === 1 && done === 0 ? { investigate: [{ act: { run: { version: (user.notebook?.episodes ?? []).find((e: any) => e.version)?.version, workloads: 1 } } }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => 100', validate: false, beliefs: [], lessons: ['l'], next_experiment: 'n' };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const args = ['--artifact', 'threesum', '--scale', '0.1', '--seed', '1', '--researcher', 'assisted', '--attempts', '3', '--flat', '--no-grade', '--no-reflection', '--no-ablation'];
+  const cut = await runLaboratory(lab, { args: [...args, '--max-tokens', '150', '--out', path.join(dir, 'cut.json')], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
+  assert.equal(cut.stoppedBy, 'token_budget');
+  const archived = JSON.parse(fs.readFileSync(cut.journal, 'utf8')).world_archive;
+  assert.ok(archived?.files?.['main.py'], 'the base, whole, in the journal');
+  /* Its directory changes after the run. */
+  fs.writeFileSync(path.join(base, 'main.py'), '# changed since\n' + fs.readFileSync(path.join(base, 'main.py'), 'utf8'));
+  const resumed = await runLaboratory(lab, { args: ['--resume', cut.journal, '--out', path.join(dir, 'resumed.json')], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
+  assert.notEqual(resumed.stoppedBy, 'diverged', 'rebuilt from its archive');
+  assert.equal(JSON.parse(fs.readFileSync(resumed.journal, 'utf8')).world_archive.base, archived.base);
+});
+
+test('a place the artifact\'s validation opened is open to experiment in: the two protocols keep their verdicts, experimenting is shared', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-shared-'));
+  /* A world with an artifact: it holds in the laboratory and not in the family, so a validation opens a family place. Its act
+     draws an episode in the place it names. */
+  const lab = { ...(cellsLab as LawLab), act: { ...(cellsLab as LawLab).act!,
+      parse: (raw: Record<string, unknown>) => ({ place: String(raw.place ?? '') }) as never,
+      place: (a: { place: string }) => a.place || undefined,
+      start: async (spec: unknown) => (cellsLab as LawLab).episode(spec as never, () => 0.5),
+      asWritten: (a: unknown) => a, varies: () => null, examples: () => [] },
+    artifact: { known: () => true,
+      check: async (_spec: unknown, _version: string, c: { purpose: string }) => ({ holds: c.purpose === 'check', view: { correct: true }, journal: {} }) } } as unknown as LawLab;
+  const told: Record<string, any>[] = [];
+  const answers: FetchLike = async (_url, init) => {
+    const b = JSON.parse(String(init.body));
+    const sys = b.messages[0].content as string;
+    const user = sys.startsWith('You grade') ? {} : JSON.parse(userOf(b));
+    if (!sys.startsWith('You grade')) told.push(user);
+    const opened = told.flatMap((u) => u.last_check?.artifact?.validation?.now_your_laboratories ?? []);
+    const done = (user.investigation ?? []).length;
+    const content = sys.startsWith('You grade') ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : user.round === 2 && done === 0 && opened.length ? { investigate: [{ act: { place: opened[0] } }] }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false, beliefs: [], lessons: ['l'], next_experiment: 'n',
+        ...(user.round === 1 ? { artifact: 'v1', validate_artifact: true } : {}) };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const r = await runLaboratory(lab, { args: ['--seed', '1', '--level', '1', '--flat', '--no-grade', '--no-reflection', '--tools', 'view,act', '--researcher', 'assisted', '--attempts', '2', '--out', path.join(dir, 'run.json')],
+    root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: answers });
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  const opened = events.find((e) => e.type === 'artifact_check')?.validation?.became_laboratories ?? [];
+  assert.ok(opened.length >= 1, 'the artifact\'s validation opened a place: ' + JSON.stringify(opened));
+  const act = events.filter((e) => e.type === 'investigation' && e.round === 2).flatMap((e) => e.results)[0];
+  assert.equal(act?.accepted, true, 'it may experiment there: ' + JSON.stringify(act));
+});

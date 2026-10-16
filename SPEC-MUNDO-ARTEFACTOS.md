@@ -755,3 +755,64 @@ choca con esa regla: entender bien los tiempos de una versión no es el final de
 - un par junior/senior (8 órdenes del senior, presupuesto de ayuda 8);
 - leen la investigación anterior como experiencia (`--experience`, modo `meta`);
 - desde el principio se les pide descubrir la solución comprobada ligeramente por debajo de O(n²).
+
+### 18.8 Revisión externa (16/10/2026): las garantías de reconstrucción
+
+Una revisión del estado hasta `9a4d50e` encontró cuatro fallos de las garantías del arnés (§11) y los reprodujo. Los
+cuatro rompen lo mismo: que la investigación entera se pueda reconstruir y revisar, sin imponer cómo investigar.
+
+**1. Una comprobación del artefacto guardaba su conclusión, no su evidencia.**
+- **El fallo:** `measureCheck` devolvía sólo el veredicto agregado, y se perdían los tiempos, las salidas y el orden de
+  cada ejecución. No se podía recalcular el veredicto ni investigar una anomalía de medición.
+- **El arreglo:** cada comprobación guarda su evidencia (`CheckEvidence`). Por carga, cada ejecución de la referencia y de
+  la candidata registra:
+  - su repetición y quién fue primero;
+  - código de salida, tiempo agotado y métricas;
+  - la salida entera si es corta, o su resumen (`sha256`, caracteres) si no;
+  - el principio de su `stderr`.
+- **Dónde queda:** en el registro de repetición y en el diario (`artifact_check`, del operador). El investigador no la ve,
+  como el resto de las medidas de una comprobación.
+
+**2. La reconstrucción dependía de que la base siguiera intacta.**
+- **El fallo:** el mundo cargaba la base de su directorio y el diario sólo guardaba su hash. Con la base cambiada, un run
+  reanudado divergía.
+- **El arreglo** es general. Un laboratorio declara qué de su mundo hay que guardar para reconstruir un run
+  (`Lab.archive`) y cómo reponerlo (`Lab.restore`).
+  - El runner lo archiva en el diario al empezar (`world_archive`) y, al reanudar, lo devuelve antes de nada.
+  - El de artefactos archiva su base entera. `ArtifactWorld.restoreBase` comprueba que el archivo da el hash de la base
+    que nombra, y que todavía no se ha hecho ninguna versión.
+
+**3. Una familia que abrió la validación del artefacto seguía cerrada para experimentar.**
+- **El fallo:** los protocolos del modelo y del artefacto tienen lugares separados, y `act` sólo miraba los del modelo.
+  El investigador recibía `now_your_laboratories: ["unique"]` y, al actuar allí, "you can act only in your laboratories:
+  mixed". No podía estudiar justo el contraejemplo encontrado.
+- **El arreglo:** los veredictos siguen separados, y el permiso de experimentar se comparte. Puede actuar en los
+  laboratorios de cualquiera de los dos protocolos. Capacidad `shared_laboratories`.
+
+**4. El mismo contenido alcanzado desde otra rama daba una procedencia equivocada.**
+- **El fallo:** el almacén devolvía la versión ya conocida, con el padre de la primera vez. Al transformar B en el
+  contenido de A, el episodio declaraba como padre la base, aunque el cambio salió de B.
+- **El arreglo:** el contenido se guarda una vez, por su hash, y cada transición aparte (`ArtifactStore.transitions`:
+  origen, destino y parche), todas las veces. `change` devuelve como padre el origen de ese cambio, y el episodio de
+  versión lo muestra. Deduplicar contenido no deduplica la historia de cómo se llegó a él.
+
+**Pruebas** (`test/artifacts-review.test.ts`), cada una como la revisión reprodujo su fallo:
+- dos ramas que llegan al mismo contenido;
+- la evidencia completa de una comprobación;
+- un run cortado, su base cambiada y el run reanudado sin divergir;
+- una familia abierta por la validación del artefacto, donde el investigador actúa.
+
+**Lo que la revisión deja pendiente, sin implementar todavía:**
+- **La interpretabilidad estructurada.** Hoy se registran `why` y `expect`. Falta:
+  - el vínculo `because → creencias` de cada cambio;
+  - identificar los cambios afectados cuando se refuta una creencia;
+  - asociar explícitamente el artefacto entregado con las predicciones que lo explican.
+
+  Aceptar el modelo acredita su predicción de tiempos bajo el protocolo; por sí solo no acredita una explicación de las
+  mejoras.
+- **Diferencias con esta spec:**
+  - `profile` (§6);
+  - la comprobación de construcción al editar;
+  - la restricción de memoria del piloto;
+  - la regresión emparejada del artefacto, desactivada en la implementación: cada comprobación usa cargas nuevas, y
+    volver a ejecutar las de la comprobación anterior aún no está.

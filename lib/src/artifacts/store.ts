@@ -53,8 +53,19 @@ function collision(paths: Iterable<string>): [string, string] | null {
   return null;
 }
 
+/** A change made: from which version, with what patch, to which content. Content is kept once, by its hash; how each version
+    was reached is kept here, every time - deduplicating content must not deduplicate the history of how it was reached
+    (an external review, 16/10/2026). */
+export interface ArtifactTransition {
+  readonly from: string;
+  readonly to: string;
+  readonly patch: Patch;
+}
+
 export class ArtifactStore {
   private readonly versions = new Map<string, ArtifactVersion>();
+  /** Every change made, in order: a version reached again from another branch is a transition of its own. */
+  readonly transitions: ArtifactTransition[] = [];
   readonly base: string;
 
   constructor(files: ReadonlyMap<string, string>) {
@@ -111,9 +122,12 @@ export class ArtifactStore {
     if (clash) return '"' + clash[0] + '" and "' + clash[1] + '" would be one file where case is ignored: rename one';
     const hash = hashOf(files);
     if (hash === from.hash) return 'the patch changes nothing';
+    const clean: Patch = { files: Object.fromEntries(entries.map(([p, c]) => [cleanPath(p)!, c])) };
+    this.transitions.push({ from: parent, to: hash, patch: clean });
     const known = this.versions.get(hash);
     if (known) return known;
-    const v: ArtifactVersion = { hash, parent, patch: { files: Object.fromEntries(entries.map(([p, c]) => [cleanPath(p)!, c])) }, files };
+    /* `parent` is the transition that first reached this content; the transitions say every way it was reached. */
+    const v: ArtifactVersion = { hash, parent, patch: clean, files };
     this.versions.set(hash, v);
     return v;
   }

@@ -67,11 +67,12 @@ function runsEpisode(world: ArtifactWorld, data: RunsData): ArtifactEpisode {
   return { kind: 'runs', ...data, points: data.runs.map((r) => pointOf(world, data.version, data.family, r.workload.params)) };
 }
 
-function versionEpisode(world: ArtifactWorld, version: string, reason?: Reason): ArtifactEpisode {
+/** A version to read. `parent`: where the change that made it came from (the base has none). */
+function versionEpisode(world: ArtifactWorld, version: string, reason?: Reason, parent?: string): ArtifactEpisode {
   const v = world.store.get(version)!;
   const lines: { file: string; line: number; text: string }[] = [];
   for (const [file, text] of [...v.files].sort(([a], [b]) => (a < b ? -1 : 1))) text.split('\n').forEach((t, i) => lines.push({ file, line: i + 1, text: t }));
-  return { kind: 'version', version, parent: v.parent, ...(reason ? { reason } : {}), lines };
+  return { kind: 'version', version, parent: parent ?? v.parent, ...(reason ? { reason } : {}), lines };
 }
 
 const metricOf = (world: ArtifactWorld, r: RunsData['runs'][number]): number | null => r.outcome.metrics?.[world.task.objective.metric] ?? null;
@@ -154,6 +155,9 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
   id: 'artifacts@1',
   /* Its product is the artifact, as good as the budget allows: an accepted model of it does not end the investigation. */
   goesOnAfterAcceptance: true,
+  /* Its base, whole, in the journal: a resumed run is rebuilt from it, whatever its directory holds now. */
+  archive: (spec) => spec.world.archiveBase(),
+  restore: (spec, archived) => spec.world.restoreBase(archived as ReturnType<ArtifactWorld['archiveBase']>),
   about: 'System 2 changes an artifact and runs its versions, and writes a model of its behaviour: the metric of a run, from what is known before it.',
   options: [
     { name: 'artifact', default: 'dedup', help: 'the artifact and its task: ' + Object.keys(TASKS).join(', ') },
@@ -224,7 +228,8 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
         holds: v.holds,
         view: { requires: fam?.requires ?? 'better', correct: v.correct, ...(v.incorrect.length ? { incorrect: v.incorrect } : {}),
           [fam?.requires === 'not_worse' ? 'not_worse' : 'better']: v.better, ...(broken.length ? { constraints_broken: broken } : {}) },
-        journal: { family: spec.family, requires: fam?.requires ?? 'better', ...v, environment: r.environment }
+        /* The operator's: the verdict, where it was measured, and every run it was decided from. */
+        journal: { family: spec.family, requires: fam?.requires ?? 'better', ...v, environment: r.environment, evidence: r.evidence }
       };
     }
   },
@@ -270,7 +275,7 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
         if ('error' in made) return null;
         latest.set(spec.world, made.version);
         const { from: _f, files: _x, ...reason } = a.change;
-        return versionEpisode(spec.world, made.version, reason);
+        return versionEpisode(spec.world, made.version, reason, made.parent);
       }
       const data = await spec.world.run(a.run.version, spec.family, a.run.workloads, seedOf(id + ':' + a.run.version + ':' + spec.family), a.run.repetitions, ctx?.recorded);
       return 'error' in data ? null : runsEpisode(spec.world, data);

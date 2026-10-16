@@ -190,6 +190,11 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       fast as it can be within the budget): the acceptance is kept, a new stage starts - nothing checked before counts, the
       validations are given back - and the run ends when its budget does. */
   readonly goesOnAfterAcceptance?: boolean;
+  /** What of its world a run must keep to be rebuilt, whatever happens to the files it was made from (an artifact's base):
+      archived in the journal when the run starts, and given back to `restore` when it is resumed, before anything else -
+      a resumed run never depends on a file it read once (an external review, 16/10/2026). */
+  readonly archive?: (spec: S) => unknown;
+  readonly restore?: (spec: S, archived: unknown) => void;
   /** The verdict on the ARTIFACT itself, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8): a version the researcher puts
       forward, judged in a place on fresh workloads - correct, and better than the reference (or not worse, where the place
       asks only that). Only a world of artifacts declares it; the runner gives it a protocol of its own. */
@@ -338,7 +343,9 @@ export const CAPABILITIES: readonly { readonly name: string; readonly since: str
   { name: 'goes_on', since: 'c55cb53', inJournal: () => false },
   /* The assisted researcher's task as the environment and the operator state it, a model a part of it (prompt.ts
      'stated_task'), and its prompt describing its channel as it works; likewise. */
-  { name: 'stated_task', since: 'c55cb53', inJournal: () => false }
+  { name: 'stated_task', since: 'c55cb53', inJournal: () => false },
+  /* Acting in the laboratories its artifact's protocol opened, too (an external review, 16/10/2026); likewise. */
+  { name: 'shared_laboratories', since: 'c55cb53', inJournal: () => false }
 ];
 
 /** The rounds a run had at an attempt: those of the stretch of its history it falls in (`rounds_before`), else its own. */

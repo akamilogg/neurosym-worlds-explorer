@@ -980,6 +980,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   type Case = LabCase<Point> & Record<string, unknown>;
   interface LabPlace extends Place { readonly spec: Spec }
   const spec: Spec = lab.generate(cfg.seed, worldOptions);
+  /* What its world must keep to be rebuilt: given back from the journal it resumes, or archived now. */
+  if (lab.archive) {
+    if (previous?.world_archive !== undefined && lab.restore) lab.restore(spec, previous.world_archive);
+    journal.world_archive = lab.archive(spec);
+  }
   const places = new Map<string, LabPlace>();
   const start = lab.places ? lab.places(spec, ctx) : {
     laboratories: [{ id: 'lab1', spec }],
@@ -1087,6 +1092,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   type ArtifactMark = { round: number; purpose: string; set?: number; index: number };
   type ArtifactResult = { place: string; holds: boolean; view: Record<string, unknown>; journal: Record<string, unknown> };
   const artifactPlaces = new Map<string, LabPlace>();
+  /* Experimenting in the artifact's laboratories too, in a run that starts with it (journals before acted as they did). */
+  const artifactShares = (): boolean => (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.shared_laboratories === 0;
   for (const p of start.laboratories) artifactPlaces.set(p.id, { ...p, role: 'laboratory', seen: true });
   for (const p of start.family) artifactPlaces.set(p.id, { ...p, role: 'family', seen: false });
   const artifactObjective: Objective<string, LabPlace, ArtifactMark[], ArtifactResult> | null = lab.artifact ? {
@@ -1168,8 +1175,15 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     if ('act' in req) {
       if (!lab.act) return { act: req.act, error: '"act" is not available in this experiment' };
       if (budget.acts <= 0) return { act: req.act, error: 'no acts left this round' };
-      const place = places.get(lab.act.place(req.act) ?? labs()[0]?.id ?? 'lab1');
-      if (!place || place.role !== 'laboratory') return { act: req.act, error: 'you can act only in your laboratories: ' + labs().map((l) => l.id).join(', ') };
+      /* Its laboratories are where it may experiment: those of its model's protocol and - where the artifact's own protocol
+         opened one, by a validation that did not hold there - those of its artifact's (an external review, 16/10/2026: the
+         place of a counterexample must be open to study). The two keep their verdicts apart; experimenting is shared. */
+      const shared = artifactShares();
+      const where = lab.act.place(req.act) ?? labs()[0]?.id ?? 'lab1';
+      const place = places.get(where)?.role === 'laboratory' ? places.get(where)
+        : shared && artifactPlaces.get(where)?.role === 'laboratory' ? artifactPlaces.get(where) : undefined;
+      const open = [...new Set([...labs().map((l) => l.id), ...(shared ? [...artifactPlaces.values()].filter((p) => p.role === 'laboratory').map((p) => p.id) : [])])];
+      if (!place) return { act: req.act, error: 'you can act only in your laboratories: ' + open.join(', ') };
       const id = 'act' + (counter + 1);
       const data = await lab.act.start(place.spec, req.act, id, ctx);
       /* The environment answers only whether it accepted: never why not. */

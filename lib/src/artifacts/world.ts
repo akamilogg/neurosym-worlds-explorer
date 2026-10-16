@@ -33,6 +33,35 @@ export interface Episode {
   readonly environment: Environment;
 }
 
+/** One run of a check, as it was measured: kept so that a verdict can be recomputed and an anomaly of measurement looked
+    into afterwards (an external review, 16/10/2026: a check kept only its conclusion, not its evidence). Hidden from the
+    researcher like the rest of the check's measures. An output is kept whole when it is short, else by its digest. */
+export interface CheckRun {
+  readonly repetition: number;
+  /** Which went first in this repetition (they alternate). */
+  readonly first: boolean;
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly metrics: Readonly<Record<string, number>> | null;
+  readonly output: { readonly text: string } | { readonly sha256: string; readonly chars: number } | null;
+  readonly stderr?: string;
+}
+
+/** A check's evidence in one family: per workload, the reference's runs and the candidate's, interleaved as they ran. */
+export interface CheckEvidence {
+  readonly workload: string;
+  readonly params: Workload['params'];
+  readonly reference: readonly CheckRun[];
+  readonly candidate: readonly CheckRun[];
+}
+
+const OUTPUT_KEPT = 2000;
+const evidenceOf = (o: RunOutcome, repetition: number, first: boolean): CheckRun => ({
+  repetition, first, exitCode: o.exitCode, timedOut: o.timedOut, metrics: o.metrics,
+  output: o.output === null ? null : o.output.length <= OUTPUT_KEPT ? { text: o.output } : { sha256: createHash('sha256').update(o.output).digest('hex'), chars: o.output.length },
+  ...(o.stderr ? { stderr: o.stderr.slice(0, 500) } : {})
+});
+
 /** The machine and runtime a measure was taken on: what it is, and its fingerprint (a hash of it). */
 export interface Environment {
   readonly fingerprint: string;
@@ -45,7 +74,8 @@ const direct: Recorder = (_route, _body, compute) => compute();
 
 export class ArtifactWorld {
   readonly task: ArtifactTask;
-  readonly store: ArtifactStore;
+  /** Its versions. Replaced only by `restoreBase`, before anything was made (a run resumed from its archived base). */
+  store: ArtifactStore;
   private readonly sandbox: Sandbox;
   private environmentOnce: Promise<Environment> | null = null;
 
@@ -76,13 +106,28 @@ export class ArtifactWorld {
     return this.environmentOnce;
   }
 
+  /** Its base, whole, as a run archives it (what it must keep to be rebuilt). */
+  archiveBase(): { readonly base: string; readonly files: Readonly<Record<string, string>> } {
+    return { base: this.store.base, files: Object.fromEntries(this.store.get(this.store.base)!.files) };
+  }
+
+  /** The base a run archived, given back when it is resumed: the run is rebuilt from it, whatever its directory holds now.
+      Refused if the archive does not hash to the base it names, or if versions were made already. */
+  restoreBase(archived: { readonly base: string; readonly files: Readonly<Record<string, string>> }): void {
+    if (this.store.all().length > 1) throw new Error('the base is restored before any version is made');
+    const store = new ArtifactStore(new Map(Object.entries(archived.files)));
+    if (store.base !== archived.base) throw new Error('the archived base does not hash to ' + archived.base + ' (it hashes to ' + store.base + ')');
+    this.store = store;
+  }
+
   /** The reference every candidate is compared with: the base. */
   get reference(): string { return this.store.base; }
 
   /** `change`: a new version from a patch on another. */
   change(from: string, patch: Patch): { version: string; parent: string } | { error: string } {
     const v = this.store.apply(from, patch);
-    return typeof v === 'string' ? { error: v } : { version: v.hash, parent: v.parent ?? from };
+    /* Its parent is where THIS change came from, not where the same content was first reached. */
+    return typeof v === 'string' ? { error: v } : { version: v.hash, parent: from };
   }
 
   /** One version, on workloads, `repetitions` times each: what each run produced. */
@@ -128,14 +173,14 @@ export class ArtifactWorld {
 
   /** The verdict (§8) on a candidate in some families, on n fresh workloads each: reference and candidate interleaved,
       repetition by repetition, so a drift of the machine falls on both. */
-  async check(candidate: string, families: readonly string[], n: number, seed: number, record: Recorder = direct): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment }[]> {
+  async check(candidate: string, families: readonly string[], n: number, seed: number, record: Recorder = direct): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment; readonly evidence: readonly CheckEvidence[] }[]> {
     return record('/check', { task: this.task.id, candidate, reference: this.reference, families, n, seed }, () => this.measureCheck(candidate, families, n, seed));
   }
 
-  private async measureCheck(candidate: string, families: readonly string[], n: number, seed: number): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment }[]> {
+  private async measureCheck(candidate: string, families: readonly string[], n: number, seed: number): Promise<{ readonly family: string; readonly verdict: Verdict; readonly environment: Environment; readonly evidence: readonly CheckEvidence[] }[]> {
     const reps = this.task.objective.repetitions;
     const environment = await this.environment();
-    const out: { family: string; verdict: Verdict; environment: Environment }[] = [];
+    const out: { family: string; verdict: Verdict; environment: Environment; evidence: CheckEvidence[] }[] = [];
     const dirs = { ref: fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-ref-')), cand: fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-cand-')) };
     try {
       this.store.materialize(this.reference, dirs.ref);
@@ -145,17 +190,19 @@ export class ArtifactWorld {
         if (!f) throw new Error('no family "' + id + '"');
         const workloads = f.workloads(seed, n);
         const pairs: { workload: Workload; reference: RunOutcome[]; candidate: RunOutcome[] }[] = workloads.map((w) => ({ workload: w, reference: [], candidate: [] }));
+        const kept = workloads.map((w) => ({ workload: w.id, params: w.params, reference: [] as CheckRun[], candidate: [] as CheckRun[] }));
         for (let r = 0; r < reps; r++) {
-          for (const p of pairs) {
+          for (const [i, p] of pairs.entries()) {
             /* Interleaved, and alternating who goes first. */
             const first = r % 2 === 0 ? 'ref' : 'cand';
             for (const who of first === 'ref' ? ['ref', 'cand'] : ['cand', 'ref']) {
               const o = await this.once(who === 'ref' ? dirs.ref : dirs.cand, p.workload, r);
               (who === 'ref' ? p.reference : p.candidate).push(o);
+              (who === 'ref' ? kept[i].reference : kept[i].candidate).push(evidenceOf(o, r, who === first));
             }
           }
         }
-        out.push({ family: id, verdict: judge(this.task, pairs as Paired[], f.requires ?? 'better'), environment });
+        out.push({ family: id, verdict: judge(this.task, pairs as Paired[], f.requires ?? 'better'), environment, evidence: kept });
       }
       return out;
     } finally { for (const d of Object.values(dirs)) fs.rmSync(d, { recursive: true, force: true }); }
