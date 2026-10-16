@@ -314,8 +314,7 @@ pruebas en `test/results.test.ts`.
 
 **Pendiente:**
 - **El dinero del junior.** Hace falta un precio registrado, o un proveedor que lo informe.
-- ~~**K2**~~ (hecho en §12.2); **K3–K5:** las comparaciones controladas del senior y la apertura, las trazas del proceso y
-  el control estadístico.
+- ~~**K2**~~ (hecho en §12.2); ~~**K3**~~ (hecho en §12.3); **K4–K5:** las trazas del proceso y el control estadístico.
 
 ### 12.2 K2: grupos comparables y referencias congeladas (16/10/2026)
 
@@ -353,3 +352,33 @@ El código está en `lib/src/orchestra/references.ts` y la comparación en `lib/
     - la comparación;
     - los runs sin pareja;
     - en qué más difieren los dos grupos, además de lo comparado: la versión, el generador o el mundo.
+
+### 12.3 K3: comparaciones controladas mediante una plantilla de lotes (16/10/2026)
+
+El código está en `lib/src/orchestra/design.ts` y `references.ts` (`compareConditions`); las pruebas, en
+`test/design.test.ts`.
+
+- **Un lote puede declararse con una plantilla y una variación,** en lugar de listar sus runs:
+  `"template": { lab, args, researcher, agent, messages }` y
+  `"vary": { "seeds": [...], "conditions": { "<nombre>": { args, agent | null, researcher, messages } }, "args": { "--opción": [valores] } }`.
+  - Cada condición se ejecuta con las mismas semillas, cruzadas con lo que se varía.
+  - `agent: null` quita el agente en esa condición: con senior y sin él, o con apertura (`opening`) y sin ella.
+  - Los argumentos de la condición y de la variación sustituyen a los de la plantilla. Si una opción apareciera dos
+    veces, el run leería sólo la primera, y no la que se declaró. Salió al probarlo.
+  - Las semillas son sólo de la variación: dentro de los argumentos se rechazan.
+  - Un lote se declara con runs o con plantilla, no con las dos cosas.
+- **La cobertura de §7.** Al crearse, el lote dice qué perturbaciones cubre y cuáles deja sin cubrir:
+  - al menos 3 semillas por grupo;
+  - lugares o familias del mundo;
+  - nombres reales y neutros, sólo en los mundos que los tienen;
+  - con senior y sin él;
+  - con apertura y sin ella;
+  - presupuestos.
+
+  Lo deja escrito en `report.design`, y en `batch.txt` como «leaves UNCOVERED». Avisa, no prohíbe.
+- **Las comparaciones entre condiciones se declaran antes de ejecutar el lote,** con su margen:
+  `"compare_conditions": [{ "a", "b", "metric", "margin", "relative" }]`. Cada una compara b contra a, emparejadas por
+  semilla y mundo (§6.2.1, con sus cuatro conclusiones), y da los pares discordantes en los resultados binarios.
+  - Si las dos condiciones no tienen la misma versión del código y el mismo presupuesto, se compara igual, pero consta
+    `not_controlled` con la lectura «el efecto no es sólo suyo».
+  - Así se atribuye el efecto del senior o de su apertura (§4.3). Contar órdenes adoptadas no basta.

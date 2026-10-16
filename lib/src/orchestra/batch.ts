@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { batchTimes, criteriaProblems, groupResults, type Criteria, type GroupResults } from './results.ts';
-import { compareWithReference, comparisonProblems, type ComparisonDeclared } from './references.ts';
+import { compareConditions, compareWithReference, comparisonProblems, conditionComparisonProblems, type ComparisonDeclared, type ConditionsDeclared } from './references.ts';
+import { coverage, designProblems, expandDesign, type BatchTemplate, type Variation } from './design.ts';
 import path from 'node:path';
 import type { ChatClient } from '../learn/system2.ts';
 import type { Finding } from '../learn/finding.ts';
@@ -61,6 +62,11 @@ export interface BatchDefinition {
   /** Comparisons with frozen references, declared BEFORE the batch with their margin (SPEC-CONTROL-ARNES §6.2.1, §6.4):
       a condition of this batch, paired by seed with the reference's runs. */
   readonly compare?: readonly ComparisonDeclared[];
+  /** A design (SPEC-CONTROL-ARNES K3, §7): the runs made from a template and its variation, the same seeds in every condition. */
+  readonly template?: BatchTemplate;
+  readonly vary?: Variation;
+  /** Comparisons of two of its conditions, declared before it runs with their margin (§4.3, §6.2.1): b against a. */
+  readonly compare_conditions?: readonly ConditionsDeclared[];
 }
 
 export interface BatchOptions {
@@ -126,7 +132,10 @@ export interface BatchReport {
   audit: { readonly condition: string; readonly rule_recovery: Spread }[];
   /** Its results apart and their cost, by group of comparable runs, with their uncertainty (SPEC-CONTROL-ARNES K1); the
       operator's view too (mechanistic recovery is in it). */
-  results?: { readonly groups: GroupResults[]; readonly times: Record<string, unknown>; readonly comparisons?: readonly Record<string, unknown>[]; readonly reading: string };
+  results?: { readonly groups: GroupResults[]; readonly times: Record<string, unknown>; readonly comparisons?: readonly Record<string, unknown>[];
+    readonly condition_comparisons?: readonly Record<string, unknown>[]; readonly reading: string };
+  /** Its design, when it was made from a template: what it covers of the perturbations of §7, and what it leaves uncovered. */
+  design?: { readonly runs: number; readonly covered: readonly string[]; readonly uncovered: readonly string[] };
 }
 
 const readJson = (file: string): any => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
@@ -164,8 +173,9 @@ function agentRow(def: BatchRun, journal: string | null): { agent?: BatchRunRow[
 export function batchResults(report: BatchReport, root: string): NonNullable<BatchReport['results']> {
   const rows = report.runs.filter((r) => r.journal && fs.existsSync(r.journal)).map((r) => ({ condition: r.condition, journal: r.journal! }));
   const comparisons = (report.definition.compare ?? []).map((c) => compareWithReference(root, report as unknown as Record<string, any>, c));
+  const conditionComparisons = (report.definition.compare_conditions ?? []).map((c) => compareConditions(report as unknown as Record<string, any>, c));
   return { groups: groupResults(rows, report.definition.criteria), times: batchTimes(report.started, report.ended, rows, report.definition.criteria),
-    ...(comparisons.length ? { comparisons } : {}),
+    ...(comparisons.length ? { comparisons } : {}), ...(conditionComparisons.length ? { condition_comparisons: conditionComparisons } : {}),
     reading: 'each result apart, none called correct; groups only of comparable runs; proportions with their denominator and Wilson\'s interval, the rest with a bootstrap interval or "insufficient evidence"; no label of control' };
 }
 
@@ -182,6 +192,10 @@ function resultsText(results: NonNullable<BatchReport['results']>): string[] {
       '      cost: tokens at least ' + g.cost.tokens_sum_at_least + ' in all, per run ' + d(g.cost.tokens_total_at_least as Record<string, any>) + '; money known ' + g.cost.money_known_sum + (g.cost.money_unknown_in ? ' (unknown in ' + g.cost.money_unknown_in + ' runs: a lower bound)' : ''),
       '      efficiency: ' + Object.entries(g.efficiency).map(([id, e]) => id + ' ' + e.runs_meeting + ' runs, ' + e.per_million_tokens + ' per million tokens').join('; ')]),
     '    times: ' + JSON.stringify(results.times),
+    ...(results.condition_comparisons ?? []).map((c: Record<string, any>) => '    ' + c.b + ' against ' + c.a + ' [' + c.metric + ']: ' + c.comparison.conclusion + ' (effect ' + c.comparison.effect
+      + (c.comparison.interval95 ? ' [' + c.comparison.interval95.join(', ') + ']' : '') + ', margin ' + c.comparison.margin + ', ' + c.comparison.pairs + ' paired seeds'
+      + (c.comparison.discordant ? ', discordant ' + c.comparison.discordant.better_now + ' better / ' + c.comparison.discordant.worse_now + ' worse' : '')
+      + (c.not_controlled ? '; NOT controlled: ' + c.not_controlled.join(', ') : '') + ')'),
     ...(results.comparisons ?? []).map((c: Record<string, any>) => '    compared with reference ' + c.reference + ' [' + c.condition + ', ' + c.metric + ']: '
       + (c.refused ? 'refused - ' + c.refused : c.comparison.conclusion + ' (effect ' + c.comparison.effect + (c.comparison.interval95 ? ' [' + c.comparison.interval95.join(', ') + ']' : '') + ', margin ' + c.comparison.margin
         + ', ' + c.comparison.pairs + ' paired seeds' + (c.groups.differ_in.length ? '; the groups differ in ' + c.groups.differ_in.join(', ') : '') + ')'))];
@@ -206,6 +220,8 @@ const ended = (journal: string): boolean => { if (!fs.existsSync(journal)) retur
 export function batchText(report: BatchReport): string {
   const s = (x: Spread) => (x.median === null ? '-' : x.median + (x.q1 !== x.q3 ? ' [' + x.q1 + '–' + x.q3 + ']' : ''));
   return ['batch ' + report.id + (report.ended ? ' (ended ' + report.ended + ')' : ' (running)'),
+    ...(report.design ? ['  design: ' + report.design.runs + ' runs from a template; covers ' + (report.design.covered.join('; ') || 'nothing of §7')
+      + (report.design.uncovered.length ? '; leaves UNCOVERED ' + report.design.uncovered.join('; ') : '')] : []),
     ...report.table.map((c) => '  ' + c.condition + ': ' + c.accepted + '/' + c.runs + ' accepted; round ' + s(c.acceptance_round) + '; tokens to acceptance ' + s(c.tokens_to_acceptance) + '; tokens ' + s(c.tokens_total) + '; help ' + s(c.help)
       + (c.severe_tests.median || c.counterexamples.median ? '; severe tests ' + s(c.severe_tests) + '; counterexamples ' + s(c.counterexamples) : '')),
     ...report.runs.map((r) => '    ' + r.id + ' [' + r.condition + ']: ' + r.status + (r.round !== null ? ' in round ' + r.round : '') + (r.error ? ' - ' + r.error : '')
@@ -217,7 +233,11 @@ export function batchText(report: BatchReport): string {
 }
 
 /** Runs a batch (or resumes it): the runs not ended yet, a few at a time; then the table and the audit. */
-export async function runBatch(def: BatchDefinition, options: BatchOptions): Promise<BatchReport> {
+export async function runBatch(declared: BatchDefinition, options: BatchOptions): Promise<BatchReport> {
+  /* A design: its runs made from its template, the same seeds under every condition. */
+  const designWrong = designProblems(declared);
+  if (designWrong.length) throw new LabError('batch ' + declared.id + ': ' + designWrong.join('; '));
+  const def: BatchDefinition = declared.template && declared.vary ? { ...declared, runs: expandDesign(declared.template, declared.vary) } : declared;
   if (!def.id || !/^[a-z0-9][a-z0-9_-]*$/i.test(def.id)) throw new LabError('a batch needs an id (letters, digits, - and _)');
   const ids = new Set<string>();
   for (const r of def.runs) {
@@ -226,13 +246,16 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     if (!LABS[r.lab]) throw new LabError('batch ' + def.id + ', run ' + r.id + ': no laboratory ' + r.lab + ' (' + Object.keys(LABS).join(', ') + ')');
     if (!r.condition) throw new LabError('batch ' + def.id + ', run ' + r.id + ': which condition does it stand for?');
   }
-  const wrong = [...criteriaProblems(def.criteria), ...comparisonProblems(options.root, def.compare)];
+  const wrong = [...criteriaProblems(def.criteria), ...comparisonProblems(options.root, def.compare),
+    ...conditionComparisonProblems([...new Set(def.runs.map((r) => r.condition))], def.compare_conditions)];
   if (wrong.length) throw new LabError('batch ' + def.id + ': ' + wrong.join('; '));
   const dir = options.dir ?? path.join(options.root, 'runs', 'batches', def.id);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'batch.json');
   const before: BatchReport | null = readJson(file);
-  const report: BatchReport = { format: 'batch@1', id: def.id, definition: def, dir, started: before?.started ?? new Date().toISOString(), runs: [], table: [], audit: [] };
+  const report: BatchReport = { format: 'batch@1', id: def.id, definition: def, dir, started: before?.started ?? new Date().toISOString(), runs: [], table: [], audit: [],
+    ...(def.template && def.vary ? { design: { runs: def.runs.length, ...coverage(def.template, def.vary) } } : {}) };
+  if (report.design?.uncovered.length) options.print?.('batch ' + def.id + ': its design leaves uncovered - ' + report.design.uncovered.join('; '));
   const latest = new Map<string, string>((before?.runs ?? []).filter((r) => r.journal).map((r) => [r.id, r.journal!]));
   const rows = new Map<string, BatchRunRow>();
   const save = () => {

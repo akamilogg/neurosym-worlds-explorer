@@ -146,6 +146,51 @@ export function comparisonProblems(root: string, compare: unknown): string[] {
   });
 }
 
+/* --- Two conditions of one batch, compared (K3, §4.3, §6.2.1): the effect of a senior, of an opening - only so ---------- */
+
+export interface ConditionsDeclared { readonly a: string; readonly b: string; readonly metric: string; readonly margin: number; readonly relative?: boolean }
+
+/** Whether the comparisons of conditions a batch declares can be made (checked before it runs). */
+export function conditionComparisonProblems(conditions: readonly string[], compare: unknown): string[] {
+  if (compare === undefined) return [];
+  if (!Array.isArray(compare)) return ['"compare_conditions": a list of { a, b, metric, margin }'];
+  return compare.flatMap((c: J, i) => [
+    ...(!c || !conditions.includes(c.a) || !conditions.includes(c.b) || c.a === c.b ? ['compare_conditions ' + i + ': two conditions of this batch (' + conditions.join(', ') + ')'] : []),
+    ...(!METRICS[c?.metric] ? ['compare_conditions ' + i + ': metric ' + JSON.stringify(c?.metric) + ' (one of ' + Object.keys(METRICS).join(', ') + ')'] : []),
+    ...(typeof c?.margin !== 'number' || !(c.margin > 0) ? ['compare_conditions ' + i + ': a margin above zero, declared before'] : [])]);
+}
+
+/** What a run's budget was: its rounds and its limits (a comparison is controlled only with the same). */
+const budgetOf = (journal: J): string => {
+  const argv = (journal.argv ?? []) as string[];
+  const at = (k: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : null; };
+  return JSON.stringify({ attempts: journal.config?.attempts ?? null, max_tokens: at('--max-tokens'), max_minutes: at('--max-minutes') });
+};
+
+/** Condition b against condition a, paired by seed and world, as declared - and what was not held the same, said. */
+export function compareConditions(report: J, c: ConditionsDeclared): Record<string, unknown> & { readonly comparison?: PairedComparison } {
+  const m = METRICS[c.metric];
+  const side = (condition: string) => {
+    const journals = (report.runs ?? []).filter((r: J) => r.condition === condition && r.journal && fs.existsSync(r.journal)).map((r: J) => r.journal as string);
+    const values = new Map<string, number>(), versions = new Set<string>(), budgets = new Set<string>();
+    for (const j of journals) {
+      const journal = readJson(j)!;
+      versions.add(String(journal.commit ?? 'unknown'));
+      budgets.add(budgetOf(journal));
+      const v = valuesOf(j)[c.metric];
+      if (typeof v === 'number') values.set(pairKey(journal), v);
+    }
+    return { values, versions, budgets };
+  };
+  const a = side(c.a), b = side(c.b);
+  const same = (x: Set<string>, y: Set<string>) => x.size === 1 && y.size === 1 && [...x][0] === [...y][0];
+  const notControlled = [...(same(a.versions, b.versions) ? [] : ['the code version']), ...(same(a.budgets, b.budgets) ? [] : ['the budget'])];
+  return { a: c.a, b: c.b, metric: c.metric, what: m.what + ', ' + c.b + ' against ' + c.a,
+    ...(notControlled.length ? { not_controlled: notControlled, reading: 'the conditions differ in more than what they stand for: the effect is not theirs alone' } : {}),
+    unpaired: { in_a: [...a.values.keys()].filter((k) => !b.values.has(k)).length, in_b: [...b.values.keys()].filter((k) => !a.values.has(k)).length },
+    comparison: pairedComparison(a.values, b.values, { margin: c.margin, ...(m.binary ? { binary: true } : {}), ...(m.lower ? { lower: true } : {}), ...(c.relative ? { relative: true } : {}) }) };
+}
+
 /** A batch's condition compared with a reference, paired by seed, as declared (§6.2.1, §6.4). */
 export function compareWithReference(root: string, report: J, c: ComparisonDeclared): Record<string, unknown> & { readonly comparison?: PairedComparison } {
   const opened = openReference(root, c.reference);
