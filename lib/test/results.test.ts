@@ -64,7 +64,7 @@ test('a batch\'s results: apart, by group of comparable runs, with their uncerta
 
   const report = { format: 'batch@1', id: 'k1', dir: root, started: new Date(Date.now() - 60000).toISOString(), ended: new Date().toISOString(), table: [], audit: [],
     definition: { id: 'k1', runs: [], criteria }, runs: [['a', a1], ['a', a2], ['a', a3], ['b', b1]].map(([condition, journal], i) => ({ id: 'r' + i, condition, journal })) } as unknown as BatchReport;
-  const r = batchResults(report);
+  const r = batchResults(report, root);
   assert.equal(r.groups.length, 3, 'by condition and generator: the run with a senior is another configuration, never pooled');
   const a = r.groups.find((g) => g.group.condition === 'a' && g.runs === 2)!;
   assert.equal(a.runs, 2);

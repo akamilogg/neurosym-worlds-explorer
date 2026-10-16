@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { batchTimes, criteriaProblems, groupResults, type Criteria, type GroupResults } from './results.ts';
+import { compareWithReference, comparisonProblems, type ComparisonDeclared } from './references.ts';
 import path from 'node:path';
 import type { ChatClient } from '../learn/system2.ts';
 import type { Finding } from '../learn/finding.ts';
@@ -57,6 +58,9 @@ export interface BatchDefinition {
   /** Criteria of adequacy to a use, declared BEFORE the batch (SPEC-CONTROL-ARNES §4.1 O3): each run is yes, no or not
       evaluable by each, and each has its own efficiency. */
   readonly criteria?: Criteria;
+  /** Comparisons with frozen references, declared BEFORE the batch with their margin (SPEC-CONTROL-ARNES §6.2.1, §6.4):
+      a condition of this batch, paired by seed with the reference's runs. */
+  readonly compare?: readonly ComparisonDeclared[];
 }
 
 export interface BatchOptions {
@@ -122,7 +126,7 @@ export interface BatchReport {
   audit: { readonly condition: string; readonly rule_recovery: Spread }[];
   /** Its results apart and their cost, by group of comparable runs, with their uncertainty (SPEC-CONTROL-ARNES K1); the
       operator's view too (mechanistic recovery is in it). */
-  results?: { readonly groups: GroupResults[]; readonly times: Record<string, unknown>; readonly reading: string };
+  results?: { readonly groups: GroupResults[]; readonly times: Record<string, unknown>; readonly comparisons?: readonly Record<string, unknown>[]; readonly reading: string };
 }
 
 const readJson = (file: string): any => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
@@ -157,9 +161,11 @@ function agentRow(def: BatchRun, journal: string | null): { agent?: BatchRunRow[
 }
 
 /** A batch's results apart and their cost, by group of comparable runs (SPEC-CONTROL-ARNES K1, §6.1-§6.2), and its times. */
-export function batchResults(report: BatchReport): NonNullable<BatchReport['results']> {
+export function batchResults(report: BatchReport, root: string): NonNullable<BatchReport['results']> {
   const rows = report.runs.filter((r) => r.journal && fs.existsSync(r.journal)).map((r) => ({ condition: r.condition, journal: r.journal! }));
+  const comparisons = (report.definition.compare ?? []).map((c) => compareWithReference(root, report as unknown as Record<string, any>, c));
   return { groups: groupResults(rows, report.definition.criteria), times: batchTimes(report.started, report.ended, rows, report.definition.criteria),
+    ...(comparisons.length ? { comparisons } : {}),
     reading: 'each result apart, none called correct; groups only of comparable runs; proportions with their denominator and Wilson\'s interval, the rest with a bootstrap interval or "insufficient evidence"; no label of control' };
 }
 
@@ -175,7 +181,10 @@ function resultsText(results: NonNullable<BatchReport['results']>): string[] {
       '      O4 mechanistic recovery: ' + d(g.o4_mechanistic_recovery as Record<string, any>),
       '      cost: tokens at least ' + g.cost.tokens_sum_at_least + ' in all, per run ' + d(g.cost.tokens_total_at_least as Record<string, any>) + '; money known ' + g.cost.money_known_sum + (g.cost.money_unknown_in ? ' (unknown in ' + g.cost.money_unknown_in + ' runs: a lower bound)' : ''),
       '      efficiency: ' + Object.entries(g.efficiency).map(([id, e]) => id + ' ' + e.runs_meeting + ' runs, ' + e.per_million_tokens + ' per million tokens').join('; ')]),
-    '    times: ' + JSON.stringify(results.times)];
+    '    times: ' + JSON.stringify(results.times),
+    ...(results.comparisons ?? []).map((c: Record<string, any>) => '    compared with reference ' + c.reference + ' [' + c.condition + ', ' + c.metric + ']: '
+      + (c.refused ? 'refused - ' + c.refused : c.comparison.conclusion + ' (effect ' + c.comparison.effect + (c.comparison.interval95 ? ' [' + c.comparison.interval95.join(', ') + ']' : '') + ', margin ' + c.comparison.margin
+        + ', ' + c.comparison.pairs + ' paired seeds' + (c.groups.differ_in.length ? '; the groups differ in ' + c.groups.differ_in.join(', ') : '') + ')'))];
 }
 
 /** The table by condition, from the rows (researchers' findings only). */
@@ -217,7 +226,7 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     if (!LABS[r.lab]) throw new LabError('batch ' + def.id + ', run ' + r.id + ': no laboratory ' + r.lab + ' (' + Object.keys(LABS).join(', ') + ')');
     if (!r.condition) throw new LabError('batch ' + def.id + ', run ' + r.id + ': which condition does it stand for?');
   }
-  const wrong = criteriaProblems(def.criteria);
+  const wrong = [...criteriaProblems(def.criteria), ...comparisonProblems(options.root, def.compare)];
   if (wrong.length) throw new LabError('batch ' + def.id + ': ' + wrong.join('; '));
   const dir = options.dir ?? path.join(options.root, 'runs', 'batches', def.id);
   fs.mkdirSync(dir, { recursive: true });
@@ -315,7 +324,7 @@ export async function runBatch(def: BatchDefinition, options: BatchOptions): Pro
     rule_recovery: spread(report.runs.filter((r) => r.condition === condition && r.journal && fs.existsSync(r.journal))
       .map((r) => Number((findingOfRun(r.journal!, 'operator').operator?.rule_recovery as { score?: number } | undefined)?.score))) }));
   if (!options.signal?.aborted && report.runs.every((r) => r.status !== 'not run' && (r.error || (r.journal && ended(r.journal))))) report.ended = new Date().toISOString();
-  report.results = batchResults(report);
+  report.results = batchResults(report, options.root);
   save();
   fs.writeFileSync(path.join(dir, 'batch.txt'), batchText(report) + '\n');
   return report;

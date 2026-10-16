@@ -314,5 +314,42 @@ pruebas en `test/results.test.ts`.
 
 **Pendiente:**
 - **El dinero del junior.** Hace falta un precio registrado, o un proveedor que lo informe.
-- **K2–K5:** las referencias congeladas y las comparaciones emparejadas por semilla (§6.2.1, §6.4), las trazas del
-  proceso y el control estadístico.
+- ~~**K2**~~ (hecho en §12.2); **K3–K5:** las comparaciones controladas del senior y la apertura, las trazas del proceso y
+  el control estadístico.
+
+### 12.2 K2: grupos comparables y referencias congeladas (16/10/2026)
+
+El código está en `lib/src/orchestra/references.ts` y la comparación en `lib/src/runtime/statistics.ts`
+(`pairedComparison`); las pruebas, en `test/references.test.ts`. Los grupos comparables ya existían desde K1 (§12.1).
+
+- **La comparación emparejada (§6.2.1)** empareja los runs por semilla y mundo (con sus opciones) y calcula el efecto
+  semilla a semilla.
+  - Va orientada de modo que lo mejor sea positivo: si un coste baja, es una mejora.
+  - Puede calcularse en absoluto o relativa al valor anterior.
+  - En resultados binarios, el efecto es la media de las diferencias, y se dan los pares discordantes en cada sentido. En
+    continuos, es la mediana.
+  - El intervalo sale de un bootstrap sobre las semillas, con semilla fija.
+  - Hay cuatro conclusiones posibles, por la regla de la spec:
+    - **mejora:** el intervalo queda entero por encima del margen;
+    - **empeora:** el intervalo queda entero por debajo de cero;
+    - **no se distingue:** el intervalo cruza cero y es más estrecho que el margen;
+    - **evidencia insuficiente:** cualquier otro caso. Lo es también con menos de 3 semillas emparejadas o con todas las
+      diferencias iguales, siguiendo el mismo principio que §6.2: nada de un intervalo de anchura cero.
+- **`lab reference freeze <batch.json> --condition C --name N --by "<persona>" [--generator G] [--supersedes VIEJA]`**
+  congela un grupo como referencia.
+  - Toma el grupo de runs comparables de esa condición. Si hay más de uno, hay que nombrar el generador.
+  - Se guarda en `runs/references/<N>.json`, en sólo lectura, con cada run (su clave de emparejamiento, el hash de su
+    diario y de su finding, y sus valores) y el hash del conjunto.
+  - Una referencia nunca se reemplaza: se congela otra nueva.
+  - La fija una persona, nunca un agente.
+  - Una referencia que sustituye a otra sólo se congela si el lote del que sale ya se comparó con ella, y la vieja se
+    queda (§6.4).
+- **`lab reference show <N>`** dice si la referencia se sostiene: su propio hash, y los diarios de sus runs donde sigan
+  existiendo.
+- **El lote declara sus comparaciones antes de ejecutarse,** con su margen:
+  `"compare": [{ "reference", "condition", "metric": o1|artifact|o4|severe|tokens|seconds, "margin", "relative" }]`.
+  - El lote no arranca si una comparación está mal declarada, si su referencia no existe o si no se sostiene.
+  - Sus resultados (`results.comparisons`, y la versión legible en `batch.txt`) dan:
+    - la comparación;
+    - los runs sin pareja;
+    - en qué más difieren los dos grupos, además de lo comparado: la versión, el generador o el mundo.

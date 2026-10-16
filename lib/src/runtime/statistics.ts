@@ -53,3 +53,45 @@ export function describe(values: readonly (number | null | undefined)[], options
   return { n: xs.length, median, q1: r3(quantile(xs, 0.25)), q3: r3(quantile(xs, 0.75)),
     median_interval95: [r3(quantile(medians, 0.025)), r3(quantile(medians, 0.975))], method: 'percentile bootstrap of the median, ' + B + ' resamples, seeded' };
 }
+
+/* --- A paired comparison (SPEC-CONTROL-ARNES §6.2.1): two conditions run with the same seeds, the effect seed by seed --------- */
+
+export interface PairedComparison {
+  readonly pairs: number;
+  /** Per paired seed: the difference, oriented so that positive is better (a cost that falls is an improvement). */
+  readonly differences: readonly { readonly key: string; readonly difference: number }[];
+  /** Binary results: the discordant pairs, each way. */
+  readonly discordant?: { readonly better_now: number; readonly worse_now: number };
+  readonly effect: number | null;
+  readonly effect_is: string;
+  readonly interval95: [number, number] | null;
+  readonly margin: number;
+  readonly conclusion: 'improves' | 'worsens' | 'indistinguishable' | 'insufficient evidence';
+  readonly rule: string;
+}
+
+/** Compares `now` with `before`, paired by key (a seed and its world). `binary`: values 1 or 0 (the effect is the mean of the
+    differences); otherwise continuous (their median). `lower`: lower is better. `relative`: each difference as a share of the
+    value before. The margin - the least improvement that would matter - is declared before; four conclusions, by its rule. */
+export function pairedComparison(before: ReadonlyMap<string, number>, now: ReadonlyMap<string, number>,
+  o: { readonly margin: number; readonly binary?: boolean; readonly lower?: boolean; readonly relative?: boolean; readonly resamples?: number; readonly seed?: number }): PairedComparison {
+  const sign = o.lower ? -1 : 1;
+  const differences = [...now.keys()].filter((k) => before.has(k)).sort().flatMap((key) => {
+    const b = before.get(key)!, n = now.get(key)!;
+    if (o.relative && !b) return [];
+    return [{ key, difference: r3(sign * (o.relative ? (n - b) / Math.abs(b) : n - b)) }];
+  });
+  const rule = 'improves if its interval is wholly above the margin; worsens if wholly below zero; indistinguishable if it crosses zero and is narrower than the margin; otherwise, or with fewer than 3 paired seeds or all differences alike, insufficient evidence';
+  const discordant = o.binary ? { better_now: differences.filter((d) => d.difference > 0).length, worse_now: differences.filter((d) => d.difference < 0).length } : undefined;
+  const xs = differences.map((d) => d.difference);
+  const stat = (v: readonly number[]) => (o.binary ? v.reduce((a, b) => a + b, 0) / v.length : quantile([...v].sort((a, b) => a - b), 0.5));
+  const base = { pairs: xs.length, differences, ...(discordant ? { discordant } : {}), margin: o.margin, rule, effect_is: (o.binary ? 'the mean' : 'the median') + ' of the paired differences' + (o.relative ? ', each relative to the value before' : '') + (o.lower ? ', lower being better' : '') };
+  if (xs.length < 3 || xs.every((x) => x === xs[0])) return { ...base, effect: xs.length ? r3(stat(xs)) : null, interval95: null, conclusion: 'insufficient evidence' };
+  const B = o.resamples ?? 2000, rnd = mulberry32(o.seed ?? 20261016);
+  const stats: number[] = [];
+  for (let b = 0; b < B; b++) stats.push(stat(Array.from({ length: xs.length }, () => xs[Math.floor(rnd() * xs.length)])));
+  stats.sort((a, b) => a - b);
+  const ci: [number, number] = [r3(quantile(stats, 0.025)), r3(quantile(stats, 0.975))];
+  const conclusion = ci[0] > o.margin ? 'improves' : ci[1] < 0 ? 'worsens' : ci[0] <= 0 && ci[1] >= 0 && ci[1] - ci[0] < o.margin ? 'indistinguishable' : 'insufficient evidence';
+  return { ...base, effect: r3(stat(xs)), interval95: ci, conclusion };
+}

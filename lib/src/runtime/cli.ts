@@ -77,6 +77,8 @@ export const CLI_USAGE = [
   'lab model list | check [<id>] | retire <id> --by "<person>"   the inventory; what changed since (dependencies, instrument, context, date, verdicts) and each state with its cause',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab batch results <runs/batches/<id>/batch.json>           its results apart (O1-O4) and their cost by group of comparable runs, with their uncertainty, computed again',
+  'lab reference freeze <batch.json> --condition C --name N --by "<person>" [--supersedes OLD]   a group\'s distribution frozen with its runs\' hash (runs/references)',
+  'lab reference show <name>                                 a reference, and whether it holds; a batch compares itself with one as its definition declares ("compare")',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
   'lab project list | status <id>                            the projects; one\'s state and report',
@@ -485,7 +487,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           const { batchResults, batchText } = await import('../orchestra/batch.ts');
           const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
           if (report.format !== 'batch@1') { out('not a batch report (batch.json): ' + reportFile); return 2; }
-          report.results = batchResults(report);
+          report.results = batchResults(report, ctx.root);
           fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
           fs.writeFileSync(path.join(path.dirname(reportFile), 'batch.txt'), batchText(report) + '\n');
           out(batchText(report));
@@ -501,6 +503,26 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         out(batchText(report));
         out('report: ' + path.join(report.dir, 'batch.json'));
         return 0;
+      }
+      case 'reference': {
+        const sub = args.shift();
+        const refs = await import('../orchestra/references.ts');
+        if (sub === 'freeze') {
+          const batchFile = path.resolve(args.shift() ?? ''), condition = take(args, 'condition'), name = take(args, 'name'), by = take(args, 'by'), generator = take(args, 'generator'), supersedes = take(args, 'supersedes');
+          if (!condition || !name || !by) { out('lab reference freeze <batch.json> --condition C --name N --by "<person>" [--generator G] [--supersedes OLD]'); return 2; }
+          const r = refs.freezeReference(ctx.root, batchFile, { condition, name, by, ...(generator ? { generator } : {}), ...(supersedes ? { supersedes } : {}) });
+          out('reference ' + r.name + ' frozen: ' + r.runs.length + ' runs of ' + r.group.condition + ' (' + r.group.world + ', code ' + String(r.group.code_version ?? 'unknown').slice(0, 10) + ', generator ' + r.group.generator + ')'
+            + (r.supersedes ? '; it supersedes ' + r.supersedes + ', which stays' : ''));
+          return 0;
+        }
+        if (sub === 'show') {
+          const o = refs.openReference(ctx.root, args[0] ?? '');
+          out(o.reference.name + ': ' + o.reference.runs.length + ' runs of ' + o.reference.group.condition + ', frozen ' + o.reference.frozen + ' by ' + o.reference.by + (o.reference.supersedes ? ', superseding ' + o.reference.supersedes : ''));
+          out(o.holds ? 'it holds' : 'it does NOT hold: ' + o.problems.join('; '));
+          return o.holds ? 0 : 1;
+        }
+        out('lab reference freeze|show ...');
+        return 2;
       }
       case 'team': {
         const file = args[0];
