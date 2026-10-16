@@ -22,6 +22,8 @@ import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, 
  *   lab resume <run> [--max-tokens N] [--max-minutes N] [--policy P]
  *   lab finding <run> [--view researcher]
  *   lab anomaly <run> [<report> bug|world|unclear [note]]
+ *   lab pack <run> [--out dir]     a research package of it (SPEC-RIESGO-MODELOS M1)
+ *   lab verify <package>           its integrity and its reconstruction, each by its name
  *
  * The keys never pass through here: a run started or resumed takes them from this process's
  * environment (LLM_URL, LLM_MODEL, LLM_KEY; JEV_URL, JEV_KEY).
@@ -59,6 +61,8 @@ export const CLI_USAGE = [
   '                                                           --extract: each text\'s claims structured by AUDIT_LLM_* (default LLM_*), the facts among them checked',
   'lab audit sample <run>[,<run>] [--n 30] [--seed N] [--with <ids>]  a blind sample of what the Judge judged in audited runs, and a page to label it',
   'lab audit agreement <labels.json>                        the agreement of the operator\'s labels with the Judge, per question (kappa, confusion)',
+  'lab pack <run> [--out dir]                                a research package of it: its record, its blobs, a report of its results each by its name, a manifest of hashes',
+  'lab verify <package> [--llm-path /v1/...]                 check a package: its integrity, its history rebuilt offline from its record; what was not done, said (verification.json)',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
@@ -284,6 +288,27 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         out('rule recovery ' + r.score + ' (graded by ' + model + '): ' + (r.event.grades as { id: string; grade: string }[]).map((g) => g.id + ':' + g.grade).join(' '));
         out('appended to ' + path.basename(journal) + '; findings written again');
         return 0;
+      }
+      case 'pack': {
+        const journal = resolveRun(ctx.root, args.shift());
+        const { packRun } = await import('./package.ts');
+        const outDir = take(args, 'out');
+        const { dir, manifest } = packRun(journal, outDir ? path.resolve(outDir) : undefined);
+        out('packed ' + manifest.files.length + ' files into ' + dir + (manifest.missing_blobs.length ? '; ' + manifest.missing_blobs.length + ' cited blobs not found: the package is not whole' : ''));
+        return manifest.missing_blobs.length ? 1 : 0;
+      }
+      case 'verify': {
+        const dir = path.resolve(args[0] ?? '');
+        if (!fs.existsSync(path.join(dir, 'manifest.json'))) { out('not a package (no manifest.json): ' + dir); return 1; }
+        const { verifyPackage } = await import('./package.ts');
+        const llmPath = take(args, 'llm-path');
+        const v = await verifyPackage(dir, llmPath ? { llmPath } : {});
+        fs.writeFileSync(path.join(dir, 'verification.json'), JSON.stringify(v, null, 2));
+        const i = v.integrity, r = v.reconstruction;
+        out('integrity: ' + (i.holds ? 'holds' : 'does NOT hold' + (i.changed.length ? '; changed ' + i.changed.join(', ') : '') + (i.missing.length ? '; missing ' + i.missing.join(', ') : '') + (i.unlisted.length ? '; not in its manifest ' + i.unlisted.join(', ') : '') + (i.missing_blobs.length ? '; ' + i.missing_blobs.length + ' blobs never packed' : '')));
+        out('reconstruction from its record (offline): ' + (r.holds ? 'holds' : 'does NOT hold') + ' - ' + r.events_compared + ' events compared' + (r.first_difference !== undefined ? ', the first different at ' + r.first_difference : '') + ', stopped by ' + r.stopped_by + (r.requests_refused ? ', ' + r.requests_refused + ' requests it would have made refused' : ''));
+        out('re-execution: not done; reproduction: not done (verification.json says what each needs)');
+        return i.holds && r.holds ? 0 : 1;
       }
       case 'audit': {
         /* Calibration against a person (MA4): a blind sample to label, and the agreement of the labels with the Judge. */

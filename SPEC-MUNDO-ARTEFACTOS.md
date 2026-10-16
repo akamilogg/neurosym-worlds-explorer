@@ -230,6 +230,9 @@ Tres garantías distintas (precisadas tras una revisión externa, 14/10/2026):
 
 El registro garantiza la primera. Las otras dos necesitan conservar el entorno y verificar de nuevo los resultados.
 
+`lab verify <package>` prueba la primera sobre un paquete (`lab pack`), sin red. Deja constancia de que las otras dos no
+se hicieron (SPEC-RIESGO-MODELOS §15.1).
+
 
 - **El artefacto** se reconstruye exactamente de su árbol de versiones: cada versión es su base más su parche, y se
   identifica por hash.

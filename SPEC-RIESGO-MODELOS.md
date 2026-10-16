@@ -377,3 +377,50 @@ En el orden que propone la auditoría:
   - una recuperación baja sólo establece eso, según esa rúbrica y ese calificador (§6.2);
   - de `c302nav` hay evidencia favorable para anticipar señales en las condiciones evaluadas, y evidencia insuficiente
     para justificar su uso al diseñar intervenciones (§1.3).
+
+## 15. Implementado
+
+### 15.1 El paquete de investigación: primera parte de M1, con R6 y R7 (16/10/2026)
+
+Es el punto 3 del cierre de la auditoría externa del 16/10/2026: un run hecho autocontenido, que se puede llevar a otra
+máquina, comprobar y reconstruir (`lib/src/runtime/package.ts`, `test/package.test.ts`).
+
+- **`lab pack <run> [--out dir]`** crea `<run>.package/` con:
+  - el diario, con su mundo archivado dentro;
+  - el registro de repetición;
+  - los findings y los registros de sus agentes;
+  - los blobs que cita.
+- **Además escribe:**
+  - `manifest.json`, con formato `research_package@1`: cada fichero con su sha256 y su tamaño, el commit y los blobs
+    citados que no se encontraron. Si falta alguno, el paquete lo dice y el comando termina con error.
+  - `report.json`, con los resultados separados, cada uno por su nombre (R6):
+    - aceptación predictiva del modelo;
+    - aceptación predictiva del artefacto, con su cadena y su linaje;
+    - evidencia discriminante (las pruebas propias);
+    - adecuación a un uso, que de momento es "no declarada";
+    - recuperación mecanística, o "sin verdad / sin calificar";
+    - las limitaciones y el coste (K1, en lo que el finding ya tiene).
+
+    Ninguno se llama "correcto".
+- **`lab verify <package> [--llm-path /v1/...]`** escribe `verification.json` aparte de lo que verifica (§7.4). Nombra
+  cada prueba (R7):
+  - **Integridad:** cada fichero se recalcula contra el manifiesto. Cuenta lo cambiado, lo que falta, lo que no está en
+    el manifiesto y los blobs que nunca se empaquetaron.
+  - **Reconstrucción desde el registro:** el run se reanuda en una copia temporal, sin red. Cada respuesta sale de su
+    registro. Una petición que el registro no contiene se rechaza, nunca se vuelve a hacer. Sus eventos se comparan uno a
+    uno, sin contar sus tiempos.
+  - **Reejecución y reproducción:** constan como "no hechas", con lo que necesitaría cada una y las huellas de entorno
+    registradas. Así nadie las confunde con la primera (SPEC-MUNDO-ARTEFACTOS §11).
+- **El diario guarda ahora `config.llm_path`:** la ruta del endpoint de System 2, nunca su host ni sus parámetros. Forma
+  parte de la identidad de cada petición, así que sin ella no se puede reconstruir sin red. La verificación también
+  restaura el ajuste registrado (`llm_tuning`).
+  - Un diario anterior no tiene esa ruta. Se toma la que se pase o, si no, `/v1/chat/completions`.
+
+**Pendiente de M1:**
+- revisiones nuevas al recalcular;
+- la conclusión firmada vinculada a una revisión (`lab model approve --revision`);
+- el almacén inmutable de evidencia (`runs/models/evidence/<hash>`).
+
+**Pendiente de la verificación:**
+- Reconstruye el run, no los procesos de sus agentes (el senior). Los registros de los agentes viajan en el paquete y su
+  integridad se comprueba, pero sus peticiones no se reconstruyen.

@@ -678,7 +678,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
     argv: experimentArgs(argv),
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
-    config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmTuningRecord(options.llm), jev_model: cfg.flat ? null : options.judge?.model ?? null },
+    config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), ...llmTuningRecord(options.llm), jev_model: cfg.flat ? null : options.judge?.model ?? null },
     /* Filled by the laboratory: what the learner is never told. */
     hidden_from_the_learner: {},
     events: [] as unknown[]
@@ -1866,6 +1866,12 @@ export function llmTuning(env: NodeJS.ProcessEnv, prefix = 'LLM'): Pick<LabConne
   return { ...(timeoutMs ? { timeoutMs } : {}), ...(maxTokens ? { maxTokens } : {}), ...(json !== undefined && json !== '' ? { jsonMode: !/^(0|false|no|off)$/i.test(json) } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(temperature !== undefined ? { temperature } : {}), ...(extraBody ? { extraBody } : {}) };
+}
+
+/** The path of System 2's endpoint - part of what makes a request that request (replay.ts), so a run can be rebuilt from its
+    record with no network (lab verify) - never its host or its parameters, where an address or a key may travel. */
+function llmPathRecord(url: string | undefined): Record<string, unknown> {
+  try { return url ? { llm_path: new URL(url).pathname } : {}; } catch { return {}; }
 }
 
 /** What the journal keeps of System 2's tuning (the model's behaviour depends on it): only what was set. */
