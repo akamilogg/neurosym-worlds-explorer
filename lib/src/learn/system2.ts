@@ -44,6 +44,8 @@ export class RoundConversation {
 export interface ChatClient {
   /** Public request configuration only: never endpoint credentials. */
   readonly configuration?: Readonly<Record<string, unknown>>;
+  /** Where it is served, in memory only: never recorded (its provider is, as an identity - runtime/provider.ts). */
+  readonly endpoint?: string;
   complete(request: { system: string; user: unknown; signal?: AbortSignal | null }): Promise<ChatAnswer>;
 }
 
@@ -109,6 +111,7 @@ export function openAiChatClient(options: ChatClientOptions | (() => ChatClientO
       const { messages, ...configuration } = body;
       return configuration;
     },
+    get endpoint() { return read().url; },
     async complete({ system, user, signal }) {
       const o = read();
       o.onRequest?.();

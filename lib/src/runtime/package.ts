@@ -113,7 +113,9 @@ export interface PackageVerification {
     readonly missing_blobs: readonly string[]; readonly corrupt_blobs: readonly string[] };
   /** Guarantee 1 (SPEC-MUNDO-ARTEFACTOS §11): its history rebuilt from its record alone, offline. */
   readonly reconstruction: { readonly holds: boolean; readonly how: string; readonly events_compared: number; readonly first_difference?: number;
-    readonly end_differs?: readonly string[]; readonly stopped_by?: string; readonly recorded_stop?: string; readonly requests_refused: number };
+    readonly end_differs?: readonly string[]; readonly stopped_by?: string; readonly recorded_stop?: string; readonly requests_refused: number;
+    /** Events after its end: the operator's later readings (a regrade), not a part of the run rebuilt. */
+    readonly later_readings?: number };
   /** Guarantees 2 and 3, named so that nobody takes the first for them. */
   readonly re_execution: { readonly done: false; readonly needs: string; readonly environments_recorded: readonly string[] };
   readonly reproduction: { readonly done: false; readonly needs: string };
@@ -133,7 +135,7 @@ const endOf = (j: Record<string, any>) => [...(j.events ?? [])].reverse().find((
     none: the path given, or the usual one. */
 function offlineConnection(config: Record<string, any>, llmPath?: string) {
   const t = (config.llm_tuning ?? {}) as Record<string, any>;
-  return { url: 'http://offline.invalid' + (config.llm_path ?? llmPath ?? '/v1/chat/completions'), model: String(config.llm_model ?? 'offline'),
+  return { url: 'http://offline.invalid' + (config.llm_path ?? llmPath ?? '/v1/chat/completions'), model: String(config.llm_model ?? 'offline'), provider: config.llm_provider ?? null,
     ...(t.temperature !== undefined ? { temperature: t.temperature } : {}), ...(t.extra_body ? { extraBody: t.extra_body } : {}),
     ...(t.reasoning_effort !== undefined ? { reasoningEffort: t.reasoning_effort } : {}), ...(t.json_mode !== undefined ? { jsonMode: t.json_mode } : {}),
     ...(t.max_tokens ? { maxTokens: t.max_tokens } : {}) };
@@ -174,26 +176,34 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
       const r = await runLaboratory(lab, { args: ['--resume', path.join(scratch, journalName), '--out', path.join(scratch, 'rebuilt.json')], root: scratch,
         llm: offlineConnection(original.config ?? {}, options.llmPath), fetch: offline, signal: controller.signal, print: () => {},
         /* The Judge as the run had it, answering only from the record: no key is needed where nothing goes out. */
-        ...(original.config?.flat ? {} : { judge: { url: 'http://offline.invalid/judge', key: 'offline', ...(original.config?.jev_model ? { model: String(original.config.jev_model) } : {}) } }),
+        ...(original.config?.flat ? {} : { judge: { url: 'http://offline.invalid/judge', key: 'offline', provider: original.config?.jev_provider ?? null, ...(original.config?.jev_model ? { model: String(original.config.jev_model) } : {}) } }),
         /* Where the record stopped short - a budget, a cancellation - the reconstruction stops there too, never goes on. */
         ...(recordedStop && STOPS_SHORT.has(recordedStop) ? { stopAsRecorded: recordedStop } : {}) });
       stoppedBy = r.stoppedBy;
     } catch (e) { stoppedBy = 'error: ' + String((e as Error).message ?? e).slice(0, 200); } finally { clearTimeout(timer); }
     const rebuilt = fs.existsSync(path.join(scratch, 'rebuilt.json')) ? JSON.parse(fs.readFileSync(path.join(scratch, 'rebuilt.json'), 'utf8')) : { events: [] };
     /* Its events, as they were, up to the original's end: the same, one by one (their time aside). */
-    const strip = (e: Record<string, unknown>) => { const { t: _t, ...rest } = e; return JSON.stringify(rest); };
-    const before = (original.events as Record<string, unknown>[]).filter((e) => e.type !== 'start' && e.type !== 'end');
-    const after = (rebuilt.events as Record<string, unknown>[]).filter((e) => e.type !== 'start' && e.type !== 'end');
+    /* What the record kept must come out the same, field by field (its time aside); what this code records beyond it - a field
+       a later version of the harness adds - is new, not a difference. */
+    const same = (was: Record<string, unknown>, now: Record<string, unknown> | undefined) => now !== undefined
+      && Object.keys(was).every((k) => k === 't' || JSON.stringify(was[k]) === JSON.stringify(now[k]));
+    /* The run is its events up to its end; what came after (a regrade, appended marked) is a later reading of it by the
+       operator - kept, counted, and not a part of what is rebuilt. */
+    const untilEnd = (events: Record<string, unknown>[]) => { const i = events.findIndex((e) => e.type === 'end'); return (i < 0 ? events : events.slice(0, i)).filter((e) => e.type !== 'start'); };
+    const before = untilEnd(original.events as Record<string, unknown>[]);
+    const after = untilEnd(rebuilt.events as Record<string, unknown>[]);
+    const laterReadings = (original.events as Record<string, unknown>[]).length - (original.events as Record<string, unknown>[]).findIndex((e) => e.type === 'end') - 1;
     let first: number | undefined;
-    for (let i = 0; i < before.length; i++) if (strip(before[i]) !== (after[i] ? strip(after[i]) : '')) { first = i; break; }
+    for (let i = 0; i < before.length; i++) if (!same(before[i], after[i])) { first = i; break; }
     if (first === undefined && after.length > before.length) first = before.length;
     /* And its end - the final model, the artifact's state, what it counted: the same, but for what a reconstruction changes. */
     const a = endOf(original) ?? {}, b = endOf(rebuilt) ?? {};
-    const endDiffers = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !END_OF_THE_PROCESS.has(k) && JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+    const endDiffers = Object.keys(a).filter((k) => !END_OF_THE_PROCESS.has(k) && JSON.stringify(a[k]) !== JSON.stringify(b[k]));
     reconstruction = { holds: first === undefined && !endDiffers.length && stoppedBy !== 'diverged' && !stoppedBy.startsWith('error'),
       how: 'resumed from its own replay log in a scratch copy, offline: every answer from the record, none asked again', events_compared: before.length,
       ...(first !== undefined ? { first_difference: first } : {}), ...(endDiffers.length ? { end_differs: endDiffers } : {}), stopped_by: stoppedBy,
-      ...(recordedStop ? { recorded_stop: recordedStop } : {}), requests_refused: refused };
+      ...(recordedStop ? { recorded_stop: recordedStop } : {}), requests_refused: refused,
+      ...(laterReadings > 0 && endOf(original) ? { later_readings: laterReadings } : {}) };
     fs.rmSync(scratch, { recursive: true, force: true });
   }
   const environments = [...new Set(JSON.stringify(original).match(/"fingerprint":\s*"[0-9a-f]{16}"/g) ?? [])].map((m) => m.replace(/.*"([0-9a-f]{16})"/, '$1'));

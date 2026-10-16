@@ -9,6 +9,7 @@ import { Predictor, type Law } from '../core/predict.ts';
 import type { MeasureDecl } from '../core/types.ts';
 import { nodeVmRunner } from './node-vm.ts';
 import { openAiChatClient, REASONING_EFFORTS, type ReasoningEffort } from '../learn/system2.ts';
+import { providerOf } from './provider.ts';
 import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
@@ -19,7 +20,7 @@ import { experimentStates } from '../orchestra/view.ts';
 import { Protocol } from '../learn/protocol.ts';
 import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
 import { instrumentReports } from '../learn/instrument.ts';
-import { formOf, operatorSummary, tokensOf, type AblationRecord, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../learn/operator.ts';
+import { formOf, graderSaw, operatorSummary, tokensOf, type AblationRecord, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../learn/operator.ts';
 import type { Objective, Place } from '../learn/objective.ts';
 import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, type LabOperatorContext, type LabOptions, type LabRunConfig, type LawLab } from '../learn/lab.ts';
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
@@ -194,6 +195,8 @@ export class LabError extends Error {
 /** Where a model is served: an OpenAI-compatible chat URL (System 2) or the Judge's URL, and the key and model to use. */
 export interface LabConnection {
   readonly url?: string; readonly key?: string; readonly model?: string;
+  /** Its provider's identity when it is not its URL's (a reconstruction offline is the provider the run had). */
+  readonly provider?: string | null;
   /** System 2 only, for models that need it (a slow local one, a reasoning one): how long to wait for an answer (default
       180 s), whether to ask for JSON mode (default yes; some servers mishandle it with reasoning models), and max_tokens
       (default: the endpoint's). Unset, the request is the same as ever. */
@@ -682,7 +685,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
     argv: experimentArgs(argv),
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
-    config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), ...llmTuningRecord(options.llm), jev_model: cfg.flat ? null : options.judge?.model ?? null },
+    config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), llm_provider: options.llm.provider ?? providerOf(options.llm.url), ...llmTuningRecord(options.llm),
+      jev_model: cfg.flat ? null : options.judge?.model ?? null, ...(cfg.flat ? {} : { jev_provider: options.judge?.provider ?? providerOf(options.judge?.url) }) },
     /* Filled by the laboratory: what the learner is never told. */
     hidden_from_the_learner: {},
     events: [] as unknown[]
@@ -1622,7 +1626,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-      log(event, { truth, grades, ...(v2 ? quotedFalseBeliefs(parsed?.false_beliefs, learned) : { false_beliefs: parsed?.false_beliefs ?? [] }), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: journal.config.llm_model });
+      log(event, { truth, grades, ...(v2 ? quotedFalseBeliefs(parsed?.false_beliefs, learned) : { false_beliefs: parsed?.false_beliefs ?? [] }), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: journal.config.llm_model,
+        grader_provider: journal.config.llm_provider ?? null, ...graderSaw(learned) });
       say('operator: recovery ' + score + (grades.length ? ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')' : ''));
     } catch (e) { log(event, { truth, error: String((e as Error).message ?? e) }); }
   };

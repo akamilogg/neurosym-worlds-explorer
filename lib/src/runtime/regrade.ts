@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseJsonLoose } from '../core/net.ts';
 import { Notebook, type Note, type NotebookBelief } from '../learn/notebook.ts';
-import { formOf, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../learn/operator.ts';
+import { formOf, FALSE_BELIEF_RULE, graderSaw, quotedFalseBeliefs } from '../learn/operator.ts';
 import { findingOf, findingView, type Finding } from '../learn/finding.ts';
 import { isGameLab } from '../learn/lab.ts';
 import type { ChatClient } from '../learn/system2.ts';
+import { providerOf } from './provider.ts';
 import { LABS } from '../worlds/labs.ts';
 import { GRID_GRADING_SYSTEM } from '../worlds/grid/lab.ts';
 import { LabError } from './lab-runner.ts';
@@ -84,7 +85,8 @@ export async function gradeSenior(journalFile: string, agentRecord: string, llm:
     const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
     const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
     const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-    event = { type: 'operator_rule_recovery', subject: 'senior', truth, grades, ...quotedFalseBeliefs(parsed?.false_beliefs, JSON.parse(user).learner), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel, at: new Date().toISOString() };
+    event = { type: 'operator_rule_recovery', subject: 'senior', truth, grades, ...quotedFalseBeliefs(parsed?.false_beliefs, JSON.parse(user).learner), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel,
+      grader_provider: providerOf(llm.endpoint), ...graderSaw(JSON.parse(user).learner), at: new Date().toISOString() };
   } catch (e) {
     event = { type: 'operator_rule_recovery', subject: 'senior', truth, error: String((e as Error)?.message ?? e), grader_model: graderModel, at: new Date().toISOString() };
   }
@@ -119,7 +121,8 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
     const parsed = parseJsonLoose(content) as { grades?: { id: string; grade: string }[]; false_beliefs?: unknown[] } | null;
     const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
     const score = Math.round(grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0) / truth.length * 100) / 100;
-    event = { type, truth, grades, ...quotedFalseBeliefs(parsed?.false_beliefs, JSON.parse(user).learner), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel };
+    event = { type, truth, grades, ...quotedFalseBeliefs(parsed?.false_beliefs, JSON.parse(user).learner), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: graderModel,
+      grader_provider: providerOf(llm.endpoint), ...graderSaw(JSON.parse(user).learner) };
   } catch (e) {
     event = { type, truth, error: String((e as Error)?.message ?? e), grader_model: graderModel };
   }

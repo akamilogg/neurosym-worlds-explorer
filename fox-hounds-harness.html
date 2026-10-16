@@ -2910,6 +2910,9 @@ var Neurosym = (() => {
         const { messages, ...configuration } = body;
         return configuration;
       },
+      get endpoint() {
+        return read().url;
+      },
       async complete({ system, user, signal }) {
         const o = read();
         o.onRequest?.();

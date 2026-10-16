@@ -129,8 +129,6 @@ function validationReport(journalFile: string, verification: PackageVerification
   const end = [...(journal.events ?? [])].reverse().find((e: Record<string, unknown>) => e.type === 'end') ?? {};
   const packaged = packageReport(finding, journal) as Record<string, any>;
   const { verified: _v, manifest_sha256: _m, ...process } = verification;
-  const models = { developer: journal.config?.llm_model ?? null, judge: journal.config?.jev_model ?? null,
-    grader: finding.operator?.rule_recovery?.grader_version ?? null, senior: (end.assistance ?? finding.assistance)?.by ?? null };
   const report: Record<string, any> = {
     format: 'validation_report@1',
     run: path.basename(base),
@@ -142,16 +140,71 @@ function validationReport(journalFile: string, verification: PackageVerification
     references: { source: 'finding', baselines: finding.tested?.places?.filter((p: Record<string, unknown>) => p.role === 'reference') ?? [] },
     robustness: { done: false, needs: 'the model, its dependencies frozen, evaluated on new episodes, other families of its use and interventions (synthetic re-evaluation, §9, M5)' },
     limitations: { source: 'finding', ...packaged.limitations },
-    independence: { source: 'journal config, finding',
-      technical_diversity: models,
-      separation_of_the_evaluation: 'not recorded (M4)',
-      organisational: 'declared by a person, never computed: not declared' },
+    independence: independenceOf(journal, audit, base),
     ...(audit ? { method_audit: { source: path.basename(base) + '.method.json', measures: audit.measures ?? null } } : {}),
     generating_configuration: { source: 'journal', ...packaged.generating_configuration, variability: 'not characterized (§8.2): context about the process, not evidence about this model' },
     cost: packaged.cost
   };
   report.proposed_conclusion = proposed(report);
   return report;
+}
+
+/* --- Independence, in its three dimensions (§7.2), apart - never summed up as "independent: yes or no" ------------------- */
+
+const independenceFile = (journal: string) => path.join(validationDir(journal), 'independence.jsonl');
+
+/** A person's declaration of the organisational independence of a run's validation: who validated, to whom they answer,
+    whether they are apart from its development and may challenge it. The harness never computes it; the latest declared
+    counts, every one is kept. */
+export function declareIndependence(journalFile: string, d: { by: string; validator: string; reportsTo?: string; separate?: string; canChallenge?: string; note?: string }): Record<string, unknown> {
+  const journal = path.resolve(journalFile);
+  if (!d.by?.trim() || /^agent:/i.test(d.by)) throw new Error('organisational independence is declared by a person: --by "<who>" (never an agent)');
+  if (!d.validator?.trim()) throw new Error('--validator "<who validated it>"');
+  for (const [k, v] of [['separate', d.separate], ['can-challenge', d.canChallenge]] as const) if (v !== undefined && !['yes', 'no'].includes(v)) throw new Error('--' + k + ' is yes or no');
+  const entry = { at: new Date().toISOString(), by: d.by.trim(), validator: d.validator.trim(), ...(d.reportsTo ? { reports_to: d.reportsTo } : {}),
+    ...(d.separate ? { separate_from_development: d.separate === 'yes' } : {}), ...(d.canChallenge ? { can_challenge: d.canChallenge === 'yes' } : {}), ...(d.note ? { note: d.note } : {}) };
+  fs.mkdirSync(validationDir(journal), { recursive: true });
+  fs.appendFileSync(independenceFile(journal), JSON.stringify(entry) + '\n');
+  return entry;
+}
+
+function independenceOf(journal: Record<string, any>, audit: Record<string, any> | null, base: string): Record<string, unknown> {
+  const unknown = 'not recorded';
+  const developer = { model: journal.config?.llm_model ?? null, provider: journal.config?.llm_provider ?? unknown };
+  /* Who directed it: its agents (a senior, a coach) and the operator's messages. */
+  const folder = path.dirname(base);
+  const agents = fs.readdirSync(folder).filter((f) => f.startsWith(path.basename(base) + '.agent-') && f.endsWith('.json')).map((f) => {
+    const a = JSON.parse(fs.readFileSync(path.join(folder, f), 'utf8'));
+    return { agent: a.agent, role: a.role, model: a.llm_config?.model ?? null, provider: a.llm_provider ?? unknown };
+  });
+  const events = (journal.events ?? []) as Record<string, any>[];
+  const operatorMessages = events.filter((e) => e.type === 'operator_message').flatMap((e) => e.messages ?? []).filter((m: Record<string, unknown>) => !String(m.by ?? '').startsWith('agent:')).length;
+  /* Who validated it: each grading as it was last done (per kind and subject), the Judge of the method's audit, the checks. */
+  const latest = new Map<string, Record<string, any>>();
+  for (const e of events) if ('grader_model' in e) latest.set(e.type + '|' + (e.subject ?? ''), e);
+  const same = (a: unknown, b: unknown) => (a === unknown || b === unknown || a == null || b == null ? 'unknown' : a === b);
+  const validators: Record<string, unknown>[] = [
+    ...[...latest.values()].map((e) => ({ role: 'grader' + (e.subject ? ' (' + e.subject + ')' : ''), source: e.type, model: e.grader_model ?? null, provider: e.grader_provider ?? unknown,
+      saw: e.saw ?? unknown, saw_reasoning: e.saw_reasoning ?? unknown, framing: e.framing ?? unknown })),
+    ...(audit?.judge ? [{ role: 'judge of the method\'s audit', source: path.basename(base) + '.method.json', model: audit.judge, provider: unknown, saw: audit.judge_saw ?? unknown,
+      saw_reasoning: audit.judge_saw ? true : unknown, framing: 'the audit\'s questions (J1-J6), fixed in its code' }] : []),
+    { role: 'the environment\'s checks', source: 'journal', model: null, provider: null, saw: 'the model as code, run in the world\'s places - never the reasoning', saw_reasoning: false,
+      framing: 'the protocol, fixed in code' }
+  ];
+  return {
+    source: 'journal config and events, agent records, the method audit, ' + path.basename(independenceFile(base + '.json')),
+    roles: { developer, directors: { agents, operator_messages: operatorMessages }, technical_validators: validators },
+    technical_diversity: validators.filter((v) => v.model).map((v) => ({ role: v.role,
+      same_model_as_developer: same(v.model, developer.model), same_provider_as_developer: same(v.provider, developer.provider),
+      ...(agents.length ? { same_model_as_a_director: agents.some((a) => a.model === v.model) } : {}),
+      reading: 'diversity, not independence: different models may share errors, or be framed alike' })),
+    separation_of_the_evaluation: validators.map((v) => ({ role: v.role, saw: v.saw, saw_reasoning: v.saw_reasoning, framing: v.framing,
+      took_part_in_development: v.model == null ? false : v.model === developer.model && same(v.provider, developer.provider) !== false ? 'its model is the developer\'s' : agents.some((a) => a.model === v.model) ? 'its model is a director\'s' : false })),
+    organisational: (() => {
+      try { const all = fs.readFileSync(independenceFile(base + '.json'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); return all.length ? { declared: all[all.length - 1], declarations: all.length } : 'declared by a person, never computed: not declared'; }
+      catch { return 'declared by a person, never computed: not declared'; }
+    })()
+  };
 }
 
 /** A readable version of the report: the same facts, lines for a person. */
@@ -174,8 +227,10 @@ function reportText(report: Record<string, any>, revision: string): string {
     '',
     'Limitations (' + limitations.length + '):', ...limitations.map((l) => '  ' + l),
     '',
-    'Independence: technical diversity ' + JSON.stringify(report.independence.technical_diversity) + '; separation of the evaluation: ' + report.independence.separation_of_the_evaluation
-      + '; organisational: ' + report.independence.organisational,
+    'Independence, in three dimensions (none is a yes or a no):',
+    ...report.independence.technical_diversity.map((t: Record<string, unknown>) => '  technical diversity - ' + t.role + ': same model as the developer ' + t.same_model_as_developer + ', same provider ' + t.same_provider_as_developer),
+    ...report.independence.separation_of_the_evaluation.map((s: Record<string, unknown>) => '  separation - ' + s.role + ': saw ' + JSON.stringify(s.saw) + '; its reasoning: ' + s.saw_reasoning + '; framed by ' + s.framing + '; took part in development: ' + s.took_part_in_development),
+    '  organisational: ' + JSON.stringify(report.independence.organisational),
     '',
     'Proposed conclusion (a draft, by rule - nobody\'s conclusion): ' + report.proposed_conclusion.conclusion,
     '  rule: ' + report.proposed_conclusion.rule
@@ -207,7 +262,9 @@ export async function reviseRun(journalFile: string, options: { readonly evidenc
 
   /* What it rests on, copied by its content. */
   const files: [string, string][] = [['journal', base + '.json'], ['replay_log', base + '.replay.jsonl'], ['finding', base + '.finding.json'],
-    ['finding_researcher', base + '.finding.researcher.json'], ['method_audit', base + '.method.json'], ['operator_verdicts', base + '.anomalies.jsonl']];
+    ['finding_researcher', base + '.finding.researcher.json'], ['method_audit', base + '.method.json'], ['operator_verdicts', base + '.anomalies.jsonl'],
+    ['independence_declarations', independenceFile(journal)],
+    ...fs.readdirSync(path.dirname(journal)).filter((f) => f.startsWith(path.basename(base) + '.agent-') && f.endsWith('.json')).map((f) => ['agent_record', path.join(path.dirname(journal), f)] as [string, string])];
   const blobsDir = path.join(path.dirname(journal), 'blobs');
   const evidence: { role: string; file: string; sha256: string; bytes: number }[] = [];
   for (const [role, file] of files) if (fs.existsSync(file)) { const c = fs.readFileSync(file); evidence.push({ role, file: path.basename(file), sha256: store(options.evidenceDir, c), bytes: c.length }); }

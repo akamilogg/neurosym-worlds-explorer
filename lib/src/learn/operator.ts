@@ -35,6 +35,15 @@ const plain = (text: string): string => text.toLowerCase().replace(/\\[nrt]/g, '
 
 /** The false beliefs a grader of version 2 gave, kept only when their quote is in what the learner wrote (`learner`, as the
     grader was given it); the others are discarded and kept apart, to review the grader. */
+/** What a grader was given of the researcher's work (SPEC-RIESGO-MODELOS §7.2, the separation of the evaluation): the parts by
+    name, and whether its reasoning was among them - its notes, reflections, rationale, lessons or methods, beyond its model and
+    its claims. Its task's framing is the harness's grading prompt, written in code, never by the run's operator. */
+export function graderSaw(learner: unknown): { saw: string[]; saw_reasoning: boolean; framing: string } {
+  const saw = learner && typeof learner === 'object' ? Object.keys(learner as Record<string, unknown>).sort() : [];
+  return { saw, saw_reasoning: saw.some((k) => REASONING.has(k)), framing: 'the harness\'s grading prompt, fixed in its code' };
+}
+const REASONING = new Set(['notes', 'reflections', 'rationale', 'lessons', 'methods', 'next_experiment', 'open_questions']);
+
 export function quotedFalseBeliefs(given: unknown, learner: unknown): { false_beliefs: unknown[]; false_beliefs_discarded: unknown[]; grader_version: number } {
   const all = Array.isArray(given) ? given : [];
   const text = plain(typeof learner === 'string' ? learner : JSON.stringify(learner));

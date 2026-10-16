@@ -505,7 +505,7 @@ nuevo. Es la opción prudente.
 **Pendiente:**
 - ~~el inventario y el historial de estados por modelo (M3)~~: hecho en §15.4;
 - los informes de lote como evidencia, cuando las estadísticas salgan de ellos (M2);
-- la separación del proceso de evaluación (M4);
+- ~~la separación del proceso de evaluación (M4)~~: hecho en §15.5;
 - la reevaluación sintética (M5).
 
 ### 15.4 El inventario y las dependencias de ejecución: M3 (16/10/2026)
@@ -556,3 +556,48 @@ El código está en `lib/src/runtime/inventory.ts` y las pruebas en `test/invent
   declare su versión en `dependencies`.
 - **La reevaluación sintética como disparador** (§9, M5).
 - **Las medidas de §11** sobre el inventario.
+
+### 15.5 Las tres dimensiones de independencia: M4 (16/10/2026)
+
+La sección de independencia del informe de validación es ahora la de §7.2. Va construida desde lo registrado, con sus
+tres dimensiones por separado y sin ningún «independiente: sí o no» (`lib/src/runtime/validation.ts`,
+`test/independence.test.ts`).
+
+- **Los roles:**
+  - el desarrollador: el modelo del junior y su proveedor;
+  - los directores: los agentes (senior, coach) con su modelo y su proveedor, y los mensajes del operador;
+  - los validadores técnicos: cada calificación en su última versión (por tipo y sujeto), el Judge de la auditoría del
+    método y las comprobaciones del entorno.
+- **Diversidad técnica:** para cada validador, si comparte modelo o proveedor con el desarrollador y si comparte modelo
+  con algún director. Siempre va con la lectura «diversidad, no independencia».
+- **Separación del proceso de evaluación:** para cada validador, qué se le dio y si entre eso estaba el razonamiento del
+  desarrollador (notas, reflexiones, justificación, lecciones, métodos). También quién encuadró su tarea (el prompt del
+  arnés, fijado en su código, o las preguntas de la auditoría) y si participó en el desarrollo: su modelo es el del
+  desarrollador o el de un director.
+  - El calificador dentro del run usa el modelo del propio junior y lee su razonamiento. Ahora se dice.
+- **Independencia organizativa:**
+  `lab model independence <run> --by "<persona>" --validator "<quién validó>" [--reports-to ...] [--separate yes|no]
+  [--can-challenge yes|no]`. La declara una persona, nunca un agente, y el arnés no la calcula.
+  - Se guardan todas las declaraciones en `<run>.validation/independence.jsonl` y vale la última.
+  - Entran como evidencia en la siguiente revisión, junto con los registros de los agentes.
+
+**Lo que se registra ahora para esto:**
+- **El proveedor como identidad, nunca como dirección:** los primeros 16 hex del sha256 del host del endpoint
+  (`runtime/provider.ts`).
+  - En el diario: `llm_provider` y `jev_provider`.
+  - En la calificación: `grader_provider`, tanto dentro del run como en `lab grade`.
+  - En el registro del agente: `llm_provider`.
+  - El cliente LLM sólo expone su endpoint en memoria (`ChatClient.endpoint`) y nunca lo registra.
+- **Cada calificación registra lo que vio:** `saw` (las partes por su nombre), `saw_reasoning` y `framing`.
+- **La auditoría del método registra lo que vio su Judge** (`judge_saw`).
+- **Se corrige una etiqueta mal puesta:** el calificador de la cuadrícula usa el cliente del operador, pero registraba
+  como `grader_model` el modelo del junior.
+
+**Dos correcciones de la verificación (§15.1) que salieron al probar esto:**
+- **Una recalificación no rompe la reconstrucción.** `lab grade` añade su evento después del cierre: es una lectura
+  posterior del operador, no parte del run. Lo reconstruido son los eventos hasta el cierre, y los posteriores se cuentan
+  aparte (`later_readings`).
+- **Lo que el registro guardó debe salir igual, campo a campo.** Lo que una versión posterior del arnés registra de más
+  (por ejemplo, `saw`) no cuenta como diferencia. Sin esta regla, ningún run anterior a un campo nuevo se podría
+  verificar con el código actual.
+  - La reconstrucción sin red conserva además el proveedor que tuvo el run.

@@ -27,6 +27,8 @@ export interface MethodAudit {
   readonly model: string | null;
   /** Who judged J1-J6: the Judge's model, or null (a --flat audit: code only). */
   readonly judge: string | null;
+  /** What the Judge was given to judge (SPEC-RIESGO-MODELOS §7.2). */
+  readonly judge_saw?: string;
   readonly measures: Measures;
   /** The outcome, as the run reports it: beside the method, not combined with it. */
   readonly outcome: J;
@@ -133,6 +135,8 @@ export async function auditMethod(journalFile: string, judge: (Judge & { readonl
     format: 'method_audit@1', run: path.basename(journalFile), audited: new Date().toISOString(),
     researcher: String(journal.researcher ?? 'unknown-world'), model: journal.config?.llm_model ?? null,
     judge: judge ? judge.id : null,
+    /* What the Judge was given (SPEC-RIESGO-MODELOS §7.2): to judge a method, the researcher's record - its reasoning included. */
+    ...(judge ? { judge_saw: 'the researcher\'s record: its texts (notes, rationale, reflections), its requests and what it was answered, its checks' } : {}),
     measures: { ...measuresOf(record, judged), ...(ownTests ? { own_tests: ownTests } : {}), ...(sources ? { claims: factMeasures(sources) } : {}) },
     outcome: outcomeOf(journal),
     observed: { ...rest, links: links.map((l) => ({ id: l.id, kind: l.kind, instruments: l.instruments, refused: l.refused, made: l.made, cited_by: l.after?.cites_this ?? [] })) },

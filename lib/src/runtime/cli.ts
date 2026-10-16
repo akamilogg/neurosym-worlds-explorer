@@ -70,6 +70,8 @@ export const CLI_USAGE = [
   '                                                           a person\'s conclusion on one revision, in a file of its own; refused if its evidence does not hold',
   'lab model register <run> --owner "<person>" [--use ..] [--criteria ..] [--influence|--consequence low|medium|high] [--criticality ..] [--review-days N]',
   '                                                           the model of a run in the inventory (runs/models/inventory.json), its execution dependencies as they are now',
+  'lab model independence <run> --by "<person>" --validator "<who>" [--reports-to ..] [--separate yes|no] [--can-challenge yes|no]',
+  '                                                           a person declares the organisational independence of its validation (the harness never computes it)',
   'lab model list | check [<id>] | retire <id> --by "<person>"   the inventory; what changed since (dependencies, instrument, context, date, verdicts) and each state with its cause',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
@@ -332,6 +334,13 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           return 0;
         }
         const v = await import('./validation.ts');
+        if (sub === 'independence') {
+          const by = take(args, 'by'), validator = take(args, 'validator'), reportsTo = take(args, 'reports-to'), separate = take(args, 'separate'), canChallenge = take(args, 'can-challenge'), note = take(args, 'note');
+          if (!by || !validator) { out('lab model independence <run> --by "<person>" --validator "<who validated it>" [--reports-to "..."] [--separate yes|no] [--can-challenge yes|no] [--note "..."]'); return 2; }
+          v.declareIndependence(journal, { by, validator, ...(reportsTo ? { reportsTo } : {}), ...(separate ? { separate } : {}), ...(canChallenge ? { canChallenge } : {}), ...(note ? { note } : {}) });
+          out('declared; it goes into its next revision (lab model revise)');
+          return 0;
+        }
         if (sub === 'revise') {
           const use = take(args, 'use'), criteria = take(args, 'criteria');
           const r = await v.reviseRun(journal, { evidenceDir, ...(use ? { use } : {}), ...(criteria ? { criteria } : {}) });
@@ -354,7 +363,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           out(a.conclusion + ', by ' + a.by + ', on revision ' + a.revision.slice(0, 16));
           return 0;
         }
-        out('lab model revise|show|approve|register <run> ... | list | check [<id>] | retire <id>');
+        out('lab model revise|show|approve|register|independence <run> ... | list | check [<id>] | retire <id>');
         return 2;
       }
       case 'pack': {

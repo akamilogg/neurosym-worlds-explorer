@@ -65,7 +65,8 @@ import { PEERS_SECTION, PeerChannel, parsePublication, type BoardEntry } from '.
 import { hashString } from '../../core/hash.ts';
 import { GRID_ANSWER, GRID_VERDICT, gridObjective } from './objective.ts';
 import { Protocol } from '../../learn/protocol.ts';
-import { GRADING_STRUCTURE, formOf, operatorSummary, type AblationRecord, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../../learn/operator.ts';
+import { providerOf } from '../../runtime/provider.ts';
+import { GRADING_STRUCTURE, formOf, graderSaw, operatorSummary, type AblationRecord, FALSE_BELIEF_RULE, quotedFalseBeliefs } from '../../learn/operator.ts';
 import type { ObserverLike } from '../../core/evaluate.ts';
 import type { Planner } from '../../core/truth.ts';
 import type { Formula, MeasureDecl } from '../../core/types.ts';
@@ -218,7 +219,10 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       const grades = (parsed?.grades ?? []).filter((g) => truth.some((t) => t.id === g.id));
       const points = grades.reduce((n, g) => n + (g.grade === 'exact' ? 1 : g.grade === 'partial' ? 0.5 : 0), 0);
       const score = Math.round(points / truth.length * 100) / 100;
-      log('operator_rule_recovery', { truth, grades, ...(v2 ? quotedFalseBeliefs(parsed?.false_beliefs, learned) : { false_beliefs: parsed?.false_beliefs ?? [] }), score, ...formOf(parsed as Record<string, unknown> | null), grader_model: s.journal.config.llm_model });
+      log('operator_rule_recovery', { truth, grades, ...(v2 ? quotedFalseBeliefs(parsed?.false_beliefs, learned) : { false_beliefs: parsed?.false_beliefs ?? [] }), score, ...formOf(parsed as Record<string, unknown> | null),
+        /* The grader is the operator's client: its own model and provider where it has them. */
+        grader_model: (s.operatorLlm?.configuration?.model as string | undefined) ?? s.journal.config.llm_model, grader_provider: s.operatorLlm?.endpoint ? providerOf(s.operatorLlm.endpoint) : s.journal.config.llm_provider ?? null,
+        ...graderSaw(learned) });
       say('operator: rule recovery ' + score + ' (' + grades.map((g) => g.id + ':' + g.grade).join(' ') + ')');
     } catch (e) {
       log('operator_rule_recovery', { truth, error: String((e as Error).message ?? e) });
