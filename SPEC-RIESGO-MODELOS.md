@@ -416,11 +416,94 @@ máquina, comprobar y reconstruir (`lib/src/runtime/package.ts`, `test/package.t
   restaura el ajuste registrado (`llm_tuning`).
   - Un diario anterior no tiene esa ruta. Se toma la que se pase o, si no, `/v1/chat/completions`.
 
-**Pendiente de M1:**
-- revisiones nuevas al recalcular;
-- la conclusión firmada vinculada a una revisión (`lab model approve --revision`);
-- el almacén inmutable de evidencia (`runs/models/evidence/<hash>`).
+**Pendiente de M1:** hecho en §15.3.
 
 **Pendiente de la verificación:**
 - Reconstruye el run, no los procesos de sus agentes (el senior). Los registros de los agentes viajan en el paquete y su
   integridad se comprueba, pero sus peticiones no se reconstruyen.
+
+### 15.2 Revisión externa del paquete (16/10/2026)
+
+Una revisión externa encontró seis fallos reproducibles y una inestabilidad. Todos quedan corregidos, cada uno con su test
+(`test/package.test.ts`, `test/artifacts-because.test.ts`):
+
+1. **`pack --out` podía borrar la investigación.** El destino se vaciaba sin mirar qué contenía. Ahora nunca se escribe en
+   la carpeta del run ni en una que la contenga, y una carpeta que ya existe sólo se reemplaza si es un paquete.
+2. **Un blob corrupto antes de empaquetar pasaba la integridad.** Sólo se comprobaba fichero contra manifiesto. Ahora se
+   comprueba también la referencia contra el contenido: el nombre de cada blob citado es su sha256.
+   - Al empaquetar, uno que no coincide no se copia y consta en `corrupt_blobs`.
+   - Al verificar, se recalcula, aunque el manifiesto se haya retocado para coincidir.
+3. **La verificación no podía reconstruir runs con el Judge:** exigía su clave. Ahora el Judge se configura como lo tuvo el
+   run (su modelo) y responde sólo desde el registro. No hace falta clave porque nada sale.
+4. **La comparación ignoraba el cierre.** Ahora se compara el evento `end` entero, salvo lo que es del proceso y no de la
+   investigación: el tiempo, cómo llegaron las respuestas (`replay`, `console_usage`), qué reanudó y trajo, y dónde
+   reanudarlo. Un modelo final cambiado ya no pasa (`end_differs`).
+5. **La cadena del producto confundía contenido con procedencia.** Con base→A, base→B y B→A, el linaje de A tomaba la
+   primera ruta.
+   - Ahora el linaje sigue los cambios tal como ocurrieron, cada uno con su número (`change`): el que hizo la versión por
+     última vez, y antes de él, el que hizo a su padre.
+   - Las dependencias de una creencia caída marcan si el *cambio* está en la línea de la última versión, no si lo está el
+     contenido.
+6. **Un run detenido por presupuesto no se verificaba,** porque la reanudación intentaba continuar. Ahora, si el registro
+   se paró antes de tiempo (presupuesto de tokens o de tiempo, cancelación), la reconstrucción se para donde él se paró
+   (`stopAsRecorded`, sólo desde código), y su cierre se sirve del registro.
+
+**La inestabilidad** venía de que el linaje del producto sólo existía si el artefacto se aceptaba, y eso depende de una
+medición real. Ahora el linaje acompaña a la versión que nombra el finding: la última aceptada o, si no hay ninguna, la
+última comprobada.
+
+**Además,** el paquete incluye ahora la auditoría del método (`.method.json`) y los veredictos del operador
+(`.anomalies.jsonl`). La reanudación lee los veredictos, así que sin ellos un run que los tuvo no se reconstruiría.
+
+### 15.3 Revisiones inmutables y la conclusión firmada: M1 completo (16/10/2026)
+
+El código está en `lib/src/runtime/validation.ts` y las pruebas en `test/validation.test.ts`.
+
+- **`lab model revise <run> [--use "<contexto>"] [--criteria "<criterios>"]`** crea una revisión del informe de
+  validación (§6):
+  - descripción, con el modelo, el artefacto y los supuestos (las creencias);
+  - resultados separados (R6);
+  - verificación del proceso con cada prueba por su nombre (R7): el run se empaqueta y se verifica (§15.1), y se
+    incluyen los informes del instrumento;
+  - referencias;
+  - robustez, que consta como "no hecha" (M5);
+  - limitaciones;
+  - independencia en sus tres dimensiones: la diversidad técnica con los modelos de cada rol, la separación "no
+    registrada" (M4) y la organizativa "declarada por una persona: no declarada";
+  - configuración generadora;
+  - coste;
+  - una conclusión propuesta como borrador, por una regla que se enuncia.
+
+  Cada parte nombra su fuente (R1).
+- **La revisión, cerrada:**
+  - el informe, el contexto de uso y cada contenido en que se apoya se copian por su sha256 a
+    `runs/models/evidence/<sha256>`, en sólo lectura: el diario, el registro de repetición, los findings, la auditoría,
+    los veredictos y los blobs;
+  - el manifiesto (`validation_manifest@1`) los nombra a todos, y **su hash es la revisión**;
+  - junto al run quedan `<run>.validation/<rev>/report.json`, `report.txt` (la versión legible) y `manifest.json`.
+- **Recalcular:** si nada cambió, sale la misma revisión. Si cambió cualquier cosa (una recalificación, un veredicto, otro
+  contexto de uso u otros criterios), sale una nueva, y el arnés la compara con la aprobada por esta regla:
+  - la contradice si un resultado que la aprobación daba por cumplido ya no se cumple: aceptación del modelo o del
+    artefacto, contraejemplos cerrados, integridad o reconstrucción;
+  - también la contradice si aparece una limitación que no tenía;
+  - si la contradice, la aprobación se suspende y el estado pasa a `revalidate`;
+  - si no, la aprobación sigue vigente, con una nota que remite a la revisión posterior sin firmar.
+
+  Todo queda en `<run>.validation/history.jsonl`.
+- **`lab model approve <run> --revision <id> --by "<persona>" --conclusion approved|approved_with_limitations|rejected
+  [--note ...]`:** la conclusión de una persona, en un archivo propio (`approvals/`) que remite a la revisión. La firma
+  nunca cambia el hash de lo firmado.
+  - Se rechaza si firma un agente (`agent:`).
+  - Se rechaza si la evidencia de la revisión no se sostiene.
+- **`lab model show <run>`:** abre cada revisión, recalcula sus copias, y muestra las aprobaciones y el estado. Una
+  discrepancia aparece como error de integridad.
+
+**Decisión de diseño.** Cualquier limitación nueva cuenta como contradicción, aunque §7.4 habla de una "que afecta al
+contexto de uso". El arnés no puede juzgar si le afecta, así que suspende y deja que lo decida la persona al firmar de
+nuevo. Es la opción prudente.
+
+**Pendiente:**
+- el inventario y el historial de estados por modelo (M3), del que esto es la base por run;
+- los informes de lote como evidencia, cuando las estadísticas salgan de ellos (M2);
+- la separación del proceso de evaluación (M4);
+- la reevaluación sintética (M5).

@@ -101,25 +101,20 @@ export class ArtifactStore {
 
   get(hash: string): ArtifactVersion | null { return this.versions.get(hash) ?? null; }
 
-  /** The versions a version comes from - itself and every version a chain of transitions leads from to it. */
-  ancestry(hash: string): Set<string> {
-    const seen = new Set<string>([hash]);
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const t of this.transitions) if (seen.has(t.to) && !seen.has(t.from)) { seen.add(t.from); grew = true; }
-    }
-    return seen;
-  }
-
-  /** A way from the base to a version: the transitions that first reached each version on it, base first. */
-  lineage(hash: string): ArtifactTransition[] {
-    const out: ArtifactTransition[] = [];
-    let at = hash;
+  /** How a version was made, as it happened: the change that made it last (or last before change `before`, counted from 1),
+      then the change that had made its parent before that one, and so on to the base - base first, each change by its number.
+      Content is not provenance: the same version may be reached by several changes, and the way that counts is the one that
+      made it when it was taken (a second review, 16/10/2026: base->A, base->B, B->A - A was last made from B). */
+  lineage(hash: string, before = this.transitions.length + 1): (ArtifactTransition & { readonly change: number })[] {
+    const out: (ArtifactTransition & { readonly change: number })[] = [];
+    let at = hash, limit = before - 1;
     while (at !== this.base) {
-      const t = this.transitions.find((x) => x.to === at);
-      if (!t) break;
-      out.unshift(t);
-      at = t.from;
+      let i = limit - 1;
+      while (i >= 0 && this.transitions[i].to !== at) i--;
+      if (i < 0) break;
+      out.unshift({ ...this.transitions[i], change: i + 1 });
+      at = this.transitions[i].from;
+      limit = i;
     }
     return out;
   }

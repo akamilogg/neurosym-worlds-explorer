@@ -33,6 +33,8 @@ export interface PackageManifest {
   readonly files: readonly { readonly path: string; readonly sha256: string; readonly bytes: number }[];
   /** Blobs the journal cites that were not found to carry: the package is then not whole, and says so. */
   readonly missing_blobs: readonly string[];
+  /** Blobs found whose content is not the one their name (its sha256, as the journal cites it) says: never packed. */
+  readonly corrupt_blobs: readonly string[];
 }
 
 /** The run's results, each by its name (R6) - never one called "correct" - and its limitations, from its finding. */
@@ -58,28 +60,44 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
   const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
   const base = journalFile.replace(/\.json$/, '');
   const name = path.basename(base);
-  const dir = outDir ?? base + '.package';
-  fs.rmSync(dir, { recursive: true, force: true });
+  const dir = path.resolve(outDir ?? base + '.package');
+  const folder = path.dirname(path.resolve(journalFile));
+  /* Never where the research is: not its folder, nor a folder that holds it; and a folder that exists is replaced only if it is
+     a package already (an external review, 16/10/2026: --out pointed at the run's folder erased the run before copying it). */
+  const inside = (a: string, b: string) => { const r = path.relative(b, a); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); };
+  if (inside(folder, dir)) throw new Error('a package is never written where its run is (' + dir + ' holds ' + folder + ')');
+  if (fs.existsSync(dir)) {
+    if (!fs.statSync(dir).isDirectory() || (fs.readdirSync(dir).length && !isPackage(dir))) throw new Error(dir + ' exists and is not a package: it is left as it is');
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   fs.mkdirSync(path.join(dir, 'blobs'), { recursive: true });
-  const folder = path.dirname(journalFile);
-  /* The run's own files: its journal and log, its findings, its agents' records (a senior's notebook and decisions). */
-  const own = fs.readdirSync(folder).filter((f) => f === name + '.json' || f === name + '.replay.jsonl' || (f.startsWith(name + '.') && /\.(finding|finding\.researcher|agent-[^.]+)\.json$/.test(f.slice(name.length))));
+  /* The run's own files: its journal and log, its findings, its agents' records (a senior's notebook and decisions), the audit
+     of its method, and the operator's verdicts on its reports of the instrument (its resumption reads them: without them a run
+     that had them would not be rebuilt). */
+  const own = fs.readdirSync(folder).filter((f) => f === name + '.json' || f === name + '.replay.jsonl' || f === name + '.anomalies.jsonl'
+    || (f.startsWith(name + '.') && /^\.(finding|finding\.researcher|method|agent-[^.]+)\.json$/.test(f.slice(name.length))));
   for (const f of own) fs.copyFileSync(path.join(folder, f), path.join(dir, f));
   const { dir: blobs, cited } = blobsOf(journalFile);
-  const missing: string[] = [];
+  const missing: string[] = [], corrupt: string[] = [];
   for (const b of cited) {
     const from = path.join(blobs, b);
-    if (fs.existsSync(from)) fs.copyFileSync(from, path.join(dir, 'blobs', b)); else missing.push(b);
+    if (!fs.existsSync(from)) missing.push(b);
+    else if (sha(from) !== b) corrupt.push(b);
+    else fs.copyFileSync(from, path.join(dir, 'blobs', b));
   }
   const finding = fs.existsSync(base + '.finding.json') ? JSON.parse(fs.readFileSync(base + '.finding.json', 'utf8')) : {};
   fs.writeFileSync(path.join(dir, 'report.json'), JSON.stringify(packageReport(finding, journal), null, 2));
   const files = listFiles(dir).filter((p) => p !== 'manifest.json' && p !== 'verification.json')
     .map((p) => ({ path: p, sha256: sha(path.join(dir, p)), bytes: fs.statSync(path.join(dir, p)).size }));
   const manifest: PackageManifest = { format: 'research_package@1', run: name, created: new Date().toISOString(), experiment: String(journal.experiment ?? ''),
-    commit: journal.commit ?? null, files, missing_blobs: missing };
+    commit: journal.commit ?? null, files, missing_blobs: missing, corrupt_blobs: corrupt };
   fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   return { dir, manifest };
 }
+
+const isPackage = (dir: string): boolean => {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).format === 'research_package@1'; } catch { return false; }
+};
 
 const listFiles = (dir: string, rel = ''): string[] => fs.readdirSync(path.join(dir, rel), { withFileTypes: true })
   .flatMap((e) => (e.isDirectory() ? listFiles(dir, rel ? rel + '/' + e.name : e.name) : [rel ? rel + '/' + e.name : e.name])).sort();
@@ -89,13 +107,26 @@ export interface PackageVerification {
   readonly format: 'research_verification@1';
   readonly verified: string;
   readonly manifest_sha256: string;
-  readonly integrity: { readonly holds: boolean; readonly changed: readonly string[]; readonly missing: readonly string[]; readonly unlisted: readonly string[]; readonly missing_blobs: readonly string[] };
+  /** Each file against its manifest, and each blob the journal cites against its content: a reference whose content is not
+      the one it names is no evidence, whatever the manifest says of the file. */
+  readonly integrity: { readonly holds: boolean; readonly changed: readonly string[]; readonly missing: readonly string[]; readonly unlisted: readonly string[];
+    readonly missing_blobs: readonly string[]; readonly corrupt_blobs: readonly string[] };
   /** Guarantee 1 (SPEC-MUNDO-ARTEFACTOS §11): its history rebuilt from its record alone, offline. */
-  readonly reconstruction: { readonly holds: boolean; readonly how: string; readonly events_compared: number; readonly first_difference?: number; readonly stopped_by?: string; readonly requests_refused: number };
+  readonly reconstruction: { readonly holds: boolean; readonly how: string; readonly events_compared: number; readonly first_difference?: number;
+    readonly end_differs?: readonly string[]; readonly stopped_by?: string; readonly recorded_stop?: string; readonly requests_refused: number };
   /** Guarantees 2 and 3, named so that nobody takes the first for them. */
   readonly re_execution: { readonly done: false; readonly needs: string; readonly environments_recorded: readonly string[] };
   readonly reproduction: { readonly done: false; readonly needs: string };
 }
+
+/** The stops that leave a record short: a reconstruction stops where they did. */
+const STOPS_SHORT = new Set(['token_budget', 'time_budget', 'cancelled']);
+
+/** What of a run's end belongs to the process that wrote it, not to its research: its time, how its answers came (live or
+    replayed), what it resumed and carried, where to resume it. Everything else of its end must come out the same. */
+const END_OF_THE_PROCESS = new Set(['t', 'type', 'replay', 'console_usage', 'resume', 'resumed_from', 'blobs_carried']);
+
+const endOf = (j: Record<string, any>) => [...(j.events ?? [])].reverse().find((e: Record<string, unknown>) => e.type === 'end') as Record<string, any> | undefined;
 
 /** System 2 as the run had it, but nowhere: its model, its endpoint's path and its tuning as recorded (they are in what makes
     each request that request), at a host that does not exist. A journal from before its path was recorded (16/10/2026) names
@@ -118,11 +149,15 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
   const changed = manifest.files.filter((f) => present.includes(f.path) && sha(path.join(dir, f.path)) !== f.sha256).map((f) => f.path);
   const missing = manifest.files.filter((f) => !present.includes(f.path)).map((f) => f.path);
   const unlisted = present.filter((p) => !listed.has(p));
-  const integrity = { holds: !changed.length && !missing.length && !unlisted.length && !manifest.missing_blobs.length, changed, missing, unlisted, missing_blobs: manifest.missing_blobs };
+  const journalName = manifest.run + '.json';
+  const { cited } = blobsOf(path.join(dir, journalName));
+  const missingBlobs = [...new Set([...(manifest.missing_blobs ?? []), ...cited.filter((b) => !present.includes('blobs/' + b))])];
+  const corruptBlobs = [...new Set([...(manifest.corrupt_blobs ?? []), ...cited.filter((b) => present.includes('blobs/' + b) && sha(path.join(dir, 'blobs', b)) !== b)])];
+  const integrity = { holds: !changed.length && !missing.length && !unlisted.length && !missingBlobs.length && !corruptBlobs.length,
+    changed, missing, unlisted, missing_blobs: missingBlobs, corrupt_blobs: corruptBlobs };
 
   /* The reconstruction: the run resumed from its own record in a scratch copy, offline. */
   const lab = Object.values(LABS).find((l) => l.id === manifest.experiment);
-  const journalName = manifest.run + '.json';
   const original = JSON.parse(fs.readFileSync(path.join(dir, journalName), 'utf8'));
   let reconstruction: PackageVerification['reconstruction'];
   if (!lab) reconstruction = { holds: false, how: 'no laboratory "' + manifest.experiment + '" in this code', events_compared: 0, requests_refused: 0 };
@@ -134,9 +169,14 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10 * 60 * 1000);
     let stoppedBy = 'unknown';
+    const recordedStop = endOf(original)?.stoppedBy as string | undefined;
     try {
       const r = await runLaboratory(lab, { args: ['--resume', path.join(scratch, journalName), '--out', path.join(scratch, 'rebuilt.json')], root: scratch,
-        llm: offlineConnection(original.config ?? {}, options.llmPath), fetch: offline, signal: controller.signal, print: () => {} });
+        llm: offlineConnection(original.config ?? {}, options.llmPath), fetch: offline, signal: controller.signal, print: () => {},
+        /* The Judge as the run had it, answering only from the record: no key is needed where nothing goes out. */
+        ...(original.config?.flat ? {} : { judge: { url: 'http://offline.invalid/judge', key: 'offline', ...(original.config?.jev_model ? { model: String(original.config.jev_model) } : {}) } }),
+        /* Where the record stopped short - a budget, a cancellation - the reconstruction stops there too, never goes on. */
+        ...(recordedStop && STOPS_SHORT.has(recordedStop) ? { stopAsRecorded: recordedStop } : {}) });
       stoppedBy = r.stoppedBy;
     } catch (e) { stoppedBy = 'error: ' + String((e as Error).message ?? e).slice(0, 200); } finally { clearTimeout(timer); }
     const rebuilt = fs.existsSync(path.join(scratch, 'rebuilt.json')) ? JSON.parse(fs.readFileSync(path.join(scratch, 'rebuilt.json'), 'utf8')) : { events: [] };
@@ -146,9 +186,14 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
     const after = (rebuilt.events as Record<string, unknown>[]).filter((e) => e.type !== 'start' && e.type !== 'end');
     let first: number | undefined;
     for (let i = 0; i < before.length; i++) if (strip(before[i]) !== (after[i] ? strip(after[i]) : '')) { first = i; break; }
-    reconstruction = { holds: first === undefined && stoppedBy !== 'diverged' && !stoppedBy.startsWith('error'),
+    if (first === undefined && after.length > before.length) first = before.length;
+    /* And its end - the final model, the artifact's state, what it counted: the same, but for what a reconstruction changes. */
+    const a = endOf(original) ?? {}, b = endOf(rebuilt) ?? {};
+    const endDiffers = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => !END_OF_THE_PROCESS.has(k) && JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+    reconstruction = { holds: first === undefined && !endDiffers.length && stoppedBy !== 'diverged' && !stoppedBy.startsWith('error'),
       how: 'resumed from its own replay log in a scratch copy, offline: every answer from the record, none asked again', events_compared: before.length,
-      ...(first !== undefined ? { first_difference: first } : {}), stopped_by: stoppedBy, requests_refused: refused };
+      ...(first !== undefined ? { first_difference: first } : {}), ...(endDiffers.length ? { end_differs: endDiffers } : {}), stopped_by: stoppedBy,
+      ...(recordedStop ? { recorded_stop: recordedStop } : {}), requests_refused: refused };
     fs.rmSync(scratch, { recursive: true, force: true });
   }
   const environments = [...new Set(JSON.stringify(original).match(/"fingerprint":\s*"[0-9a-f]{16}"/g) ?? [])].map((m) => m.replace(/.*"([0-9a-f]{16})"/, '$1'));

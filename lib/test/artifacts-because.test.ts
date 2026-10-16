@@ -37,6 +37,22 @@ test('because: a change says which beliefs it rests on; a fallen belief lists th
   assert.deepEqual((line[0].reason as any).because, ['sorting_helps']);
 });
 
+test('content is not provenance: base->A, base->B, B->A - A was last made from B, and the line of the latest is those changes', async () => {
+  const lab = artifactsLab;
+  const spec = lab.generate(1, { artifact: 'threesum', scale: '0.1', acts: '3', tolerance: '0.25', workloads: '2' });
+  const make = async (change: Record<string, unknown>, id: string) => (await lab.act!.start(spec, lab.act!.parse({ change }) as never, id, {} as never) as { version: string }).version;
+  const base = spec.world.reference;
+  const a = await make({ from: base, files: { 'main.py': QUADRATIC }, why: 'straight to it', expect: 'faster', because: ['first_way'] }, 'act1');
+  const b = await make({ from: base, files: { 'NOTE.md': 'a step' }, why: 'a step first', exploratory: true }, 'act2');
+  const again = await make({ from: b, files: { 'main.py': QUADRATIC, 'NOTE.md': null }, why: 'then the change', expect: 'faster', because: ['second_way'] }, 'act3');
+  assert.equal(again, a, 'the same content, the same version');
+  const line = lab.lineage!(spec, a);
+  assert.deepEqual(line.map((t) => [t.change, t.from, t.to]), [[2, base, b], [3, b, a]], 'the way it was last made, change by change');
+  const resting = lab.dependents!(spec, ['first_way', 'second_way'])!;
+  assert.deepEqual((resting.changes_resting_on_them as any[]).map((x) => [x.change, x.in_line_of_latest]), [[1, false], [3, true]],
+    'the first way to A is not in the line of the latest: another change made it');
+});
+
 test('in a run: a dropped belief is told with the changes that rested on it; the product\'s chain in the finding - reasons, beliefs as they stand, its tests', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifacts-because-'));
   let made = '';
@@ -70,7 +86,7 @@ test('in a run: a dropped belief is told with the changes that rested on it; the
   assert.equal(fell.changes_resting_on_them[0].in_line_of_latest, true);
   const noticed = told.find((u) => (u.channel?.notices ?? []).some((n: any) => n.from === 'world' && n.body.beliefs_fell));
   assert.equal(noticed?.round, 3, 'as a notice of the world, at the next round');
-  /* The product, accepted, and the chain that made it. */
+  /* The version the run ends with - accepted or not, as a measurement may decide - and the chain that made it. */
   assert.equal(r.finding.artifact?.version, made, 'the product: ' + JSON.stringify(r.finding.artifact));
   const lineage = r.finding.artifact!.lineage as any[];
   assert.equal(lineage.length, 1);

@@ -161,14 +161,15 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
   /* The changes that rested on beliefs that fell, and whether each is still in the line of the latest version (§9). */
   dependents: (spec, fallen) => {
     const current = latest.get(spec.world) ?? spec.world.reference;
-    const line = spec.world.store.ancestry(current);
-    const resting = spec.world.store.transitions.flatMap((t) => {
+    /* The line of the latest version as it was made - the changes themselves, not every way to the same contents. */
+    const line = new Set(spec.world.store.lineage(current).map((t) => t.change));
+    const resting = spec.world.store.transitions.flatMap((t, i) => {
       const because = ((t.reason as Reason | undefined)?.because ?? []).filter((b) => fallen.includes(b));
-      return because.length ? [{ version: t.to, from: t.from, why: (t.reason as Reason).why, because, in_line_of_latest: line.has(t.to) }] : [];
+      return because.length ? [{ change: i + 1, version: t.to, from: t.from, why: (t.reason as Reason).why, because, in_line_of_latest: line.has(i + 1) }] : [];
     });
     return resting.length ? { beliefs_fell: [...fallen], latest_version: current, changes_resting_on_them: resting } : null;
   },
-  lineage: (spec, product) => spec.world.store.lineage(product).map((t) => ({ from: t.from, to: t.to, ...(t.reason !== undefined ? { reason: t.reason } : {}) })),
+  lineage: (spec, product) => spec.world.store.lineage(product).map((t) => ({ change: t.change, from: t.from, to: t.to, ...(t.reason !== undefined ? { reason: t.reason } : {}) })),
   about: 'System 2 changes an artifact and runs its versions, and writes a model of its behaviour: the metric of a run, from what is known before it.',
   options: [
     { name: 'artifact', default: 'dedup', help: 'the artifact and its task: ' + Object.keys(TASKS).join(', ') },

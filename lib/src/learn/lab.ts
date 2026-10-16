@@ -204,7 +204,7 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       to undo stays its own (SPEC-MUNDO-ARTEFACTOS §9). Null: nothing rests on them. */
   readonly dependents?: (spec: S, fallen: readonly string[]) => Record<string, unknown> | null;
   /** How a product of its world was reached (an artifact's version: its changes from the base, each with its reason). */
-  readonly lineage?: (spec: S, product: string) => readonly { readonly from: string; readonly to: string; readonly reason?: unknown }[];
+  readonly lineage?: (spec: S, product: string) => readonly { readonly change?: number; readonly from: string; readonly to: string; readonly reason?: unknown }[];
   /** The verdict on the ARTIFACT itself, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8): a version the researcher puts
       forward, judged in a place on fresh workloads - correct, and better than the reference (or not worse, where the place
       asks only that). Only a world of artifacts declares it; the runner gives it a protocol of its own. */

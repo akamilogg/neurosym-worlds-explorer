@@ -226,6 +226,10 @@ export interface LabRunOptions {
   readonly researcher?: Researcher;
   /** The operator's policy: the researchers allowed, or the one forced (`--policy` in the arguments says the same). */
   readonly policy?: ResearcherPolicy;
+  /** A reconstruction, not a continuation (lab verify): with --resume, once the record it resumes has no answer left waiting,
+      the run stops as that record stopped - a budget (its closing then served from the record), a cancellation - where it
+      would otherwise go on asking. Only from code: a run on the command line resumes to go on. */
+  readonly stopAsRecorded?: string;
 }
 
 /** The two researchers (SPEC-INVESTIGADOR-ASISTIDO): the one that learns only from what the world answers, and the one the
@@ -850,6 +854,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   };
   /* Stopping: the caller's signal (Ctrl+C on the command line) and the budgets are asked before each question to System 2. */
   const halt = (): string | null => (pollInbox(), pollVerdicts(), options.signal?.aborted || stopRequested) ? 'cancelled'
+    : options.stopAsRecorded && previous && replay.pending() === 0 ? options.stopAsRecorded
     : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
     : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
 
@@ -1675,11 +1680,15 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const reason = (t.reason ?? {}) as { because?: string[] };
       const tests = events.filter((e) => e.type === 'test_registered' && JSON.stringify(e.protocol ?? {}).includes('"' + t.to + '"'))
         .map((e) => { const r = results.get(e.test); const { type: _t, t: _s, test: _i, claim: _c, round: _r, by: _b, ...outcome } = r ?? {}; return { test: e.test, claim: e.claim, round: e.round, ...(r ? { result: outcome } : { result: 'not run' }) }; });
-      return { from: t.from, to: t.to, ...(t.reason !== undefined ? { reason: t.reason } : {}),
+      return { ...(t.change !== undefined ? { change: t.change } : {}), from: t.from, to: t.to, ...(t.reason !== undefined ? { reason: t.reason } : {}),
         ...(reason.because?.length ? { beliefs: reason.because.map((id) => ({ id, status: session.notebook.beliefs.get(id)?.status ?? 'never written' })) } : {}),
         ...(tests.length ? { tests } : {}) };
     });
   };
+  /* The version the run ends with, as its finding names it: the last accepted, or else the last it had checked - its chain goes
+     with whichever it names (not only with an acceptance, which may hang on how a measurement came out). */
+  const productVersion = (): string | null => artifactAccepted[artifactAccepted.length - 1]?.version
+    ?? [...(journal.events as Record<string, any>[])].reverse().find((e) => e.type === 'artifact_check' && typeof e.version === 'string')?.version ?? null;
   const goesOn = Boolean(lab.goesOnAfterAcceptance) && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.goes_on === 0;
   const modelsAccepted: { law: Law; round: number }[] = [];
   for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
@@ -1814,7 +1823,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownLaw(acceptedBefore.law) } } : {}),
     /* A world of artifacts: the artifact's own state, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8). */
     ...(artifactProtocol ? { artifact: { accepted: artifactAccepted[artifactAccepted.length - 1] ?? null, chain: artifactAccepted, protocol: artifactProtocol.summary(),
-      ...(artifactAccepted.length && lab.lineage ? { product_lineage: productLineage(artifactAccepted[artifactAccepted.length - 1].version) } : {}) } } : {}),
+      ...(productVersion() && lab.lineage ? { product_lineage: productLineage(productVersion()!) } : {}) } } : {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
     jev: { calls: judge.stats.calls, errors: judge.stats.errors },

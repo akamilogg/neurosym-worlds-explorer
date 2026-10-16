@@ -24,6 +24,7 @@ import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, 
  *   lab anomaly <run> [<report> bug|world|unclear [note]]
  *   lab pack <run> [--out dir]     a research package of it (SPEC-RIESGO-MODELOS M1)
  *   lab verify <package>           its integrity and its reconstruction, each by its name
+ *   lab model revise|show|approve <run>   revisions of its validation report, closed; a person's conclusion on one
  *
  * The keys never pass through here: a run started or resumed takes them from this process's
  * environment (LLM_URL, LLM_MODEL, LLM_KEY; JEV_URL, JEV_KEY).
@@ -63,6 +64,10 @@ export const CLI_USAGE = [
   'lab audit agreement <labels.json>                        the agreement of the operator\'s labels with the Judge, per question (kappa, confusion)',
   'lab pack <run> [--out dir]                                a research package of it: its record, its blobs, a report of its results each by its name, a manifest of hashes',
   'lab verify <package> [--llm-path /v1/...]                 check a package: its integrity, its history rebuilt offline from its record; what was not done, said (verification.json)',
+  'lab model revise <run> [--use "<context>"] [--criteria "<criteria>"]   a revision of its validation report, closed: its evidence copied by content (runs/models/evidence)',
+  'lab model show <run>                                      its revisions (each opened, its copies hashed again), its approvals, its state',
+  'lab model approve <run> --revision <id> --by "<person>" --conclusion approved|approved_with_limitations|rejected [--note "..."]',
+  '                                                           a person\'s conclusion on one revision, in a file of its own; refused if its evidence does not hold',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
   'lab project start <goal.json>                             a project of the planner, in a process of its own',
@@ -288,6 +293,36 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         out('rule recovery ' + r.score + ' (graded by ' + model + '): ' + (r.event.grades as { id: string; grade: string }[]).map((g) => g.id + ':' + g.grade).join(' '));
         out('appended to ' + path.basename(journal) + '; findings written again');
         return 0;
+      }
+      case 'model': {
+        const sub = args.shift();
+        const journal = resolveRun(ctx.root, args.shift());
+        const evidenceDir = path.join(ctx.root, 'runs', 'models', 'evidence');
+        const v = await import('./validation.ts');
+        if (sub === 'revise') {
+          const use = take(args, 'use'), criteria = take(args, 'criteria');
+          const r = await v.reviseRun(journal, { evidenceDir, ...(use ? { use } : {}), ...(criteria ? { criteria } : {}) });
+          out((r.created ? 'revision ' : 'unchanged: the latest revision is ') + r.revision.slice(0, 16) + ' (proposed, as a draft: ' + r.report.proposed_conclusion.conclusion + ')');
+          if (r.comparison) out(r.comparison.contradicts ? 'it contradicts the approved revision ' + r.comparison.approved.slice(0, 16) + ': the approval is suspended (revalidate) - '
+            + [...r.comparison.no_longer_met.map((k) => k + ' no longer holds'), ...r.comparison.new_limitations.map((l) => 'new: ' + l)].join('; ')
+            : 'it contradicts nothing of the approved revision ' + r.comparison.approved.slice(0, 16) + ': the approval stands');
+          return 0;
+        }
+        if (sub === 'show') {
+          const s = v.validationState(journal, evidenceDir);
+          out('state: ' + s.status + (s.approval ? ' (signed by ' + s.approval.by + ' on ' + s.approval.revision.slice(0, 16) + ', ' + s.approval.at + ')' : '') + (s.note ? ' - ' + s.note : ''));
+          for (const r of s.revisions) out('  revision ' + r.revision.slice(0, 16) + ': ' + (r.integrity.holds ? 'its evidence holds' : 'INTEGRITY ERROR - ' + r.integrity.problems.join('; ')));
+          return s.revisions.every((r) => r.integrity.holds) ? 0 : 1;
+        }
+        if (sub === 'approve') {
+          const revision = take(args, 'revision'), by = take(args, 'by'), conclusion = take(args, 'conclusion'), note = take(args, 'note');
+          if (!revision || !by || !conclusion) { out('lab model approve <run> --revision <id> --by "<person>" --conclusion ' + v.CONCLUSIONS.join('|') + ' [--note "..."]'); return 2; }
+          const a = v.approveRevision(journal, revision, { by, conclusion, ...(note ? { note } : {}), evidenceDir });
+          out(a.conclusion + ', by ' + a.by + ', on revision ' + a.revision.slice(0, 16));
+          return 0;
+        }
+        out('lab model revise|show|approve <run> ...');
+        return 2;
       }
       case 'pack': {
         const journal = resolveRun(ctx.root, args.shift());

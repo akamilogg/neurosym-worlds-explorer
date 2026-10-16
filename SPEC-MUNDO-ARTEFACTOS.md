@@ -909,6 +909,11 @@ apoyaban en ella.
   una prueba propia sobre ella y descarta la creencia. El aviso llega en la ronda siguiente, y el finding da el producto
   con su cadena: razón, la creencia descartada y la prueba con su resultado.
 
+**Contenido no es procedencia** (revisión externa, 16/10/2026). La misma versión puede alcanzarse por varios cambios:
+- el linaje de una versión sigue los cambios tal como ocurrieron, cada uno con su número;
+- "en la línea de la última versión" se dice de un cambio, no de un contenido;
+- el linaje del producto acompaña a la versión que nombra el finding, aceptada o no (SPEC-RIESGO-MODELOS §15.2).
+
 **Pendiente:**
 - **Una predicción sobre un cambio como prueba propia ligada a él al hacerlo** (registrarla junto al `change`). Hoy se
   liga por la versión que nombra la prueba.
