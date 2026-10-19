@@ -1,0 +1,176 @@
+# PLAN · Política de exploración y primitivas «¿Y si…?»
+
+Estado (19/10/2026): **plan de implementación; código aún sin modificar**.
+Desarrolla [SPEC-Y-SI.md](SPEC-Y-SI.md) con la decisión de permitir cierres y cambios de dirección autónomos.
+
+## 1. Resultado que queremos
+
+Una política neurosimbólica observa el recorrido visible de la investigación y decide si conviene continuar,
+cerrar una ronda, pedir un giro o pedir alternativas incompatibles con un discriminante. System 2 formula las
+ideas y decide cómo investigarlas. Los resultados de los experimentos permiten después revisar la política.
+
+El circuito mínimo es:
+
+**Resultados del run → observaciones → reglas Jev → decisión → dirección de System 2 → experimentos habituales.**
+
+La política es un artefacto separado del modelo del mundo: observaciones, reglas y composición inspeccionables,
+con versión y procedencia. La primera versión será una hipótesis metodológica escrita por nosotros; aprenderla
+significa que un investigador puede modificarla a partir de experiencia y contrastar la modificación en otros mundos.
+No se presupone que esa primera política mejore el rendimiento.
+
+Se habilita explícitamente por run. Sin habilitarla, el comportamiento actual se conserva. Primera cobertura:
+mundos del bucle común de leyes; los bucles propios, como cuadrícula, quedan fuera hasta conectarlos expresamente.
+
+## 2. Contrato de decisión
+
+| Salida | Efecto en modo automático |
+|---|---|
+| `continue` | Seguir explorando la ronda actual |
+| `close_round` | Cerrar sin presentar un modelo nuevo; continuar en otra ronda si queda presupuesto |
+| `turn` | Cerrar y solicitar a System 2 una nueva dirección para abrir la ronda siguiente |
+| `fork` | Cerrar y solicitar dos alternativas incompatibles en una premisa y una forma de distinguirlas |
+| `abstain` | Conservar el control habitual del investigador por falta de fundamento suficiente |
+
+Una evaluación no ejecutada por límites o fallida se registra como tal, separada de estas decisiones.
+La salida incluye una razón breve y referencias a las observaciones y reglas que la sustentan.
+`turn` y `fork` seleccionan la operación; no redactan hipótesis mediante reglas.
+
+Cerrar una ronda no termina el run, reinicia validaciones ni descarta modelos, memoria o contraejemplos. Consume
+la ronda correspondiente y conserva todo el gasto. Una dirección no es evidencia ni un nuevo modelo aceptado.
+La bifurcación no lanza investigadores paralelos: el investigador diseña el experimento discriminante con las
+herramientas disponibles. Puede descubrir que ninguna alternativa sirve o que necesita reformularlas.
+
+## 3. Entrega 1 · Cierre explícito de rondas
+
+**Archivos:** `lib/src/learn/law-session.ts`, `lib/src/learn/law-explorer.ts`,
+`lib/src/runtime/lab-runner.ts`, `lib/src/learn/assisted/own-tests.ts`.
+
+- Introducir un resultado de ronda que distinga propuesta, cierre voluntario y salida sin propuesta por otras causas.
+  Añadir una entrada tipada para el runner y conservar `consult` como adaptador para sus consumidores actuales.
+- Añadir la acción explícita del investigador para cerrar una ronda con motivo. La política usará la misma transición.
+- Aplicarla únicamente después de terminar y registrar el lote de herramientas en curso; nunca interrumpir una
+  intervención ni omitir las restantes operaciones ya aceptadas del lote.
+- Separar el cierre de la evaluación de una propuesta. Ejecutar las pruebas propias pendientes al cerrar, como
+  promete su contrato actual; publicar sus resultados aunque no haya propuesta. No llamar a `closeBy` sin un modelo
+  nuevo ni borrar contraejemplos. Respetar los límites existentes y registrar cualquier prueba no ejecutada.
+- Mantener el último modelo disponible y revisar reanudación, referencias por ronda y coordinación con el senior.
+
+**Motivo concreto:** el runner actual continúa cuando `consult` devuelve `null`, salvo fallo fatal; no existe un
+cierre voluntario identificado. Además, `runPending` está después de la comprobación de que hay propuesta.
+Añadir simplemente otra salida `null` dejaría ambiguo el cierre y podría posponer pruebas que debían ejecutarse.
+
+**Verificación:** cerrar la primera ronda sin modelo; cerrar después de una propuesta; conservar el último modelo;
+ejecutar pruebas registradas una sola vez; mantener contraejemplos y presupuestos; terminar al agotar las rondas.
+
+## 4. Entrega 2 · Primitiva generativa de System 2
+
+**Archivos:** nuevo `lib/src/learn/assisted/what-if.ts`, despacho y prompt de investigación,
+`lib/src/learn/lab.ts` y `lib/src/runtime/lab-runner.ts`.
+
+- Implementar el contrato `what_if` del spec: `turn` devuelve una idea; `fork`, alternativas y discriminante;
+  `no_direction` expresa que no se encontró una dirección defendible.
+- Usar una llamada aislada de System 2, inicialmente con el mismo cliente y configuración del investigador.
+  No hace falta otro agente persistente ni un modelo adicional.
+- Admitir uso manual durante una ronda. Para el uso automático, construir una solicitud reproducible a partir
+  de la razón de la política, las últimas notas del investigador y la ventana visible declarada. System 2 recibe
+  ese material directamente; no introducir otra llamada obligatoria para resumirlo.
+- Tras un cierre automático, resolver las pruebas pendientes antes de preparar ese contexto: sus resultados
+  pueden cambiar la dirección que merece explorarse. Entregar la sugerencia al comienzo de la siguiente ronda.
+- No generar si ya no puede abrirse esa ronda. La generación consume un paso de la ronda receptora y presupuesto
+  de inferencia. Una respuesta inválida o vacía no inicia una cadena de reintentos ni impide continuar normalmente.
+
+**Verificación:** ambos modos con cliente simulado; formato inválido; referencias prohibidas; contexto demasiado
+grande; cierre sin presupuesto restante; incorporación de resultados de pruebas al contexto; gasto contabilizado.
+
+## 5. Entrega 3 · Política neurosimbólica sobre el recorrido
+
+**Archivos:** nuevo `lib/src/learn/assisted/exploration-policy.ts`, integración en `law-session.ts` y runner;
+reutilización de `lib/src/core/formula.ts`, `observer.ts`, `jev.ts` y `output.ts` según sus contratos.
+
+- Definir una proyección de entrada estable: acciones y resultados visibles, preguntas y notas registradas,
+  últimas comprobaciones comunicadas, pruebas pendientes, presupuesto y decisiones previas. Nunca usar el diario
+  bruto: contiene información exclusiva del operador. Congelar e identificar cada ventana evaluada.
+- Obtener contadores mediante código y juicios semánticos mediante Jev. Ejemplos iniciales: repetición del mismo
+  enfoque, incertidumbre que no se aclara, prueba discriminante pendiente y alternativas aún sin contrastar.
+  No inventar una medida universal de incertidumbre ni tratar los valores de Jev como probabilidades calibradas.
+- Componer una salida del contrato anterior mediante `output`, con umbrales y precedencia explícitos. Reutilizar
+  las piezas del núcleo; evitar fabricar un mundo de juego para adaptar el evaluador completo a este problema.
+- Evaluar tras un lote con evidencia nueva y antes de la siguiente consulta del investigador. La política declara
+  ventana, frecuencia y separación entre disparos. Leer memoria o emitir un aviso no dispara otra evaluación.
+- Validar entradas desconocidas antes de componer: un juicio ausente no equivale a cero. Usar el sandbox existente
+  y mantener fuera del artefacto los controles de acceso, gasto y cancelación.
+
+**Verificación:** decisiones deterministas con juicios simulados; precedencia; abstención; fallo de Jev; ausencia
+de filtración de información oculta; no recurrencia por avisos; caché ligada a entrada, regla y configuración del juez.
+
+## 6. Entrega 4 · Integración autónoma, registro y reanudación
+
+**Archivos:** configuración del run, runner, `lib/src/runtime/replay.ts`, memoria y lectores de experiencia.
+
+- Exponer modos `off`, `recommend` y `auto`, versión de política y límites. `auto` es parte de esta entrega;
+  `recommend` sirve para observar y comparar la misma política sin concederle control sobre las rondas.
+- Conservar por evaluación: entrada, versión, juicios, decisión, transición aplicada o motivo de no aplicación;
+  y por generación: solicitud exacta, respuesta, error y consumo. Incluir Jev y System 2 en el coste total.
+- Persistir el cierre y la intención de generar con identidad estable. Al reanudar, completar únicamente lo pendiente;
+  replay reproduce las decisiones y respuestas grabadas sin nueva inferencia.
+- Una caída antes de persistir la respuesta externa puede dejar una llamada de resultado desconocido: registrarla
+  como incierta, sin afirmar garantía de exactamente una llamada ni volver a gastarla silenciosamente.
+- Hacer recuperables las direcciones y versiones de política desde la memoria y experiencia existentes. No crear
+  otro almacén de investigación ni un grafo obligatorio.
+
+El soporte de registro y presupuesto se desarrolla junto a las entregas anteriores; esta entrega verifica el circuito
+completo. No se habilitan llamadas reales antes de contar con ese soporte.
+
+**Verificación:** replay sin red; reanudar antes/después del cierre y de la generación; límites agotados;
+cancelación; política desactivada conserva el flujo anterior; senior y registro de rondas observan el mismo cierre.
+
+## 7. Entrega 5 · Aprender y contrastar la política
+
+- Dar al investigador acceso a runs de desarrollo mediante `experience` y a la política usada como artefacto
+  versionado. Puede proponer cambios de observaciones, reglas o composición con padre, motivo y contenido íntegro.
+- Validar el artefacto antes de usarlo; una política propuesta no se activa solo por haber sido escrita. El batch
+  declara qué versión ejecuta y la congela durante cada run. La autoedición durante el run queda para otra variante.
+- Empezar con dos mundos soportados y semillas de desarrollo, reservar otras tareas para evaluación y reservar
+  otra familia antes de afirmar transferencia entre dominios.
+- Comparar primero uso manual frente a automático con la política inicial. Después comparar política inicial
+  frente a aprendida, manteniendo proponente, contexto disponible y presupuesto total comparables.
+- Usar el resultado habitual del mundo como criterio principal. Examinar también experimentos discriminantes,
+  vías abandonadas y retrocesos con sus evidencias; no recompensar cantidad de giros ni una puntuación de creatividad.
+  Si aparece mejora, contrastarla con un disparador sencillo y con deliberación adicional de coste equivalente.
+
+**Cierre de la feature:** un run puede cerrar una ronda, recibir una dirección, investigarla y reproducir toda esa
+secuencia; otro investigador puede inspeccionar la experiencia, proponer una política distinta y probarla sin cambiar
+los criterios de aceptación del mundo. La mejora científica es una hipótesis por evaluar, no un requisito que el código
+pueda garantizar.
+
+## 8. Orden y límite de alcance
+
+**Conciliado (19/10/2026, [SPEC-Y-SI §8](SPEC-Y-SI.md)):**
+- Implementar 1 → 2, con el registro y los costes de la Entrega 4 adelantados a la 2.
+- Pilotar con un lote K3 (sin `what_if` / con `what_if` / control «revisa tu enfoque»). `what_if` está siempre disponible para los dos hemisferios; la condición sin ella es `--no-what-if`, que la quita a ambos.
+- El piloto es un diagnóstico, no una condición: distingue «no se usó», «se usó a destiempo» y «a tiempo pero sin
+  aporte». Las entregas 3 → 4 → 5 siguen en cualquier caso, porque un resultado manual negativo puede deberse a cuándo se
+  pide, que es lo que la política aprende. Sólo «sin aporte» lleva antes a revisar el proponente.
+
+Cada entrega, además:
+- declara su capacidad en `CAPABILITIES` (`capabilities_from`);
+- entrega sus textos como mensajes nuevos del canal, sin tocar el sistema fijo;
+- muestra su límite en el presupuesto visible;
+- deja su configuración en la del diario, para que `generatorOf` separe las condiciones.
+
+La política parte de `stuckSignals` (`orchestra/reader.ts`) y añade sus propios contadores: última solicitud de
+`what_if`, separación entre disparos, avisos ignorados y presupuesto para desarrollar.
+
+Su entrada es la vista de `orchestra/view.ts` **ampliada** con los resultados visibles de cada paso, las pruebas propias
+(registradas, resultados y pendientes) y los `what_if`, sin nada del operador.
+
+Evaluar consume inferencia; entregar una intervención consume una unidad de `help_left`. Un cierre y su dirección
+comparten la identidad `intervention:<n>`, para que no se cuenten dos veces.
+
+Orden original: implementar 1 → 2 → 3 → 4 → 5, con registro y costes desde la primera llamada externa. Cada entrega debe dejar un
+recorrido verificable antes de añadir la siguiente. Los tests usan clientes simulados; el piloto con modelos reales
+es un batch separado y presupuestado, posterior a la comprobación de reanudación y replay.
+
+No incluye NCP, difusión, entrenamiento de pesos, generación de código neurosimbólico para las hipótesis,
+investigadores adicionales ni un optimizador nuevo. El objeto aprendido es la **política de exploración**;
+la creatividad de las direcciones queda en System 2.
