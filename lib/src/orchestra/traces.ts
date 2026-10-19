@@ -26,6 +26,8 @@ export interface ProcessTraces {
   readonly first_round_holding_in_its_laboratories: number | null;
   readonly steps: { readonly looking: number; readonly experimenting: number; readonly recalling: number; readonly other: number; readonly by_request: Readonly<Record<string, number>> };
   readonly proposals_returned: number;
+  /** Rounds it closed itself without a new model (PLAN-Y-SI, Entrega 1). */
+  readonly rounds_closed: number;
   readonly directives: { readonly given: number; readonly reported_carried_out: number; readonly reported_not_carried_out: number; readonly not_reported: number };
   readonly told_its_senior: number;
   readonly other_help: number;
@@ -36,7 +38,7 @@ export function processTraces(journalFile: string): ProcessTraces {
   let journal: J = {};
   try { journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')); } catch { /* an empty trace */ }
   const events = (journal.events ?? []) as J[];
-  const rounds = Math.max(0, ...events.filter((e) => e.type === 'proposal' || e.type === 'check').map((e) => Number(e.round) || 0));
+  const rounds = Math.max(0, ...events.filter((e) => e.type === 'proposal' || e.type === 'check' || e.type === 'round_closed').map((e) => Number(e.round) || 0));
   const holding = events.find((e) => e.type === 'check' && Array.isArray(e.laboratories) && e.laboratories.length && e.laboratories.every((l: J) => l.holds));
   const byRequest: Record<string, number> = {};
   for (const e of events) if (e.type === 'investigation') for (const r of (e.requests ?? []) as J[]) {
@@ -56,6 +58,7 @@ export function processTraces(journalFile: string): ProcessTraces {
     first_round_holding_in_its_laboratories: holding ? Number(holding.round) : null,
     steps: { ...steps, by_request: byRequest },
     proposals_returned: events.filter((e) => e.type === 'proposal_refused').length,
+    rounds_closed: events.filter((e) => e.type === 'round_closed').length,
     directives: { given: directives.length, reported_carried_out: reported.filter((r) => r && !r.not_done).length,
       reported_not_carried_out: reported.filter((r) => r?.not_done).length, not_reported: reported.filter((r) => !r).length },
     told_its_senior: events.filter((e) => e.type === 'junior_report').length,

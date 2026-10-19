@@ -84,6 +84,8 @@ export interface LawSessionHost<A> {
   /** How many times a round it may ask to investigate with no steps left before it counts as a refusal (logged); 0 by
       default. */
   readonly overreach?: number;
+  /** Whether it may close a round without a new model (PLAN-Y-SI, Entrega 1): `{"close_round": {"why": ...}}`. None by default. */
+  closeRound?(): boolean;
   /** Whether it may keep documents of its own (the assisted researcher, from its first question asked live:
       SPEC-INVESTIGADOR-ASISTIDO §14.1). None by default. */
   documents?(): boolean;
@@ -193,6 +195,11 @@ export class LawSession<A> {
   fatal: string | null = null;
   /** Set when the host stopped the session (`halt`): nothing further is asked. */
   halted: string | null = null;
+  /** How the latest round ended: a model proposed, the round closed by the researcher, no proposal after its refusals, a
+      reflection, or the session stopped - told apart, where `consult` alone answers a record or null. */
+  roundEnd: RoundEnd = { kind: 'none' };
+  /** The round the researcher closed last, and why, told at the start of the next one. */
+  private closedLast: { round: number; why: string } | null = null;
   private unaddressed: string[] = [];
   /** Its selective memory, when the host gives it one. */
   readonly memory: JournalMemory | null;
@@ -227,9 +234,12 @@ export class LawSession<A> {
   /** One round: investigation steps, then a proposal - or, with `reflect`, a reflection (the law is final). */
   async consult(mode: 'propose' | 'reflect', reflectionTask: string | null = null): Promise<LawRecord | null> {
     const h = this.host;
-    if (this.fatal || this.halted) return null;
+    if (this.fatal || this.halted) { this.roundEnd = { kind: 'stopped' }; return null; }
     this.currentRound++;
     const round = this.currentRound;
+    const closedBefore = this.closedLast;
+    this.closedLast = null;
+    const end = (e: RoundEnd): null => { this.roundEnd = e; return null; };
     h.onRound?.(round);
     const b = this.latest();
     let refused: string[] = [];
@@ -245,14 +255,15 @@ export class LawSession<A> {
     let told: string[] = refused;
     let written: Record<string, unknown> = {};
     const context = (): Record<string, unknown> => ({ ...lawExplorerPayload({ round, perceptDoc: h.perceptDoc, notebook: this.notebookBrief(), law: b?.law ?? null, lawRound: b?.round ?? null,
-      setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(), task: mode === 'reflect' ? reflectionTask : null }), ...counters() });
+      setups: h.places(), validationsLeft: h.validationsLeft(), lastTest: h.lastCheck(), task: mode === 'reflect' ? reflectionTask : null }),
+      ...(closedBefore ? { you_closed_round: { round: closedBefore.round, why: closedBefore.why } } : {}), ...counters() });
     while (refusals < 3 && steps - free - overreach - consolidated <= h.steps + 3) {
       const halt = h.halt?.() ?? null;
       if (halt) {
         this.halted = halt;
         h.log('halted', { round, step: steps, reason: halt });
         h.say('stopping before asking System 2 again: ' + halt);
-        return null;
+        return end({ kind: 'stopped' });
       }
       const stepsLeft = h.investigative ? Math.max(0, h.steps - (steps - free)) : 0;
       if (refused !== told && refused.length) { talk.add({ your_previous_answer_was_refused: refused, ...written, ...counters() }); written = {}; }
@@ -270,7 +281,7 @@ export class LawSession<A> {
           this.fatal = String((error as Error)?.message || error);
           h.log('llm_fatal', { round, status, error: this.fatal });
           h.say('the LLM service refused the account (HTTP ' + status + '): stopping');
-          return null;
+          return end({ kind: 'stopped' });
         }
         refusals++;
         h.log('proposal_failed', { round, error: String((error as Error)?.message || error) });
@@ -368,7 +379,16 @@ export class LawSession<A> {
           lessons: r.reflection.lessons, next_experiment: r.reflection.nextExperiment, stance_warnings: stances.warnings, note_warnings: noteWarnings,
           ...(openQuestions(content) ? { open_questions: openQuestions(content) } : {}) });
         for (const l of r.reflection.lessons) h.say('  lesson: ' + l);
-        return null;
+        return end({ kind: 'reflected' });
+      }
+      /* It closes the round without a new model (PLAN-Y-SI, Entrega 1): its latest model stays as it was, the round counts. */
+      const closing = mode === 'propose' && h.closeRound?.() ? closeOf(content) : null;
+      if (closing !== null) {
+        if (typeof closing === 'string') { refused = [closing]; refusals++; h.log('proposal_refused', { round, errors: refused, content }); continue; }
+        this.closedLast = { round, why: closing.why };
+        h.log('round_closed', { round, why: closing.why, investigation_steps: investigation.length, notes: turn.notes, ...(noteWarnings.length ? { warnings: noteWarnings } : {}) });
+        h.say('  closes the round without a new model: ' + closing.why.slice(0, 160));
+        return end({ kind: 'closed', round, why: closing.why });
       }
       const parsed = turn.parse;
       if (!parsed.ok) {
@@ -399,11 +419,39 @@ export class LawSession<A> {
       this.laws.push(record);
       h.log('proposal', { round, investigation_steps: investigation.length, rationale: p.rationale, beliefs: p.beliefs, notes: turn.notes, law: ownLaw(p.law),
         fingerprint: record.fingerprint, ...(p.artifact ? { artifact: p.artifact, validate_artifact: Boolean(p.validateArtifact) } : {}), lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });
+      this.roundEnd = { kind: 'proposal', round };
       h.say('  proposes: ' + Object.keys(p.law.observations).length + ' observations, ' + Object.keys(p.law.rules).length + ' rules' + (p.law.output ? ', output in code' : '') +
         '; beliefs ' + p.beliefs.map((x) => x.id + ':' + x.stance).join(' ') + (p.validate ? '; asks to validate' : ''));
       return record;
     }
     h.log('no_proposal', { round, refusals });
-    return null;
+    return end({ kind: 'no_proposal', round });
   }
+}
+
+/** What the assisted researcher is told of closing a round (PLAN-Y-SI, Entrega 1), in its system from its first question. */
+export const CLOSE_ROUND_SECTION = 'CLOSING A ROUND: a round does not have to end with a model. When this round has taught you what it could and a new '
+  + 'model now would only be a variant of your last, you may close it instead: answer {"close_round": {"why": "what this round showed you, and why no '
+  + 'new model now"}} - alone, with your notes if you write any. Your latest model stays as it was and is not checked again; the tests of your own '
+  + 'registered this round run now, and their results come back to you with the next round; the round counts as one of your rounds. The next '
+  + 'round begins with `you_closed_round`, your own words.';
+
+/** How a round ended. */
+export type RoundEnd =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'proposal'; readonly round: number }
+  | { readonly kind: 'closed'; readonly round: number; readonly why: string }
+  | { readonly kind: 'no_proposal'; readonly round: number }
+  | { readonly kind: 'reflected' }
+  | { readonly kind: 'stopped' };
+
+/** A closing of the round, as written: `{"close_round": {"why": "..."}}` alone - or why it is not one; null when it is none. */
+export function closeOf(content: string): { why: string } | string | null {
+  const o = obj(parseJsonLoose(content));
+  if (!o || o.close_round === undefined) return null;
+  const c = obj(o.close_round);
+  if (o.observations || o.rules || o.output || Array.isArray(o.investigate)) return 'a round is closed with "close_round" alone: no model and no investigation with it';
+  const why = typeof c?.why === 'string' ? c.why.trim() : '';
+  if (!why) return '"close_round" says why: {"close_round": {"why": "what this round showed you, and why no new model now"}}';
+  return { why };
 }

@@ -62,6 +62,29 @@ Añadir simplemente otra salida `null` dejaría ambiguo el cierre y podría posp
 **Verificación:** cerrar la primera ronda sin modelo; cerrar después de una propuesta; conservar el último modelo;
 ejecutar pruebas registradas una sola vez; mantener contraejemplos y presupuestos; terminar al agotar las rondas.
 
+**Hecho (19/10/2026).** Las pruebas están en `lib/test/close-round.test.ts`.
+
+- **La respuesta del investigador asistido** es `{"close_round": {"why": "..."}}`, sola o con sus notas. Junto a un modelo
+  o a una investigación se rechaza, y sin `why` también.
+- **`LawSession.roundEnd`** dice cómo acabó cada ronda: `proposal`, `closed`, `no_proposal`, `reflected` o `stopped`.
+  `consult` sigue siendo el adaptador de siempre, que devuelve un registro o `null`.
+- **El runner, ante un cierre:**
+  - ejecuta una vez las pruebas propias pendientes de esa ronda;
+  - publica sus resultados con la siguiente ronda, en `last_check.your_tests`;
+  - no llama a `closeBy`, así que no cierra contraejemplos de ningún modelo;
+  - no comprueba nada: el último modelo queda como estaba.
+- **La siguiente ronda** empieza con `you_closed_round` (su ronda y sus palabras). La ronda cerrada cuenta como una más.
+- **En el prompt,** `CLOSE_ROUND_SECTION` va en el sistema del asistido desde su primera pregunta.
+  - Lo controla la capacidad `close_round` (`capabilities_from`). Un diario anterior reanudado no la tiene; uno continuado
+    la tiene desde sus rondas nuevas.
+  - `--no-close-round` es la condición sin ella, y va en la configuración del diario, así que también en la identidad
+    del generador.
+- **El investigador puro** queda como estaba: no lo ve, y un cierre suyo es una propuesta rechazada.
+- **El senior ve los cierres** en la vista del registro (`round_closed`), y las trazas de K4 los cuentan (`rounds_closed`).
+
+**Pendiente de la entrega:** la política usará esta misma transición (Entregas 3–4). El mundo de cuadrícula, con su bucle
+propio, queda fuera, como dice §1.
+
 ## 4. Entrega 2 · Primitiva generativa de System 2
 
 **Archivos:** nuevo `lib/src/learn/assisted/what-if.ts`, despacho y prompt de investigación,

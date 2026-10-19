@@ -13,6 +13,7 @@ import { providerOf } from './provider.ts';
 import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
+import { CLOSE_ROUND_SECTION } from '../learn/law-session.ts';
 import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { FINGERPRINT_VERSION, LawSession, lawFingerprint } from '../learn/law-session.ts';
 import { CAPABILITIES, capabilityAt, roundsAt } from '../learn/lab.ts';
@@ -80,6 +81,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'no-reflection', help: 'skip the final reflection round' },
   { name: 'task-as-model', help: 'the task of the assisted researcher framed as before: a model of the environment, not the task its world and its operator state (the comparison)' },
   { name: 'no-pins', help: 'the assisted researcher cannot pin messages of its own in its channel (SPEC-CANAL-MENSAJES §6): the condition without' },
+  { name: 'no-close-round', help: 'the assisted researcher cannot close a round without a new model (PLAN-Y-SI, Entrega 1): the condition without' },
   { name: 'budget-hidden', help: 'the assisted researcher is not shown its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the condition without it' },
   { name: 'no-instruments', help: 'the assisted researcher writes no instruments of its own (SPEC-INSTRUMENTOS-PROPIOS): the condition without them' },
   { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
@@ -432,6 +434,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     instruments: !flag('no-instruments'),
     budget_visible: !flag('budget-hidden'),
     pins: !flag('no-pins'),
+    close_round: !flag('no-close-round'),
     stated_task: !flag('task-as-model'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
@@ -1075,6 +1078,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The attempt now (the capabilities added later apply from their own: `capabilities_from`). */
   let attemptNow = 1;
   const instrumenting = (): boolean => cfg.instruments !== false && capabilityAt(cfg as never, 'instruments', attemptNow);
+  const closesRounds = (): boolean => journal.researcher === 'assisted' && helping && (cfg as { close_round?: boolean }).close_round !== false && capabilityAt(cfg as never, 'close_round', attemptNow);
   /* The tests of its own required: a continuation's from its new rounds, its history's before. */
   const ownTestsRequired = (): number => (typeof cfg.own_tests_before === 'number' && !reviewing ? cfg.own_tests_before as number : (cfg.ownTests as number | undefined) ?? 0);
   /* What it did with each experiment of its own (SPEC-ORQUESTADOR §3.3.5). */
@@ -1416,6 +1420,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     fingerprint: (law) => lawFingerprint(law, cfg.fingerprint as number),
     /* Its own documents (SPEC-INVESTIGADOR-ASISTIDO §14.1): the assisted researcher, in the rounds this code reviews. */
     documents: () => journal.researcher === 'assisted' && helping && reviewing,
+    /* Closing a round without a new model (PLAN-Y-SI, Entrega 1): the assisted researcher, from when this code gives it. */
+    closeRound: () => closesRounds(),
     /* Its visible budget (SPEC-INVESTIGADOR-ASISTIDO §15): the assisted researcher's, once it is helped. */
     /* What it pins itself (SPEC-CANAL-MENSAJES §6): a document in its latest version, a notice it received, or a text. */
     pins: () => (pinning() ? { apply: (_round: number, ops: readonly PinOp[]) => applyPinsNow(ops) } : null),
@@ -1566,6 +1572,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       take: (round?: number) => (helping && run.replay.pending() === 0 ? run.operator.take(round) : []), scheduled: deliveredMessages(previous),
       system: () => (helping ? assistedSystem(assistedPromptFor(focus), statedTask && channelOn) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
+        + (closesRounds() ? '\n\n' + CLOSE_ROUND_SECTION : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
         + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '') : promptFor(focus)),
@@ -1774,7 +1781,17 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const resting = fallen.length ? lab.dependents(spec, fallen) : null;
       if (resting) { log('beliefs_fell', { round: session.currentRound, ...resting }); channelNow()?.publish('world', { kind: 'notice', body: resting }); }
     }
-    if (!record) { if (session.fatal) break; continue; }
+    if (!record) {
+      if (session.fatal) break;
+      /* Closed by the researcher without a new model (PLAN-Y-SI, Entrega 1): what this round registered runs now - its
+         results with the next round, as with a check - and nothing is closed of the counterexamples of any model. */
+      if (session.roundEnd.kind === 'closed' && ownTests) {
+        await ownTests.runPending(session.roundEnd.round);
+        const told = ownTests.view();
+        if (Object.keys(told).length) protocol.lastView = { ...(protocol.lastView ?? {}), ...told };
+      }
+      continue;
+    }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });
     record.accepted = outcome.accepted;
     const detail = outcome.laboratories[0]?.detail ?? null;

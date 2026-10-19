@@ -26,6 +26,7 @@ export function researcherEvents(journal: J): J[] {
       case 'proposal': out.push({ type: e.type, round: e.round, rationale: e.rationale, beliefs: e.beliefs, notes: e.notes, law: e.law, ...(e.formula ? { formula: e.formula } : {}), fingerprint: e.fingerprint,
         lessons: e.lessons, next_experiment: e.next_experiment }); break;
       case 'proposal_refused': out.push({ type: e.type, round: e.round, errors: e.errors }); break;
+      case 'round_closed': out.push({ type: e.type, round: e.round, why: e.why, investigation_steps: e.investigation_steps }); break;
       case 'check': out.push({ type: e.type, round: e.round, laboratories: held(e.laboratories),
         ...(e.validation ? { validation: { family: held(e.validation.family), blind: (e.validation.blind_confirmation?.sets ?? []).map((s: J) => Boolean(s.ok)) } } : {}),
         ...(e.accepted ? { accepted: true } : {}) }); break;
