@@ -1,0 +1,39 @@
+{
+  "format": "batch@1",
+  "id": "cells-what-if-pilot",
+  "concurrency": 2,
+  "budget": {
+    "tokens_per_run": 800000
+  },
+  "template": {
+    "lab": "cells",
+    "researcher": "assisted",
+    "args": ["--level", "3", "--attempts", "8", "--memory", "selective", "--max-minutes", "90"]
+  },
+  "vary": {
+    "seeds": [1, 2, 3],
+    "conditions": {
+      "sin_what_if": { "args": ["--no-what-if"] },
+      "con_what_if": {},
+      "revisa_enfoque": {
+        "args": ["--no-what-if"],
+        "messages": [
+          {
+            "round": 4,
+            "text": "Review your approach before going on: read your course so far as a stranger would. Where are you adjusting details without understanding more, or relying on pieces you never tested? Decide whether to keep your direction or change it, and say why in your notes."
+          }
+        ]
+      }
+    }
+  },
+  "criteria": {
+    "anticipa": { "description": "its model predicts in places it never saw", "require": ["model_accepted"] },
+    "mecanismo": { "description": "and it recovers the rule the world was written with", "require": ["model_accepted", { "recovery_at_least": 0.5 }] }
+  },
+  "compare_conditions": [
+    { "a": "sin_what_if", "b": "con_what_if", "metric": "o1", "margin": 0.25 },
+    { "a": "sin_what_if", "b": "con_what_if", "metric": "o4", "margin": 0.1 },
+    { "a": "revisa_enfoque", "b": "con_what_if", "metric": "o4", "margin": 0.1 },
+    { "a": "sin_what_if", "b": "con_what_if", "metric": "tokens", "margin": 0.1, "relative": true }
+  ]
+}
