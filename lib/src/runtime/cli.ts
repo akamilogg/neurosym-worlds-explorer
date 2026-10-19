@@ -77,6 +77,7 @@ export const CLI_USAGE = [
   'lab model list | check [<id>] | retire <id> --by "<person>"   the inventory; what changed since (dependencies, instrument, context, date, verdicts) and each state with its cause',
   'lab batch <batch.json>                                    run (or resume) a batch of runs and compare them by condition',
   'lab batch results <runs/batches/<id>/batch.json>           its results apart (O1-O4) and their cost by group of comparable runs, with their uncertainty, computed again',
+  'lab control <batch.json> [...] --condition C [--metric M] [--min-subgroups 20]   a control chart of a group across batches, only if its assumptions hold; signals are indications to investigate',
   'lab reference freeze <batch.json> --condition C --name N --by "<person>" [--supersedes OLD]   a group\'s distribution frozen with its runs\' hash (runs/references)',
   'lab reference show <name>                                 a reference, and whether it holds; a batch compares itself with one as its definition declares ("compare")',
   'lab team <team.json>                                      run (or resume) a team on worlds of one family, with or without a board (SPEC-INVESTIGACION-PARALELA)',
@@ -502,6 +503,25 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const report = await runBatch(def, { root: ctx.root, ...labEndpointsFromEnv(env), agentLlm: () => chatFromEnv(env, 'SENIOR_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), print: out });
         out(batchText(report));
         out('report: ' + path.join(report.dir, 'batch.json'));
+        return 0;
+      }
+      case 'control': {
+        const files = args.filter((a, i) => !a.startsWith('--') && !(args[i - 1] ?? '').startsWith('--')).map((a) => path.resolve(a));
+        const condition = take(args, 'condition'), metric = take(args, 'metric'), min = take(args, 'min-subgroups');
+        if (!condition || !files.length) { out('lab control <batch.json> [...] --condition C [--metric o1|artifact|o4|severe|tokens|seconds] [--min-subgroups 20]'); return 2; }
+        const { controlCharts } = await import('../orchestra/control-chart.ts');
+        const charts = controlCharts(files, { condition, ...(metric ? { metric } : {}), ...(Number(min) > 0 ? { minSubgroups: Number(min) } : {}) });
+        const dir = path.join(ctx.root, 'runs', 'control');
+        fs.mkdirSync(dir, { recursive: true });
+        const outFile = path.join(dir, condition.replace(/[^a-z0-9_-]/gi, '_') + '-' + (metric ?? 'o1') + '-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
+        fs.writeFileSync(outFile, JSON.stringify({ format: 'control@1', condition, metric: metric ?? 'o1', batches: files.map((f) => path.relative(ctx.root, f)), charts }, null, 2));
+        for (const c of charts as Record<string, any>[]) {
+          out('group ' + JSON.stringify(c.group) + ':');
+          for (const a of c.assumptions) out('  ' + (a.holds === true ? 'holds' : a.holds === 'assumed' ? 'assumed' : 'NOT MET') + ' - ' + a.assumption + ' (' + a.detail + ')');
+          out('  ' + c.reading + (c.signals?.length ? ': ' + c.signals.map((s: Record<string, string>) => s.at + ' (' + s.rule + ')').join('; ') : ''));
+        }
+        if (!charts.length) out('no run of condition ' + condition + ' in those batches');
+        out('written to ' + path.relative(ctx.root, outFile));
         return 0;
       }
       case 'reference': {

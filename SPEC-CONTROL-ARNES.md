@@ -314,7 +314,7 @@ pruebas en `test/results.test.ts`.
 
 **Pendiente:**
 - **El dinero del junior.** Hace falta un precio registrado, o un proveedor que lo informe.
-- ~~**K2**~~ (§12.2); ~~**K3**~~ (§12.3); ~~**K4**~~ (§12.4); **K5:** el control estadístico.
+- ~~**K2**~~ (§12.2); ~~**K3**~~ (§12.3); ~~**K4**~~ (§12.4); ~~**K5**~~ (§12.6).
 
 ### 12.2 K2: grupos comparables y referencias congeladas (16/10/2026)
 
@@ -436,3 +436,40 @@ hacía falta corregirlos antes de usar estos veredictos para atribuir mejoras al
 4. **Una comparación rechazada permitía sustituir una referencia.** Ahora, para sustituir, hace falta una comparación
    declarada, hecha y con runs emparejados, y que la referencia vieja se sostenga. Si la vieja no se sostiene, ninguna
    comparación con ella vale, y la nueva se congela sin `--supersedes`.
+
+### 12.6 K5: control estadístico, cuando los datos lo permitan (19/10/2026)
+
+El código está en `lib/src/orchestra/control-chart.ts` y las pruebas en `test/control-chart.test.ts`.
+
+**El comando:** `lab control <batch.json> [...] --condition C [--metric o1|artifact|o4|severe|tokens|seconds]
+[--min-subgroups 20]`. Sigue un grupo de runs comparables a través de varios lotes, en el orden en que empezaron: mismo
+mundo, misma versión del código y misma configuración generadora. Cada lote es un subgrupo. Si la condición tiene runs de
+varios grupos, cada grupo va en su propia serie.
+
+**Antes de dibujar nada, comprueba sus supuestos uno por uno y los dice** (manual de ingeniería estadística del NIST,
+para gráficos de proporciones):
+- **Bastantes subgrupos comparables:** lotes, o runs si la métrica es continua. Por defecto pide 20.
+- **Subgrupos de tamaño definido:** al menos 2 runs por lote para una proporción.
+- **Independencia entre runs:**
+  - semillas distintas dentro de cada lote;
+  - ningún run que sea miembro de un equipo que comparte tablón;
+  - ninguna rama de otro run.
+- **La aproximación normal del gráfico de proporciones:** n·p y n·(1−p) al menos 5 en cada lote.
+- **Probabilidad estable:** consta como *supuesta*, porque es justo lo que examina el gráfico; sus señales marcan dónde
+  podría no cumplirse.
+
+Si falla algún supuesto, no hay gráfico, sólo la descripción de §6.2, y el informe dice cuál falla.
+
+**Los gráficos:**
+- **Resultados binarios:** gráfico p, con límites a 3 sigmas propios de cada lote.
+- **Resultados continuos:** gráfico de individuos y rangos móviles, con los runs en el orden en que se ejecutaron.
+
+**Las señales** son dos: un punto más allá de un límite, y ocho seguidos al mismo lado del centro. Se presentan como
+**indicios de una causa especial que hay que investigar**, nunca como diagnóstico. Nunca se da el rótulo «en control» ni
+«fuera de control»: sin señales, el informe dice «ningún indicio de causa especial con estas reglas».
+
+**Dónde queda:** en `runs/control/<condición>-<métrica>-<hora>.json` (`control@1`), con los lotes de los que sale.
+
+**Pendiente:**
+- Los datos: hacen falta lotes reales que acumulen grupos comparables.
+- Hasta entonces, lo que se informa es §6.2.
