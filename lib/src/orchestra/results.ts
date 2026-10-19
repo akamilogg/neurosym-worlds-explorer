@@ -126,7 +126,9 @@ export interface GroupResults {
   readonly runs: number;
   readonly o1_predictive_acceptance: { readonly model: Rate; readonly artifact?: Rate };
   readonly o2_severe_passed_as_preregistered: Described;
-  readonly o3_adequacy: Readonly<Record<string, { readonly yes: Rate; readonly evaluable: number; readonly not_evaluable: number; readonly coverage: number | null }>> | 'no criteria declared';
+  readonly o3_adequacy: Readonly<Record<string, { readonly yes: Rate; readonly evaluable: number; readonly not_evaluable: number; readonly coverage: number | null;
+    /** When it was declared: before the batch began (preregistered), or after. */
+    readonly declared?: string }>> | 'no criteria declared';
   readonly o4_mechanistic_recovery: Described;
   readonly cost: { readonly tokens_total_at_least: Described; readonly tokens_sum_at_least: number; readonly money_known_sum: number; readonly money_unknown_in: number; readonly seconds: Described; readonly seconds_sum: number };
   /** Runs that meet each criterion (O1 always among them), per the group's whole cost: the criterion always said. */

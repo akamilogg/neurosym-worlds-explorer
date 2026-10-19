@@ -408,3 +408,31 @@ El código está en `lib/src/orchestra/traces.ts` y las pruebas en `test/traces.
 
 **Pendiente:** clasificar la discrepancia («discrepar» frente a «rechazar con razón») haría falta juzgarla, y eso es de la
 auditoría, no de una traza. Hoy se cuenta que habló y se nombra lo que reportó de cada directiva.
+
+### 12.5 Revisión externa de K2–K4 (19/10/2026)
+
+Una revisión externa encontró cuatro fallos. Están corregidos, cada uno con su test (`test/comparisons-review.test.ts`), y
+hacía falta corregirlos antes de usar estos veredictos para atribuir mejoras al método.
+
+1. **El orden de los runs podía invertir la conclusión.** El emparejamiento usaba mundo y semilla. Cuando el diseño variaba
+   algo más (`--attempts`), varios runs compartían clave y se sobrescribían: de 12 runs quedaban 3 pares, y al invertir el
+   orden «mejora» pasaba a «empeora».
+   - Ahora la clave incluye también dónde está el run en lo que el diseño varía (sus `vary.args`).
+   - Si dos runs de un mismo lado comparten clave, no se empareja nada: la comparación se rechaza diciendo por qué. Vale
+     al congelar una referencia, al comparar con ella y al comparar condiciones.
+2. **Reanudar un lote permitía presentar resultados anteriores bajo un diseño nuevo.**
+   - Un lote reanudado conserva sus runs tal como se declararon. Si cambian (otra plantilla, otro nivel), se rechaza: un
+     diseño nuevo es un lote nuevo, con otro id.
+   - El informe guarda lo declarado al empezar (`preregistered`: criterios y comparaciones) y cada definición que tuvo
+     después (`definition_history`, con su hash).
+   - Cada criterio y cada comparación dicen cuándo se declararon: antes de empezar el lote, o después, y entonces «no
+     prerregistrado».
+3. **No se detectaban presupuestos de tokens o de tiempo distintos.** Esos límites no quedan en `argv`, porque un run
+   reanudado los toma de nuevo.
+   - Ahora el diario guarda los límites en vigor (`limits`: `max_tokens`, `max_minutes`), y el presupuesto de una
+     comparación es: rondas, límites y presupuesto de ayuda.
+   - Si un run no los tiene registrados (un diario anterior), el presupuesto no se da por igual: consta como no controlado
+     y se dice por qué.
+4. **Una comparación rechazada permitía sustituir una referencia.** Ahora, para sustituir, hace falta una comparación
+   declarada, hecha y con runs emparejados, y que la referencia vieja se sostenga. Si la vieja no se sostiene, ninguna
+   comparación con ella vale, y la nueva se congela sin `--supersedes`.

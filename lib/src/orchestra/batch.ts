@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { batchTimes, criteriaProblems, groupResults, type Criteria, type GroupResults } from './results.ts';
 import { compareConditions, compareWithReference, comparisonProblems, conditionComparisonProblems, type ComparisonDeclared, type ConditionsDeclared } from './references.ts';
@@ -134,6 +135,10 @@ export interface BatchReport {
       operator's view too (mechanistic recovery is in it). */
   results?: { readonly groups: GroupResults[]; readonly times: Record<string, unknown>; readonly comparisons?: readonly Record<string, unknown>[];
     readonly condition_comparisons?: readonly Record<string, unknown>[]; readonly reading: string };
+  /** What was declared when it began - its criteria and its comparisons, preregistered - and every definition it had since:
+      a batch resumed never presents results of runs made under another design, and what is declared later is marked so. */
+  preregistered?: { readonly at: string; readonly criteria: Criteria; readonly compare: readonly ComparisonDeclared[]; readonly compare_conditions: readonly ConditionsDeclared[]; readonly note?: string };
+  definition_history?: { readonly at: string; readonly sha256: string }[];
   /** Its design, when it was made from a template: what it covers of the perturbations of §7, and what it leaves uncovered. */
   design?: { readonly runs: number; readonly covered: readonly string[]; readonly uncovered: readonly string[] };
 }
@@ -172,9 +177,15 @@ function agentRow(def: BatchRun, journal: string | null): { agent?: BatchRunRow[
 /** A batch's results apart and their cost, by group of comparable runs (SPEC-CONTROL-ARNES K1, §6.1-§6.2), and its times. */
 export function batchResults(report: BatchReport, root: string): NonNullable<BatchReport['results']> {
   const rows = report.runs.filter((r) => r.journal && fs.existsSync(r.journal)).map((r) => ({ condition: r.condition, journal: r.journal! }));
-  const comparisons = (report.definition.compare ?? []).map((c) => compareWithReference(root, report as unknown as Record<string, any>, c));
-  const conditionComparisons = (report.definition.compare_conditions ?? []).map((c) => compareConditions(report as unknown as Record<string, any>, c));
-  return { groups: groupResults(rows, report.definition.criteria), times: batchTimes(report.started, report.ended, rows, report.definition.criteria),
+  /* What was declared after the batch began is not preregistered, and is said so beside each result. */
+  const pre = report.preregistered;
+  const when = (declared: boolean) => (pre ? (declared ? 'before the batch began' : 'after it began: not preregistered') : 'not recorded');
+  const same = (x: unknown, y: unknown) => JSON.stringify(x) === JSON.stringify(y);
+  const comparisons = (report.definition.compare ?? []).map((c) => ({ ...compareWithReference(root, report as unknown as Record<string, any>, c), declared: when(!!pre?.compare.some((p) => same(p, c))) }));
+  const conditionComparisons = (report.definition.compare_conditions ?? []).map((c) => ({ ...compareConditions(report as unknown as Record<string, any>, c), declared: when(!!pre?.compare_conditions.some((p) => same(p, c))) }));
+  const groups = groupResults(rows, report.definition.criteria).map((g) => (typeof g.o3_adequacy === 'string' ? g
+    : { ...g, o3_adequacy: Object.fromEntries(Object.entries(g.o3_adequacy).map(([id, x]) => [id, { ...x, declared: when(!!pre && same(pre.criteria[id], report.definition.criteria?.[id])) }])) }));
+  return { groups, times: batchTimes(report.started, report.ended, rows, report.definition.criteria),
     ...(comparisons.length ? { comparisons } : {}), ...(conditionComparisons.length ? { condition_comparisons: conditionComparisons } : {}),
     reading: 'each result apart, none called correct; groups only of comparable runs; proportions with their denominator and Wilson\'s interval, the rest with a bootstrap interval or "insufficient evidence"; no label of control' };
 }
@@ -258,7 +269,23 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'batch.json');
   const before: BatchReport | null = readJson(file);
-  const report: BatchReport = { format: 'batch@1', id: def.id, definition: def, dir, started: before?.started ?? new Date().toISOString(), runs: [], table: [], audit: [],
+  /* Resumed: its runs as they were declared when it began - never others under the same name (an external review, 19/10/2026:
+     a design changed from level 1 to level 2 kept the runs of level 1 and saved the definition of level 2). */
+  if (before) {
+    const substance = (runs: readonly BatchRun[]) => JSON.stringify(runs.map((r) => ({ id: r.id, condition: r.condition, lab: r.lab, args: r.args ?? [], researcher: r.researcher ?? null,
+      agent: r.agent ?? null, fork: r.fork ?? null, messages: r.messages ?? null })));
+    if (substance(before.definition.runs) !== substance(def.runs))
+      throw new LabError('batch ' + def.id + ' began with other runs: a batch resumed keeps its runs as declared - a new design is a new batch (another id)');
+  }
+  const started = before?.started ?? new Date().toISOString();
+  const sha = createHash('sha256').update(JSON.stringify(def)).digest('hex');
+  const history = [...(before?.definition_history ?? [])];
+  if (history[history.length - 1]?.sha256 !== sha) history.push({ at: new Date().toISOString(), sha256: sha });
+  const preregistered = before?.preregistered ?? (before
+    ? { at: before.started, criteria: before.definition.criteria ?? {}, compare: before.definition.compare ?? [], compare_conditions: before.definition.compare_conditions ?? [],
+      note: 'taken from the definition it was saved with before this was recorded: when each was declared is not known' }
+    : { at: started, criteria: def.criteria ?? {}, compare: def.compare ?? [], compare_conditions: def.compare_conditions ?? [] });
+  const report: BatchReport = { format: 'batch@1', id: def.id, definition: def, dir, started, runs: [], table: [], audit: [], preregistered, definition_history: history,
     ...(def.template && def.vary ? { design: { runs: def.runs.length, ...coverage(def.template, def.vary) } } : {}) };
   if (report.design?.uncovered.length) options.print?.('batch ' + def.id + ': its design leaves uncovered - ' + report.design.uncovered.join('; '));
   const latest = new Map<string, string>((before?.runs ?? []).filter((r) => r.journal).map((r) => [r.id, r.journal!]));

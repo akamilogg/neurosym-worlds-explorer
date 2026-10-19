@@ -698,6 +698,9 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     researcher, researcher_requested: o.asked, researcher_policy: o.policy,
     /* The experiment's arguments (never a key: those come from the environment), for --resume. */
     argv: experimentArgs(argv),
+    /* The limits it ran under, as they were in effect (its controls are not in argv: a resumed run takes them anew) - what a
+       comparison needs to know whether two runs had the same budget (SPEC-CONTROL-ARNES §6.2.1). */
+    limits: { max_tokens: maxTokens, max_minutes: maxMinutes },
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
     config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), llm_provider: options.llm.provider ?? providerOf(options.llm.url), ...llmTuningRecord(options.llm),
       jev_model: cfg.flat ? null : options.judge?.model ?? null, ...(cfg.flat ? {} : { jev_provider: options.judge?.provider ?? providerOf(options.judge?.url), ...jevPathRecord(options.judge?.url || JEV_DEFAULT_URL) }) },

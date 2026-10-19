@@ -55,9 +55,30 @@ export interface Reference {
 export const referenceFile = (root: string, name: string) => path.join(root, 'runs', 'references', name + '.json');
 
 /** A run's key to pair it with another: its world, its world's options and its seed. */
-function pairKey(journal: J): string {
+function pairKey(journal: J, coordinates: Readonly<Record<string, string>> = {}): string {
   const lab = Object.values(LABS).find((l) => l.id === journal.experiment);
-  return String(journal.experiment) + '|' + JSON.stringify(lab ? worldOptionsIn(lab.options, journal.config ?? {}) : {}) + '|seed ' + String(journal.config?.seed ?? '');
+  return String(journal.experiment) + '|' + JSON.stringify(lab ? worldOptionsIn(lab.options, journal.config ?? {}) : {}) + '|seed ' + String(journal.config?.seed ?? '')
+    + (Object.keys(coordinates).length ? '|' + JSON.stringify(Object.fromEntries(Object.entries(coordinates).sort(([a], [b]) => a.localeCompare(b)))) : '');
+}
+
+/** Where a run of a designed batch stands in what its design varies besides the conditions (its "vary.args"): two runs of a
+    condition are told apart by them, and paired only with the run of the other side that stands at the same place. */
+function coordinatesOf(report: J, journalFile: string): Record<string, string> {
+  const flags = Object.keys(report.definition?.vary?.args ?? {});
+  if (!flags.length) return {};
+  const row = (report.runs ?? []).find((r: J) => r.journal === journalFile);
+  const def = (report.definition?.runs ?? []).find((r: J) => r.id === row?.id);
+  const args = (def?.args ?? []) as string[];
+  return Object.fromEntries(flags.map((f) => { const i = args.lastIndexOf(f); return [f, i >= 0 ? String(args[i + 1]) : 'not given']; }));
+}
+
+/** Values by pairing key - or the keys that more than one run shares: then its runs are not told apart, and nothing is paired
+    (one would overwrite another, and the order of the runs would decide the conclusion: an external review, 19/10/2026). */
+function keyed(entries: readonly { key: string; value: number | null | undefined }[]): { values: Map<string, number>; duplicates: string[] } {
+  const values = new Map<string, number>(), seen = new Map<string, number>();
+  for (const e of entries) seen.set(e.key, (seen.get(e.key) ?? 0) + 1);
+  for (const e of entries) if (typeof e.value === 'number') values.set(e.key, e.value);
+  return { values, duplicates: [...seen].filter(([, n]) => n > 1).map(([k]) => k) };
 }
 
 /** What a run's results are, as numbers to compare. */
@@ -110,14 +131,17 @@ export function freezeReference(root: string, batchFile: string, o: { condition:
   /* A new reference only after the comparison with the one it supersedes (§6.4): declared by its batch, and in its results. */
   let compared: unknown[] | undefined;
   if (o.supersedes) {
-    openReference(root, o.supersedes);
-    const found = (report.results?.comparisons ?? []).filter((c: J) => c.reference === o.supersedes && c.condition === o.condition);
+    const old = openReference(root, o.supersedes);
+    if (!old.holds) throw new Error('reference ' + o.supersedes + ' does not hold (' + old.problems.join('; ') + '): no comparison with it stands, so none can supersede it - freeze a new one without --supersedes');
+    const found = (report.results?.comparisons ?? []).filter((c: J) => c.reference === o.supersedes && c.condition === o.condition && !c.refused && c.comparison && c.comparison.pairs > 0);
     compared = found;
-    if (!found.length) throw new Error('batch ' + report.id + ' was not compared with ' + o.supersedes + ' for ' + o.condition + ': declare the comparison in its definition ("compare") and compute its results first');
+    if (!found.length) throw new Error('batch ' + report.id + ' was not compared with ' + o.supersedes + ' for ' + o.condition + ' - a comparison declared, made, and with paired runs: declare it in its definition ("compare") and compute its results first');
   }
+  const keys = keyed(group.journals.map((j) => ({ key: pairKey(readJson(j)!, coordinatesOf(report, j)), value: 0 })));
+  if (keys.duplicates.length) throw new Error('its runs are not told apart by world, seed and what its design varies (' + keys.duplicates.join('; ') + '): a reference of them could not be paired');
   const runs: ReferenceRun[] = group.journals.map((j) => {
     const finding = j.replace(/\.json$/, '.finding.json');
-    return { key: pairKey(readJson(j)!), journal: path.relative(root, j).split(path.sep).join('/'), journal_sha256: sha(fs.readFileSync(j)),
+    return { key: pairKey(readJson(j)!, coordinatesOf(report, j)), journal: path.relative(root, j).split(path.sep).join('/'), journal_sha256: sha(fs.readFileSync(j)),
       finding_sha256: fs.existsSync(finding) ? sha(fs.readFileSync(finding)) : null, values: valuesOf(j) };
   });
   const reference: Reference = { format: 'reference@1', name: o.name, frozen: new Date().toISOString(), by: o.by.trim(), group: group.key,
@@ -161,30 +185,33 @@ export function conditionComparisonProblems(conditions: readonly string[], compa
 }
 
 /** What a run's budget was: its rounds and its limits (a comparison is controlled only with the same). */
-const budgetOf = (journal: J): string => {
-  const argv = (journal.argv ?? []) as string[];
-  const at = (k: string) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : null; };
-  return JSON.stringify({ attempts: journal.config?.attempts ?? null, max_tokens: at('--max-tokens'), max_minutes: at('--max-minutes') });
-};
+const budgetOf = (journal: J): string | null => (journal.limits
+  ? JSON.stringify({ attempts: journal.config?.attempts ?? null, max_tokens: journal.limits.max_tokens ?? null, max_minutes: journal.limits.max_minutes ?? null, help_budget: journal.help_budget ?? null })
+  : null);
 
 /** Condition b against condition a, paired by seed and world, as declared - and what was not held the same, said. */
 export function compareConditions(report: J, c: ConditionsDeclared): Record<string, unknown> & { readonly comparison?: PairedComparison } {
   const m = METRICS[c.metric];
   const side = (condition: string) => {
     const journals = (report.runs ?? []).filter((r: J) => r.condition === condition && r.journal && fs.existsSync(r.journal)).map((r: J) => r.journal as string);
-    const values = new Map<string, number>(), versions = new Set<string>(), budgets = new Set<string>();
-    for (const j of journals) {
+    const versions = new Set<string>(), budgets = new Set<string>();
+    let unknownBudget = false;
+    const entries = journals.map((j: string) => {
       const journal = readJson(j)!;
       versions.add(String(journal.commit ?? 'unknown'));
-      budgets.add(budgetOf(journal));
-      const v = valuesOf(j)[c.metric];
-      if (typeof v === 'number') values.set(pairKey(journal), v);
-    }
-    return { values, versions, budgets };
+      const budget = budgetOf(journal);
+      if (budget === null) unknownBudget = true; else budgets.add(budget);
+      return { key: pairKey(journal, coordinatesOf(report, j)), value: valuesOf(j)[c.metric] };
+    });
+    return { ...keyed(entries), versions, budgets, unknownBudget };
   };
   const a = side(c.a), b = side(c.b);
+  if (a.duplicates.length || b.duplicates.length) return { a: c.a, b: c.b, metric: c.metric,
+    refused: 'runs of one condition are not told apart by world, seed and what the design varies (' + [...a.duplicates, ...b.duplicates].join('; ') + '): nothing is paired' };
   const same = (x: Set<string>, y: Set<string>) => x.size === 1 && y.size === 1 && [...x][0] === [...y][0];
-  const notControlled = [...(same(a.versions, b.versions) ? [] : ['the code version']), ...(same(a.budgets, b.budgets) ? [] : ['the budget'])];
+  /* A budget not recorded is not known to be the same: never assumed equal. */
+  const notControlled = [...(same(a.versions, b.versions) ? [] : ['the code version']),
+    ...(a.unknownBudget || b.unknownBudget ? ['the budget (not recorded for some runs)'] : same(a.budgets, b.budgets) ? [] : ['the budget'])];
   return { a: c.a, b: c.b, metric: c.metric, what: m.what + ', ' + c.b + ' against ' + c.a,
     ...(notControlled.length ? { not_controlled: notControlled, reading: 'the conditions differ in more than what they stand for: the effect is not theirs alone' } : {}),
     unpaired: { in_a: [...a.values.keys()].filter((k) => !b.values.has(k)).length, in_b: [...b.values.keys()].filter((k) => !a.values.has(k)).length },
@@ -198,9 +225,12 @@ export function compareWithReference(root: string, report: J, c: ComparisonDecla
   const m = METRICS[c.metric];
   let group: ReturnType<typeof groupOf>;
   try { group = groupOf(report, c.condition); } catch (e) { return { reference: c.reference, condition: c.condition, metric: c.metric, refused: String((e as Error).message) }; }
-  const before = new Map<string, number>(), now = new Map<string, number>();
+  const before = new Map<string, number>();
   for (const r of opened.reference.runs) if (typeof r.values[c.metric] === 'number') before.set(r.key, r.values[c.metric] as number);
-  for (const j of group.journals) { const v = valuesOf(j)[c.metric]; if (typeof v === 'number') now.set(pairKey(readJson(j)!), v); }
+  const current = keyed(group.journals.map((j) => ({ key: pairKey(readJson(j)!, coordinatesOf(report, j)), value: valuesOf(j)[c.metric] })));
+  if (current.duplicates.length) return { reference: c.reference, condition: c.condition, metric: c.metric,
+    refused: 'its runs are not told apart by world, seed and what the design varies (' + current.duplicates.join('; ') + '): nothing is paired' };
+  const now = current.values;
   const ref = opened.reference.group;
   return { reference: c.reference, condition: c.condition, metric: c.metric, what: m.what,
     /* What differs between the two groups besides what is compared: the version is the point; anything else is said. */
