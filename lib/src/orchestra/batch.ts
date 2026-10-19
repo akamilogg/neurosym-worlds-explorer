@@ -190,7 +190,12 @@ function resultsText(results: NonNullable<BatchReport['results']>): string[] {
       '      O3 ' + (typeof g.o3_adequacy === 'string' ? g.o3_adequacy : Object.entries(g.o3_adequacy).map(([id, x]) => id + ' ' + p(x.yes) + ' of the evaluable (' + x.not_evaluable + ' not evaluable, coverage ' + x.coverage + ')').join('; ')),
       '      O4 mechanistic recovery: ' + d(g.o4_mechanistic_recovery as Record<string, any>),
       '      cost: tokens at least ' + g.cost.tokens_sum_at_least + ' in all, per run ' + d(g.cost.tokens_total_at_least as Record<string, any>) + '; money known ' + g.cost.money_known_sum + (g.cost.money_unknown_in ? ' (unknown in ' + g.cost.money_unknown_in + ' runs: a lower bound)' : ''),
-      '      efficiency: ' + Object.entries(g.efficiency).map(([id, e]) => id + ' ' + e.runs_meeting + ' runs, ' + e.per_million_tokens + ' per million tokens').join('; ')]),
+      '      efficiency: ' + Object.entries(g.efficiency).map(([id, e]) => id + ' ' + e.runs_meeting + ' runs, ' + e.per_million_tokens + ' per million tokens').join('; '),
+      '      process (a description): first round holding in its laboratories ' + d(g.process.first_round_holding_in_its_laboratories as Record<string, any>) + (g.process.runs_never_holding ? ' (' + g.process.runs_never_holding + ' never)' : '')
+        + '; steps looking ' + d(g.process.steps.looking as Record<string, any>) + ', experimenting ' + d(g.process.steps.experimenting as Record<string, any>) + ', recalling ' + d(g.process.steps.recalling as Record<string, any>)
+        + '; proposals returned ' + d(g.process.proposals_returned as Record<string, any>)
+        + (g.process.directives.given ? '; directives ' + g.process.directives.given + ': reported carried out ' + g.process.directives.reported_carried_out + ', not carried out ' + g.process.directives.reported_not_carried_out + ', not reported ' + g.process.directives.not_reported : '')
+        + (g.process.told_its_senior ? '; told its senior ' + g.process.told_its_senior + ' times' : '')]),
     '    times: ' + JSON.stringify(results.times),
     ...(results.condition_comparisons ?? []).map((c: Record<string, any>) => '    ' + c.b + ' against ' + c.a + ' [' + c.metric + ']: ' + c.comparison.conclusion + ' (effect ' + c.comparison.effect
       + (c.comparison.interval95 ? ' [' + c.comparison.interval95.join(', ') + ']' : '') + ', margin ' + c.comparison.margin + ', ' + c.comparison.pairs + ' paired seeds'

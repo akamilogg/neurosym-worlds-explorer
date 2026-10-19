@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, rate, type Described, type Rate } from '../runtime/statistics.ts';
 import { generatorOf } from '../runtime/generators.ts';
 import { agentUsage } from './agent-operator.ts';
+import { processTraces, type ProcessTraces } from './traces.ts';
 
 /* ============================================================================
  * RESULTS APART, AND WHAT THEY COST (SPEC-CONTROL-ARNES K1, §4.1, §4.2, §6.1, §6.2; SPEC-RIESGO-MODELOS M2).
@@ -130,22 +131,32 @@ export interface GroupResults {
   readonly cost: { readonly tokens_total_at_least: Described; readonly tokens_sum_at_least: number; readonly money_known_sum: number; readonly money_unknown_in: number; readonly seconds: Described; readonly seconds_sum: number };
   /** Runs that meet each criterion (O1 always among them), per the group's whole cost: the criterion always said. */
   readonly efficiency: Readonly<Record<string, { readonly runs_meeting: number; readonly per_million_tokens: number | null }>>;
+  /** How its runs went (K4, §4.3): a description, never a performance. */
+  readonly process: {
+    readonly first_round_holding_in_its_laboratories: Described; readonly runs_never_holding: number;
+    readonly steps: { readonly looking: Described; readonly experimenting: Described; readonly recalling: Described; readonly other: Described };
+    readonly proposals_returned: Described;
+    readonly directives: { readonly given: number; readonly reported_carried_out: number; readonly reported_not_carried_out: number; readonly not_reported: number };
+    readonly told_its_senior: number;
+    readonly reading: string;
+  };
 }
 
 /** The results of a batch's runs, by group of comparable runs (§6.1), each described with its uncertainty (§6.2). */
 export function groupResults(rows: readonly { readonly condition: string; readonly journal: string }[], criteria?: Criteria): GroupResults[] {
-  const groups = new Map<string, { key: GroupResults['group']; runs: (RunResults & { started: string | null })[] }>();
+  const groups = new Map<string, { key: GroupResults['group']; runs: (RunResults & { started: string | null })[]; traces: ProcessTraces[] }>();
   for (const row of rows) {
     const journal = readJson(row.journal);
     if (!journal) continue;
     const gen = generatorOf(journal, path.dirname(row.journal), path.basename(row.journal, '.json'));
     const key = { condition: row.condition, world: String(journal.experiment), code_version: journal.commit ?? null, generator: gen.id, criteria: Object.keys(criteria ?? {}) };
     const id = JSON.stringify(key);
-    const g = groups.get(id) ?? { key, runs: [] as (RunResults & { started: string | null })[] };
+    const g = groups.get(id) ?? { key, runs: [] as (RunResults & { started: string | null })[], traces: [] as ProcessTraces[] };
     g.runs.push(runResults(row.journal, criteria));
+    g.traces.push(processTraces(row.journal));
     groups.set(id, g);
   }
-  return [...groups.values()].map(({ key, runs }) => {
+  return [...groups.values()].map(({ key, runs, traces }) => {
     const artifacts = runs.filter((r) => r.o1_predictive_acceptance.artifact !== undefined);
     const meets: Record<string, number> = { O1_model_accepted: runs.filter((r) => r.o1_predictive_acceptance.model).length };
     const o3: GroupResults['o3_adequacy'] = criteria && Object.keys(criteria).length ? Object.fromEntries(Object.keys(criteria).map((id) => {
@@ -164,10 +175,23 @@ export function groupResults(rows: readonly { readonly condition: string; readon
       o4_mechanistic_recovery: describe(runs.map((r) => (typeof r.o4_mechanistic_recovery === 'object' ? r.o4_mechanistic_recovery.score : null))),
       cost: { tokens_total_at_least: describe(tokens), tokens_sum_at_least: tokensSum, money_known_sum: Math.round(runs.reduce((a, r) => a + r.cost.money.known, 0) * 1e6) / 1e6,
         money_unknown_in: runs.filter((r) => r.cost.money.unknown.length).length, seconds: describe(runs.map((r) => r.cost.seconds)), seconds_sum: runs.reduce((a, r) => a + (r.cost.seconds ?? 0), 0) },
-      efficiency: Object.fromEntries(Object.entries(meets).map(([id, k]) => [id, { runs_meeting: k, per_million_tokens: tokensSum ? Math.round(k / tokensSum * 1e6 * 1000) / 1000 : null }]))
+      efficiency: Object.fromEntries(Object.entries(meets).map(([id, k]) => [id, { runs_meeting: k, per_million_tokens: tokensSum ? Math.round(k / tokensSum * 1e6 * 1000) / 1000 : null }])),
+      process: {
+        first_round_holding_in_its_laboratories: describe(traces.map((t) => t.first_round_holding_in_its_laboratories)),
+        runs_never_holding: traces.filter((t) => t.first_round_holding_in_its_laboratories === null).length,
+        steps: { looking: describe(traces.map((t) => t.steps.looking)), experimenting: describe(traces.map((t) => t.steps.experimenting)),
+          recalling: describe(traces.map((t) => t.steps.recalling)), other: describe(traces.map((t) => t.steps.other)) },
+        proposals_returned: describe(traces.map((t) => t.proposals_returned)),
+        directives: { given: sum(traces, (t) => t.directives.given), reported_carried_out: sum(traces, (t) => t.directives.reported_carried_out),
+          reported_not_carried_out: sum(traces, (t) => t.directives.reported_not_carried_out), not_reported: sum(traces, (t) => t.directives.not_reported) },
+        told_its_senior: sum(traces, (t) => t.told_its_senior),
+        reading: 'a description of how its runs went, never their performance: the effect of a senior or an opening only from controlled comparisons (compare_conditions)'
+      }
     };
   });
 }
+
+const sum = <T>(xs: readonly T[], f: (x: T) => number) => xs.reduce((a, x) => a + f(x), 0);
 
 /** The batch's times (§4.2), three apart: its duration on the clock, the time to its first run meeting each criterion, and
     the resources it accumulated (the sum of its runs' durations, apart from the clock - its runs ran in parallel). */

@@ -314,7 +314,7 @@ pruebas en `test/results.test.ts`.
 
 **Pendiente:**
 - **El dinero del junior.** Hace falta un precio registrado, o un proveedor que lo informe.
-- ~~**K2**~~ (hecho en §12.2); ~~**K3**~~ (hecho en §12.3); **K4–K5:** las trazas del proceso y el control estadístico.
+- ~~**K2**~~ (§12.2); ~~**K3**~~ (§12.3); ~~**K4**~~ (§12.4); **K5:** el control estadístico.
 
 ### 12.2 K2: grupos comparables y referencias congeladas (16/10/2026)
 
@@ -382,3 +382,29 @@ El código está en `lib/src/orchestra/design.ts` y `references.ts` (`compareCon
   - Si las dos condiciones no tienen la misma versión del código y el mismo presupuesto, se compara igual, pero consta
     `not_controlled` con la lectura «el efecto no es sólo suyo».
   - Así se atribuye el efecto del senior o de su apertura (§4.3). Contar órdenes adoptadas no basta.
+
+### 12.4 K4: trazas del proceso, sin valoración (16/10/2026)
+
+El código está en `lib/src/orchestra/traces.ts` y las pruebas en `test/traces.test.ts`.
+
+- **Por run** (`processTraces`):
+  - las rondas;
+  - la primera ronda en que su modelo se sostiene en todos sus laboratorios;
+  - los pasos de investigación por tipo:
+    - mirar: `view`, `inspect`, `table`, `measure`, `episode`, `source`, `instrument`;
+    - experimentar: `act`, `try`, `replay`, `register_test`;
+    - recordar: `memory`;
+    - otro: un tipo de petición que no conoce, contado por su nombre, nunca descartado;
+  - las propuestas devueltas;
+  - las directivas del senior y lo que el junior dijo de cada una: informó que la llevó a cabo, que no la llevó a cabo, o
+    nunca informó;
+  - las veces que habló a su senior por su cuenta (donde puede discrepar), y la otra ayuda.
+- **Por grupo,** en los resultados del lote (`process`, y en `batch.txt` como «process (a description)»):
+  - la primera ronda en que se sostiene, con los runs que nunca se sostuvieron;
+  - los pasos por tipo y las propuestas devueltas, descritos con la estadística de §6.2;
+  - las directivas sumadas.
+- **Se leen siempre como descripción,** nunca como rendimiento ni pérdidas. El efecto del senior o de la apertura sólo
+  sale de comparaciones controladas (`compare_conditions`, §12.3): contar órdenes adoptadas no basta.
+
+**Pendiente:** clasificar la discrepancia («discrepar» frente a «rechazar con razón») haría falta juzgarla, y eso es de la
+auditoría, no de una traza. Hoy se cuenta que habló y se nombra lo que reportó de cada directiva.
