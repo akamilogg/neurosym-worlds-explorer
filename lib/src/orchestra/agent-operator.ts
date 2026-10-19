@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { SENIOR_WHAT_IF_SECTION, WhatIf } from '../learn/assisted/what-if.ts';
 import { providerOf } from '../runtime/provider.ts';
 import path from 'node:path';
 import { parseJsonLoose } from '../core/net.ts';
@@ -66,13 +67,14 @@ export const SENIOR_ROLE = [
 /** The senior's system prompt: its role, the junior's brief word for word (when its world is known here), what the
     junior's code receives at a point (its `percept`, which reaches the junior with every round rather than in its brief:
     without it the senior may advise reading what the junior's code cannot see), its instructions. */
-export const seniorSystem = (brief: string | null, percept: string | null = null, tests: string | null = null, instruments: string | null = null): string =>
+export const seniorSystem = (brief: string | null, percept: string | null = null, tests: string | null = null, instruments: string | null = null, whatIf = false): string =>
   SENIOR_HEAD + '\n\n'
   + (brief ? '=== THE JUNIOR\'S BRIEF ===\n\n' + brief + '\n\n=== END OF THE JUNIOR\'S BRIEF ===\n\n' : '')
   + (percept ? '=== WHAT THE JUNIOR\'S CODE RECEIVES AT A POINT (its `percept`, given to it with every round) ===\n\n' + percept
     + '\n\nIts observations and output can read these fields and nothing else; what its views and tables show besides them is for the junior to read, not for its code.\n\n=== END ===\n\n' : '')
   + (instruments ? '=== THE JUNIOR\'S OWN INSTRUMENTS (as it is told; they read its sources and its own record, never the environment) ===\n\n' + instruments + '\n\n=== END ===\n\n' : '')
   + (tests ? '=== HOW THE JUNIOR MAY TEST ITS MODEL (as it is told) ===\n\n' + tests + '\n\n=== END ===\n\n' + SENIOR_TESTS + '\n\n' : '')
+  + (whatIf ? SENIOR_WHAT_IF_SECTION + '\n\n' : '')
   + SENIOR_ROLE;
 
 /** The senior's part in the junior's tests (SPEC-PRUEBAS-PROPIAS §8): it orders the test most likely to refute its model. */
@@ -92,6 +94,8 @@ export interface AgentDecision {
   /** The senior's: the signs it was called for, what it read of the junior's record, and the items its message relies on. */
   readonly signals?: readonly string[];
   readonly read?: readonly unknown[];
+  /** Its requests of «what if…?» in this decision, each with what came of it (SPEC-Y-SI §8.3). */
+  readonly what_if?: readonly unknown[];
   readonly evidence?: readonly string[];
   /** The round in course when the senior was called during it (not at its end). */
   readonly during_round?: number;
@@ -178,7 +182,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   const role: AgentRole = o.role ?? 'coach';
   const record: { format: string; agent: string; role: AgentRole; run: string; started: string; decisions: AgentDecision[]; usage?: Usage;
     llm_config?: Readonly<Record<string, unknown>>; llm_provider?: string; settings?: Record<string, unknown>;
-    continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
+    continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState; what_if?: Record<string, unknown>[] } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
   if (o.llm.configuration) record.llm_config = o.llm.configuration;
   /* The settings of its role, as given: they make it the agent it is (a characterization tells one from another). */
   record.settings = Object.fromEntries(Object.entries({ maxOrders: o.maxOrders, patience: o.patience, looking: o.looking, readSteps: o.readSteps, cooldown: o.cooldown,
@@ -227,11 +231,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       }
     }
     const digest = journal ? runDigest(journal) : null;
-    /* Rounds it has completed: checked, or reflected on. */
-    const rounds = journal ? researcherEvents(journal).filter((e) => e.type === 'check' || e.type === 'reflection').length : 0;
+    /* Rounds it has completed: checked, closed without a new model (PLAN-Y-SI Entrega 1), or reflected on. */
+    const rounds = journal ? researcherEvents(journal).filter((e) => e.type === 'check' || e.type === 'round_closed' || e.type === 'reflection').length : 0;
     /* A reflection is how a run ends: after it nothing more is asked of the researcher, so a message would never reach it
        (and would spend the run's help budget). A continuation that goes on after one is decided on at its next check. */
-    const lastCompleted = journal ? [...researcherEvents(journal)].reverse().find((e) => e.type === 'check' || e.type === 'reflection') : undefined;
+    const lastCompleted = journal ? [...researcherEvents(journal)].reverse().find((e) => e.type === 'check' || e.type === 'round_closed' || e.type === 'reflection') : undefined;
     const ended = status?.state === 'ended' || status?.state === 'interrupted';
     const over = ended || lastCompleted?.type === 'reflection';
     /* The senior, during a round: a sign about the round in course (it only looks, or insists with no steps left). */
@@ -252,7 +256,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       seenRounds = Math.max(seenRounds, rounds);
       let d: AgentDecision | null;
       if (role === 'senior') {
-        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel);
+        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel,
+          /* Its «what if…?», kept in its record as it goes: the request before the call, its answer after - saved at once. */
+          (entry) => { (record.what_if ??= []).push({ at: new Date().toISOString(), ...entry }); save(); });
         record.senior!.followed_up = [...followedUp];
         record.senior!.called_in_round = [...calledInRound];
       }
@@ -308,14 +314,18 @@ function noteOf(state: SeniorState, id: string): { text: string; versions: numbe
 }
 
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
-  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel()): Promise<AgentDecision | null> {
+  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel(),
+  persist: (entry: Record<string, unknown>) => void = () => {}): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
      to have had time with its last message. */
   if (!isOpening && !followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const nb = seniorNotebook(state);
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
-  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal));
+  /* «What if…?» (SPEC-Y-SI §8.3): a tool of the whole researcher - the senior's too, wherever the junior has it. */
+  const config = (journal.config ?? {}) as Record<string, any>;
+  const whatIfOn = journal.researcher === 'assisted' && config.what_if !== false && typeof config.capabilities_from?.what_if === 'number' && config.capabilities_from.what_if <= rounds;
+  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal), whatIfOn);
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
   const call = decisions.length + 1;
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
@@ -336,6 +346,19 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     state.since = Math.max(state.since, latestRound());
   }
   const limit = followUp ? 1 : o.readSteps ?? 4;
+  const whatIf: WhatIf = new WhatIf({ llm: o.llm, who: 'senior', max: Number(config.what_if_max) || 0, used: state.what_if_used ?? 0,
+    /* Unique in the run: its count kept in its state, not in this call. */
+    nextId: (round) => 'what_if:' + o.id + ':r' + round + '.' + (state.what_if_seq = (state.what_if_seq ?? 0) + 1),
+    /* Durable: its request, whole, before the call (with its calls counted), its answer after - each saved to its record. */
+    log: (type, data) => { if (type === 'what_if_requested') state.what_if_used = whatIf.calls(); persist({ type, ...data }); },
+    onAnswer: (a) => addUsage(usage, a.raw),
+    /* The junior is told that its senior asked, and what (its id, mode and situation): a fact of the record, not help. */
+    onRequested: (e) => { send(o.journal, { kind: 'what_if_requested', id: e.id, mode: e.mode, situation: e.situation, by: 'agent:' + o.id }); },
+    resolve: async (refs) => {
+      const r = await memory.run({ memory: 'open', items: [...refs], whole: true }) as { items?: Record<string, unknown>[] };
+      const missing = (r.items ?? []).filter((i) => i.error).map((i) => String(i.id));
+      return missing.length ? { missing } : { items: r.items ?? [] };
+    } });
   /* What the junior reported since its latest call: the directives it carried out, and where it disagrees. */
   const reports = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'directive_report' || e.type === 'junior_report');
   const freshReports = reports.slice(state.reports_seen ?? 0).map((e) => (e.type === 'junior_report' ? { the_junior_says: e.text } : { directive: e.id, done: e.done ?? null }));
@@ -344,7 +367,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     ...(freshReports.length ? { junior_reports: freshReports } : {}),
     ...(isOpening ? { opening: 'the junior has its task and the environment\'s first episodes, and has not asked anything yet: it waits for the first hypothesis it will develop' } : {}),
     ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
-    orders_left: ordersLeft, memory: memory.counts(), steps_left: limit } });
+    orders_left: ordersLeft, memory: memory.counts(), steps_left: limit, ...(whatIfOn ? { what_if_left: whatIf.left() } : {}) } });
   state.conversation.push(callPart());
   /* Its channel mirrors the junior's (SPEC-CANAL-MENSAJES §9): everything the junior was told between its answers since this
      channel's latest look - the operator's task, its messages, the instructions, the budget, the environment's notices -
@@ -357,6 +380,8 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const read: { step: string; requests: Record<string, unknown>[]; results: unknown[] }[] = [];
   const at = () => new Date().toISOString();
   const asked = () => read.map((r) => r.requests);
+  /* Its requests of «what if…?» and what came of them: kept in its record whole (a suggestion it was given, with its id). */
+  const whatIfs: unknown[] = [];
   const maxTokens = o.maxContextTokens ?? 150000;
   let reminded = 0, consolidated = 0, toldToConsolidate = 0, measured = 0;
   const suspicions: InstrumentReport[] = [];
@@ -410,9 +435,13 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       }
       const stepsLeft = Math.max(0, limit - read.length);
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {
-        const requests = parsed.investigate.filter((q: unknown): q is Record<string, unknown> => Boolean(q) && typeof q === 'object' && typeof (q as Record<string, unknown>).memory === 'string').slice(0, 8);
+        const requests = parsed.investigate.filter((q: unknown): q is Record<string, unknown> => Boolean(q) && typeof q === 'object'
+          && (typeof (q as Record<string, unknown>).memory === 'string' || (whatIfOn && WhatIf.accepts(q as Record<string, unknown>)))).slice(0, 8);
         const results: unknown[] = [];
-        for (const q of requests) results.push(await memory.run(q));
+        for (const q of requests) {
+          if (WhatIf.accepts(q)) { const a = await whatIf.run(q, rounds); whatIfs.push(a); results.push(a); } else results.push(await memory.run(q));
+        }
+        state.what_if_used = whatIf.calls();
         read.push({ step: 'd' + call + '.' + (read.length + 1), requests, results });
         state.conversation.push({ investigation_step: read[read.length - 1], steps_left: Math.max(0, limit - read.length), ...written });
         continue;
@@ -437,14 +466,14 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       const decision = parsed.decision === 'message' && parsed.text?.trim() ? 'message' : 'wait';
       const d: AgentDecision = { at: at(), rounds, ...(isOpening ? { opening: true } : {}), ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
         why: String(parsed.why ?? (Array.isArray(parsed.investigate) ? 'it kept asking to read after being reminded to decide' : '')), signals: signals.signs,
-        read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}),
+        read: asked(), ...(whatIfs.length ? { what_if: whatIfs } : {}), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}),
         ...(decision === 'message' && parsed.test && typeof parsed.test === 'object' && !Array.isArray(parsed.test) ? { test: parsed.test } : {}),
         ...(consolidated ? { consolidated } : {}), ...(Object.keys(wrote).length ? { wrote } : {}), ...(suspicions.length ? { instrument_reports: suspicions } : {}), usage };
       /* What it decided stays in its conversation, as it was. */
       state.conversation.push({ your_decision: { n: call, decision, ...(d.text ? { text: d.text } : {}), ...(d.why ? { why: d.why } : {}) }, ...written });
       return done(d);
     }
-    const d: AgentDecision = { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked(), ...(suspicions.length ? { instrument_reports: suspicions } : {}), usage };
+    const d: AgentDecision = { at: at(), rounds, decision: 'wait', why: 'it kept reading and never decided', signals: signals.signs, read: asked(), ...(whatIfs.length ? { what_if: whatIfs } : {}), ...(suspicions.length ? { instrument_reports: suspicions } : {}), usage };
     state.conversation.push({ your_decision: { n: call, decision: 'wait', why: d.why } });
     return done(d);
   } catch (e) {

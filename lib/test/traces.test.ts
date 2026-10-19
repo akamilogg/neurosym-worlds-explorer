@@ -32,7 +32,7 @@ test('the traces of a run, as they happened: no valuation in them', () => {
   const t = processTraces(file);
   assert.equal(t.rounds, 2);
   assert.equal(t.first_round_holding_in_its_laboratories, 2);
-  assert.deepEqual({ ...t.steps, by_request: undefined }, { looking: 2, experimenting: 1, recalling: 1, other: 1, by_request: undefined });
+  assert.deepEqual({ ...t.steps, by_request: undefined }, { looking: 2, experimenting: 1, recalling: 1, asking_a_direction: 0, other: 1, by_request: undefined });
   assert.equal(t.steps.by_request.something_new, 1, 'a kind of request it does not know is counted by its name, as other');
   assert.equal(t.proposals_returned, 1);
   assert.deepEqual(t.directives, { given: 2, reported_carried_out: 1, reported_not_carried_out: 0, not_reported: 1 });

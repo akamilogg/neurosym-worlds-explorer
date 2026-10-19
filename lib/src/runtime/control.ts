@@ -46,6 +46,8 @@ export type RunOrder =
       /** A senior's order to register a test of the junior's own, with its message (SPEC-PRUEBAS-PROPIAS §8). */ readonly test?: Readonly<Record<string, unknown>> }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string }
+  /** A senior's request of «what if…?» (SPEC-Y-SI §8.3): logged by the run, and told to the junior in its channel - never help. */
+  | { readonly kind: 'what_if_requested'; readonly id: string; readonly mode: string; readonly situation: string; readonly by?: string }
   /** A senior's suspicion of the instrument (SPEC-CALIBRACION-INSTRUMENTOS §4.3): logged by the run, never delivered. */
   | { readonly kind: 'instrument_report'; readonly what: string; readonly evidence: readonly string[]; readonly report_kind: string; readonly by?: string };
 

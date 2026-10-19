@@ -15,19 +15,22 @@ import fs from 'node:fs';
 type J = Record<string, any>;
 
 /** The kinds of a request of investigation, by what it does: it looks at what is there, acts on the world, or recalls. */
-const KIND: Readonly<Record<string, 'looking' | 'experimenting' | 'recalling'>> = {
+const KIND: Readonly<Record<string, 'looking' | 'experimenting' | 'recalling' | 'asking_a_direction'>> = {
   view: 'looking', inspect: 'looking', table: 'looking', measure: 'looking', episode: 'looking', series: 'looking', source: 'looking', instrument: 'looking',
   act: 'experimenting', try: 'experimenting', replay: 'experimenting', register_test: 'experimenting',
-  memory: 'recalling'
+  memory: 'recalling',
+  what_if: 'asking_a_direction'
 };
 
 export interface ProcessTraces {
   readonly rounds: number;
   readonly first_round_holding_in_its_laboratories: number | null;
-  readonly steps: { readonly looking: number; readonly experimenting: number; readonly recalling: number; readonly other: number; readonly by_request: Readonly<Record<string, number>> };
+  readonly steps: { readonly looking: number; readonly experimenting: number; readonly recalling: number; readonly asking_a_direction: number; readonly other: number; readonly by_request: Readonly<Record<string, number>> };
   readonly proposals_returned: number;
   /** Rounds it closed itself without a new model (PLAN-Y-SI, Entrega 1). */
   readonly rounds_closed: number;
+  /** Its requests of «what if…?», by hemisphere (SPEC-Y-SI). */
+  readonly what_if: { readonly junior: number; readonly senior: number };
   readonly directives: { readonly given: number; readonly reported_carried_out: number; readonly reported_not_carried_out: number; readonly not_reported: number };
   readonly told_its_senior: number;
   readonly other_help: number;
@@ -45,7 +48,7 @@ export function processTraces(journalFile: string): ProcessTraces {
     const kind = r && typeof r === 'object' ? Object.keys(r)[0] ?? 'unknown' : 'unknown';
     byRequest[kind] = (byRequest[kind] ?? 0) + 1;
   }
-  const steps = { looking: 0, experimenting: 0, recalling: 0, other: 0 };
+  const steps = { looking: 0, experimenting: 0, recalling: 0, asking_a_direction: 0, other: 0 };
   for (const [k, n] of Object.entries(byRequest)) steps[KIND[k] ?? 'other'] += n;
   /* The directives (the senior's messages it was told to carry out), and what it reported of each. */
   const messages = events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []) as J[]);
@@ -59,6 +62,7 @@ export function processTraces(journalFile: string): ProcessTraces {
     steps: { ...steps, by_request: byRequest },
     proposals_returned: events.filter((e) => e.type === 'proposal_refused').length,
     rounds_closed: events.filter((e) => e.type === 'round_closed').length,
+    what_if: { junior: events.filter((e) => e.type === 'what_if_requested' && e.by === 'junior').length, senior: events.filter((e) => e.type === 'what_if_requested' && String(e.by).startsWith('agent:')).length },
     directives: { given: directives.length, reported_carried_out: reported.filter((r) => r && !r.not_done).length,
       reported_not_carried_out: reported.filter((r) => r?.not_done).length, not_reported: reported.filter((r) => !r).length },
     told_its_senior: events.filter((e) => e.type === 'junior_report').length,

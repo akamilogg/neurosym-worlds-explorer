@@ -161,6 +161,19 @@ export interface OperatorChannel {
   readonly tests?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number, budget: { acts: number }): Promise<unknown> };
   /** Its own instruments, used (SPEC-INSTRUMENTOS-PROPIOS): a use is an investigation request, answered here. */
   readonly instruments?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number): Promise<unknown> };
+  /** «What if…?» (SPEC-Y-SI): a request of a new direction, answered by an isolated call. The prompt's section is the host's. */
+  readonly whatIf?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number): Promise<unknown> };
+}
+
+/** Items of its record, opened whole by their ids (as its memory names them) - or the ids that are not there. With no
+    selective memory, a memory made over its session to open them (its notes, beliefs, models, episodes...). */
+export async function openRefs<A>(session: LawSession<A>, host: LawSessionHost<A>, refs: readonly string[]): Promise<{ items: readonly Record<string, unknown>[] } | { missing: readonly string[] }> {
+  const memory = session.record ?? new JournalMemory(session.notebook, { episodes: () => host.episodes() as never, instruments: () => host.instruments?.()?.all() ?? [],
+    models: () => session.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })) });
+  const r = await memory.run({ memory: 'open', items: [...refs], whole: true }) as { items?: Record<string, unknown>[] };
+  const items = r.items ?? [];
+  const missing = items.filter((i) => i.error).map((i) => String(i.id));
+  return missing.length ? { missing } : { items };
 }
 
 /** How many times a round the assisted researcher may ask to investigate with no steps left before it is a refusal. */
@@ -323,6 +336,8 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
   const registers = (q: Record<string, unknown>): boolean => tests !== undefined && tests.accepts(q);
   const instruments = channel.instruments;
   const measures = (q: Record<string, unknown>): boolean => instruments !== undefined && instruments.accepts(q);
+  const whatIf = channel.whatIf;
+  const asks = (q: Record<string, unknown>): boolean => whatIf !== undefined && whatIf.accepts(q);
   let session: LawSession<A> | null = null;
   const client = operatorClient(host.llm, { ...channel, round: () => session?.currentRound ?? 0 }, (t, d) => host.log(t, d));
   session = new LawSession<A>({
@@ -339,12 +354,16 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
     overreach: OVERREACH,
     /* Its own instruments - the sources once an origin is allowed (`list`, `open`, `find`) and its memory (`memory`) -
        answered here, never by the world. */
-    ...(sources || memory || experience || board || tests || instruments ? {
-      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || registers(q) || measures(q) || reads(q),
+    ...(sources || memory || experience || board || tests || instruments || whatIf ? {
+      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || registers(q) || measures(q) || asks(q) || reads(q),
       runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session!.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra)
+        : asks(r.extra) ? whatIf!.run(r.extra, round)
         : posts(r.extra) ? board!.run(r.extra, round) : registers(r.extra) ? tests!.run(r.extra, round, budget) : measures(r.extra) ? instruments!.run(r.extra, round) : sources!.run(r.extra))
         : host.runRequest(r, budget, round))
     } : {}),
+    /* Without a selective memory, its record kept by item ids all the same, for the items its «what if…?» names. */
+    ...(!memory && whatIf ? { recordOf: (s: LawSession<A>) => new JournalMemory(s.notebook, { episodes: () => host.episodes() as never, instruments: () => host.instruments?.()?.all() ?? [],
+      models: () => s.laws.map((l) => ({ round: l.round, fingerprint: l.fingerprint, model: ownLaw(l.law), accepted: l.accepted })) }) } : {}),
     /* Its episodes and models are kept by the host and the session, not in the notebook. */
     ...(memory ? {
       memory: (s: LawSession<A>) => new JournalMemory(s.notebook, { ...(memory.selector ? { selector: memory.selector } : {}),
