@@ -385,6 +385,14 @@ export class LawSession<A> {
       const closing = mode === 'propose' && h.closeRound?.() ? closeOf(content) : null;
       if (closing !== null) {
         if (typeof closing === 'string') { refused = [closing]; refusals++; h.log('proposal_refused', { round, errors: refused, content }); continue; }
+        /* A closing answers to its senior's open directives as a proposal does: returned once (SPEC-ORQUESTADOR §3.3.3). */
+        const returned = !vetted && h.vet ? h.vet(round) : [];
+        if (returned.length) {
+          vetted = true; refused = returned; refusals++;
+          h.log('proposal_refused', { round, errors: returned, content, returned: true });
+          h.say('  returned: ' + returned[0].slice(0, 200));
+          continue;
+        }
         this.closedLast = { round, why: closing.why };
         h.log('round_closed', { round, why: closing.why, investigation_steps: investigation.length, notes: turn.notes, ...(noteWarnings.length ? { warnings: noteWarnings } : {}) });
         h.say('  closes the round without a new model: ' + closing.why.slice(0, 160));

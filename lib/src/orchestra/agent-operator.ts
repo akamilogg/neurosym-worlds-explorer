@@ -227,11 +227,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       }
     }
     const digest = journal ? runDigest(journal) : null;
-    /* Rounds it has completed: checked, or reflected on. */
-    const rounds = journal ? researcherEvents(journal).filter((e) => e.type === 'check' || e.type === 'reflection').length : 0;
+    /* Rounds it has completed: checked, closed without a new model (PLAN-Y-SI Entrega 1), or reflected on. */
+    const rounds = journal ? researcherEvents(journal).filter((e) => e.type === 'check' || e.type === 'round_closed' || e.type === 'reflection').length : 0;
     /* A reflection is how a run ends: after it nothing more is asked of the researcher, so a message would never reach it
        (and would spend the run's help budget). A continuation that goes on after one is decided on at its next check. */
-    const lastCompleted = journal ? [...researcherEvents(journal)].reverse().find((e) => e.type === 'check' || e.type === 'reflection') : undefined;
+    const lastCompleted = journal ? [...researcherEvents(journal)].reverse().find((e) => e.type === 'check' || e.type === 'round_closed' || e.type === 'reflection') : undefined;
     const ended = status?.state === 'ended' || status?.state === 'interrupted';
     const over = ended || lastCompleted?.type === 'reflection';
     /* The senior, during a round: a sign about the round in course (it only looks, or insists with no steps left). */

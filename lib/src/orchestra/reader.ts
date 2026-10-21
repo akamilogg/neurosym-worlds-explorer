@@ -32,6 +32,7 @@ export interface StuckSignals {
   readonly holding_nowhere_in_a_row: number;
   /** Rounds since anything of its task was accepted (a model, or a version of what it makes), or since the start. */
   readonly rounds_without_acceptance?: number;
+  readonly rounds_closed_in_a_row?: number;
   /** Requests it made more than once in its latest round. */
   readonly repeated_requests: number;
   /** Times it asked to investigate with no steps left in its latest round. */
@@ -90,9 +91,13 @@ export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2):
      the start. */
   const acceptedAt = Math.max(0, ...events.filter((e) => e.type === 'accepted' || e.type === 'artifact_accepted').map((e) => Number(e.round) || 0));
   const withoutAcceptance = last - acceptedAt;
+  /* Rounds it closed itself without a new model, in a row (PLAN-Y-SI Entrega 1): a fact, a sign once it repeats. */
+  let closedInARow = 0;
+  for (const e of [...events].reverse()) { if (e.type === 'round_closed') closedInARow++; else if (e.type === 'proposal') break; }
   const signs = [
     ...(nowhere >= patience ? [nowhere + ' checks in a row where its model held in no place'] : []),
     ...(withoutAcceptance >= Math.max(patience, 3) && last > Math.max(patience, 3) ? ['nothing of its task accepted (a model, or a version of what it makes) in its latest ' + withoutAcceptance + ' rounds'] : []),
+    ...(closedInARow >= 2 ? ['it closed its latest ' + closedInARow + ' rounds without a new model'] : []),
     ...(repeated >= 2 ? [repeated + ' requests repeated in its latest round'] : []),
     ...(insisted >= 2 ? ['it asked to investigate ' + insisted + ' times with no steps left in its latest round'] : []),
     ...(onlyLooking >= looking ? ['it spent ' + onlyLooking + ' investigation answers of its latest round only looking, with no experiment (no act, replay, table or measure)'] : []),
@@ -100,7 +105,7 @@ export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2):
     ...(sinceBest >= window && best >= 0 ? ['its best check (' + scored[best].wins + ' of ' + scored[best].total + ' scored 1, round ' + scored[best].round + ') has not been matched in the ' + sinceBest + ' checks since'] : [])
   ];
   return { holding_nowhere_in_a_row: nowhere, repeated_requests: repeated, insisted_without_steps: insisted, distinct_models_lately: distinct,
-    only_looking: onlyLooking, regressions, checks_since_best: sinceBest, rounds_without_acceptance: withoutAcceptance, current_round: last, in_round: insisted >= 2 || onlyLooking >= looking, signs };
+    only_looking: onlyLooking, regressions, checks_since_best: sinceBest, rounds_without_acceptance: withoutAcceptance, rounds_closed_in_a_row: closedInARow, current_round: last, in_round: insisted >= 2 || onlyLooking >= looking, signs };
 }
 
 /** Where the researcher's prompt stops describing its work and starts describing the shape of its own answer. */
