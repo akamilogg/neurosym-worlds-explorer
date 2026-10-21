@@ -185,7 +185,8 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
   const requests: J[] = events.filter((e) => e.type === 'investigation').flatMap((e) => (Array.isArray(e.requests) ? e.requests : []));
   const given = events.find((e) => e.type === 'experience');
   const assistance = assisted ? {
-    messages: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).map((m: J) => ({ id: String(m.id), question: e.question, text: String(m.text ?? ''),
+    /* The results of its branches are its own delegated work, not help (SPEC-DELEGACION-INVESTIGACIONES §5). */
+    messages: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).filter((m: J) => !m.research_result).map((m: J) => ({ id: String(m.id), question: e.question, text: String(m.text ?? ''),
       ...(m.by ? { by: String(m.by) } : {}), ...(m.at ? { at: String(m.at) } : {}), author: String(m.by ?? '').startsWith('agent:') ? 'agent' as const : 'person' as const }))),
     ...(typeof journal.help_budget === 'number' ? { help_budget: journal.help_budget } : {}),
     focus_changes: events.filter((e) => e.type === 'focus_changed'),

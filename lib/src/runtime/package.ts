@@ -78,6 +78,9 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
   const own = fs.readdirSync(folder).filter((f) => f === name + '.json' || f === name + '.replay.jsonl' || f === name + '.anomalies.jsonl'
     || (f.startsWith(name + '.') && /^\.(finding|finding\.researcher|method|agent-[^.]+)\.json$/.test(f.slice(name.length))));
   for (const f of own) fs.copyFileSync(path.join(folder, f), path.join(dir, f));
+  /* Its branches (SPEC-DELEGACION-INVESTIGACIONES §7): their records and the cuts they read, verified with their own. */
+  for (const d of fs.readdirSync(folder).filter((f) => f.startsWith(name + '.') && f.endsWith('.branches') && fs.statSync(path.join(folder, f)).isDirectory()))
+    fs.cpSync(path.join(folder, d), path.join(dir, d), { recursive: true });
   const { dir: blobs, cited } = blobsOf(journalFile);
   const missing: string[] = [], corrupt: string[] = [];
   for (const b of cited) {

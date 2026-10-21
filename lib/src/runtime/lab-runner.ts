@@ -14,6 +14,7 @@ import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
 import { CLOSE_ROUND_SECTION } from '../learn/law-session.ts';
+import { Delegations, DELEGATION_SECTION, type Launcher } from '../learn/assisted/delegation.ts';
 import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { FINGERPRINT_VERSION, LawSession, lawFingerprint } from '../learn/law-session.ts';
 import { CAPABILITIES, capabilityAt, roundsAt } from '../learn/lab.ts';
@@ -60,6 +61,10 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'every', default: '3', help: 'take every N-th step of an episode as a point of a check' },
   { name: 'family', default: '3', help: 'places of the family to validate on' },
   { name: 'validations', default: '3', help: 'how many times System 2 may validate' },
+  { name: 'delegation-fund', default: '0', help: 'N > 0: the assisted researcher may delegate investigations to branches, with N tokens in all for them, apart from its own budget (SPEC-DELEGACION-INVESTIGACIONES)' },
+  { name: 'delegation-tokens', default: '200000', help: 'at most N tokens a branch' },
+  { name: 'delegation-rounds', default: '3', help: 'the rounds a branch gets when it asks none' },
+  { name: 'delegation-max-rounds', default: '6', help: 'at most N rounds a branch' },
   { name: 'own-tests', default: '0', help: 'N > 0: a model is confirmed blind only after N severe tests of the assisted researcher\'s own, registered with it (SPEC-PRUEBAS-PROPIAS §7)' },
   { name: 'confirm-places', default: '2', help: 'places per blind confirmation set, two sets' },
   { name: 'tools', default: 'all', help: 'the instruments, a,b,... ("all" or "none")' },
@@ -234,6 +239,8 @@ export interface LabRunOptions {
   /** A synthetic re-evaluation (SPEC-RIESGO-MODELOS §9, `lab model reevaluate`): no System 2 - the model a run ended with
       (and its artifact's version), frozen, checked by its world's protocol on places of its family it never saw. */
   readonly reevaluate?: Reevaluation;
+  /** How a branch is started (SPEC-DELEGACION-INVESTIGACIONES): by default a run in a process of its own; tests run it here. */
+  readonly delegate?: Launcher;
   /** A reconstruction, not a continuation (lab verify): with --resume, once the record it resumes has no answer left waiting,
       the run stops as that record stopped - a budget (its closing then served from the record), a cancellation - where it
       would otherwise go on asking. Only from code: a run on the command line resumes to go on. */
@@ -435,6 +442,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     budget_visible: !flag('budget-hidden'),
     pins: !flag('no-pins'),
     close_round: !flag('no-close-round'),
+    ...(Number(arg('delegation-fund')) > 0 ? { delegation: { fund: Math.floor(Number(arg('delegation-fund'))), tokens: Math.max(1, Math.floor(Number(arg('delegation-tokens', '200000')) || 200000)),
+      rounds: Math.max(1, Math.floor(Number(arg('delegation-rounds', '3')) || 3)), max_rounds: Math.max(1, Math.floor(Number(arg('delegation-max-rounds', '6')) || 6)) } } : {}),
     stated_task: !flag('task-as-model'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
@@ -528,7 +537,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       return finished;
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
-      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team, reevaluate: options.reevaluate ?? null });
+      confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team, reevaluate: options.reevaluate ?? null,
+      ...(options.delegate ? { delegate: options.delegate } : {}) });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]).finally(() => { if (team) team.board.end(team.member); });
 }
@@ -716,7 +726,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   let helpDelivered = 0;
   const log = (type: string, data: Record<string, unknown> = {}): void => {
     if (closed) return;
-    if (type === 'operator_message' && Array.isArray(data.messages)) helpDelivered += data.messages.length;
+    if (type === 'operator_message' && Array.isArray(data.messages)) helpDelivered += data.messages.filter((m: Record<string, unknown>) => !m.research_result).length;
     journal.events.push({ t: Math.round((Date.now() - started.getTime()) / 1000), type, ...data });
     fs.writeFileSync(outFile, JSON.stringify(journal, null, 2));
     writeStatus();
@@ -989,7 +999,7 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * ========================================================================== */
 
 async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[]; assistedAfter: number | null;
-  team: { board: TeamBoard; member: string; channel: PeerChannel } | null; reevaluate?: Reevaluation | null }): Promise<LabResult> {
+  team: { board: TeamBoard; member: string; channel: PeerChannel } | null; reevaluate?: Reevaluation | null; delegate?: Launcher }): Promise<LabResult> {
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
@@ -1563,16 +1573,35 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     },
     log
   }) : null;
+  /* Its branches (SPEC-DELEGACION-INVESTIGACIONES): the assisted researcher's, where the operator gives it a fund, from when
+     this code gives it; one at a time, none delegating in turn, never in a world whose environment is outside the harness. */
+  const delegationCfg = (cfg as { delegation?: { fund: number; tokens: number; rounds: number; max_rounds: number } }).delegation;
+  const delegating = (): boolean => journal.researcher === 'assisted' && helping && investigative && delegationCfg !== undefined && capabilityAt(cfg as never, 'delegation', attemptNow);
+  const delegations = delegationCfg ? new Delegations({
+    config: { fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds },
+    journalFile: run.outFile, snapshot: () => JSON.parse(JSON.stringify(journal)), lab: lab.id,
+    worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptions).flatMap(([k, v]) => ['--' + k, String(v)]),
+      ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
+    /* A run in a process of its own, with the keys of this process's environment (loaded when first needed: control.ts reads
+       every laboratory). */
+    launcher: o.delegate ?? ((l) => { void import('./control.ts').then((c) => c.startRunAt(l.journal, c.labNameOf(l.lab), l.args)); }), log,
+    history: (previous?.events ?? []) as Record<string, any>[],
+    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null
+  }) : null;
+  /* The results of its branches, delivered as they end: messages of their own, never help (a resumed run delivers them at the
+     same questions, as any message). */
+  const branchResults = (): OperatorMessage[] => (delegations && delegating() ? delegations.results().map((r) => ({ ...r, by: 'agent:' + r.research_result, at: new Date().toISOString() })) : []);
   const session: LawSession<unknown> = journal.researcher === 'assisted'
     ? assistedSession(sessionHost, {
       /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
          sent meanwhile waits for its first new round. */
       /* A message sent while a resumed run still replays its history waits: delivered then, the question would differ from
          the one its log answers, and the run would diverge. It goes with the first question asked live. */
-      take: (round?: number) => (helping && run.replay.pending() === 0 ? run.operator.take(round) : []), scheduled: deliveredMessages(previous),
+      take: (round?: number) => (helping && run.replay.pending() === 0 ? [...branchResults(), ...run.operator.take(round)] : []), scheduled: deliveredMessages(previous),
       system: () => (helping ? assistedSystem(assistedPromptFor(focus), statedTask && channelOn) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (closesRounds() ? '\n\n' + CLOSE_ROUND_SECTION : '')
+        + (delegating() && delegationCfg ? '\n\n' + DELEGATION_SECTION({ fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds }) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
         + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '') : promptFor(focus)),
@@ -1600,6 +1629,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {}),
       /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2). */
       instruments: { accepts: (q: Record<string, unknown>) => helping && reviewing && instrumenting() && Instruments.accepts(q), run: (q: Record<string, unknown>, round: number) => instruments.use(q, round) },
+      ...(delegations ? { delegations: { accepts: (q: Record<string, unknown>) => delegating() && Delegations.accepts(q), run: (q: Record<string, unknown>, round: number) => delegations.run(q, round) } } : {}),
       ...(ownTests ? { tests: { accepts: (q: Record<string, unknown>) => helping && OwnTests.accepts(q),
         run: (q: Record<string, unknown>, round: number, budget: { acts: number }) => ownTests.register(q, round, budget) } } : {})
     })
@@ -1885,6 +1915,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const result = run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     final: final ? ownLaw(final) : null,
+    /* Its branches: each with its record, how it stands, what it spent; those still running asked to stop. */
+    ...(delegations ? { delegation: delegations.close() } : {}),
     ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownLaw(acceptedBefore.law) } } : {}),
     /* A world of artifacts: the artifact's own state, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8). */
     ...(artifactProtocol ? { artifact: { accepted: artifactAccepted[artifactAccepted.length - 1] ?? null, chain: artifactAccepted, protocol: artifactProtocol.summary(),

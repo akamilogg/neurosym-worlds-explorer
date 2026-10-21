@@ -58,6 +58,8 @@ export function journalReader(journal: J, options: Pick<MemoryOptions, 'openLimi
         break;
       }
       case 'methods': notebook.applyMethods(round, (e.methods ?? []) as NoteOp[]); break;
+      /* A round it closed without a new model (PLAN-Y-SI Entrega 1): the notes it wrote with it are its notes too. */
+      case 'round_closed': notebook.applyNotes(round, notes, () => true); break;
       case 'instrument_registered': instruments.push({ id: String(e.id), version: Number(e.version), about: String(e.about ?? ''), source: String(e.source ?? ''), round }); break;
       case 'document_written': notebook.applyDocuments(round, [{ do: e.do === 'forget' ? 'forget' : 'write', id: String(e.id), ...(typeof e.text === 'string' ? { text: e.text } : {}) }]); break;
       case 'proposal': {

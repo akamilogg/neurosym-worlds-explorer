@@ -31,6 +31,8 @@ export interface ProcessTraces {
   readonly directives: { readonly given: number; readonly reported_carried_out: number; readonly reported_not_carried_out: number; readonly not_reported: number };
   readonly told_its_senior: number;
   readonly other_help: number;
+  /** Its branches (SPEC-DELEGACION-INVESTIGACIONES): opened, and their results delivered to it. */
+  readonly branches: { readonly opened: number; readonly results_delivered: number };
   readonly reading: string;
 }
 
@@ -48,7 +50,9 @@ export function processTraces(journalFile: string): ProcessTraces {
   const steps = { looking: 0, experimenting: 0, recalling: 0, other: 0 };
   for (const [k, n] of Object.entries(byRequest)) steps[KIND[k] ?? 'other'] += n;
   /* The directives (the senior's messages it was told to carry out), and what it reported of each. */
-  const messages = events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []) as J[]);
+  const all = events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []) as J[]);
+  /* The results of its branches are not help: they are counted with its branches. */
+  const messages = all.filter((m) => !m.research_result);
   const directives = messages.filter((m) => m.directive);
   const reports = new Map<string, J>();
   for (const e of events.filter((x) => x.type === 'directive_report')) reports.set(String(e.id), e);
@@ -63,6 +67,7 @@ export function processTraces(journalFile: string): ProcessTraces {
       reported_not_carried_out: reported.filter((r) => r?.not_done).length, not_reported: reported.filter((r) => !r).length },
     told_its_senior: events.filter((e) => e.type === 'junior_report').length,
     other_help: messages.filter((m) => !m.directive).length,
+    branches: { opened: events.filter((e) => e.type === 'delegation_requested').length, results_delivered: all.filter((m) => m.research_result).length },
     reading: 'a description of how it went - never its performance; effects only from controlled comparisons'
   };
 }

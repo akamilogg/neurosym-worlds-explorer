@@ -364,7 +364,9 @@ export const CAPABILITIES: readonly { readonly name: string; readonly since: str
   /* Acting in the laboratories its artifact's protocol opened, too (an external review, 16/10/2026); likewise. */
   { name: 'shared_laboratories', since: 'c55cb53', inJournal: () => false },
   /* Closing a round without a new model (PLAN-Y-SI, Entrega 1), the assisted researcher's: every journal before it lacks it. */
-  { name: 'close_round', since: 'a67c367', inJournal: () => false }
+  { name: 'close_round', since: 'a67c367', inJournal: () => false },
+  /* Delegating an investigation (SPEC-DELEGACION-INVESTIGACIONES), the assisted researcher's; likewise. */
+  { name: 'delegation', since: '228e07b', inJournal: () => false }
 ];
 
 /** The rounds a run had at an attempt: those of the stretch of its history it falls in (`rounds_before`), else its own. */

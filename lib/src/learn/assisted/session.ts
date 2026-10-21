@@ -47,6 +47,11 @@ export interface OperatorMessage {
   readonly test?: Readonly<Record<string, unknown>>;
   /** Pinned in its channel under this key (SPEC-CANAL-MENSAJES): a standing message (a member's role), sent every round. */
   readonly pin?: string;
+  /** The result of a branch it delegated (SPEC-DELEGACION-INVESTIGACIONES): a contribution, never an order nor help - its
+      branch, how it ended, and what it spent. */
+  readonly research_result?: string;
+  readonly result_state?: string;
+  readonly result_spent?: number | null;
   /** Held until this round begins: a message scheduled in advance. */
   readonly round?: number;
 }
@@ -161,6 +166,8 @@ export interface OperatorChannel {
   readonly tests?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number, budget: { acts: number }): Promise<unknown> };
   /** Its own instruments, used (SPEC-INSTRUMENTOS-PROPIOS): a use is an investigation request, answered here. */
   readonly instruments?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number): Promise<unknown> };
+  /** Its branches (SPEC-DELEGACION-INVESTIGACIONES): a request that opens one, reads one, or stops one. The prompt's section is the host's. */
+  readonly delegations?: { accepts(q: Record<string, unknown>): boolean; run(q: Record<string, unknown>, round: number): Promise<unknown> };
 }
 
 /** How many times a round the assisted researcher may ask to investigate with no steps left before it is a refusal. */
@@ -323,6 +330,8 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
   const registers = (q: Record<string, unknown>): boolean => tests !== undefined && tests.accepts(q);
   const instruments = channel.instruments;
   const measures = (q: Record<string, unknown>): boolean => instruments !== undefined && instruments.accepts(q);
+  const delegations = channel.delegations;
+  const delegates = (q: Record<string, unknown>): boolean => delegations !== undefined && delegations.accepts(q);
   let session: LawSession<A> | null = null;
   const client = operatorClient(host.llm, { ...channel, round: () => session?.currentRound ?? 0 }, (t, d) => host.log(t, d));
   session = new LawSession<A>({
@@ -339,9 +348,10 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
     overreach: OVERREACH,
     /* Its own instruments - the sources once an origin is allowed (`list`, `open`, `find`) and its memory (`memory`) -
        answered here, never by the world. */
-    ...(sources || memory || experience || board || tests || instruments ? {
-      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || registers(q) || measures(q) || reads(q),
+    ...(sources || memory || experience || board || tests || instruments || delegations ? {
+      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || registers(q) || measures(q) || delegates(q) || reads(q),
       runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session!.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra)
+        : delegates(r.extra) ? delegations!.run(r.extra, round)
         : posts(r.extra) ? board!.run(r.extra, round) : registers(r.extra) ? tests!.run(r.extra, round, budget) : measures(r.extra) ? instruments!.run(r.extra, round) : sources!.run(r.extra))
         : host.runRequest(r, budget, round))
     } : {}),

@@ -10,6 +10,10 @@ import { followUpDue, journalReader, juniorBrief, juniorInstruments, juniorPerce
 import { UserParts } from '../learn/system2.ts';
 import { Channel, applyPins, parsePins } from '../learn/assisted/channel.ts';
 import { emptySeniorState, keepNotebook, notebookBrief, seniorMemory, seniorNotebook, tokensOf, writeNotebook, type SeniorState } from './senior.ts';
+import { Delegations, SENIOR_DELEGATION_SECTION, type Launcher } from '../learn/assisted/delegation.ts';
+import { worldOptionsIn } from './reader.ts';
+import { LABS } from '../worlds/labs.ts';
+import { startRunAt, labNameOf } from '../runtime/control.ts';
 
 /* ============================================================================
  * The AGENT OPERATOR (SPEC-ORQUESTADOR §3, R1): an agent that follows an assisted run and does
@@ -135,6 +139,8 @@ function addUsage(u: Usage, raw: unknown): void {
 
 export interface AgentOperatorOptions {
   readonly id: string;
+  /** How a branch of the senior's is started (SPEC-DELEGACION-INVESTIGACIONES): a run of its own by default; tests run it here. */
+  readonly delegate?: Launcher;
   /** The run it follows (its journal). */
   readonly journal: string;
   /** Its LLM (the caller wraps it with a replay log when it should be resumable). */
@@ -178,7 +184,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   const role: AgentRole = o.role ?? 'coach';
   const record: { format: string; agent: string; role: AgentRole; run: string; started: string; decisions: AgentDecision[]; usage?: Usage;
     llm_config?: Readonly<Record<string, unknown>>; llm_provider?: string; settings?: Record<string, unknown>;
-    continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
+    continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState;
+    /** Its branches (SPEC-DELEGACION-INVESTIGACIONES): every request and answer, kept as it goes. */
+    delegation_log?: Record<string, unknown>[]; delegation?: Record<string, unknown> } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
   if (o.llm.configuration) record.llm_config = o.llm.configuration;
   /* The settings of its role, as given: they make it the agent it is (a characterization tells one from another). */
   record.settings = Object.fromEntries(Object.entries({ maxOrders: o.maxOrders, patience: o.patience, looking: o.looking, readSteps: o.readSteps, cooldown: o.cooldown,
@@ -198,6 +206,26 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   const maxOrders = o.maxOrders ?? 6;
   /* The senior's channel (SPEC-CANAL-MENSAJES §9): the environment's notices to the junior, the junior's budget, its pins. */
   const seniorChannel = new Channel();
+  /* Its branches (SPEC-DELEGACION-INVESTIGACIONES): a senior's, where the junior's run gives a fund and its code the capability -
+     its own (one at a time), under the run's fund and limits, kept in its record as it goes. */
+  let branchesOf: Delegations | null | undefined;
+  const seniorBranches = (journal: Record<string, any>): Delegations | null => {
+    if (branchesOf !== undefined) return branchesOf;
+    const cfg = (journal?.config ?? {}) as Record<string, any>;
+    const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
+    if (role !== 'senior' || !cfg.delegation || typeof cfg.capabilities_from?.delegation !== 'number' || !lab) return (branchesOf = null);
+    branchesOf = new Delegations({
+      config: { fund: cfg.delegation.fund, tokens: cfg.delegation.tokens, rounds: cfg.delegation.rounds, maxRounds: cfg.delegation.max_rounds },
+      journalFile: file, snapshot: () => JSON.parse(fs.readFileSync(o.journal, 'utf8')), lab: lab.id,
+      worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptionsIn(lab.options, cfg)).flatMap(([k, v]) => ['--' + k, String(v)]),
+        ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
+      launcher: o.delegate ?? ((l) => { startRunAt(l.journal, labNameOf(l.lab), l.args); }),
+      log: (type, data) => { (record.delegation_log ??= []).push({ at: new Date().toISOString(), type, ...data }); save(); },
+      history: (record.delegation_log ?? []) as Record<string, any>[],
+      unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own' : null
+    });
+    return branchesOf;
+  };
   while (!o.signal?.aborted) {
     const status = fs.existsSync(o.journal) ? runStatus(o.journal) : null;
     const journal = readJson(o.journal);
@@ -252,7 +280,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       seenRounds = Math.max(seenRounds, rounds);
       let d: AgentDecision | null;
       if (role === 'senior') {
-        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel);
+        d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel,
+          seniorBranches(journal));
         record.senior!.followed_up = [...followedUp];
         record.senior!.called_in_round = [...calledInRound];
       }
@@ -292,7 +321,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       d.outcome = out.state + (out.reason ? ': ' + out.reason : '');
     }
     save();
-    if (ended) break;
+    if (ended) { if (branchesOf) { record.delegation = branchesOf.close(); save(); } break; }
     await sleep(o.pollMs ?? 2000, o.signal);
   }
   return { decisions: record.decisions, file };
@@ -308,14 +337,17 @@ function noteOf(state: SeniorState, id: string): { text: string; versions: numbe
 }
 
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
-  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel()): Promise<AgentDecision | null> {
+  duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel(),
+  branches: Delegations | null = null): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
      to have had time with its last message. */
   if (!isOpening && !followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const nb = seniorNotebook(state);
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
-  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal));
+  const delegation = (journal.config?.delegation ?? null) as { fund: number; tokens: number; rounds: number; max_rounds: number } | null;
+  const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal))
+    + (branches && delegation ? '\n\n' + SENIOR_DELEGATION_SECTION({ fund: delegation.fund, tokens: delegation.tokens, rounds: delegation.rounds, maxRounds: delegation.max_rounds }) : '');
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
   const call = decisions.length + 1;
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
@@ -336,6 +368,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     state.since = Math.max(state.since, latestRound());
   }
   const limit = followUp ? 1 : o.readSteps ?? 4;
+  const branchResults = branches ? branches.results().map((r) => { branches.given(r); return { branch: r.research_result, state: r.result_state, spent_tokens: r.result_spent, report: r.text }; }) : [];
   /* What the junior reported since its latest call: the directives it carried out, and where it disagrees. */
   const reports = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'directive_report' || e.type === 'junior_report');
   const freshReports = reports.slice(state.reports_seen ?? 0).map((e) => (e.type === 'junior_report' ? { the_junior_says: e.text } : { directive: e.id, done: e.done ?? null }));
@@ -344,7 +377,9 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     ...(freshReports.length ? { junior_reports: freshReports } : {}),
     ...(isOpening ? { opening: 'the junior has its task and the environment\'s first episodes, and has not asked anything yet: it waits for the first hypothesis it will develop' } : {}),
     ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
-    orders_left: ordersLeft, memory: memory.counts(), steps_left: limit } });
+    orders_left: ordersLeft, memory: memory.counts(), steps_left: limit,
+    /* What its branches found since its latest call: theirs to read, and its own to pass on, if anything. */
+    ...(branchResults.length ? { branch_results: branchResults } : {}) } });
   state.conversation.push(callPart());
   /* Its channel mirrors the junior's (SPEC-CANAL-MENSAJES §9): everything the junior was told between its answers since this
      channel's latest look - the operator's task, its messages, the instructions, the budget, the environment's notices -
@@ -410,9 +445,10 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       }
       const stepsLeft = Math.max(0, limit - read.length);
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {
-        const requests = parsed.investigate.filter((q: unknown): q is Record<string, unknown> => Boolean(q) && typeof q === 'object' && typeof (q as Record<string, unknown>).memory === 'string').slice(0, 8);
+        const requests = parsed.investigate.filter((q: unknown): q is Record<string, unknown> => Boolean(q) && typeof q === 'object'
+          && (typeof (q as Record<string, unknown>).memory === 'string' || (branches !== null && Delegations.accepts(q as Record<string, unknown>)))).slice(0, 8);
         const results: unknown[] = [];
-        for (const q of requests) results.push(await memory.run(q));
+        for (const q of requests) results.push(branches && Delegations.accepts(q) ? await branches.run(q, rounds) : await memory.run(q));
         read.push({ step: 'd' + call + '.' + (read.length + 1), requests, results });
         state.conversation.push({ investigation_step: read[read.length - 1], steps_left: Math.max(0, limit - read.length), ...written });
         continue;

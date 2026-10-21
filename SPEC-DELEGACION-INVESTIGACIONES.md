@@ -180,3 +180,62 @@ efecto de más recursos del de explorar independientemente. Evaluar resultados d
 contar hipótesis no demuestra progreso.
 
 **La capacidad general es delegar una pregunta investigable y recuperar su trabajo. Generar hipótesis es su primer uso.**
+
+## 10. Implementado: primera entrega (21/10/2026)
+
+El código está en `lib/src/learn/assisted/delegation.ts` y las pruebas en `lib/test/delegation.test.ts`. Antes se retiró
+`what_if` con un revert, y se conservó lo que no le pertenecía: el cierre de ronda y sus correcciones.
+
+- **El operador habilita la capacidad** con `--delegation-fund N` (los tokens de todas las ramas) y fija los límites:
+  `--delegation-tokens` (200.000 por rama), `--delegation-rounds` (3) y `--delegation-max-rounds` (6). Sin fondo, la
+  herramienta no existe y no aparece en el prompt. Lo controla la capacidad `delegation`, y la configuración queda en el
+  diario, así que también en la identidad del generador.
+- **`delegate`** dentro de `investigate`, con su pregunta (obligatoria), `refs`, `expected` y `budget`.
+  - Responde enseguida con el id (`delegation:r<ronda>.<n>`), su estado, lo concedido y el saldo, o con una negativa y
+    su motivo: sin pregunta, una rama ya activa, el fondo agotado, o un mundo cuyo entorno está fuera del arnés.
+  - **`delegation`** permite consultar el estado (`status`), leer el recorrido de la rama con las peticiones de
+    experiencia (`read`) y cancelarla (`cancel`).
+  - Cada petición cuesta un paso.
+- **La rama es el investigador asistido general,** en un run propio dentro de `<run>.branches/`.
+  - Su tarea es la pregunta, junto con lo que se espera y por dónde empezar.
+  - Su montaje es el mismo mundo (semilla y opciones) en una instancia propia, y así se declara.
+  - Su presupuesto son las rondas y los tokens concedidos.
+  - Lee el trabajo del solicitante como experiencia `meta`, desde un **corte** escrito al aceptar la petición (con su
+    hash) y sin la parte oculta del mundo.
+  - Puede cerrar rondas sin modelo; no necesita terminar con una propuesta.
+- **El solicitante sigue trabajando mientras tanto.** Cuando la rama acaba, su resultado le llega **una sola vez** como
+  mensaje propio (`research_result`):
+  - su estado, lo que gastó, sus creencias y notas, su última palabra, sus cierres y su último modelo;
+  - una referencia para leer su registro entero.
+
+  Es una aportación delegada, nunca una orden ni ayuda: no gasta `help_left` y no cuenta en `assistance` ni en la
+  ayuda de K4.
+- **El fondo:** se reserva al aceptar, se liquida con lo gastado al terminar y el resto se libera. El cierre del run
+  dice, por rama, su registro, su estado, lo gastado y lo concedido.
+  - K1 separa coste directo, delegado y total.
+  - Una rama que seguía en marcha al acabar el solicitante deja su coste como desconocido, y se dice.
+- **Al terminar el solicitante,** sus ramas activas reciben la orden de parar. Sus resultados parciales quedan en sus
+  registros, y el solicitante no se reabre.
+- **Reanudación y reproducción:**
+  - cada respuesta queda registrada con lo que se registró con ella (`delegation_answered`), y al reanudar se responde
+    igual: no se lanza nada otra vez ni se leen ficheros de la rama que hayan cambiado;
+  - el fin de una rama sólo queda registrado con el mensaje que entrega su resultado, que se reproduce en la misma
+    pregunta;
+  - `lab pack` incluye las ramas y sus cortes, y `lab verify` reconstruye el run sin red ni lanzamientos.
+- **El senior también puede delegar,** desde su propio bucle y con la misma herramienta en sus lecturas.
+  - Su rama vive en `<run>.agent-<id>.branches/` y su registro de agente guarda cada paso en el momento
+    (`delegation_log`).
+  - El resultado le llega a él en su siguiente llamada (`branch_results`), nunca al junior: lo que llegue al junior es
+    lo que el senior haga con él.
+  - La vista del registro le muestra las solicitudes de rama del junior.
+- **Además:** el lector del registro toma ahora las notas escritas al cerrar una ronda (`round_closed`). Antes se
+  perdían, y lo destapó esta entrega.
+
+**Pendiente o limitado:**
+- **Mundos:** sólo los del bucle común de leyes. Los de bucle propio (cuadrícula) no la tienen, y los de entorno externo
+  la rechazan.
+- **El fondo se lleva por solicitante.** El senior y el junior tienen cada uno su cuenta con el mismo fondo declarado,
+  así que juntos podrían gastar hasta el doble. Un fondo compartido entre los dos procesos queda pendiente.
+- **Comunicación continua** con la rama, concurrencia mayor o delegación recursiva: condiciones posteriores (§6).
+- **La comparación de §9:** sin delegación frente a con delegación, al mismo coste total, separando el efecto de tener
+  más recursos del de explorar de forma independiente. Necesita runs reales.

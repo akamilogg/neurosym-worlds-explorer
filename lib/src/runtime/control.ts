@@ -142,6 +142,11 @@ export function startRun(lab: string, options: { root: string; args?: readonly s
     '--out', journal], options.env);
 }
 
+/** Starts a run of a laboratory in a process of its own, writing to the journal given (a branch of another run's, SPEC-DELEGACION-INVESTIGACIONES). */
+export function startRunAt(journal: string, lab: string, args: readonly string[], env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
+  return launch(journal, ['--lab', lab, ...args, '--out', journal], env);
+}
+
 /** Resumes a run in a process of its own, as a run derived from it (the journal resumed stays as it was). */
 export function resumeRun(journal: string, options: { args?: readonly string[]; policy?: string; env?: NodeJS.ProcessEnv } = {}): { journal: string; pid: number } {
   const lab = Object.entries(LAB_IDS).find(([, id]) => id === readJson(journal)?.experiment)?.[0];
@@ -152,6 +157,8 @@ export function resumeRun(journal: string, options: { args?: readonly string[]; 
 
 /** The laboratories' names on the command line, by the id their journals carry. */
 const LAB_IDS: Readonly<Record<string, string>> = Object.fromEntries(Object.entries(LABS).map(([name, lab]) => [name, lab.id]));
+/** A laboratory's name on the command line, from its id (e.g. "cells@1" -> "cells"). */
+export const labNameOf = (id: string): string => Object.entries(LAB_IDS).find(([, v]) => v === id)?.[0] ?? id;
 
 function launch(journal: string, args: readonly string[], env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
   fs.mkdirSync(path.dirname(journal), { recursive: true });

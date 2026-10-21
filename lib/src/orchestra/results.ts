@@ -57,7 +57,9 @@ export interface RunResults {
 }
 
 export interface RunCost {
-  readonly tokens: { readonly junior: number | null; readonly agents: number | null; readonly total_at_least: number };
+  readonly tokens: { readonly junior: number | null; readonly agents: number | null;
+    /** What its branches spent (SPEC-DELEGACION-INVESTIGACIONES §6): direct, delegated and total, never counted twice. */
+    readonly delegated: number | null; readonly total_at_least: number };
   readonly money: { readonly known: number; readonly unknown: readonly string[] };
   readonly seconds: number | null;
   readonly judge_calls: number | null;
@@ -101,21 +103,26 @@ export function runResults(journalFile: string, criteria?: Criteria): RunResults
   const junior = typeof finding.cost?.total?.llm_tokens === 'number' ? finding.cost.total.llm_tokens : null;
   if (junior === null) unknown.push('the junior\'s tokens');
   else if (end.console_usage?.usage_unknown) unknown.push('part of the junior\'s tokens (its provider did not report them all)');
-  let agentTokens: number | null = null, money = 0;
+  let agentTokens: number | null = null, money = 0, agentDelegated = 0;
   const moneyUnknown: string[] = ['the junior\'s (no price recorded)'];
   for (const f of fs.existsSync(path.dirname(journalFile)) ? fs.readdirSync(path.dirname(journalFile)).filter((x) => x.startsWith(path.basename(base) + '.agent-') && x.endsWith('.json')) : []) {
-    const u = agentUsage(readJson(path.join(path.dirname(journalFile), f)));
+    const rec = readJson(path.join(path.dirname(journalFile), f));
+    const u = agentUsage(rec);
+    /* Its branches' work, delegated: counted with the run's delegated cost, never twice. */
+    if (typeof rec?.delegation?.spent === 'number') agentDelegated += rec.delegation.spent;
     agentTokens = (agentTokens ?? 0) + u.tokens_in + u.tokens_out;
     if (u.cost > 0) money += u.cost; else if (u.calls) moneyUnknown.push(f.replace(/^.*\.agent-|\.json$/g, '') + '\'s (its provider reported no price)');
   }
   const seconds = typeof end.t === 'number' ? end.t : null;
+  const delegated = typeof end.delegation?.spent === 'number' || agentDelegated ? (Number(end.delegation?.spent) || 0) + agentDelegated : null;
+  if (end.delegation && (end.delegation.branches ?? []).some((b: J) => b.spent === null)) unknown.push('a branch still running when it ended (its tokens not counted)');
   return {
     o1_predictive_acceptance: { model, ...(artifact !== undefined ? { artifact } : {}) },
     o2_discriminating_evidence: o2,
     o3_adequacy: o3,
     o4_mechanistic_recovery: recovery !== null ? { score: recovery, grader_version: rec.grader_version ?? null } : 'no truth to grade against, or not graded',
     ...(model && recovery !== null ? { prediction_and_mechanism: { accepted: true, recovery } } : {}),
-    cost: { tokens: { junior, agents: agentTokens, total_at_least: (junior ?? 0) + (agentTokens ?? 0) }, money: { known: Math.round(money * 1e6) / 1e6, unknown: moneyUnknown },
+    cost: { tokens: { junior, agents: agentTokens, delegated, total_at_least: (junior ?? 0) + (agentTokens ?? 0) + (delegated ?? 0) }, money: { known: Math.round(money * 1e6) / 1e6, unknown: moneyUnknown },
       seconds, judge_calls: typeof end.jev?.calls === 'number' ? end.jev.calls : null, unknown },
     started: journal.started ?? null, ended_at_seconds: seconds
   };
