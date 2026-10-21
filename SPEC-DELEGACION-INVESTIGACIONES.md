@@ -285,3 +285,24 @@ Cuatro fallos más, corregidos con sus pruebas (`lib/test/delegation-review.test
    - **muerta,** si su registro no tiene fin y su latido se paró: termina como fallida, con lo que su registro dice que
      gastó;
    - **nunca arrancada,** si pasado el margen no dejó registro: termina como fallida, se dice y se libera su reserva.
+
+### 10.3 Tercera revisión (21/10/2026)
+
+Tres fallos más, corregidos con sus pruebas (`lib/test/delegation-review.test.ts`):
+
+1. **Un solicitante podía recrear un fondo perdido ignorando las reservas del otro.** El senior, sin ramas propias, veía
+   un libro ausente como un fondo nuevo. Ahora el fondo **se abre una sola vez**: el run que inicia el linaje (no uno
+   reanudado, ni uno cuyo registro ya pidió ramas) escribe en el libro una línea `opened`. A partir de ahí, un libro
+   ausente, o uno sin esa apertura, es una **pérdida para todos los solicitantes**: no se abre ninguna rama y se dice por
+   qué.
+2. **Empaquetar un run reanudado omitía las ramas anteriores.** `lab pack` ya no copia por el prefijo del nombre: sigue
+   las ramas que nombran los registros (los `delegation_requested` del diario y el `delegation_log` de cada agente,
+   incluido el senior), cada una con su carpeta y su corte, por la ruta que da su registro.
+3. **Un latido vencido convertía un gasto parcial en una liquidación definitiva.** El contador de tokens del `status`
+   puede no incluir una llamada en curso, y un latido tardío no demuestra la muerte. Ahora:
+   - el lanzamiento registra el **pid** de la rama;
+   - si el latido se pasó de plazo, se pregunta al sistema por ese proceso, y si vive, la rama sigue **viva**;
+   - una rama muerta queda como fallida con el **gasto incierto**: se anota su asignación completa (la cota superior), con
+     `uncertain` y `at_least` (lo que su registro mostraba). Su reserva nunca se libera por una suposición. El resumen
+     (`spent_uncertain`), el mensaje de resultado y K1 (`cost.unknown`) lo dicen;
+   - sólo una rama que nunca arrancó se liquida a 0.

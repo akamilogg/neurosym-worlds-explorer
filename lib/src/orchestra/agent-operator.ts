@@ -219,7 +219,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       journalFile: file, snapshot: () => JSON.parse(fs.readFileSync(o.journal, 'utf8')), lab: lab.id,
       worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptionsIn(lab.options, cfg)).flatMap(([k, v]) => ['--' + k, String(v)]),
         ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
-      launcher: o.delegate ?? (async (l) => { startRunAt(l.journal, labNameOf(l.lab), l.args); }),
+      launcher: o.delegate ?? (async (l) => ({ pid: startRunAt(l.journal, labNameOf(l.lab), l.args).pid })),
       log: (type, data) => { (record.delegation_log ??= []).push({ at: new Date().toISOString(), type, ...data }); save(); },
       history: (record.delegation_log ?? []) as Record<string, any>[],
       unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,

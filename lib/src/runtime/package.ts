@@ -78,9 +78,18 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
   const own = fs.readdirSync(folder).filter((f) => f === name + '.json' || f === name + '.replay.jsonl' || f === name + '.anomalies.jsonl'
     || (f.startsWith(name + '.') && /^\.(finding|finding\.researcher|method|agent-[^.]+)\.json$/.test(f.slice(name.length))));
   for (const f of own) fs.copyFileSync(path.join(folder, f), path.join(dir, f));
-  /* Its branches (SPEC-DELEGACION-INVESTIGACIONES §7): their records and the cuts they read, verified with their own. */
-  for (const d of fs.readdirSync(folder).filter((f) => f.startsWith(name + '.') && f.endsWith('.branches') && fs.statSync(path.join(folder, f)).isDirectory()))
-    fs.cpSync(path.join(folder, d), path.join(dir, d), { recursive: true });
+  /* Its branches (SPEC-DELEGACION-INVESTIGACIONES §7, §10.3): every one its record names - and its agents' records - wherever it lives (a run resumed may name the branches
+     of the run it resumed), each with its folder (its record, its cut, its blobs), by the path its record gives. */
+  const named: string[] = [];
+  for (const e of (journal.events ?? []) as Record<string, any>[]) if (e.type === 'delegation_requested' && typeof e.journal === 'string') named.push(e.journal);
+  for (const f of own.filter((x) => /\.agent-[^.]+\.json$/.test(x))) {
+    try { for (const e of (JSON.parse(fs.readFileSync(path.join(folder, f), 'utf8')).delegation_log ?? []) as Record<string, any>[]) if (e.type === 'delegation_requested' && typeof e.journal === 'string') named.push(e.journal); } catch { /* not a record */ }
+  }
+  for (const rel of [...new Set(named.map((j) => path.dirname(j)))]) {
+    const from = path.resolve(folder, rel);
+    if (!inside(from, folder) || from === folder || !fs.existsSync(from)) continue;
+    fs.cpSync(from, path.join(dir, rel), { recursive: true });
+  }
   /* The fund's ledger of its lineage (it may be named after the run that began it): without it, what was spent is not known. */
   const ledger = journal.config?.delegation?.ledger;
   if (typeof ledger === 'string' && fs.existsSync(path.join(folder, ledger))) fs.copyFileSync(path.join(folder, ledger), path.join(dir, path.basename(ledger)));

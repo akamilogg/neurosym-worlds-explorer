@@ -31,7 +31,13 @@ export interface DelegationConfig {
 
 /** How a branch is started: a run of the laboratory `lab` with `args`, writing `journal` (a process of its own, or - in
     tests - the same process). */
-export type Launcher = (o: { readonly journal: string; readonly lab: string; readonly args: readonly string[] }) => void | Promise<void>;
+export type Launcher = (o: { readonly journal: string; readonly lab: string; readonly args: readonly string[] }) => void | { readonly pid?: number } | Promise<void | { readonly pid?: number }>;
+
+/** Whether a process is alive (a signal 0 asks the system without touching it). */
+function processAlive(pid: unknown): boolean {
+  if (typeof pid !== 'number' || !(pid > 0)) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as { code?: string }).code === 'EPERM'; }
+}
 
 type J = Record<string, any>;
 const readJson = (f: string): J | null => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
@@ -48,6 +54,10 @@ interface Branch {
   delivered: boolean;
   /** Why it failed, when it did not end by itself (its process stopped, it never started). */
   why?: string;
+  /** Its process, when its launch told it. */
+  pid?: number;
+  /** What it spent is not known: booked at its grant (the most it was allowed), with what its record showed at least. */
+  uncertain?: { readonly at_least: number };
 }
 
 /** A run's heartbeat older than this: its process is no longer alive (as control.ts reads it). */
@@ -92,6 +102,9 @@ export class Delegations {
     readonly ledger?: string;
     /** Who asks, in that ledger. */
     readonly requester?: string;
+    /** Whether this requester opens the fund (the run that begins the lineage): its ledger written once, so that a ledger
+        missing afterwards is a loss for every requester - never a fresh fund. */
+    readonly opens?: boolean;
     /** The clock and its thresholds (tests). */
     now?(): number;
     readonly staleMs?: number;
@@ -102,6 +115,10 @@ export class Delegations {
 
   constructor(o: Delegations['o']) {
     this.o = o;
+    if (o.ledger && o.opens && !fs.existsSync(o.ledger) && !o.history.some((e) => e.type === 'delegation_requested')) {
+      fs.mkdirSync(path.dirname(o.ledger), { recursive: true });
+      fs.writeFileSync(o.ledger, JSON.stringify({ at: new Date().toISOString(), opened: o.config.fund, by: o.requester ?? 'junior' }) + '\n');
+    }
     /* A run resumed: its branches as its record left them - opened by its requests, ended by the results delivered to it. */
     let pending: J[] = [];
     for (const e of o.history) {
@@ -110,7 +127,7 @@ export class Delegations {
         this.reserved += Number(e.granted?.tokens) || 0;
         this.perRound.set(e.round, Math.max(this.perRound.get(e.round) ?? 0, Number(String(e.id).split('.').pop()) || 0));
       }
-      if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.spent === 'number') this.settle(b, e.spent); } }
+      if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.pid === 'number') b.pid = e.pid; if (typeof e.spent === 'number') this.settle(b, e.spent); } }
       if (e.type === 'delegation_requested' || e.type === 'delegation_state' || e.type === 'delegation_cancel_asked') pending.push(e);
       if (e.type === 'delegation_answered') { this.answered.push({ round: e.round, request: e.request, answer: e.answer, events: pending }); pending = []; }
       if (e.type === 'delegation_answered') for (const p of this.answered[this.answered.length - 1].events) if (p.type === 'delegation_requested') this.unconfirmed.delete(p.id);
@@ -138,7 +155,8 @@ export class Delegations {
   private ledgerNow(): { reserved: number; spent: number } | { problem: string } {
     const read = ledgerOf(this.o.ledger!);
     if ('problem' in read) return read;
-    if (read.absent && this.branches.length) return { problem: 'its ledger is missing (' + path.basename(this.o.ledger!) + ') while branches were booked' };
+    if (read.absent) return { problem: 'its ledger is missing (' + path.basename(this.o.ledger!) + '): what every requester of the run booked is not known' };
+    if (!read.entries.some((e) => e.opened !== undefined)) return { problem: 'its ledger was not opened by its run (' + path.basename(this.o.ledger!) + ')' };
     return ledgerTotals(read.entries);
   }
 
@@ -153,14 +171,23 @@ export class Delegations {
   private active(): Branch | undefined { return this.branches.find((b) => b.state === 'accepted' || b.state === 'running'); }
 
   /** Its cost settled: the reservation released, what it spent kept (in the shared ledger too, once). */
-  private settle(b: Branch, spent: number, live = false): void {
+  private settle(b: Branch, spent: number, live = false, uncertain?: { at_least: number }): void {
     if (b.spent !== null) return;
     b.spent = spent;
+    if (uncertain) b.uncertain = uncertain;
     this.reserved = Math.max(0, this.reserved - b.granted.tokens);
     this.spentAll += spent;
     if (!live || !this.o.ledger) return;
     const read = ledgerOf(this.o.ledger);
-    if (!('problem' in read) && !read.entries.some((e) => keyOf(e) === this.key(b.id) && e.settle !== undefined)) this.book({ id: b.id, settle: spent });
+    if (!('problem' in read) && !read.entries.some((e) => keyOf(e) === this.key(b.id) && e.settle !== undefined)) this.book({ id: b.id, settle: spent, ...(uncertain ? { uncertain: true, at_least: uncertain.at_least } : {}) });
+  }
+
+  /** A branch that did not end by itself: never started (nothing spent), or stopped (its spending not known: its grant kept). */
+  private fail(b: Branch, l: { state: string; why: string; spent: number }): void {
+    b.state = 'failed';
+    b.why = l.why;
+    if (l.state === 'never') this.settle(b, 0, true);
+    else this.settle(b, b.granted.tokens, true, { at_least: l.spent });
   }
 
   /** A branch its record asked for and never saw answered: running if its record exists, otherwise never started - said so,
@@ -172,10 +199,8 @@ export class Delegations {
       if (!b || b.state !== 'running') continue;
       const l = this.liveness(b);
       if (l.state === 'alive' || l.state === 'starting' || l.state === 'ended') { this.o.log('delegation_state', { id, state: 'running', reconciled: true, why: l.why }); continue; }
-      b.state = 'failed';
-      b.why = l.why;
-      this.o.log('delegation_state', { id, state: 'failed', reconciled: true, why: l.why, spent: l.spent });
-      this.settle(b, l.spent, true);
+      this.fail(b, l);
+      this.o.log('delegation_state', { id, state: 'failed', reconciled: true, why: l.why, spent: b.spent, ...(b.uncertain ? { uncertain: b.uncertain } : {}) });
     }
   }
 
@@ -191,15 +216,19 @@ export class Delegations {
     const beat = status?.heartbeat ? Date.parse(status.heartbeat) : NaN;
     const spentSoFar = Number(status?.cost?.llm_tokens) || 0;
     if (Number.isFinite(beat) && now - beat < stale) return { state: 'alive', why: 'its process is alive (its heartbeat is fresh)', spent: 0 };
+    /* A heartbeat late is not a death: its process is asked, when it is known. */
+    const pid = typeof status?.pid === 'number' ? status.pid : b.pid;
+    if (processAlive(pid)) return { state: 'alive', why: 'its process is alive (its heartbeat late)', spent: 0 };
     if (journal || status || fs.existsSync(b.journal)) {
       const since = Number.isFinite(beat) ? beat : fs.statSync(fs.existsSync(b.journal) ? b.journal : b.journal.replace(/\.json$/, '') + '.status.json').mtimeMs;
       return now - since < grace ? { state: 'starting', why: 'its record began and its heartbeat is not yet stale for long', spent: 0 }
-        : { state: 'dead', why: 'its process stopped without ending (its heartbeat stale): what it spent is what its record says', spent: spentSoFar };
+        : { state: 'dead', why: 'its process stopped without ending' + (typeof pid === 'number' ? ' (process ' + pid + ' is gone)' : ' (its process could not be confirmed alive)')
+          + ': what it spent is not known - its grant is kept booked, its record showed at least ' + spentSoFar + ' tokens', spent: spentSoFar };
     }
     const cut = b.journal.replace(/\.json$/, '') + '.cut.json';
     const asked = fs.existsSync(cut) ? fs.statSync(cut).mtimeMs : 0;
     return now - asked < grace ? { state: 'starting', why: 'launched and not yet started: within the grace of a launch', spent: 0 }
-      : { state: 'never', why: 'it left no record in the grace of a launch: taken as never started', spent: 0 };
+      : { state: 'never', why: 'it left no record in the grace of a launch' + (typeof b.pid === 'number' ? ' and its process ' + b.pid + ' is gone' : '') + ': taken as never started, nothing spent', spent: 0 };
   }
 
   /** Whether a branch ended and its result is still to give (what calls a requester that is not asked every round). */
@@ -303,7 +332,8 @@ export class Delegations {
       this.settle(b, 0, true);
       return { delegation: id, state: 'failed', error: 'the fund for branches is spent', fund_left: this.fundLeft() };
     }
-    try { await this.o.launcher({ journal, lab: this.o.lab, args }); }
+    let launched: void | { readonly pid?: number };
+    try { launched = await this.o.launcher({ journal, lab: this.o.lab, args }); }
     catch (e) {
       b.state = 'failed';
       this.o.log('delegation_state', { id, state: 'failed', why: 'it could not be started: ' + String((e as Error)?.message ?? e).slice(0, 200), spent: 0 });
@@ -311,7 +341,8 @@ export class Delegations {
       return { delegation: id, state: 'failed', error: 'it could not be started', fund_left: this.fundLeft() };
     }
     b.state = 'running';
-    this.o.log('delegation_state', { id, state: 'running' });
+    if (launched && typeof launched.pid === 'number') b.pid = launched.pid;
+    this.o.log('delegation_state', { id, state: 'running', ...(b.pid !== undefined ? { pid: b.pid } : {}) });
     return { delegation: id, state: 'accepted', granted, fund_left: this.fundLeft(), note: 'its result comes to you as a message when it ends; go on meanwhile' };
   }
 
@@ -323,7 +354,7 @@ export class Delegations {
       const end = endOf(readJson(b.journal));
       if (!end) {
         const l = this.liveness(b);
-        if (l.state === 'dead' || l.state === 'never') { b.state = 'failed'; b.why = l.why; this.settle(b, l.spent, true); }
+        if (l.state === 'dead' || l.state === 'never') this.fail(b, l);
         continue;
       }
       const spent = Number(readJson(b.journal.replace(/\.json$/, '.finding.json'))?.cost?.total?.llm_tokens) || Number(end.console_usage?.llm_tokens_live ?? 0) + Number(end.console_usage?.llm_tokens_replayed ?? 0);
@@ -333,13 +364,13 @@ export class Delegations {
   }
 
   /** The results to deliver now: each branch ended and not delivered yet, once. */
-  results(): { id: string; text: string; research_result: string; result_state: string; result_spent: number | null }[] {
+  results(): { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: { readonly at_least: number } }[] {
     this.refresh();
-    const out: { id: string; text: string; research_result: string; result_state: string; result_spent: number | null }[] = [];
+    const out: { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: { readonly at_least: number } }[] = [];
     for (const b of this.branches) {
       if (b.delivered || (b.state !== 'completed' && b.state !== 'failed' && b.state !== 'cancelled')) continue;
       b.delivered = true;
-      out.push({ id: 'result-' + b.id, research_result: b.id, result_state: b.state, result_spent: b.spent,
+      out.push({ id: 'result-' + b.id, research_result: b.id, result_state: b.state, result_spent: b.spent, ...(b.uncertain ? { result_spent_uncertain: b.uncertain } : {}),
         text: 'RESEARCH RESULT of your branch ' + b.id + ' (a delegated contribution, not an order nor an answer of the environment): ' + JSON.stringify(reportOf(b)) });
     }
     return out;
@@ -357,7 +388,8 @@ export class Delegations {
       this.o.log('delegation_cancel_asked', { id: b.id, why: 'its requester ended' });
     }
     return { fund: this.o.config.fund, spent: this.spentAll, reserved: this.reserved,
-      branches: this.branches.map((b) => ({ id: b.id, journal: path.relative(path.dirname(this.o.journalFile), b.journal).split(path.sep).join('/'), state: b.state, spent: b.spent, granted: b.granted })) };
+      branches: this.branches.map((b) => ({ id: b.id, journal: path.relative(path.dirname(this.o.journalFile), b.journal).split(path.sep).join('/'), state: b.state, spent: b.spent, granted: b.granted,
+        ...(b.uncertain ? { spent_uncertain: b.uncertain } : {}) })) };
   }
 }
 

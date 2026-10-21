@@ -1591,8 +1591,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
     /* A run in a process of its own, with the keys of this process's environment (loaded when first needed: control.ts reads
        every laboratory). */
-    launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); c.startRunAt(l.journal, c.labNameOf(l.lab), l.args); }), log,
-    ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior' } : {}),
+    launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); return { pid: c.startRunAt(l.journal, c.labNameOf(l.lab), l.args).pid }; }), log,
+    /* The run that begins the lineage opens its fund; a run resumed finds it - or its loss, said so. */
+    ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous } : {}),
     history: (previous?.events ?? []) as Record<string, any>[],
     unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null
   }) : null;

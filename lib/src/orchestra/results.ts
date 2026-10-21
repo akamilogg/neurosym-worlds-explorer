@@ -116,6 +116,7 @@ export function runResults(journalFile: string, criteria?: Criteria): RunResults
   const seconds = typeof end.t === 'number' ? end.t : null;
   const delegated = typeof end.delegation?.spent === 'number' || agentDelegated ? (Number(end.delegation?.spent) || 0) + agentDelegated : null;
   if (end.delegation && (end.delegation.branches ?? []).some((b: J) => b.spent === null)) unknown.push('a branch still running when it ended (its tokens not counted)');
+  if (end.delegation && (end.delegation.branches ?? []).some((b: J) => b.spent_uncertain)) unknown.push('a branch stopped without ending: its tokens booked at its grant, an upper bound');
   return {
     o1_predictive_acceptance: { model, ...(artifact !== undefined ? { artifact } : {}) },
     o2_discriminating_evidence: o2,

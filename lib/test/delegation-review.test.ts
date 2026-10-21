@@ -40,7 +40,7 @@ test('a stop between a request and its answer: reconciled before anything else, 
 test('one fund for the run: its junior and its senior reserve from the same ledger', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-fund-'));
   const ledger = path.join(dir, 'run.delegation-fund.jsonl');
-  const junior = base(dir, { ledger, requester: 'junior' });
+  const junior = base(dir, { ledger, requester: 'junior', opens: true });
   const senior = base(dir, { ledger, requester: 'agent:senior', journalFile: path.join(dir, 'run.agent-senior.json') });
   assert.equal((await junior.run({ delegate: { question: 'q' } }, 1)).state, 'accepted');
   const s = await senior.run({ delegate: { question: 'q' } }, 1);
@@ -105,7 +105,7 @@ test('bookings keyed by requester and branch: two branches numbered alike are tw
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-keys-'));
   const ledger = path.join(dir, 'run.delegation-fund.jsonl');
   const c = { fund: 100, tokens: 40, rounds: 1, maxRounds: 1 };
-  const junior = base(dir, { config: c, ledger, requester: 'junior' });
+  const junior = base(dir, { config: c, ledger, requester: 'junior', opens: true });
   const senior = base(dir, { config: c, ledger, requester: 'agent:senior', journalFile: path.join(dir, 'run.agent-senior.json') });
   assert.equal((await junior.run({ delegate: { question: 'q' } }, 1)).delegation, 'delegation:r1.1');
   assert.equal((await senior.run({ delegate: { question: 'q' } }, 1)).delegation, 'delegation:r1.1', 'the same number, another requester');
@@ -128,8 +128,8 @@ test('a ledger broken, or missing where branches were booked, is no fund - never
   fs.rmSync(ledger);
   const e = base(dir, { ledger, history: [requested(dir), { type: 'delegation_answered', round: 1, request: '{}', answer: {} }] });
   assert.match(String((await e.run({ delegate: { question: 'q' } }, 2)).error), /its ledger is missing/);
-  const fresh = base(fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-fresh-')), { ledger: path.join(dir, 'other.jsonl') });
-  assert.equal(fresh.fundLeft(), 100, 'absent and nothing booked: a fresh fund');
+  const fresh = base(fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-fresh-')), { ledger: path.join(dir, 'other.jsonl'), opens: true });
+  assert.equal(fresh.fundLeft(), 100, 'opened by the run that begins it: a fresh fund');
 });
 
 test('the ledger\'s name is operational, not a condition: the same generator', async () => {
@@ -149,7 +149,8 @@ test('a branch judged by its heartbeat: a record whose process died ends it; no 
   assert.equal(dead.hasResults(), true, 'its process stopped without ending');
   const [r] = dead.results();
   assert.equal(r.result_state, 'failed');
-  assert.equal(r.result_spent, 33, 'what its record says it spent');
+  assert.equal(r.result_spent, 100, 'what it spent is not known: its grant kept booked');
+  assert.deepEqual(r.result_spent_uncertain, { at_least: 33 }, 'what its record showed, at least');
   assert.match(r.text, /its process stopped without ending/);
 
   /* No record yet: starting within the grace (not freed), never started past it. */
@@ -163,4 +164,69 @@ test('a branch judged by its heartbeat: a record whose process died ends it; no 
   assert.equal(starting.hasResults(), true);
   assert.match(starting.results()[0].text, /never started/);
   assert.equal(starting.fundLeft(), 100);
+});
+
+/* A third review (21/10/2026): the fund opened once for the lineage, so its loss is a loss for every requester; a package
+   follows the branches its records name; a heartbeat late is no death, and a death's spending is kept uncertain. */
+
+test('a ledger lost is lost for every requester: a senior with no branches of its own is refused too', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-lost-'));
+  const ledger = path.join(dir, 'run.delegation-fund.jsonl');
+  const junior = base(dir, { ledger, requester: 'junior', opens: true });
+  assert.equal((await junior.run({ delegate: { question: 'q' } }, 1)).state, 'accepted');
+  fs.rmSync(ledger);
+  const senior = base(dir, { ledger, requester: 'agent:senior', journalFile: path.join(dir, 'run.agent-senior.json') });
+  assert.equal(senior.fundLeft(), 0);
+  assert.match(String((await senior.run({ delegate: { question: 'q' } }, 1)).error), /its ledger is missing/);
+  /* Nor does one that would open it, once its run has asked: a resumed run never opens it again. */
+  const again = base(dir, { ledger, requester: 'junior', opens: true, history: [requested(dir)] });
+  assert.match(String((await again.run({ delegate: { question: 'q' } }, 2)).error), /fund cannot be known/);
+  assert.ok(!fs.existsSync(ledger));
+  /* A ledger that exists but was never opened by its run is no fund either. */
+  fs.writeFileSync(ledger, '');
+  assert.match(String((await senior.run({ delegate: { question: 'q' } }, 1)).error), /not opened by its run/);
+});
+
+test('a package follows the branches its records name: a run resumed keeps the branches of the run it resumed', async () => {
+  const { packRun } = await import('../src/runtime/package.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-pack-'));
+  const write = (rel: string, v: unknown) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), JSON.stringify(v)); };
+  write('old.branches/delegation-r1.1.json', { events: [] });
+  write('old.branches/delegation-r1.1.cut.json', { events: [] });
+  write('old.agent-senior.branches/delegation-r2.1.json', { events: [] });
+  write('stray.branches/x.json', {});
+  write('new.json', { experiment: 'x', events: [{ type: 'delegation_requested', id: 'delegation:r1.1', journal: 'old.branches/delegation-r1.1.json' }] });
+  write('new.agent-senior.json', { delegation_log: [{ type: 'delegation_requested', id: 'delegation:r2.1', journal: 'old.agent-senior.branches/delegation-r2.1.json' }] });
+  const files = packRun(path.join(dir, 'new.json'), path.join(os.tmpdir(), 'deleg-pack-out-' + path.basename(dir))).manifest.files.map((f) => f.path);
+  for (const f of ['old.branches/delegation-r1.1.json', 'old.branches/delegation-r1.1.cut.json', 'old.agent-senior.branches/delegation-r2.1.json'])
+    assert.ok(files.includes(f), f + ' packed: ' + files.join(', '));
+  assert.ok(!files.some((f) => f.startsWith('stray.')), 'only what its records name');
+});
+
+test('a heartbeat late is no death while its process lives; a death keeps its spending uncertain, its grant booked', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-pid-'));
+  const ledger = path.join(dir, 'run.delegation-fund.jsonl');
+  fs.writeFileSync(ledger, JSON.stringify({ opened: 100, by: 'junior' }) + '\n' + JSON.stringify({ requester: 'junior', id: 'delegation:r1.1', reserve: 100 }) + '\n');
+  const branch = path.join(dir, 'run.branches', 'delegation-r1.1.json');
+  fs.mkdirSync(path.dirname(branch), { recursive: true });
+  fs.writeFileSync(branch, JSON.stringify({ events: [{ type: 'start' }] }));
+  const status = (pid: number) => fs.writeFileSync(branch.replace(/\.json$/, '.status.json'), JSON.stringify({ pid, heartbeat: new Date(Date.now() - 120000).toISOString(), cost: { llm_tokens: 33 } }));
+  const history = [requested(dir), { type: 'delegation_state', id: 'delegation:r1.1', state: 'running' }, { type: 'delegation_answered', round: 1, request: '{}', answer: {} }];
+  status(process.pid);
+  const alive = base(dir, { history, ledger, requester: 'junior' });
+  assert.equal(alive.hasResults(), false, 'its process alive: still running, its reservation kept');
+  assert.equal(alive.fundLeft(), 0);
+  status(2 ** 22 + 12345);
+  const dead = base(dir, { history, ledger, requester: 'junior' });
+  assert.equal(dead.hasResults(), true);
+  const [r] = dead.results();
+  assert.equal(r.result_state, 'failed');
+  assert.match(r.text, /is gone/);
+  assert.deepEqual(r.result_spent_uncertain, { at_least: 33 });
+  assert.equal(dead.fundLeft(), 0, 'its grant kept booked: never freed on a guess');
+  const settled = fs.readFileSync(ledger, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((e) => e.settle !== undefined);
+  assert.equal(settled.settle, 100);
+  assert.equal(settled.uncertain, true);
+  assert.equal(settled.at_least, 33);
+  assert.ok((dead.close() as any).branches[0].spent_uncertain, 'said in its summary');
 });
