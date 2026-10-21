@@ -295,3 +295,37 @@ test('K1: what the fund holds for a spending not known is apart from what was ob
   const note = (cost as any).unknown.find((u: string) => /not known/.test(u));
   assert.ok(note && !/upper bound/.test(note) && /not a bound/.test(note), String(note));
 });
+
+/* A continuation given a fund now (§10.6): a run made without delegation opens one for its new rounds - a stalled run asked
+   whether it branches - and a lineage that has a fund keeps it. */
+test('a continuation opens a fund for its new rounds; a lineage with one keeps it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-cont-'));
+  const llm = { url: 'http://x.test/v1/chat/completions', model: 's' };
+  const MODEL = { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false, lessons: ['l'], next_experiment: 'n', beliefs: [] };
+  const answers: any[] = [];
+  const fetch: FetchLike = async (_url, init) => {
+    const user = JSON.parse(userOf(JSON.parse(String(init.body))));
+    const content = 'task' in user ? { rationale: 'r', beliefs: [], lessons: ['l'], next_experiment: 'n' }
+      : user.round === 2 && !(user.investigation ?? []).length ? { investigate: [{ delegate: { question: 'what keeps it where it is?' } }] } : MODEL;
+    for (const s of user.investigation ?? []) answers.push(s);
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const common = ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--no-grade', '--no-reflection', '--no-ablation'];
+  const first = path.join(dir, 'first.json');
+  await runLaboratory(cellsLab, { args: [...common, '--attempts', '1', '--out', first], root: dir, llm, fetch });
+  const launched: string[] = [];
+  const out = path.join(dir, 'more.json');
+  const r = await runLaboratory(cellsLab, { args: ['--resume', first, '--attempts', '3', '--delegation-fund', '1000', '--delegation-tokens', '400', '--out', out], root: dir, llm, fetch,
+    delegate: (l) => { launched.push(l.journal); } });
+  const journal = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  assert.equal(journal.config.delegation.fund, 1000);
+  assert.equal(journal.config.capabilities_from.delegation, 1, 'from its new rounds, never in the history it repeats');
+  const ledger = path.join(dir, journal.config.delegation.ledger);
+  assert.equal(JSON.parse(fs.readFileSync(ledger, 'utf8').split('\n')[0]).opened, 1000, 'opened by the continuation that began it');
+  assert.equal(launched.length, 1, 'a branch opened in its new rounds: ' + JSON.stringify(answers.slice(0, 2)));
+  await assert.rejects(runLaboratory(cellsLab, { args: ['--resume', r.journal, '--attempts', '5', '--delegation-fund', '50', '--out', path.join(dir, 'again.json')], root: dir, llm, fetch }), /its lineage has a fund already/);
+  /* The same fund given again is no change: it goes on with it. */
+  const same = await runLaboratory(cellsLab, { args: ['--resume', r.journal, '--attempts', '4', '--delegation-fund', '1000', '--delegation-tokens', '400', '--out', path.join(dir, 'same.json')], root: dir, llm, fetch, delegate: () => {} });
+  assert.equal(JSON.parse(fs.readFileSync(same.journal, 'utf8')).config.delegation.ledger, journal.config.delegation.ledger, 'the ledger of its lineage');
+});

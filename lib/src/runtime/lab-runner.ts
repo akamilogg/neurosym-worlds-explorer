@@ -358,6 +358,20 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     if (acceptedAt !== null && !Number.isFinite(acceptedAt)) throw new LabError('--attempts with --resume: the run ended accepted, but its journal has no check that accepted');
     if (!(moreRounds > continuedFrom!)) throw new LabError('--attempts with --resume: give it more than the ' + continuedFrom + ' rounds it had');
   }
+  /* A continuation may open a fund for branches from its new rounds on (`--delegation-fund N` given now, SPEC-DELEGACION-
+     INVESTIGACIONES §10.6), when its lineage had none: a lineage that has one keeps it - its ledger was opened with it. */
+  const DELEGATION_FLAGS = ['--delegation-fund', '--delegation-tokens', '--delegation-rounds', '--delegation-max-rounds'];
+  const asked = previous && continuedFrom !== null && given.includes('--delegation-fund')
+    ? DELEGATION_FLAGS.flatMap((n) => { const i = given.indexOf(n); return i >= 0 && given[i + 1] ? [n, given[i + 1]] : []; }) : [];
+  /* The fund its lineage has, given again, is no change (it is in the arguments it repeats); another one is refused. */
+  const had = previous?.config?.delegation;
+  if (asked.length && had) {
+    const now = (n: string) => { const i = asked.indexOf(n); return i >= 0 ? Math.floor(Number(asked[i + 1])) : null; };
+    const differs = [['--delegation-fund', had.fund], ['--delegation-tokens', had.tokens], ['--delegation-rounds', had.rounds], ['--delegation-max-rounds', had.max_rounds]]
+      .some(([n, v]) => now(n as string) !== null && now(n as string) !== v);
+    if (differs) throw new LabError('--delegation-fund with --resume: its lineage has a fund already (' + had.fund + ', ' + had.tokens + ' per branch): it keeps it - its ledger was opened with it');
+  }
+  const delegationNow = had ? [] : asked;
   /* What this code adds to a researcher's questions (SPEC-INVESTIGADOR-ASISTIDO §14, SPEC-ORQUESTADOR §3.3.5) applies from the
      rounds after this attempt: from the start in a new run, from its new rounds in a continuation; a run resumed keeps its
      journal's, and one made before never gets them - the history a resumed run repeats is asked as it was. */
@@ -368,6 +382,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
      and its replay diverged). */
   const capabilitiesFrom: Record<string, number> = Object.fromEntries(CAPABILITIES.map((c) => {
     if (!previous) return [c.name, 0];
+    /* A fund given now: its branches from the new rounds, never in the history it repeats (asked as it was). */
+    if (c.name === 'delegation' && delegationNow.length) return [c.name, continuedFrom];
     const had = previous.config?.capabilities_from;
     if (had && typeof had === 'object') return [c.name, typeof had[c.name] === 'number' ? had[c.name] : continuedFrom];
     /* A journal from before `capabilities_from`: it had the capability from its review_from if its code did. */
@@ -380,10 +396,10 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   /* A resumed run is a run of its own, derived from the one it resumes, which stays as it was (its provenance). */
   const o = given.indexOf('--out');
   const derived = previous ? (o >= 0 && given[o + 1] ? given[o + 1] : resumeFrom!.replace(/\.json$/, '') + (continuedFrom !== null ? '.continued-' : '.resumed-') + new Date().toISOString().replace(/[:.]/g, '-') + '.json') : null;
-  const replaced = (a: string, i: number, all: readonly string[]) => continuedFrom !== null && ['--attempts', ...(ownTestsNow !== null ? ['--own-tests'] : [])].some((n) => a === n || all[i - 1] === n);
+  const replaced = (a: string, i: number, all: readonly string[]) => continuedFrom !== null && ['--attempts', ...(ownTestsNow !== null ? ['--own-tests'] : []), ...(delegationNow.length ? DELEGATION_FLAGS : [])].some((n) => a === n || all[i - 1] === n);
   const kept = previous ? (previous.argv as string[]).filter((a, i, all) => !replaced(a, i, all)) : [];
   const argv: readonly string[] = previous ? [...kept, ...(continuedFrom !== null ? ['--attempts', String(moreRounds)] : []), ...(ownTestsNow !== null ? ['--own-tests', ownTestsNow] : []),
-    ...budgetArgs(given), '--out', derived!] : given;
+    ...delegationNow, ...budgetArgs(given), '--out', derived!] : given;
   /* The tests of its own the history it repeats was asked under. */
   const ownTestsBefore = previous ? (typeof previous.config?.own_tests_before === 'number' ? previous.config.own_tests_before
     : ownTestsNow !== null ? ownTestsIn(previous.argv as string[]) : null) : null;
@@ -1592,8 +1608,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* A run in a process of its own, with the keys of this process's environment (loaded when first needed: control.ts reads
        every laboratory). */
     launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); return { pid: c.startRunAt(l.journal, c.labNameOf(l.lab), l.args).pid }; }), log,
-    /* The run that begins the lineage opens its fund; a run resumed finds it - or its loss, said so. */
-    ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous } : {}),
+    /* The run that begins the lineage's fund opens it (a new run, or a continuation given one now); a run resumed finds it -
+       or its loss, said so. */
+    ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous?.config?.delegation } : {}),
     history: (previous?.events ?? []) as Record<string, any>[],
     unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null
   }) : null;

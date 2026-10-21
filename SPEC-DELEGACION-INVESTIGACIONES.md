@@ -330,3 +330,15 @@ Dos fallos en el tratamiento del gasto incierto, corregidos con sus pruebas (`li
 observado 33). Ahora `status` y el informe de la rama leen el gasto de una sola función (`spendingOf`): con gasto incierto
 dan `spent_tokens: null` y `spent_not_known: {observed_at_least, held_in_the_fund}`, igual que el resultado y el resumen.
 Su prueba está en `lib/test/delegation-review.test.ts`.
+
+### 10.6 Continuar un run estancado con fondo (21/10/2026)
+
+Para probar si un investigador estancado delega (`lib/examples/batch.artifacts-threesum-delegation.json`), una
+**continuación** (`--resume <run> --attempts N`) puede recibir un fondo ahora con `--delegation-fund` y sus límites, o con
+`fork.delegation` en un lote. Sólo se permite si su linaje no tenía fondo. Entonces:
+- la capacidad `delegation` empieza en sus rondas nuevas, nunca en la historia que repite, que se pregunta como fue;
+- la continuación abre el libro del fondo, porque es el primer run del linaje que lo tiene.
+
+Un linaje que ya tiene fondo lo conserva, porque su libro se abrió con él: darle otro se rechaza. Un run reanudado sin
+`--attempts` sigue con el fondo de sus argumentos. Su prueba está en `lib/test/delegation-review.test.ts`.
+

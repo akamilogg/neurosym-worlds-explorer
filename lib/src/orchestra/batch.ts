@@ -42,7 +42,9 @@ export interface BatchRun {
       researcher, with a first message that states the alternative to explore. */
   readonly fork?: { readonly journal: string; readonly attempts: number; readonly message?: string;
     /** Tests of its own required from its new rounds on (SPEC-PRUEBAS-PROPIAS §13): `--own-tests N` given to the continuation. */
-    readonly own_tests?: number };
+    readonly own_tests?: number;
+    /** A fund for branches from its new rounds on (SPEC-DELEGACION-INVESTIGACIONES §10.6), when the run it continues had none. */
+    readonly delegation?: { readonly fund: number; readonly tokens?: number; readonly rounds?: number; readonly max_rounds?: number } };
   /** Messages of the operator scheduled in advance (SPEC-INVESTIGADOR-ASISTIDO §6.1): each held until its round begins,
       then delivered with its first question - a nudge given at a round chosen beforehand, the same for every run that
       declares it. Help like any other message: in the finding, and in the help budget. */
@@ -338,7 +340,7 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
       return;
     }
     const args = known ? ['--resume', known, ...control, '--out', out]
-      : r.fork ? ['--resume', r.fork.journal, '--attempts', String(r.fork.attempts), '--researcher', 'assisted', ...(r.fork.own_tests ? ['--own-tests', String(r.fork.own_tests)] : []), ...control, '--out', out]
+      : r.fork ? ['--resume', r.fork.journal, '--attempts', String(r.fork.attempts), '--researcher', 'assisted', ...(r.fork.own_tests ? ['--own-tests', String(r.fork.own_tests)] : []), ...delegationArgs(r.fork.delegation), ...control, '--out', out]
         : [...own, ...(r.researcher ? ['--researcher', r.researcher] : []), ...control, ...opening, '--out', out];
     /* A branch's first message waits in its inbox for its first new round. */
     if (!known && r.fork?.message) send(out, { kind: 'message', text: r.fork.message, by: 'agent:planner' });
@@ -384,3 +386,8 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
   fs.writeFileSync(path.join(dir, 'batch.txt'), batchText(report) + '\n');
   return report;
 }
+
+/** A branch's fund, as the arguments of its continuation. */
+const delegationArgs = (d: NonNullable<BatchRun['fork']>['delegation']): string[] => !d ? [] : [
+  '--delegation-fund', String(d.fund), ...(d.tokens ? ['--delegation-tokens', String(d.tokens)] : []),
+  ...(d.rounds ? ['--delegation-rounds', String(d.rounds)] : []), ...(d.max_rounds ? ['--delegation-max-rounds', String(d.max_rounds)] : [])];
