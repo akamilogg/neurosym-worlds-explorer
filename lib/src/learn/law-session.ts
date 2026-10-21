@@ -81,9 +81,6 @@ export interface LawSessionHost<A> {
       the session: its notebook travels abridged, it recalls the rest itself, and answers of only memory requests are free.
       None by default. */
   memory?(session: LawSession<A>): JournalMemory;
-  /** Without a selective memory: a record of the same items kept over the session (its investigations and checks too), never
-      shown to it - for the items its requests name (`refs` of «what if…?»). None by default. */
-  recordOf?(session: LawSession<A>): JournalMemory;
   /** How many times a round it may ask to investigate with no steps left before it counts as a refusal (logged); 0 by
       default. */
   readonly overreach?: number;
@@ -206,10 +203,8 @@ export class LawSession<A> {
   private unaddressed: string[] = [];
   /** Its selective memory, when the host gives it one. */
   readonly memory: JournalMemory | null;
-  /** Its record by item ids: its memory, or one kept for the items its requests name. */
-  readonly record: JournalMemory | null;
 
-  constructor(host: LawSessionHost<A>) { this.host = host; this.memory = host.memory?.(this) ?? null; this.record = this.memory ?? host.recordOf?.(this) ?? null; }
+  constructor(host: LawSessionHost<A>) { this.host = host; this.memory = host.memory?.(this) ?? null; }
 
   latest(): LawRecord | null { return this.laws[this.laws.length - 1] ?? null; }
   lawOfRound(round: number): Law | null { return this.laws.find((l) => l.round === round)?.law ?? null; }
@@ -253,7 +248,7 @@ export class LawSession<A> {
     const budget = { acts: h.acts ?? 0 };
     const memory = this.memory;
     /* The verdicts it was given on its latest model, kept in its memory by that model's round. */
-    if (this.record && b) this.record.recordCheck(b.round, h.lastCheck());
+    if (memory && b) memory.recordCheck(b.round, h.lastCheck());
     let talk = new RoundConversation();
     const counters = (): Record<string, unknown> => ({ ...(h.budget?.() ?? {}), ...(h.investigative ? { steps_left: Math.max(0, h.steps - (steps - free)) } : {}),
       ...(h.acts !== undefined ? { acts_left: budget.acts } : {}), ...(memory ? { memory_answers_left: FREE_MEMORY_ANSWERS - free, memory: memory.counts() } : {}) });
@@ -364,7 +359,7 @@ export class LawSession<A> {
         investigation.push(entry);
         talk.add({ investigation_step: entry, ...written, ...counters() });
         written = {};
-        this.record?.recordInvestigation(round, entry.step, entry);
+        memory?.recordInvestigation(round, entry.step, entry);
         h.log('investigation', { round, requests: asWritten, results, warnings: [...warnings, ...noteWarnings], notes: turn.notes, ...(onlyMemory ? { free: true } : {}) });
         h.say('  investigates: ' + requests.map((r, i) => {
           const res = results[i] as { error?: string };
@@ -390,14 +385,6 @@ export class LawSession<A> {
       const closing = mode === 'propose' && h.closeRound?.() ? closeOf(content) : null;
       if (closing !== null) {
         if (typeof closing === 'string') { refused = [closing]; refusals++; h.log('proposal_refused', { round, errors: refused, content }); continue; }
-        /* A closing answers to its senior's open directives as a proposal does: returned once (SPEC-ORQUESTADOR §3.3.3). */
-        const returned = !vetted && h.vet ? h.vet(round) : [];
-        if (returned.length) {
-          vetted = true; refused = returned; refusals++;
-          h.log('proposal_refused', { round, errors: returned, content, returned: true });
-          h.say('  returned: ' + returned[0].slice(0, 200));
-          continue;
-        }
         this.closedLast = { round, why: closing.why };
         h.log('round_closed', { round, why: closing.why, investigation_steps: investigation.length, notes: turn.notes, ...(noteWarnings.length ? { warnings: noteWarnings } : {}) });
         h.say('  closes the round without a new model: ' + closing.why.slice(0, 160));

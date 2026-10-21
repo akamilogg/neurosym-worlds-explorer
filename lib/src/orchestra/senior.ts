@@ -32,9 +32,6 @@ export interface SeniorState {
   /** Its messages already followed up (by their place among its messages), and rounds it was called during. */
   followed_up: number[];
   called_in_round: number[];
-  /** Its calls of «what if…?» so far (SPEC-Y-SI §8.3), and the number of its latest request (its ids are unique in the run). */
-  what_if_used?: number;
-  what_if_seq?: number;
   /** The junior's reports (directives carried out, disagreements) already given to it. */
   reports_seen?: number;
   /** Its channel (SPEC-CANAL-MENSAJES §9): what it pinned (to pin it again in a run resumed), and how many of the deliveries

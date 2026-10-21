@@ -108,68 +108,6 @@ propio, queda fuera, como dice §1.
 **Verificación:** ambos modos con cliente simulado; formato inválido; referencias prohibidas; contexto demasiado
 grande; cierre sin presupuesto restante; incorporación de resultados de pruebas al contexto; gasto contabilizado.
 
-**Hecho (19/10/2026), en su parte manual.** El código está en `lib/src/learn/assisted/what-if.ts` y las pruebas en
-`lib/test/what-if.test.ts`.
-
-- **La petición:** `{"what_if": {"mode": "turn" | "fork", "situation", "question", "refs"}}` dentro de `investigate`.
-  - El modo `turn` responde `idea`; `fork` responde `a`, `b` y `difference`; si no hay dirección, `no_direction`.
-  - Una respuesta con otra forma se registra y no se reintenta.
-- **La llamada es aislada:** el mismo cliente de System 2, sin nada de la conversación. Recibe sólo `situation`,
-  `question` y los elementos de memoria que se citaron, abiertos enteros.
-  - Una referencia que no existe se rechaza antes de llamar.
-  - Más de 24.000 caracteres también se rechaza: nunca se recorta.
-  - Sin memoria selectiva, las referencias se abren con una memoria construida sobre la sesión.
-- **El registro:** `what_if_requested` se escribe **antes** de la llamada, y `what_if` con la respuesta o el error,
-  después. Los ids son `what_if:<quién>:r<ronda>.<n>`.
-  - El replay la sirve como cualquier llamada del canal `llm`, y `lab verify` la reconstruye sin red.
-  - Sus tokens son los del run.
-- **El coste:** un paso de investigación y una llamada de su límite (`--what-if-max`, 6 por defecto).
-  `what_if_left` aparece en el presupuesto visible y en cada respuesta.
-- **Disponible siempre para los dos hemisferios.** `--no-what-if` la quita a los dos, y va en la configuración (con
-  `what_if_max` y la versión de la instrucción). Las secciones van en el sistema desde la primera pregunta, bajo la
-  capacidad `what_if`.
-- **El senior** la tiene entre sus lecturas, con referencias a la memoria del junior y a la suya.
-  - Consume una lectura y una llamada; sus tokens se suman a su registro de agente.
-  - La respuesta queda en su decisión (`what_if`). Lo que llega al junior es lo que el senior haga con ella, en su propio
-    mensaje.
-  - Su sección va antes de su rol.
-- **Cada hemisferio sabe qué pidió el otro:**
-  - el senior ve en la vista del registro las peticiones y respuestas del junior;
-  - el junior recibe en su canal un aviso con el id, el modo y la `situation` de cada petición del senior (llega por la
-    bandeja como `what_if_requested`);
-  - ese aviso queda como hecho del registro y nunca cuenta como ayuda.
-- **Las trazas de K4** cuentan las peticiones de cada hemisferio.
-
-**Pendiente:** el uso automático, que construye la petición a partir de la decisión de la política, va con las Entregas
-3–4.
-
-**Revisión de las Entregas 1–2 (19/10/2026): una externa y nuestra propia introspección.** Pruebas en
-`lib/test/entregas-review.test.ts`.
-
-- **El senior cuenta los cierres como rondas completadas:** activan su revisión y avanzan su contador. Además,
-  `stuckSignals` da una señal nueva, «cerró sus últimas N rondas sin un modelo nuevo», a partir de dos seguidas.
-- **Las referencias funcionan sin memoria selectiva.** La sesión guarda un registro por ids (investigaciones y
-  comprobaciones incluidas) que el investigador nunca ve. Sirve para abrir lo que cita, de modo que `investigation:r1.1`
-  existe también sin `--memory selective`.
-- **Las peticiones del senior tienen ids únicos:** `what_if:<agente>:r<ronda>.<n>`, con la cuenta en su estado y no en
-  cada llamada.
-- **El registro del senior es durable.** Cada petición, entera, se guarda en su registro de agente **antes** de la
-  llamada, con su consumo, y la respuesta después; el archivo se escribe en el momento.
-- **Un cierre con directivas abiertas del senior se devuelve una vez,** como una propuesta. Así cerrar no sirve para
-  no rendir cuentas.
-- **Sin llamada pasado el presupuesto:** el `what_if` del junior consulta `halt` antes de llamar, y responde «not
-  asked: token_budget».
-- **Sólo donde hay pasos:** sin herramientas de investigación, `what_if` no se ofrece.
-- **Las trazas de K4** dan a `what_if` su propia clase de paso (`asking_a_direction`).
-- **Un run con cierres** se reconstruye sin red (`lab verify`).
-
-**Límites conocidos:**
-- **Las llamadas del senior no se reproducen** al reanudar, igual que el resto de su agente, que no tiene registro de
-  repetición. El replay vale para el junior; del senior queda el registro durable.
-- **El límite `--what-if-max` es por hemisferio** (6 cada uno), no compartido. Encaja con «los dos la pueden usar
-  siempre».
-- **Una petición rechazada consume su paso,** como cualquier herramienta que responde con un error.
-
 ## 5. Entrega 3 · Política neurosimbólica sobre el recorrido
 
 **Archivos:** nuevo `lib/src/learn/assisted/exploration-policy.ts`, integración en `law-session.ts` y runner;

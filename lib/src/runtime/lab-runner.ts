@@ -14,7 +14,6 @@ import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
 import { CLOSE_ROUND_SECTION } from '../learn/law-session.ts';
-import { WhatIf, WHAT_IF_INSTRUCTION_VERSION, WHAT_IF_SECTION } from '../learn/assisted/what-if.ts';
 import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { FINGERPRINT_VERSION, LawSession, lawFingerprint } from '../learn/law-session.ts';
 import { CAPABILITIES, capabilityAt, roundsAt } from '../learn/lab.ts';
@@ -28,7 +27,7 @@ import { isGameLab, type AnyLab, type GameLab, type LabCase, type LabContext, ty
 import { findingOf, findingText, findingView, type Finding } from '../learn/finding.ts';
 import { ReplayLog } from './replay.ts';
 import { runFiles } from './control.ts';
-import { assistedSession, assistedSystem, deliveredMessages, openRefs, operatorClient, BUDGET_SECTION, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
+import { assistedSession, assistedSystem, deliveredMessages, operatorClient, BUDGET_SECTION, OPEN_QUESTIONS_TASK, OWN_DOCUMENTS_SECTION, TASK_COVERAGE_SECTION, type OperatorMessage } from '../learn/assisted/session.ts';
 import { Instruments, instrumentsSection } from '../learn/assisted/instruments.ts';
 import { Channel, PINS_SECTION, applyPins, type ChannelPublication, type PinOp } from '../learn/assisted/channel.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
@@ -61,7 +60,6 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'every', default: '3', help: 'take every N-th step of an episode as a point of a check' },
   { name: 'family', default: '3', help: 'places of the family to validate on' },
   { name: 'validations', default: '3', help: 'how many times System 2 may validate' },
-  { name: 'what-if-max', default: '6', help: 'calls of «what if…?» the assisted researcher may make in a run (SPEC-Y-SI), both hemispheres each' },
   { name: 'own-tests', default: '0', help: 'N > 0: a model is confirmed blind only after N severe tests of the assisted researcher\'s own, registered with it (SPEC-PRUEBAS-PROPIAS §7)' },
   { name: 'confirm-places', default: '2', help: 'places per blind confirmation set, two sets' },
   { name: 'tools', default: 'all', help: 'the instruments, a,b,... ("all" or "none")' },
@@ -84,7 +82,6 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'task-as-model', help: 'the task of the assisted researcher framed as before: a model of the environment, not the task its world and its operator state (the comparison)' },
   { name: 'no-pins', help: 'the assisted researcher cannot pin messages of its own in its channel (SPEC-CANAL-MENSAJES §6): the condition without' },
   { name: 'no-close-round', help: 'the assisted researcher cannot close a round without a new model (PLAN-Y-SI, Entrega 1): the condition without' },
-  { name: 'no-what-if', help: 'neither hemisphere of the assisted researcher may ask «what if…?» (SPEC-Y-SI): the condition without' },
   { name: 'budget-hidden', help: 'the assisted researcher is not shown its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the condition without it' },
   { name: 'no-instruments', help: 'the assisted researcher writes no instruments of its own (SPEC-INSTRUMENTOS-PROPIOS): the condition without them' },
   { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
@@ -438,8 +435,6 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     budget_visible: !flag('budget-hidden'),
     pins: !flag('no-pins'),
     close_round: !flag('no-close-round'),
-    what_if: !flag('no-what-if'),
-    ...(!flag('no-what-if') ? { what_if_max: Math.max(0, Math.floor(Number(arg('what-if-max', '6')) || 0)), what_if_instruction: WHAT_IF_INSTRUCTION_VERSION } : {}),
     stated_task: !flag('task-as-model'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
@@ -632,8 +627,6 @@ interface OpenRun {
   /** The operator's messages accepted and not yet delivered (the assisted researcher takes them). */
   /** `round`: the round in course - a message held for a later round stays (with none known, everything is taken). */
   readonly operator: { take(round?: number): OperatorMessage[] };
-  /** Requests of «what if…?» its senior made since, to tell the junior (SPEC-Y-SI §8.3). */
-  whatIfNotices(): Record<string, string>[];
   /** The agent whose first hypothesis the run waits for (SPEC-ORQUESTADOR §3.3.4), and for how long; null when none, or
       when the run resumes a history that had it. */
   readonly opening: { readonly agent: string; readonly ms: number } | null;
@@ -750,8 +743,6 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   let stopRequested = false;
   let consumed = 0;
   const waiting: OperatorMessage[] = [];
-  /* Requests of «what if…?» by its senior, to tell the junior in its channel (SPEC-Y-SI §8.3). */
-  const whatIfNotices: Record<string, string>[] = [];
   const lastRound = (): number | null => { for (let i = journal.events.length - 1; i >= 0; i--) if (typeof journal.events[i].round === 'number') return journal.events[i].round; return null; };
   function writeStatus(): void {
     try {
@@ -773,16 +764,6 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       const agent = typeof order.by === 'string' && order.by.startsWith('agent:') ? order.by.slice(6) : null;
       /* A report of the instrument (a senior's, SPEC-CALIBRACION-INSTRUMENTOS §4.3): not help and not control - logged for
          the operator, from any agent, whatever the run's policy. */
-      /* A request of «what if…?» by its senior (SPEC-Y-SI §8.3): a fact of the record, told to the junior in its channel, so
-         that neither hemisphere asks again what the other asked without knowing - never help, never refused for a policy. */
-      if (order.kind === 'what_if_requested') {
-        const o = order as Record<string, unknown>;
-        const agentId = typeof o.by === 'string' && o.by.startsWith('agent:') ? o.by : 'agent:senior';
-        const fact = { id: String(o.id ?? ''), by: agentId, mode: String(o.mode ?? ''), situation: String(o.situation ?? '') };
-        log('what_if_requested', { round: lastRound(), ...fact, told: true });
-        whatIfNotices.push(fact);
-        continue;
-      }
       if (order.kind === 'instrument_report') {
         const o = order as Record<string, unknown>;
         const [r] = instrumentReports({ instrument_report: { what: o.what, evidence: o.evidence, kind: o.report_kind } });
@@ -991,7 +972,6 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     return JSON.parse(await r.text()) as T;
   };
   return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), recorded, finish, diverged, verdicts,
-    whatIfNotices: () => whatIfNotices.splice(0),
     operator: { take: (round?: number) => {
       const due = waiting.filter((m) => m.round === undefined || round === undefined || m.round <= round);
       for (const m of due) waiting.splice(waiting.indexOf(m), 1);
@@ -1019,15 +999,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The channel is the assisted researcher's from its first question (after a hand-over, from then): its budget is pinned by
      the harness then, read as it stands when delivered (SPEC-INVESTIGADOR-ASISTIDO §15). */
   let channelOpened = false;
-  /* Its budget as it stands: its rounds and help, and its calls of «what if…?» left (SPEC-Y-SI §8.2). */
-  const budgetNow = (): Record<string, number> => ({ ...run.services.budget!(attemptNow, roundsAt(cfg, attemptNow)), ...(asksWhatIf() ? { what_if_left: whatIf.left() } : {}) });
   const channelNow = (): Channel | null => {
     if (!channelOn || !helping) return null;
-    /* What its senior asked of «what if…?»: told as it stands when delivered (a fact of the record, never help). */
-    for (const n of run.whatIfNotices()) channel.publish(n.by as `agent:${string}`, { kind: 'notice', body: { what_if_requested: { id: n.id, mode: n.mode, situation: n.situation } } });
     if (!channelOpened) {
       channelOpened = true;
-      if (run.services.budget) channel.publish('harness', { kind: 'pinned', key: 'budget', body: () => budgetNow() });
+      if (run.services.budget) channel.publish('harness', { kind: 'pinned', key: 'budget', body: () => run.services.budget!(attemptNow, roundsAt(cfg, attemptNow)) });
     }
     return channel;
   };
@@ -1102,7 +1078,6 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The attempt now (the capabilities added later apply from their own: `capabilities_from`). */
   let attemptNow = 1;
   const instrumenting = (): boolean => cfg.instruments !== false && capabilityAt(cfg as never, 'instruments', attemptNow);
-  const asksWhatIf = (): boolean => journal.researcher === 'assisted' && helping && investigative && (cfg as { what_if?: boolean }).what_if !== false && capabilityAt(cfg as never, 'what_if', attemptNow);
   const closesRounds = (): boolean => journal.researcher === 'assisted' && helping && (cfg as { close_round?: boolean }).close_round !== false && capabilityAt(cfg as never, 'close_round', attemptNow);
   /* The tests of its own required: a continuation's from its new rounds, its history's before. */
   const ownTestsRequired = (): number => (typeof cfg.own_tests_before === 'number' && !reviewing ? cfg.own_tests_before as number : (cfg.ownTests as number | undefined) ?? 0);
@@ -1451,7 +1426,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* What it pins itself (SPEC-CANAL-MENSAJES §6): a document in its latest version, a notice it received, or a text. */
     pins: () => (pinning() ? { apply: (_round: number, ops: readonly PinOp[]) => applyPinsNow(ops) } : null),
     /* Its budget: pinned in its channel when it has one (below), else counters with its others. */
-    budget: () => (run.services.budget && journal.researcher === 'assisted' && helping && !channelOn ? budgetNow() : {}),
+    budget: () => (run.services.budget && journal.researcher === 'assisted' && helping && !channelOn ? run.services.budget(attemptNow, roundsAt(cfg, attemptNow)) : {}),
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
     instruments: () => (journal.researcher === 'assisted' && helping && reviewing && instrumenting() ? instruments : null),
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
@@ -1588,11 +1563,6 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     },
     log
   }) : null;
-  /* «What if…?» (SPEC-Y-SI): an isolated call to System 2 - the same client, none of the researcher's conversation - with the
-     items of its memory it named; its limit in its visible budget. */
-  let sessionNow: LawSession<unknown> | null = null;
-  const whatIf = new WhatIf({ llm, who: 'junior', max: Number((cfg as { what_if_max?: number }).what_if_max) || 0, log, halt: () => run.halt(),
-    resolve: (refs) => openRefs(sessionNow!, sessionHost, refs) });
   const session: LawSession<unknown> = journal.researcher === 'assisted'
     ? assistedSession(sessionHost, {
       /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
@@ -1603,7 +1573,6 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       system: () => (helping ? assistedSystem(assistedPromptFor(focus), statedTask && channelOn) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (closesRounds() ? '\n\n' + CLOSE_ROUND_SECTION : '')
-        + (asksWhatIf() ? '\n\n' + WHAT_IF_SECTION : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
         + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '') : promptFor(focus)),
@@ -1631,12 +1600,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         run: async (q: Record<string, unknown>, round: number) => (PeerChannel.acceptsPublish(q) ? publish(q.publish) : readPeers(q, round)) } } : {}),
       /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2). */
       instruments: { accepts: (q: Record<string, unknown>) => helping && reviewing && instrumenting() && Instruments.accepts(q), run: (q: Record<string, unknown>, round: number) => instruments.use(q, round) },
-      whatIf: { accepts: (q: Record<string, unknown>) => asksWhatIf() && WhatIf.accepts(q), run: (q: Record<string, unknown>, round: number) => whatIf.run(q, round) },
       ...(ownTests ? { tests: { accepts: (q: Record<string, unknown>) => helping && OwnTests.accepts(q),
         run: (q: Record<string, unknown>, round: number, budget: { acts: number }) => ownTests.register(q, round, budget) } } : {})
     })
     : new LawSession<unknown>(sessionHost);
-  sessionNow = session;
 
   /* --- Operator only ------------------------------------------------------------------------- */
   const operatorContext: LabOperatorContext<Spec, Case> = {
