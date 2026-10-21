@@ -234,8 +234,31 @@ El código está en `lib/src/learn/assisted/delegation.ts` y las pruebas en `lib
 **Pendiente o limitado:**
 - **Mundos:** sólo los del bucle común de leyes. Los de bucle propio (cuadrícula) no la tienen, y los de entorno externo
   la rechazan.
-- **El fondo se lleva por solicitante.** El senior y el junior tienen cada uno su cuenta con el mismo fondo declarado,
-  así que juntos podrían gastar hasta el doble. Un fondo compartido entre los dos procesos queda pendiente.
+- ~~El fondo por solicitante~~: hecho en §10.1, con un único fondo para el run.
 - **Comunicación continua** con la rama, concurrencia mayor o delegación recursiva: condiciones posteriores (§6).
 - **La comparación de §9:** sin delegación frente a con delegación, al mismo coste total, separando el efecto de tener
   más recursos del de explorar de forma independiente. Necesita runs reales.
+
+### 10.1 Revisión externa de la primera entrega (21/10/2026)
+
+Una revisión externa encontró cinco fallos. Están corregidos, cada uno con su prueba (`lib/test/delegation-review.test.ts`).
+
+1. **Una caída entre la solicitud y su respuesta bloqueaba la delegación.** Al reanudar, la rama quedaba «en marcha» sin
+   comprobar que existiera, con el fondo reservado. Ahora, antes de responder a la siguiente petición, se reconcilia toda
+   rama solicitada cuya respuesta no llegó a registrarse:
+   - si su registro existe, arrancó y sigue en marcha;
+   - si no existe, se toma como nunca arrancada, se dice y se libera su reserva.
+
+   No se vuelve a lanzar; el investigador puede pedirla de nuevo.
+2. **Al reanudar, el senior perdía sus delegaciones.** Ahora su registro de agente recupera también `delegation_log`:
+   las mismas ramas, reservas, gasto y resultados entregados. Nunca se crean ramas nuevas en su lugar.
+3. **Que una rama terminara no despertaba al senior.** Su llamada dependía de rondas, señales de atasco, seguimientos o
+   la apertura. Ahora una rama suya terminada y no entregada lo llama por sí misma, sin depender de las señales, y le
+   entrega el resultado.
+4. **El fondo se duplicaba entre junior y senior.** Ahora hay **un único fondo para el run**: un libro de reservas
+   (`<run>.delegation-fund.jsonl`), compartido por el junior y su senior.
+   - Cada reserva y cada liquidación se anotan con su solicitante.
+   - Cada reserva se comprueba de nuevo tras anotarla, por si otro solicitante reservó entretanto.
+   - El nombre del libro queda en la configuración del run, y un run reanudado conserva el del linaje.
+5. **Los errores del lanzador escapaban al manejo de fallos.** Ahora el lanzamiento se espera: si falla, aunque sea de
+   forma asíncrona, la rama queda como fallida y su reserva se libera.

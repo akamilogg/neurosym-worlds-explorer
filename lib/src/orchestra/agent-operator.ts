@@ -219,10 +219,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       journalFile: file, snapshot: () => JSON.parse(fs.readFileSync(o.journal, 'utf8')), lab: lab.id,
       worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptionsIn(lab.options, cfg)).flatMap(([k, v]) => ['--' + k, String(v)]),
         ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
-      launcher: o.delegate ?? ((l) => { startRunAt(l.journal, labNameOf(l.lab), l.args); }),
+      launcher: o.delegate ?? (async (l) => { startRunAt(l.journal, labNameOf(l.lab), l.args); }),
       log: (type, data) => { (record.delegation_log ??= []).push({ at: new Date().toISOString(), type, ...data }); save(); },
       history: (record.delegation_log ?? []) as Record<string, any>[],
-      unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own' : null
+      unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
+      ...(cfg.delegation.ledger ? { ledger: path.join(path.dirname(o.journal), cfg.delegation.ledger), requester: 'agent:' + o.id } : {})
     });
     return branchesOf;
   };
@@ -240,6 +241,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
           record.senior = earlier.senior as SeniorState;
           record.continued_from = from!;
           record.earlier = { decisions: [...(earlier.earlier?.decisions ?? []), ...(earlier.decisions ?? [])] };
+          /* Its branches too: their requests, reservations, spending and results given - the same branches, never new ones. */
+          if (Array.isArray(earlier.delegation_log)) { record.delegation_log = [...earlier.delegation_log]; branchesOf = undefined; }
           for (const k of record.senior.followed_up ?? []) followedUp.add(k);
           for (const r of record.senior.called_in_round ?? []) calledInRound.add(r);
           /* What it had pinned, pinned again in its channel (which lives as long as this process). */
@@ -272,7 +275,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     const opening = role === 'senior' && journal && !opened && awaitsOpening(journal, o.id);
     if (opening) opened = true;
     /* A round completed since it last decided, or (the senior) a sign within the round (and the run still going): decide. */
-    if (digest && ((rounds > seenRounds && rounds > 0) || duringRound || followUp || opening) && !over && orders < maxOrders) {
+    /* A branch of its own that ended: its result calls it, whatever the signs (SPEC-DELEGACION-INVESTIGACIONES §5). */
+    const branchDue = role === 'senior' && journal && !opening ? Boolean(seniorBranches(journal)?.hasResults()) : false;
+    if (digest && ((rounds > seenRounds && rounds > 0) || duringRound || followUp || opening || branchDue) && !over && orders < maxOrders) {
       if (followUp) followedUp.add(followUp.message);
       else if (duringRound) calledInRound.add(now!.current_round);
       /* A round completed (not the run's start, before any round): otherwise it is called during the round in course. */
@@ -281,7 +286,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       let d: AgentDecision | null;
       if (role === 'senior') {
         d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel,
-          seniorBranches(journal));
+          seniorBranches(journal), branchDue);
         record.senior!.followed_up = [...followedUp];
         record.senior!.called_in_round = [...calledInRound];
       }
@@ -338,11 +343,11 @@ function noteOf(state: SeniorState, id: string): { text: string; versions: numbe
 
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
   duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel(),
-  branches: Delegations | null = null): Promise<AgentDecision | null> {
+  branches: Delegations | null = null, branchDue = false): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
   /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
      to have had time with its last message. */
-  if (!isOpening && !followUp && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
+  if (!isOpening && !followUp && !branchDue && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const nb = seniorNotebook(state);
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
   const delegation = (journal.config?.delegation ?? null) as { fund: number; tokens: number; rounds: number; max_rounds: number } | null;

@@ -443,7 +443,9 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     pins: !flag('no-pins'),
     close_round: !flag('no-close-round'),
     ...(Number(arg('delegation-fund')) > 0 ? { delegation: { fund: Math.floor(Number(arg('delegation-fund'))), tokens: Math.max(1, Math.floor(Number(arg('delegation-tokens', '200000')) || 200000)),
-      rounds: Math.max(1, Math.floor(Number(arg('delegation-rounds', '3')) || 3)), max_rounds: Math.max(1, Math.floor(Number(arg('delegation-max-rounds', '6')) || 6)) } } : {}),
+      rounds: Math.max(1, Math.floor(Number(arg('delegation-rounds', '3')) || 3)), max_rounds: Math.max(1, Math.floor(Number(arg('delegation-max-rounds', '6')) || 6)),
+      /* The fund's ledger, one for the run's lineage: a run resumed keeps the one it began with (set below for a new run). */
+      ...(previous?.config?.delegation?.ledger ? { ledger: String(previous.config.delegation.ledger) } : {}) } } : {}),
     stated_task: !flag('task-as-model'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
@@ -1575,8 +1577,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   }) : null;
   /* Its branches (SPEC-DELEGACION-INVESTIGACIONES): the assisted researcher's, where the operator gives it a fund, from when
      this code gives it; one at a time, none delegating in turn, never in a world whose environment is outside the harness. */
-  const delegationCfg = (cfg as { delegation?: { fund: number; tokens: number; rounds: number; max_rounds: number } }).delegation;
+  const delegationCfg = (cfg as { delegation?: { fund: number; tokens: number; rounds: number; max_rounds: number; ledger?: string } }).delegation;
   const delegating = (): boolean => journal.researcher === 'assisted' && helping && investigative && delegationCfg !== undefined && capabilityAt(cfg as never, 'delegation', attemptNow);
+  /* The fund's ledger, beside the journal of the run that began the lineage, shared by its junior and its senior (one fund). */
+  if (delegationCfg && !delegationCfg.ledger) {
+    (delegationCfg as { ledger?: string }).ledger = path.basename(run.outFile).replace(/\.json$/, '') + '.delegation-fund.jsonl';
+    if (journal.config?.delegation) journal.config.delegation.ledger = delegationCfg.ledger;
+  }
   const delegations = delegationCfg ? new Delegations({
     config: { fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds },
     journalFile: run.outFile, snapshot: () => JSON.parse(JSON.stringify(journal)), lab: lab.id,
@@ -1584,7 +1591,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
     /* A run in a process of its own, with the keys of this process's environment (loaded when first needed: control.ts reads
        every laboratory). */
-    launcher: o.delegate ?? ((l) => { void import('./control.ts').then((c) => c.startRunAt(l.journal, c.labNameOf(l.lab), l.args)); }), log,
+    launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); c.startRunAt(l.journal, c.labNameOf(l.lab), l.args); }), log,
+    ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior' } : {}),
     history: (previous?.events ?? []) as Record<string, any>[],
     unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null
   }) : null;

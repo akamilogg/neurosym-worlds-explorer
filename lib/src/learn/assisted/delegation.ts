@@ -31,7 +31,7 @@ export interface DelegationConfig {
 
 /** How a branch is started: a run of the laboratory `lab` with `args`, writing `journal` (a process of its own, or - in
     tests - the same process). */
-export type Launcher = (o: { readonly journal: string; readonly lab: string; readonly args: readonly string[] }) => void;
+export type Launcher = (o: { readonly journal: string; readonly lab: string; readonly args: readonly string[] }) => void | Promise<void>;
 
 type J = Record<string, any>;
 const readJson = (f: string): J | null => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
@@ -81,7 +81,13 @@ export class Delegations {
     readonly history: readonly J[];
     /** Why a branch cannot be opened in this world at all (an environment outside the harness), or null. */
     readonly unsupported: string | null;
+    /** The fund's ledger, shared by every requester of the run (its junior and its senior): one fund, never one each. */
+    readonly ledger?: string;
+    /** Who asks, in that ledger. */
+    readonly requester?: string;
   };
+  /* Branches its record asked for and never saw answered (a stop between the two): reconciled before anything else is decided. */
+  private readonly unconfirmed = new Set<string>();
 
   constructor(o: Delegations['o']) {
     this.o = o;
@@ -96,6 +102,9 @@ export class Delegations {
       if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.spent === 'number') this.settle(b, e.spent); } }
       if (e.type === 'delegation_requested' || e.type === 'delegation_state' || e.type === 'delegation_cancel_asked') pending.push(e);
       if (e.type === 'delegation_answered') { this.answered.push({ round: e.round, request: e.request, answer: e.answer, events: pending }); pending = []; }
+      if (e.type === 'delegation_answered') for (const p of this.answered[this.answered.length - 1].events) if (p.type === 'delegation_requested') this.unconfirmed.delete(p.id);
+      if (e.type === 'delegation_requested') this.unconfirmed.add(e.id);
+      if (e.type === 'delegation_state' && e.reconciled) this.unconfirmed.delete(e.id);
       /* A senior's: the results it was given at one of its calls. */
       if (e.type === 'branch_result_given') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.delivered = true; b.state = e.state ?? 'completed'; if (typeof e.spent === 'number') this.settle(b, e.spent); } }
       if (e.type === 'operator_message') for (const m of (e.messages ?? []) as J[]) if (m.research_result) {
@@ -107,16 +116,47 @@ export class Delegations {
 
   static accepts(q: Record<string, unknown>): boolean { return q !== null && typeof q === 'object' && ('delegate' in q || 'delegation' in q); }
 
-  fundLeft(): number { return Math.max(0, this.o.config.fund - this.spentAll - this.reserved); }
+  fundLeft(): number {
+    if (!this.o.ledger) return Math.max(0, this.o.config.fund - this.spentAll - this.reserved);
+    const t = ledgerTotals(this.o.ledger);
+    return Math.max(0, this.o.config.fund - t.spent - t.reserved);
+  }
+
+  private book(entry: Record<string, unknown>): void {
+    if (!this.o.ledger) return;
+    fs.mkdirSync(path.dirname(this.o.ledger), { recursive: true });
+    fs.appendFileSync(this.o.ledger, JSON.stringify({ at: new Date().toISOString(), requester: this.o.requester ?? 'junior', ...entry }) + '\n');
+  }
 
   private active(): Branch | undefined { return this.branches.find((b) => b.state === 'accepted' || b.state === 'running'); }
 
-  /** Its cost settled: the reservation released, what it spent kept. */
-  private settle(b: Branch, spent: number): void {
+  /** Its cost settled: the reservation released, what it spent kept (in the shared ledger too, once). */
+  private settle(b: Branch, spent: number, live = false): void {
     if (b.spent !== null) return;
     b.spent = spent;
     this.reserved = Math.max(0, this.reserved - b.granted.tokens);
     this.spentAll += spent;
+    if (live && this.o.ledger && !ledgerOf(this.o.ledger).some((e) => e.id === b.id && e.settle !== undefined)) this.book({ id: b.id, settle: spent });
+  }
+
+  /** A branch its record asked for and never saw answered: running if its record exists, otherwise never started - said so,
+      and its reservation released. Never launched again: its requester may ask again. */
+  private reconcile(): void {
+    for (const id of [...this.unconfirmed]) {
+      this.unconfirmed.delete(id);
+      const b = this.branches.find((x) => x.id === id);
+      if (!b || b.state !== 'running') continue;
+      if (fs.existsSync(b.journal)) { this.o.log('delegation_state', { id, state: 'running', reconciled: true, why: 'its record exists: it started' }); continue; }
+      b.state = 'failed';
+      this.o.log('delegation_state', { id, state: 'failed', reconciled: true, why: 'its launch was never confirmed and it left no record: taken as never started', spent: 0 });
+      this.settle(b, 0, true);
+    }
+  }
+
+  /** Whether a branch ended and its result is still to give (what calls a requester that is not asked every round). */
+  hasResults(): boolean {
+    this.refresh();
+    return this.branches.some((b) => !b.delivered && (b.state === 'completed' || b.state === 'failed' || b.state === 'cancelled'));
   }
 
   async run(q: Record<string, unknown>, round: number): Promise<Record<string, unknown>> {
@@ -129,6 +169,7 @@ export class Delegations {
       this.o.log('delegation_answered', { round, request, answer: head.answer });
       return head.answer;
     }
+    this.reconcile();
     const answer = await this.answer(q, round);
     this.o.log('delegation_answered', { round, request, answer });
     return answer;
@@ -137,7 +178,7 @@ export class Delegations {
   private async answer(q: Record<string, unknown>, round: number): Promise<Record<string, unknown>> {
     if ('delegate' in q) {
       const r = q.delegate && typeof q.delegate === 'object' && !Array.isArray(q.delegate) ? q.delegate as J : null;
-      return this.decide(r, typeof r?.question === 'string' ? r.question.trim() : '', round);
+      return await this.decide(r, typeof r?.question === 'string' ? r.question.trim() : '', round);
     }
     const d = q.delegation && typeof q.delegation === 'object' ? q.delegation as J : null;
     const b = d ? this.branches.find((x) => x.id === d.id) : undefined;
@@ -159,7 +200,7 @@ export class Delegations {
     return { delegation: b.id, state: b.state, granted: b.granted, ...(b.spent !== null ? { spent_tokens: b.spent } : {}), fund_left: this.fundLeft() };
   }
 
-  private decide(r: J | null, question: string, round: number): Record<string, unknown> {
+  private async decide(r: J | null, question: string, round: number): Promise<Record<string, unknown>> {
     if (!question) return { delegate: null, error: '"question": what to investigate - the branch knows nothing else of your intent' };
     if (this.o.unsupported) return { delegate: { question }, error: 'not here: ' + this.o.unsupported };
     if (r!.refs !== undefined && (!Array.isArray(r!.refs) || !r!.refs.every((x: unknown) => typeof x === 'string'))) return { delegate: { question }, error: '"refs": ids of items of your record' };
@@ -203,11 +244,19 @@ export class Delegations {
     const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false };
     this.branches.push(b);
     this.reserved += tokens;
-    try { this.o.launcher({ journal, lab: this.o.lab, args }); }
+    /* The fund is one for the run: reserved in its ledger, and checked again - another requester may have reserved meanwhile. */
+    this.book({ id, reserve: tokens });
+    if (this.o.ledger && ledgerTotals(this.o.ledger).spent + ledgerTotals(this.o.ledger).reserved > this.o.config.fund) {
+      b.state = 'failed';
+      this.o.log('delegation_state', { id, state: 'failed', why: 'the fund was taken meanwhile by another requester of the run', spent: 0 });
+      this.settle(b, 0, true);
+      return { delegation: id, state: 'failed', error: 'the fund for branches is spent', fund_left: this.fundLeft() };
+    }
+    try { await this.o.launcher({ journal, lab: this.o.lab, args }); }
     catch (e) {
       b.state = 'failed';
       this.o.log('delegation_state', { id, state: 'failed', why: 'it could not be started: ' + String((e as Error)?.message ?? e).slice(0, 200), spent: 0 });
-      this.settle(b, 0);
+      this.settle(b, 0, true);
       return { delegation: id, state: 'failed', error: 'it could not be started', fund_left: this.fundLeft() };
     }
     b.state = 'running';
@@ -224,7 +273,7 @@ export class Delegations {
       if (!end) continue;
       const spent = Number(readJson(b.journal.replace(/\.json$/, '.finding.json'))?.cost?.total?.llm_tokens) || Number(end.console_usage?.llm_tokens_live ?? 0) + Number(end.console_usage?.llm_tokens_replayed ?? 0);
       b.state = end.stoppedBy === 'cancelled' ? 'cancelled' : end.stoppedBy === 'llm_error' || end.stoppedBy === 'diverged' ? 'failed' : 'completed';
-      this.settle(b, spent);
+      this.settle(b, spent, true);
     }
   }
 
@@ -255,6 +304,21 @@ export class Delegations {
     return { fund: this.o.config.fund, spent: this.spentAll, reserved: this.reserved,
       branches: this.branches.map((b) => ({ id: b.id, journal: path.relative(path.dirname(this.o.journalFile), b.journal).split(path.sep).join('/'), state: b.state, spent: b.spent, granted: b.granted })) };
   }
+}
+
+/** The fund's ledger: every reservation and settlement of every requester of the run, in order. */
+function ledgerOf(file: string): J[] {
+  try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; }
+}
+/** What is reserved and not settled, and what was spent, in all. */
+function ledgerTotals(file: string): { reserved: number; spent: number } {
+  const entries = ledgerOf(file);
+  const settled = new Map<string, number>();
+  for (const e of entries) if (e.settle !== undefined) settled.set(e.id, Number(e.settle) || 0);
+  let reserved = 0, spent = 0;
+  for (const e of entries) if (e.reserve !== undefined && !settled.has(e.id)) reserved += Number(e.reserve) || 0;
+  for (const v of settled.values()) spent += v;
+  return { reserved, spent };
 }
 
 /** A branch's report, from its record: what it investigated and found, in its own words, with the references to the whole. */
