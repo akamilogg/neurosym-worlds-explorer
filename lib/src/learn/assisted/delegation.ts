@@ -64,6 +64,11 @@ interface Branch {
 /** A spending not known: observed at least, and held in the fund. */
 type Uncertain = { readonly at_least: number; readonly held: number };
 
+/** A branch's spending as its requester reads it, wherever it reads it (its status, its report): what it spent, or - not
+    known - nothing as spent, what was observed and what the fund holds for it said apart. */
+const spendingOf = (b: Branch): { spent_tokens: number | null; spent_not_known?: { observed_at_least: number; held_in_the_fund: number } } =>
+  b.uncertain ? { spent_tokens: null, spent_not_known: { observed_at_least: b.uncertain.at_least, held_in_the_fund: b.uncertain.held } } : { spent_tokens: b.spent };
+
 /** A branch's result as delivered: its spending as observed, and when not known, said so. */
 type Result = { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: Uncertain };
 
@@ -293,7 +298,7 @@ export class Delegations {
       const reader = new Experience([{ label: 'branch', journal, sameWorld: true }]);
       return { delegation: b.id, state: b.state, read: await reader.run({ ...(d.read as J), run: 'branch' }) };
     }
-    return { delegation: b.id, state: b.state, granted: b.granted, ...(b.spent !== null ? { spent_tokens: b.spent } : {}), fund_left: this.fundLeft() };
+    return { delegation: b.id, state: b.state, granted: b.granted, ...(b.spent !== null ? spendingOf(b) : {}), fund_left: this.fundLeft() };
   }
 
   private async decide(r: J | null, question: string, round: number): Promise<Record<string, unknown>> {
@@ -447,8 +452,7 @@ function reportOf(b: Branch): Record<string, unknown> {
   const last = reflections[reflections.length - 1] ?? [...events].reverse().find((e) => e.type === 'proposal') ?? null;
   const beliefs = ((nb.beliefs ?? []) as J[]).map((x) => ({ id: x.id, status: x.status, statement: x.statement }));
   return {
-    branch: b.id, question: b.question, state: b.state, ...(b.why ? { why: b.why } : {}), rounds: events.filter((e) => e.type === 'proposal' || e.type === 'round_closed').length, spent_tokens: b.uncertain ? null : b.spent,
-    ...(b.uncertain ? { spent_not_known: { observed_at_least: b.uncertain.at_least, held_in_the_fund: b.uncertain.held } } : {}),
+    branch: b.id, question: b.question, state: b.state, ...(b.why ? { why: b.why } : {}), rounds: events.filter((e) => e.type === 'proposal' || e.type === 'round_closed').length, ...spendingOf(b),
     beliefs, notes: ((nb.notes ?? []) as J[]).map((n) => ({ id: n.id, text: String(n.text ?? '').slice(0, 600) })),
     ...(last ? { its_last_word: { ...(last.rationale ? { rationale: last.rationale } : {}), ...(last.lessons ? { lessons: last.lessons } : {}), ...(last.next_experiment ? { next_experiment: last.next_experiment } : {}),
       ...(last.open_questions ? { open_questions: last.open_questions } : {}) } } : {}),

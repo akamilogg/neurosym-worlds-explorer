@@ -323,3 +323,10 @@ Dos fallos en el tratamiento del gasto incierto, corregidos con sus pruebas (`li
    La retención **no es un límite superior** del gasto: el límite de tokens se comprueba entre llamadas, y una llamada
    puede sobrepasarlo. K1 lo dice así en `cost.unknown`. El informe de la rama da `spent_tokens: null` y
    `spent_not_known: {observed_at_least, held_in_the_fund}`.
+
+### 10.5 Quinta revisión (21/10/2026)
+
+**La consulta `delegation.status` presentaba la retención como gasto real** (`spent_tokens: 100` cuando se habían
+observado 33). Ahora `status` y el informe de la rama leen el gasto de una sola función (`spendingOf`): con gasto incierto
+dan `spent_tokens: null` y `spent_not_known: {observed_at_least, held_in_the_fund}`, igual que el resultado y el resumen.
+Su prueba está en `lib/test/delegation-review.test.ts`.

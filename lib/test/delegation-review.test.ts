@@ -254,6 +254,10 @@ test('a spending not known stays so on a resumption: delivered to the junior, gi
   assert.equal(s.spent, 33);
   assert.equal(s.held_uncertain, 100);
   assert.equal(junior.fundLeft(), 0, 'its grant still held');
+  /* Its status says the same as its result and its summary: nothing given as spent, what was observed and what is held apart. */
+  const status: any = await junior.run({ delegation: { id: 'delegation:r1.1', status: true } }, 2);
+  assert.equal(status.spent_tokens, null, JSON.stringify(status));
+  assert.deepEqual(status.spent_not_known, { observed_at_least: 33, held_in_the_fund: 100 });
   /* The senior's: given at one of its calls, its record says so. */
   const logged: any[] = [];
   const senior = base(dir, { history, log: (type, data) => logged.push({ type, ...data }) });
