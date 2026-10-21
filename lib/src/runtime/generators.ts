@@ -30,7 +30,9 @@ export function generatorOf(journal: J, folder: string, base: string): { id: str
   const config = { ...(journal.config ?? {}) } as J;
   const lab = Object.values(LABS).find((l) => l.id === journal.experiment);
   const world = new Set(['seed', ...(lab ? Object.keys(worldOptionsIn(lab.options, config)) : [])]);
-  const harness = Object.fromEntries(Object.entries(config).filter(([k]) => !world.has(k) && !/^(llm_|jev_)/.test(k)).sort(([a], [b]) => a.localeCompare(b)));
+  /* Operational metadata is not the configuration: where the fund's ledger is kept names a file, not a condition. */
+  const operational = (k: string, v: unknown): unknown => (k === 'delegation' && v && typeof v === 'object' ? (({ ledger: _l, ...rest }) => rest)(v as Record<string, unknown>) : v);
+  const harness = Object.fromEntries(Object.entries(config).filter(([k]) => !world.has(k) && !/^(llm_|jev_)/.test(k)).map(([k, v]): [string, unknown] => [k, operational(k, v)]).sort(([a], [b]) => a.localeCompare(b)));
   const agents = fs.existsSync(folder) ? fs.readdirSync(folder).filter((f) => f.startsWith(base + '.agent-') && f.endsWith('.json')).map((f) => readJson(path.join(folder, f)))
     .filter(Boolean).map((a) => ({ role: a!.role, model: a!.llm_config?.model ?? null, provider: a!.llm_provider ?? null,
       /* Every setting of its requests (its reasoning effort, temperature...) and of its role (orders, patience...): a senior

@@ -91,3 +91,76 @@ test('the senior resumed keeps its branches; a branch that ended calls it whatev
   assert.ok((record.delegation_log as any[]).some((e) => e.type === 'delegation_requested' && e.id === 'delegation:r1.1'), 'its earlier branches kept');
   assert.ok((record.delegation_log as any[]).some((e) => e.type === 'branch_result_given' && e.id === 'delegation:r1.1'));
 });
+
+/* A second review (21/10/2026): bookings keyed by requester and branch; a ledger unreadable or missing is never a fresh
+   fund; the ledger's name not part of the generator; a branch's execution judged by its heartbeat, not a file. */
+
+const ended = (file: string, spent: number) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ events: [{ type: 'end', stoppedBy: 'budget', notebook: { beliefs: [], notes: [] } }] }));
+  fs.writeFileSync(file.replace(/\.json$/, '.finding.json'), JSON.stringify({ cost: { total: { llm_tokens: spent } } }));
+};
+
+test('bookings keyed by requester and branch: two branches numbered alike are two bookings', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-keys-'));
+  const ledger = path.join(dir, 'run.delegation-fund.jsonl');
+  const c = { fund: 100, tokens: 40, rounds: 1, maxRounds: 1 };
+  const junior = base(dir, { config: c, ledger, requester: 'junior' });
+  const senior = base(dir, { config: c, ledger, requester: 'agent:senior', journalFile: path.join(dir, 'run.agent-senior.json') });
+  assert.equal((await junior.run({ delegate: { question: 'q' } }, 1)).delegation, 'delegation:r1.1');
+  assert.equal((await senior.run({ delegate: { question: 'q' } }, 1)).delegation, 'delegation:r1.1', 'the same number, another requester');
+  assert.equal(senior.fundLeft(), 20);
+  ended(path.join(dir, 'run.branches', 'delegation-r1.1.json'), 10);
+  assert.equal(junior.hasResults(), true);
+  assert.equal(senior.fundLeft(), 50, '100 - 10 spent - 40 still reserved');
+  ended(path.join(dir, 'run.agent-senior.branches', 'delegation-r1.1.json'), 5);
+  senior.hasResults();
+  assert.equal(junior.fundLeft(), 85, 'its settlement booked too');
+});
+
+test('a ledger broken, or missing where branches were booked, is no fund - never a fresh one', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-ledger-'));
+  const ledger = path.join(dir, 'run.delegation-fund.jsonl');
+  fs.writeFileSync(ledger, '{"requester":"junior","id":"delegation:r1.1","reserve":40}\n{"requester":"jun');
+  const d = base(dir, { ledger });
+  assert.equal(d.fundLeft(), 0);
+  assert.match(String((await d.run({ delegate: { question: 'q' } }, 1)).error), /fund cannot be known: its ledger is broken at line 2/);
+  fs.rmSync(ledger);
+  const e = base(dir, { ledger, history: [requested(dir), { type: 'delegation_answered', round: 1, request: '{}', answer: {} }] });
+  assert.match(String((await e.run({ delegate: { question: 'q' } }, 2)).error), /its ledger is missing/);
+  const fresh = base(fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-fresh-')), { ledger: path.join(dir, 'other.jsonl') });
+  assert.equal(fresh.fundLeft(), 100, 'absent and nothing booked: a fresh fund');
+});
+
+test('the ledger\'s name is operational, not a condition: the same generator', async () => {
+  const { generatorOf } = await import('../src/runtime/generators.ts');
+  const journal = (ledger: string) => ({ experiment: cellsLab.id, researcher: 'assisted', config: { seed: 1, level: 1, llm_model: 'm', delegation: { fund: 10, tokens: 5, rounds: 1, max_rounds: 2, ledger } } });
+  assert.equal(generatorOf(journal('a.jsonl'), os.tmpdir(), 'x').id, generatorOf(journal('b.jsonl'), os.tmpdir(), 'x').id);
+});
+
+test('a branch judged by its heartbeat: a record whose process died ends it; no record past the grace, never started', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-live-'));
+  const branch = path.join(dir, 'run.branches', 'delegation-r1.1.json');
+  fs.mkdirSync(path.dirname(branch), { recursive: true });
+  fs.writeFileSync(branch, JSON.stringify({ events: [{ type: 'start' }] }));
+  fs.writeFileSync(branch.replace(/\.json$/, '.status.json'), JSON.stringify({ heartbeat: new Date(Date.now() - 120000).toISOString(), cost: { llm_tokens: 33 } }));
+  const answered = { type: 'delegation_answered', round: 1, request: '{}', answer: {} };
+  const dead = base(dir, { history: [requested(dir), { type: 'delegation_state', id: 'delegation:r1.1', state: 'running' }, answered] });
+  assert.equal(dead.hasResults(), true, 'its process stopped without ending');
+  const [r] = dead.results();
+  assert.equal(r.result_state, 'failed');
+  assert.equal(r.result_spent, 33, 'what its record says it spent');
+  assert.match(r.text, /its process stopped without ending/);
+
+  /* No record yet: starting within the grace (not freed), never started past it. */
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-live2-'));
+  fs.mkdirSync(path.join(dir2, 'run.branches'), { recursive: true });
+  fs.writeFileSync(path.join(dir2, 'run.branches', 'delegation-r1.1.cut.json'), '{}');
+  let clock = Date.now();
+  const starting = base(dir2, { history: [requested(dir2)], now: () => clock });
+  assert.match(String((await starting.run({ delegate: { question: 'again' } }, 2)).error), /one branch at a time/, 'launched and not yet started: kept');
+  clock += 61000;
+  assert.equal(starting.hasResults(), true);
+  assert.match(starting.results()[0].text, /never started/);
+  assert.equal(starting.fundLeft(), 100);
+});

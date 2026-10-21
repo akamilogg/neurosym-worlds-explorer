@@ -92,7 +92,9 @@ test('a branch opened, the requester going on; its result delivered once, a cont
   assert.equal(cost.total_at_least, (cost.junior ?? 0) + (cost.agents ?? 0) + end.delegation.spent);
 
   /* Rebuilt offline: answered from its record, nothing launched. */
-  const v = await verifyPackage(packRun(r.journal).dir);
+  const packed = packRun(r.journal);
+  assert.ok(packed.manifest.files.some((f) => f.path === 'run.delegation-fund.jsonl'), 'the ledger of its fund packed');
+  const v = await verifyPackage(packed.dir);
   assert.equal(v.reconstruction.holds, true, JSON.stringify(v.reconstruction));
   assert.equal(seen.launched, 1);
 });

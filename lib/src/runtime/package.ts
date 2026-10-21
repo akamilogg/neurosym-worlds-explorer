@@ -81,6 +81,9 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
   /* Its branches (SPEC-DELEGACION-INVESTIGACIONES §7): their records and the cuts they read, verified with their own. */
   for (const d of fs.readdirSync(folder).filter((f) => f.startsWith(name + '.') && f.endsWith('.branches') && fs.statSync(path.join(folder, f)).isDirectory()))
     fs.cpSync(path.join(folder, d), path.join(dir, d), { recursive: true });
+  /* The fund's ledger of its lineage (it may be named after the run that began it): without it, what was spent is not known. */
+  const ledger = journal.config?.delegation?.ledger;
+  if (typeof ledger === 'string' && fs.existsSync(path.join(folder, ledger))) fs.copyFileSync(path.join(folder, ledger), path.join(dir, path.basename(ledger)));
   const { dir: blobs, cited } = blobsOf(journalFile);
   const missing: string[] = [], corrupt: string[] = [];
   for (const b of cited) {

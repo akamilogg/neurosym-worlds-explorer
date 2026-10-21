@@ -262,3 +262,26 @@ Una revisión externa encontró cinco fallos. Están corregidos, cada uno con su
    - El nombre del libro queda en la configuración del run, y un run reanudado conserva el del linaje.
 5. **Los errores del lanzador escapaban al manejo de fallos.** Ahora el lanzamiento se espera: si falla, aunque sea de
    forma asíncrona, la rama queda como fallida y su reserva se libera.
+
+### 10.2 Segunda revisión (21/10/2026)
+
+Cuatro fallos más, corregidos con sus pruebas (`lib/test/delegation-review.test.ts`, `delegation.test.ts`):
+
+1. **El fondo compartido confundía ramas del junior y del senior.** Los dos pueden numerar una rama
+   `delegation:r1.1`. Ahora cada anotación del libro se identifica por solicitante y rama, y la liquidación de cada una
+   se anota aparte.
+2. **Un libro perdido o ilegible devolvía todo el presupuesto.** Ahora un libro roto (por ejemplo, una línea a medio
+   escribir), o ausente cuando el propio registro tiene ramas, deja el fondo como **desconocido**: no se abre ninguna
+   rama hasta que se pueda saber, y se dice por qué. Sólo un libro ausente sin nada anotado es un fondo nuevo.
+   `lab pack` incluye el libro.
+3. **El nombre del libro cambiaba la identidad del generador.** Ahora `generatorOf` lo excluye: es un metadato
+   operativo, no una condición del experimento.
+4. **La reconciliación confundía ausencia de diario con ausencia de ejecución.** Ahora una rama se juzga por su
+   **latido** (el `status` de su run, como en `control.ts`), no por la existencia de un fichero:
+   - **terminada,** si su registro tiene fin;
+   - **viva,** si su latido es reciente;
+   - **arrancando,** si no hay registro todavía o su latido aún no lleva mucho parado, dentro del margen de un
+     lanzamiento (60 s). Mientras tanto se mantiene su reserva;
+   - **muerta,** si su registro no tiene fin y su latido se paró: termina como fallida, con lo que su registro dice que
+     gastó;
+   - **nunca arrancada,** si pasado el margen no dejó registro: termina como fallida, se dice y se libera su reserva.

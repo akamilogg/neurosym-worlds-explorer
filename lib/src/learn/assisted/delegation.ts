@@ -46,7 +46,14 @@ interface Branch {
   state: 'accepted' | 'running' | 'completed' | 'failed' | 'cancelled';
   spent: number | null;
   delivered: boolean;
+  /** Why it failed, when it did not end by itself (its process stopped, it never started). */
+  why?: string;
 }
+
+/** A run's heartbeat older than this: its process is no longer alive (as control.ts reads it). */
+const STALE_MS = 15000;
+/** How long a branch launched may take to write its first record before it is taken as never started. */
+const START_GRACE_MS = 60000;
 
 /** What the senior is told of the tool: the same delegation, from its own reading; the result comes to it. */
 export const SENIOR_DELEGATION_SECTION = (c: DelegationConfig): string => 'DELEGATING AN INVESTIGATION. Among your readings you may open a BRANCH: another researcher, with the junior\'s record readable as it stands when you ask, its own laboratory in this same world and its own budget, investigates a question of yours: {"delegate": {"question": "...", "refs": ["optional: items of the junior\'s record"], "expected": "optional", "budget": {"rounds": <n>, "tokens": <n>}}}; {"delegation": {"id": "<id>", "status": true}}, {"delegation": {"id": "<id>", "read": {"experience": "list" | "open" | "find", ...}}} or {"delegation": {"id": "<id>", "cancel": true}}. Its result comes to YOU, at a later call (`branch_results`): a contribution, never evidence until it is tested; what reaches the junior is what you make of it, in your own message. One branch of yours at a time; the fund is ' + c.fund + ' tokens, at most ' + c.tokens + ' tokens and ' + c.maxRounds + ' rounds a branch; each request costs one of your readings.';
@@ -85,6 +92,10 @@ export class Delegations {
     readonly ledger?: string;
     /** Who asks, in that ledger. */
     readonly requester?: string;
+    /** The clock and its thresholds (tests). */
+    now?(): number;
+    readonly staleMs?: number;
+    readonly startGraceMs?: number;
   };
   /* Branches its record asked for and never saw answered (a stop between the two): reconciled before anything else is decided. */
   private readonly unconfirmed = new Set<string>();
@@ -118,9 +129,20 @@ export class Delegations {
 
   fundLeft(): number {
     if (!this.o.ledger) return Math.max(0, this.o.config.fund - this.spentAll - this.reserved);
-    const t = ledgerTotals(this.o.ledger);
-    return Math.max(0, this.o.config.fund - t.spent - t.reserved);
+    const t = this.ledgerNow();
+    return 'problem' in t ? 0 : Math.max(0, this.o.config.fund - t.spent - t.reserved);
   }
+
+  /** The fund as its ledger keeps it - or why it cannot be known: a ledger unreadable, or missing where this requester's own
+      record has branches (a fresh fund is a ledger absent with nothing booked yet). Never taken as nothing spent. */
+  private ledgerNow(): { reserved: number; spent: number } | { problem: string } {
+    const read = ledgerOf(this.o.ledger!);
+    if ('problem' in read) return read;
+    if (read.absent && this.branches.length) return { problem: 'its ledger is missing (' + path.basename(this.o.ledger!) + ') while branches were booked' };
+    return ledgerTotals(read.entries);
+  }
+
+  private key(id: string): string { return (this.o.requester ?? 'junior') + '|' + id; }
 
   private book(entry: Record<string, unknown>): void {
     if (!this.o.ledger) return;
@@ -136,7 +158,9 @@ export class Delegations {
     b.spent = spent;
     this.reserved = Math.max(0, this.reserved - b.granted.tokens);
     this.spentAll += spent;
-    if (live && this.o.ledger && !ledgerOf(this.o.ledger).some((e) => e.id === b.id && e.settle !== undefined)) this.book({ id: b.id, settle: spent });
+    if (!live || !this.o.ledger) return;
+    const read = ledgerOf(this.o.ledger);
+    if (!('problem' in read) && !read.entries.some((e) => keyOf(e) === this.key(b.id) && e.settle !== undefined)) this.book({ id: b.id, settle: spent });
   }
 
   /** A branch its record asked for and never saw answered: running if its record exists, otherwise never started - said so,
@@ -146,11 +170,36 @@ export class Delegations {
       this.unconfirmed.delete(id);
       const b = this.branches.find((x) => x.id === id);
       if (!b || b.state !== 'running') continue;
-      if (fs.existsSync(b.journal)) { this.o.log('delegation_state', { id, state: 'running', reconciled: true, why: 'its record exists: it started' }); continue; }
+      const l = this.liveness(b);
+      if (l.state === 'alive' || l.state === 'starting' || l.state === 'ended') { this.o.log('delegation_state', { id, state: 'running', reconciled: true, why: l.why }); continue; }
       b.state = 'failed';
-      this.o.log('delegation_state', { id, state: 'failed', reconciled: true, why: 'its launch was never confirmed and it left no record: taken as never started', spent: 0 });
-      this.settle(b, 0, true);
+      b.why = l.why;
+      this.o.log('delegation_state', { id, state: 'failed', reconciled: true, why: l.why, spent: l.spent });
+      this.settle(b, l.spent, true);
     }
+  }
+
+  /** How a branch's run stands, by its record and its heartbeat - never by a file's existence alone: ended; alive (its
+      heartbeat fresh); starting (no record yet, within the grace of a launch); dead (its record without an end, its heartbeat
+      stopped); never (no record, the grace past). */
+  private liveness(b: Branch): { state: 'ended' | 'alive' | 'starting' | 'dead' | 'never'; why: string; spent: number } {
+    const now = this.o.now?.() ?? Date.now();
+    const stale = this.o.staleMs ?? STALE_MS, grace = this.o.startGraceMs ?? START_GRACE_MS;
+    const journal = readJson(b.journal);
+    if (endOf(journal)) return { state: 'ended', why: 'it ended', spent: 0 };
+    const status = readJson(b.journal.replace(/\.json$/, '') + '.status.json');
+    const beat = status?.heartbeat ? Date.parse(status.heartbeat) : NaN;
+    const spentSoFar = Number(status?.cost?.llm_tokens) || 0;
+    if (Number.isFinite(beat) && now - beat < stale) return { state: 'alive', why: 'its process is alive (its heartbeat is fresh)', spent: 0 };
+    if (journal || status || fs.existsSync(b.journal)) {
+      const since = Number.isFinite(beat) ? beat : fs.statSync(fs.existsSync(b.journal) ? b.journal : b.journal.replace(/\.json$/, '') + '.status.json').mtimeMs;
+      return now - since < grace ? { state: 'starting', why: 'its record began and its heartbeat is not yet stale for long', spent: 0 }
+        : { state: 'dead', why: 'its process stopped without ending (its heartbeat stale): what it spent is what its record says', spent: spentSoFar };
+    }
+    const cut = b.journal.replace(/\.json$/, '') + '.cut.json';
+    const asked = fs.existsSync(cut) ? fs.statSync(cut).mtimeMs : 0;
+    return now - asked < grace ? { state: 'starting', why: 'launched and not yet started: within the grace of a launch', spent: 0 }
+      : { state: 'never', why: 'it left no record in the grace of a launch: taken as never started', spent: 0 };
   }
 
   /** Whether a branch ended and its result is still to give (what calls a requester that is not asked every round). */
@@ -204,6 +253,7 @@ export class Delegations {
     if (!question) return { delegate: null, error: '"question": what to investigate - the branch knows nothing else of your intent' };
     if (this.o.unsupported) return { delegate: { question }, error: 'not here: ' + this.o.unsupported };
     if (r!.refs !== undefined && (!Array.isArray(r!.refs) || !r!.refs.every((x: unknown) => typeof x === 'string'))) return { delegate: { question }, error: '"refs": ids of items of your record' };
+    if (this.o.ledger) { const t = this.ledgerNow(); if ('problem' in t) return { delegate: { question }, error: 'the fund cannot be known: ' + t.problem + ' - no branch is opened until it can' }; }
     const active = this.active();
     if (active) return { delegate: { question }, error: 'one branch at a time: ' + active.id + ' is ' + active.state, fund_left: this.fundLeft() };
     const c = this.o.config;
@@ -246,7 +296,8 @@ export class Delegations {
     this.reserved += tokens;
     /* The fund is one for the run: reserved in its ledger, and checked again - another requester may have reserved meanwhile. */
     this.book({ id, reserve: tokens });
-    if (this.o.ledger && ledgerTotals(this.o.ledger).spent + ledgerTotals(this.o.ledger).reserved > this.o.config.fund) {
+    const after = this.o.ledger ? this.ledgerNow() : null;
+    if (after && ('problem' in after || after.spent + after.reserved > this.o.config.fund)) {
       b.state = 'failed';
       this.o.log('delegation_state', { id, state: 'failed', why: 'the fund was taken meanwhile by another requester of the run', spent: 0 });
       this.settle(b, 0, true);
@@ -270,7 +321,11 @@ export class Delegations {
     for (const b of this.branches) {
       if (b.state !== 'running' && b.state !== 'accepted') continue;
       const end = endOf(readJson(b.journal));
-      if (!end) continue;
+      if (!end) {
+        const l = this.liveness(b);
+        if (l.state === 'dead' || l.state === 'never') { b.state = 'failed'; b.why = l.why; this.settle(b, l.spent, true); }
+        continue;
+      }
       const spent = Number(readJson(b.journal.replace(/\.json$/, '.finding.json'))?.cost?.total?.llm_tokens) || Number(end.console_usage?.llm_tokens_live ?? 0) + Number(end.console_usage?.llm_tokens_replayed ?? 0);
       b.state = end.stoppedBy === 'cancelled' ? 'cancelled' : end.stoppedBy === 'llm_error' || end.stoppedBy === 'diverged' ? 'failed' : 'completed';
       this.settle(b, spent, true);
@@ -307,16 +362,24 @@ export class Delegations {
 }
 
 /** The fund's ledger: every reservation and settlement of every requester of the run, in order. */
-function ledgerOf(file: string): J[] {
-  try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; }
+function ledgerOf(file: string): { entries: J[]; absent: boolean } | { problem: string } {
+  if (!fs.existsSync(file)) return { entries: [], absent: true };
+  let text: string;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { return { problem: 'its ledger cannot be read: ' + String((e as Error)?.message ?? e).slice(0, 120) }; }
+  const entries: J[] = [];
+  for (const [i, line] of text.split('\n').filter(Boolean).entries()) {
+    try { entries.push(JSON.parse(line)); } catch { return { problem: 'its ledger is broken at line ' + (i + 1) + ': what was booked there is not known' }; }
+  }
+  return { entries, absent: false };
 }
+/** A booking's key: its requester and its branch - two requesters may number their branches alike. */
+const keyOf = (e: J): string => String(e.requester ?? 'junior') + '|' + String(e.id);
 /** What is reserved and not settled, and what was spent, in all. */
-function ledgerTotals(file: string): { reserved: number; spent: number } {
-  const entries = ledgerOf(file);
+function ledgerTotals(entries: readonly J[]): { reserved: number; spent: number } {
   const settled = new Map<string, number>();
-  for (const e of entries) if (e.settle !== undefined) settled.set(e.id, Number(e.settle) || 0);
+  for (const e of entries) if (e.settle !== undefined) settled.set(keyOf(e), Number(e.settle) || 0);
   let reserved = 0, spent = 0;
-  for (const e of entries) if (e.reserve !== undefined && !settled.has(e.id)) reserved += Number(e.reserve) || 0;
+  for (const e of entries) if (e.reserve !== undefined && !settled.has(keyOf(e))) reserved += Number(e.reserve) || 0;
   for (const v of settled.values()) spent += v;
   return { reserved, spent };
 }
@@ -331,7 +394,7 @@ function reportOf(b: Branch): Record<string, unknown> {
   const last = reflections[reflections.length - 1] ?? [...events].reverse().find((e) => e.type === 'proposal') ?? null;
   const beliefs = ((nb.beliefs ?? []) as J[]).map((x) => ({ id: x.id, status: x.status, statement: x.statement }));
   return {
-    branch: b.id, question: b.question, state: b.state, rounds: events.filter((e) => e.type === 'proposal' || e.type === 'round_closed').length, spent_tokens: b.spent,
+    branch: b.id, question: b.question, state: b.state, ...(b.why ? { why: b.why } : {}), rounds: events.filter((e) => e.type === 'proposal' || e.type === 'round_closed').length, spent_tokens: b.spent,
     beliefs, notes: ((nb.notes ?? []) as J[]).map((n) => ({ id: n.id, text: String(n.text ?? '').slice(0, 600) })),
     ...(last ? { its_last_word: { ...(last.rationale ? { rationale: last.rationale } : {}), ...(last.lessons ? { lessons: last.lessons } : {}), ...(last.next_experiment ? { next_experiment: last.next_experiment } : {}),
       ...(last.open_questions ? { open_questions: last.open_questions } : {}) } } : {}),
