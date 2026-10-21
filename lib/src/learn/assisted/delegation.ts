@@ -56,9 +56,16 @@ interface Branch {
   why?: string;
   /** Its process, when its launch told it. */
   pid?: number;
-  /** What it spent is not known: booked at its grant (the most it was allowed), with what its record showed at least. */
-  uncertain?: { readonly at_least: number };
+  /** What it spent is not known: what its record showed (at least, all that was observed), and what the fund holds for it
+      (its grant - held, never a bound on its spending: the limit is checked between calls, and a call may pass it). */
+  uncertain?: Uncertain;
 }
+
+/** A spending not known: observed at least, and held in the fund. */
+type Uncertain = { readonly at_least: number; readonly held: number };
+
+/** A branch's result as delivered: its spending as observed, and when not known, said so. */
+type Result = { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: Uncertain };
 
 /** A run's heartbeat older than this: its process is no longer alive (as control.ts reads it). */
 const STALE_MS = 15000;
@@ -127,19 +134,29 @@ export class Delegations {
         this.reserved += Number(e.granted?.tokens) || 0;
         this.perRound.set(e.round, Math.max(this.perRound.get(e.round) ?? 0, Number(String(e.id).split('.').pop()) || 0));
       }
-      if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.pid === 'number') b.pid = e.pid; if (typeof e.spent === 'number') this.settle(b, e.spent); } }
+      if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.pid === 'number') b.pid = e.pid; this.restore(b, e.spent, e.uncertain); } }
       if (e.type === 'delegation_requested' || e.type === 'delegation_state' || e.type === 'delegation_cancel_asked') pending.push(e);
       if (e.type === 'delegation_answered') { this.answered.push({ round: e.round, request: e.request, answer: e.answer, events: pending }); pending = []; }
       if (e.type === 'delegation_answered') for (const p of this.answered[this.answered.length - 1].events) if (p.type === 'delegation_requested') this.unconfirmed.delete(p.id);
       if (e.type === 'delegation_requested') this.unconfirmed.add(e.id);
       if (e.type === 'delegation_state' && e.reconciled) this.unconfirmed.delete(e.id);
       /* A senior's: the results it was given at one of its calls. */
-      if (e.type === 'branch_result_given') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.delivered = true; b.state = e.state ?? 'completed'; if (typeof e.spent === 'number') this.settle(b, e.spent); } }
+      if (e.type === 'branch_result_given') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.delivered = true; b.state = e.state ?? 'completed'; this.restore(b, e.spent, e.uncertain); } }
       if (e.type === 'operator_message') for (const m of (e.messages ?? []) as J[]) if (m.research_result) {
         const b = this.branches.find((x) => x.id === m.research_result);
-        if (b) { b.delivered = true; b.state = m.result_state ?? 'completed'; if (typeof m.result_spent === 'number') this.settle(b, m.result_spent); }
+        if (b) { b.delivered = true; b.state = m.result_state ?? 'completed'; this.restore(b, m.result_spent, m.result_spent_uncertain); }
       }
     }
+  }
+
+  /** What it was observed to spend: what it spent, or - not known - what its record showed at least. */
+  private observed(b: Branch): number | null { return b.uncertain ? b.uncertain.at_least : b.spent; }
+
+  /** A settlement as its record gives it - a spending observed, and when not known, what the fund held for it (a record of an
+      earlier version gave the amount held as its spending, with the least observed). */
+  private restore(b: Branch, spent: unknown, u?: J): void {
+    if (u && typeof u.at_least === 'number') { const held = typeof u.held === 'number' ? u.held : Number(spent) || b.granted.tokens; this.settle(b, held, false, { at_least: u.at_least, held }); }
+    else if (typeof spent === 'number') this.settle(b, spent);
   }
 
   static accepts(q: Record<string, unknown>): boolean { return q !== null && typeof q === 'object' && ('delegate' in q || 'delegation' in q); }
@@ -171,7 +188,7 @@ export class Delegations {
   private active(): Branch | undefined { return this.branches.find((b) => b.state === 'accepted' || b.state === 'running'); }
 
   /** Its cost settled: the reservation released, what it spent kept (in the shared ledger too, once). */
-  private settle(b: Branch, spent: number, live = false, uncertain?: { at_least: number }): void {
+  private settle(b: Branch, spent: number, live = false, uncertain?: Uncertain): void {
     if (b.spent !== null) return;
     b.spent = spent;
     if (uncertain) b.uncertain = uncertain;
@@ -179,15 +196,16 @@ export class Delegations {
     this.spentAll += spent;
     if (!live || !this.o.ledger) return;
     const read = ledgerOf(this.o.ledger);
-    if (!('problem' in read) && !read.entries.some((e) => keyOf(e) === this.key(b.id) && e.settle !== undefined)) this.book({ id: b.id, settle: spent, ...(uncertain ? { uncertain: true, at_least: uncertain.at_least } : {}) });
+    if (!('problem' in read) && !read.entries.some((e) => keyOf(e) === this.key(b.id) && e.settle !== undefined)) this.book({ id: b.id, settle: spent, ...(uncertain ? { uncertain: true, at_least: uncertain.at_least, held: uncertain.held } : {}) });
   }
 
-  /** A branch that did not end by itself: never started (nothing spent), or stopped (its spending not known: its grant kept). */
+  /** A branch that did not end by itself: never started (nothing spent), or stopped (its spending not known: its grant held in
+      the fund, what was observed kept apart). */
   private fail(b: Branch, l: { state: string; why: string; spent: number }): void {
     b.state = 'failed';
     b.why = l.why;
     if (l.state === 'never') this.settle(b, 0, true);
-    else this.settle(b, b.granted.tokens, true, { at_least: l.spent });
+    else this.settle(b, b.granted.tokens, true, { at_least: l.spent, held: b.granted.tokens });
   }
 
   /** A branch its record asked for and never saw answered: running if its record exists, otherwise never started - said so,
@@ -200,7 +218,7 @@ export class Delegations {
       const l = this.liveness(b);
       if (l.state === 'alive' || l.state === 'starting' || l.state === 'ended') { this.o.log('delegation_state', { id, state: 'running', reconciled: true, why: l.why }); continue; }
       this.fail(b, l);
-      this.o.log('delegation_state', { id, state: 'failed', reconciled: true, why: l.why, spent: b.spent, ...(b.uncertain ? { uncertain: b.uncertain } : {}) });
+      this.o.log('delegation_state', { id, state: 'failed', reconciled: true, why: l.why, spent: this.observed(b), ...(b.uncertain ? { uncertain: b.uncertain } : {}) });
     }
   }
 
@@ -364,21 +382,21 @@ export class Delegations {
   }
 
   /** The results to deliver now: each branch ended and not delivered yet, once. */
-  results(): { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: { readonly at_least: number } }[] {
+  results(): Result[] {
     this.refresh();
-    const out: { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: { readonly at_least: number } }[] = [];
+    const out: Result[] = [];
     for (const b of this.branches) {
       if (b.delivered || (b.state !== 'completed' && b.state !== 'failed' && b.state !== 'cancelled')) continue;
       b.delivered = true;
-      out.push({ id: 'result-' + b.id, research_result: b.id, result_state: b.state, result_spent: b.spent, ...(b.uncertain ? { result_spent_uncertain: b.uncertain } : {}),
+      out.push({ id: 'result-' + b.id, research_result: b.id, result_state: b.state, result_spent: this.observed(b), ...(b.uncertain ? { result_spent_uncertain: b.uncertain } : {}),
         text: 'RESEARCH RESULT of your branch ' + b.id + ' (a delegated contribution, not an order nor an answer of the environment): ' + JSON.stringify(reportOf(b)) });
     }
     return out;
   }
 
   /** Records that a result was given (a requester whose deliveries are not messages of its run: a senior). */
-  given(r: { research_result: string; result_state: string; result_spent: number | null }): void {
-    this.o.log('branch_result_given', { id: r.research_result, state: r.result_state, spent: r.result_spent });
+  given(r: Result): void {
+    this.o.log('branch_result_given', { id: r.research_result, state: r.result_state, spent: r.result_spent, ...(r.result_spent_uncertain ? { uncertain: r.result_spent_uncertain } : {}) });
   }
 
   /** At the requester's end: its branches still running asked to stop (their partial results kept in their records). */
@@ -387,8 +405,11 @@ export class Delegations {
       fs.appendFileSync(b.journal.replace(/\.json$/, '') + '.inbox.jsonl', JSON.stringify({ id: 'close-' + b.id, kind: 'stop', by: 'requester' }) + '\n');
       this.o.log('delegation_cancel_asked', { id: b.id, why: 'its requester ended' });
     }
-    return { fund: this.o.config.fund, spent: this.spentAll, reserved: this.reserved,
-      branches: this.branches.map((b) => ({ id: b.id, journal: path.relative(path.dirname(this.o.journalFile), b.journal).split(path.sep).join('/'), state: b.state, spent: b.spent, granted: b.granted,
+    /* What was spent, as observed (a spending not known, at least what was seen); what the fund holds for those apart. */
+    const uncertain = this.branches.filter((b) => b.uncertain);
+    return { fund: this.o.config.fund, spent: this.branches.reduce((a, b) => a + (this.observed(b) ?? 0), 0), reserved: this.reserved,
+      ...(uncertain.length ? { held_uncertain: uncertain.reduce((a, b) => a + b.uncertain!.held, 0) } : {}),
+      branches: this.branches.map((b) => ({ id: b.id, journal: path.relative(path.dirname(this.o.journalFile), b.journal).split(path.sep).join('/'), state: b.state, spent: this.observed(b), granted: b.granted,
         ...(b.uncertain ? { spent_uncertain: b.uncertain } : {}) })) };
   }
 }
@@ -426,7 +447,8 @@ function reportOf(b: Branch): Record<string, unknown> {
   const last = reflections[reflections.length - 1] ?? [...events].reverse().find((e) => e.type === 'proposal') ?? null;
   const beliefs = ((nb.beliefs ?? []) as J[]).map((x) => ({ id: x.id, status: x.status, statement: x.statement }));
   return {
-    branch: b.id, question: b.question, state: b.state, ...(b.why ? { why: b.why } : {}), rounds: events.filter((e) => e.type === 'proposal' || e.type === 'round_closed').length, spent_tokens: b.spent,
+    branch: b.id, question: b.question, state: b.state, ...(b.why ? { why: b.why } : {}), rounds: events.filter((e) => e.type === 'proposal' || e.type === 'round_closed').length, spent_tokens: b.uncertain ? null : b.spent,
+    ...(b.uncertain ? { spent_not_known: { observed_at_least: b.uncertain.at_least, held_in_the_fund: b.uncertain.held } } : {}),
     beliefs, notes: ((nb.notes ?? []) as J[]).map((n) => ({ id: n.id, text: String(n.text ?? '').slice(0, 600) })),
     ...(last ? { its_last_word: { ...(last.rationale ? { rationale: last.rationale } : {}), ...(last.lessons ? { lessons: last.lessons } : {}), ...(last.next_experiment ? { next_experiment: last.next_experiment } : {}),
       ...(last.open_questions ? { open_questions: last.open_questions } : {}) } } : {}),

@@ -59,7 +59,9 @@ export interface RunResults {
 export interface RunCost {
   readonly tokens: { readonly junior: number | null; readonly agents: number | null;
     /** What its branches spent (SPEC-DELEGACION-INVESTIGACIONES §6): direct, delegated and total, never counted twice. */
-    readonly delegated: number | null; readonly total_at_least: number };
+    readonly delegated: number | null; readonly total_at_least: number;
+    /** What the fund holds for branches whose spending is not known (§10.4): held, neither spent nor a bound - apart. */
+    readonly delegated_held_uncertain?: number };
   readonly money: { readonly known: number; readonly unknown: readonly string[] };
   readonly seconds: number | null;
   readonly judge_calls: number | null;
@@ -103,27 +105,30 @@ export function runResults(journalFile: string, criteria?: Criteria): RunResults
   const junior = typeof finding.cost?.total?.llm_tokens === 'number' ? finding.cost.total.llm_tokens : null;
   if (junior === null) unknown.push('the junior\'s tokens');
   else if (end.console_usage?.usage_unknown) unknown.push('part of the junior\'s tokens (its provider did not report them all)');
-  let agentTokens: number | null = null, money = 0, agentDelegated = 0;
+  let agentTokens: number | null = null, money = 0, agentDelegated = 0, held = heldOf(end.delegation);
+  let uncertainBranches = ((end.delegation?.branches ?? []) as J[]).filter((b) => b.spent_uncertain).length;
   const moneyUnknown: string[] = ['the junior\'s (no price recorded)'];
   for (const f of fs.existsSync(path.dirname(journalFile)) ? fs.readdirSync(path.dirname(journalFile)).filter((x) => x.startsWith(path.basename(base) + '.agent-') && x.endsWith('.json')) : []) {
     const rec = readJson(path.join(path.dirname(journalFile), f));
     const u = agentUsage(rec);
     /* Its branches' work, delegated: counted with the run's delegated cost, never twice. */
     if (typeof rec?.delegation?.spent === 'number') agentDelegated += rec.delegation.spent;
+    held += heldOf(rec?.delegation);
+    uncertainBranches += ((rec?.delegation?.branches ?? []) as J[]).filter((b) => b.spent_uncertain).length;
     agentTokens = (agentTokens ?? 0) + u.tokens_in + u.tokens_out;
     if (u.cost > 0) money += u.cost; else if (u.calls) moneyUnknown.push(f.replace(/^.*\.agent-|\.json$/g, '') + '\'s (its provider reported no price)');
   }
   const seconds = typeof end.t === 'number' ? end.t : null;
   const delegated = typeof end.delegation?.spent === 'number' || agentDelegated ? (Number(end.delegation?.spent) || 0) + agentDelegated : null;
   if (end.delegation && (end.delegation.branches ?? []).some((b: J) => b.spent === null)) unknown.push('a branch still running when it ended (its tokens not counted)');
-  if (end.delegation && (end.delegation.branches ?? []).some((b: J) => b.spent_uncertain)) unknown.push('a branch stopped without ending: its tokens booked at its grant, an upper bound');
+  if (uncertainBranches) unknown.push(uncertainBranches + ' branch(es) stopped without ending: what they spent is not known - counted at what was observed, a lower bound; what the fund holds for them is apart (delegated_held_uncertain), not a bound either: the limit is checked between calls');
   return {
     o1_predictive_acceptance: { model, ...(artifact !== undefined ? { artifact } : {}) },
     o2_discriminating_evidence: o2,
     o3_adequacy: o3,
     o4_mechanistic_recovery: recovery !== null ? { score: recovery, grader_version: rec.grader_version ?? null } : 'no truth to grade against, or not graded',
     ...(model && recovery !== null ? { prediction_and_mechanism: { accepted: true, recovery } } : {}),
-    cost: { tokens: { junior, agents: agentTokens, delegated, total_at_least: (junior ?? 0) + (agentTokens ?? 0) + (delegated ?? 0) }, money: { known: Math.round(money * 1e6) / 1e6, unknown: moneyUnknown },
+    cost: { tokens: { junior, agents: agentTokens, delegated, total_at_least: (junior ?? 0) + (agentTokens ?? 0) + (delegated ?? 0), ...(held ? { delegated_held_uncertain: held } : {}) }, money: { known: Math.round(money * 1e6) / 1e6, unknown: moneyUnknown },
       seconds, judge_calls: typeof end.jev?.calls === 'number' ? end.jev.calls : null, unknown },
     started: journal.started ?? null, ended_at_seconds: seconds
   };
@@ -217,3 +222,7 @@ export function batchTimes(started: string, ended: string | undefined, rows: rea
     accumulated_run_seconds: runs.reduce((a, x) => a + (x.r.ended_at_seconds ?? 0), 0)
   };
 }
+
+/** What a summary of branches holds for those whose spending is not known (a summary of an earlier version: its grant each). */
+const heldOf = (d: J | undefined): number => typeof d?.held_uncertain === 'number' ? d.held_uncertain
+  : ((d?.branches ?? []) as J[]).filter((b) => b.spent_uncertain).reduce((a, b) => a + (Number(b.spent_uncertain.held ?? b.granted?.tokens) || 0), 0);

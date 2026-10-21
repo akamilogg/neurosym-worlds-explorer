@@ -373,7 +373,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
     state.since = Math.max(state.since, latestRound());
   }
   const limit = followUp ? 1 : o.readSteps ?? 4;
-  const branchResults = branches ? branches.results().map((r) => { branches.given(r); return { branch: r.research_result, state: r.result_state, spent_tokens: r.result_spent, report: r.text }; }) : [];
+  const branchResults = branches ? branches.results().map((r) => { branches.given(r); return { branch: r.research_result, state: r.result_state, spent_tokens: r.result_spent, ...(r.result_spent_uncertain ? { spent_not_known: r.result_spent_uncertain } : {}), report: r.text }; }) : [];
   /* What the junior reported since its latest call: the directives it carried out, and where it disagrees. */
   const reports = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'directive_report' || e.type === 'junior_report');
   const freshReports = reports.slice(state.reports_seen ?? 0).map((e) => (e.type === 'junior_report' ? { the_junior_says: e.text } : { directive: e.id, done: e.done ?? null }));

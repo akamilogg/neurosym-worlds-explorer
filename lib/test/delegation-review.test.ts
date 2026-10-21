@@ -149,8 +149,8 @@ test('a branch judged by its heartbeat: a record whose process died ends it; no 
   assert.equal(dead.hasResults(), true, 'its process stopped without ending');
   const [r] = dead.results();
   assert.equal(r.result_state, 'failed');
-  assert.equal(r.result_spent, 100, 'what it spent is not known: its grant kept booked');
-  assert.deepEqual(r.result_spent_uncertain, { at_least: 33 }, 'what its record showed, at least');
+  assert.equal(r.result_spent, 33, 'what was observed, at least');
+  assert.deepEqual(r.result_spent_uncertain, { at_least: 33, held: 100 }, 'not known: its grant held in the fund, apart');
   assert.match(r.text, /its process stopped without ending/);
 
   /* No record yet: starting within the grace (not freed), never started past it. */
@@ -222,11 +222,72 @@ test('a heartbeat late is no death while its process lives; a death keeps its sp
   const [r] = dead.results();
   assert.equal(r.result_state, 'failed');
   assert.match(r.text, /is gone/);
-  assert.deepEqual(r.result_spent_uncertain, { at_least: 33 });
+  assert.deepEqual(r.result_spent_uncertain, { at_least: 33, held: 100 });
   assert.equal(dead.fundLeft(), 0, 'its grant kept booked: never freed on a guess');
   const settled = fs.readFileSync(ledger, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((e) => e.settle !== undefined);
   assert.equal(settled.settle, 100);
   assert.equal(settled.uncertain, true);
   assert.equal(settled.at_least, 33);
   assert.ok((dead.close() as any).branches[0].spent_uncertain, 'said in its summary');
+});
+
+/* A fourth review (21/10/2026): a spending not known stays so through a resumption - its events, its delivery, its rebuilding;
+   and what the fund holds for it is apart from what was observed spent, never counted as spent nor called a bound. */
+
+const deadBranch = (dir: string) => {
+  const branch = path.join(dir, 'run.branches', 'delegation-r1.1.json');
+  fs.mkdirSync(path.dirname(branch), { recursive: true });
+  fs.writeFileSync(branch, JSON.stringify({ events: [{ type: 'start' }] }));
+  fs.writeFileSync(branch.replace(/\.json$/, '.status.json'), JSON.stringify({ heartbeat: new Date(Date.now() - 120000).toISOString(), cost: { llm_tokens: 33 } }));
+  return [requested(dir), { type: 'delegation_state', id: 'delegation:r1.1', state: 'running' }, { type: 'delegation_answered', round: 1, request: '{}', answer: {} }];
+};
+
+test('a spending not known stays so on a resumption: delivered to the junior, given to the senior, reconciled', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-unc-'));
+  const history: any[] = deadBranch(dir);
+  const first = base(dir, { history });
+  const [m] = first.results();
+  /* The junior's: delivered as a message of its run, read again on resuming. */
+  const junior = base(dir, { history: [...history, { type: 'operator_message', messages: [m] }] });
+  const s = junior.close() as any;
+  assert.deepEqual(s.branches[0].spent_uncertain, { at_least: 33, held: 100 }, 'still not known after resuming');
+  assert.equal(s.spent, 33);
+  assert.equal(s.held_uncertain, 100);
+  assert.equal(junior.fundLeft(), 0, 'its grant still held');
+  /* The senior's: given at one of its calls, its record says so. */
+  const logged: any[] = [];
+  const senior = base(dir, { history, log: (type, data) => logged.push({ type, ...data }) });
+  for (const r of senior.results()) senior.given(r);
+  const given = logged.find((e) => e.type === 'branch_result_given');
+  assert.deepEqual(given.uncertain, { at_least: 33, held: 100 });
+  const resumed = base(dir, { history: [...history, given] });
+  assert.deepEqual((resumed.close() as any).branches[0].spent_uncertain, { at_least: 33, held: 100 });
+  /* Reconciled before its answer: its state event carries it. */
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-unc2-'));
+  const h2 = deadBranch(dir2).slice(0, 2);
+  const rec: any[] = [];
+  await base(dir2, { history: h2, log: (type, data) => rec.push({ type, ...data }) }).run({ delegation: { id: 'delegation:r1.1', status: true } }, 2);
+  const state = rec.find((e) => e.type === 'delegation_state' && e.reconciled);
+  assert.equal(state.spent, 33);
+  assert.deepEqual(state.uncertain, { at_least: 33, held: 100 });
+  assert.deepEqual((base(dir2, { history: [...h2, state] }).close() as any).branches[0].spent_uncertain, { at_least: 33, held: 100 });
+  /* A record of the earlier version (its grant as its spending, the least observed): read as held. */
+  const old = base(dir2, { history: [...h2, { type: 'delegation_state', id: 'delegation:r1.1', state: 'failed', reconciled: true, spent: 100, uncertain: { at_least: 33 } }] });
+  assert.deepEqual((old.close() as any).branches[0].spent_uncertain, { at_least: 33, held: 100 });
+});
+
+test('K1: what the fund holds for a spending not known is apart from what was observed spent', async () => {
+  const { runResults } = await import('../src/orchestra/results.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-k1-'));
+  const d = base(dir, { history: deadBranch(dir) });
+  d.results();
+  const journal = path.join(dir, 'run.json');
+  fs.writeFileSync(journal, JSON.stringify({ events: [{ type: 'end', t: 1, delegation: d.close() }] }));
+  fs.writeFileSync(path.join(dir, 'run.finding.json'), JSON.stringify({ cost: { total: { llm_tokens: 0 } } }));
+  const cost = runResults(journal).cost;
+  assert.equal(cost.tokens.delegated, 33, 'observed');
+  assert.equal(cost.tokens.total_at_least, 33, 'never the amount held');
+  assert.equal(cost.tokens.delegated_held_uncertain, 100);
+  const note = (cost as any).unknown.find((u: string) => /not known/.test(u));
+  assert.ok(note && !/upper bound/.test(note) && /not a bound/.test(note), String(note));
 });

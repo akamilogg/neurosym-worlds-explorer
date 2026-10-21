@@ -306,3 +306,20 @@ Tres fallos más, corregidos con sus pruebas (`lib/test/delegation-review.test.t
      `uncertain` y `at_least` (lo que su registro mostraba). Su reserva nunca se libera por una suposición. El resumen
      (`spent_uncertain`), el mensaje de resultado y K1 (`cost.unknown`) lo dicen;
    - sólo una rama que nunca arrancó se liquida a 0.
+
+### 10.4 Cuarta revisión (21/10/2026)
+
+Dos fallos en el tratamiento del gasto incierto, corregidos con sus pruebas (`lib/test/delegation-review.test.ts`):
+
+1. **La incertidumbre desaparecía al reanudar.** Ahora el gasto incierto es `{at_least, held}`: lo observado y lo que el
+   fondo retiene para la rama. Va en todos los eventos que lo liquidan: el `delegation_state` reconciliado, el mensaje de
+   resultado del junior (`result_spent_uncertain`) y el `branch_result_given` del senior. Al reanudar, la rama sigue
+   incierta y su retención sigue en el fondo. Un registro de la versión anterior (la asignación como gasto, con
+   `at_least`) se lee como retención.
+2. **K1 sumaba la retención como gasto mínimo demostrado.** Ahora se separa de lo consumido:
+   - `spent` y `delegated` cuentan sólo lo observado, y `total_at_least` es una cota inferior verdadera;
+   - lo retenido va aparte, en `held_uncertain` del resumen y `delegated_held_uncertain` de K1.
+
+   La retención **no es un límite superior** del gasto: el límite de tokens se comprueba entre llamadas, y una llamada
+   puede sobrepasarlo. K1 lo dice así en `cost.unknown`. El informe de la rama da `spent_tokens: null` y
+   `spent_not_known: {observed_at_least, held_in_the_fund}`.
