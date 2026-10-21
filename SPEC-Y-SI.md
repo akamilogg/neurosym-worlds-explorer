@@ -1,11 +1,17 @@
 # SPEC · «¿Y si…?»: primitivas para abrir una dirección de investigación
 
-Estado (19/10/2026): **propuesto, sin implementar**.
+Estado (21/10/2026): **sustituido; no es un contrato vigente**.
+La propuesta vigente es [SPEC-DELEGACION-INVESTIGACIONES.md](SPEC-DELEGACION-INVESTIGACIONES.md).
+Su implementación elimina la herramienta aquí descrita y sus superficies exclusivas, sin compatibilidad,
+migración ni conservación de runs: no se han realizado runs con ella. El contenido siguiente queda como antecedente
+de diseño, no como requisitos para implementar o mantener.
 Refinamiento: política neurosimbólica opcional para decidir cuándo cerrar una ronda o solicitar una nueva dirección;
 Jev es un candidato para sus juicios semánticos. System 2 genera las hipótesis. La política puede ser un artefacto
 que el investigador revise con experiencia. El [plan de implementación](PLAN-Y-SI.md) concreta el modo autónomo.
 Esta es la propuesta de implementación acotada. `SPEC-GENERACION-HIPOTESIS.md` queda como investigación de referencia;
 sus componentes adicionales no son requisitos de esta entrega.
+
+La delegación sustituye estas primitivas; no se conservan como modalidad ligera.
 
 ## 1. La idea
 

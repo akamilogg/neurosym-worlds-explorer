@@ -1,6 +1,9 @@
 # PLAN · Política de exploración y primitivas «¿Y si…?»
 
-Estado (19/10/2026): **plan de implementación; código aún sin modificar**.
+Estado (21/10/2026): **plan anterior sustituido en lo relativo a `what_if`**.
+Rige [SPEC-DELEGACION-INVESTIGACIONES.md](SPEC-DELEGACION-INVESTIGACIONES.md): eliminar la herramienta y sus
+superficies exclusivas, sin compatibilidad ni preservación de runs. Las capacidades independientes, como el cierre
+de rondas, permanecen. Las entregas y comparaciones siguientes no justifican mantener un segundo mecanismo.
 Desarrolla [SPEC-Y-SI.md](SPEC-Y-SI.md) con la decisión de permitir cierres y cambios de dirección autónomos.
 
 ## 1. Resultado que queremos
