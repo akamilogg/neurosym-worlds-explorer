@@ -9,12 +9,22 @@
     {
       "id": "threesum-stalled-free",
       "lab": "artifacts",
-      "condition": "3SUM stalled at O(n^2), continued with a fund for branches and nothing said of it: does it delegate when its investigation stops advancing? The run artifacts-threesum-subquadratic-7 (12 rounds, accepted at 12) given 8 more, its senior with it; the fund opened from its new rounds, the world's verdict as it was (against the cubic base)",
-      "fork": {
-        "journal": "D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-7/threesum-subquadratic.json",
-        "attempts": 20,
-        "delegation": { "fund": 900000, "tokens": 300000, "rounds": 3, "max_rounds": 6 }
-      },
+      "condition": "3SUM below O(n^2), judged on growth (threesum-subquadratic@1): from the quadratic base, where the earlier runs stalled, with a fund for branches and nothing said of it - does it delegate when its investigation stops advancing?",
+      "researcher": "assisted",
+      "args": [
+        "--artifact", "threesum-subquadratic",
+        "--seed", "1",
+        "--attempts", "16",
+        "--validations", "5",
+        "--memory", "selective",
+        "--max-minutes", "480",
+        "--help-budget", "8",
+        "--delegation-fund", "900000",
+        "--delegation-tokens", "300000",
+        "--delegation-rounds", "3",
+        "--delegation-max-rounds", "6",
+        "--task", "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
+      ],
       "agent": {
         "id": "senior",
         "role": "senior",
@@ -25,13 +35,28 @@
     {
       "id": "threesum-stalled-invited",
       "lab": "artifacts",
-      "condition": "The same continuation, with one message of the operator at its first new round inviting it to delegate an examination of its own assumptions (no algorithm, no family named): when it delegates, does the branch bring a different and grounded direction, and does the requester test it and decide? Help, counted as such",
-      "fork": {
-        "journal": "D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-7/threesum-subquadratic.json",
-        "attempts": 20,
-        "message": "You now have a fund for branches: you may delegate an investigation to a researcher of its own while you go on. One branch worth considering: examine which assumptions keep this investigation on quadratic solutions, develop an alternative with a different mechanism, and name an experiment that decides whether it deserves to be followed - concluding that it is not promising is a result too. Ask for an explanation of the mechanism, its conditions of application, a first contrast and the evidence behind it, not a list of ideas. Whether to delegate, and what to ask, is yours to decide; keep enough of your rounds to read its result, test it and decide whether to change direction.",
-        "delegation": { "fund": 900000, "tokens": 300000, "rounds": 3, "max_rounds": 6 }
-      },
+      "condition": "The same, with one message of the operator at round 6 inviting it to delegate an examination of its own assumptions (no algorithm, no family named): when it delegates, does the branch bring a different and grounded direction, and does the requester test it and decide? Help, counted as such",
+      "researcher": "assisted",
+      "args": [
+        "--artifact", "threesum-subquadratic",
+        "--seed", "1",
+        "--attempts", "16",
+        "--validations", "5",
+        "--memory", "selective",
+        "--max-minutes", "480",
+        "--help-budget", "8",
+        "--delegation-fund", "900000",
+        "--delegation-tokens", "300000",
+        "--delegation-rounds", "3",
+        "--delegation-max-rounds", "6",
+        "--task", "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
+      ],
+      "messages": [
+        {
+          "round": 6,
+          "text": "You have a fund for branches: you may delegate an investigation to a researcher of its own while you go on. One branch worth considering: examine which assumptions keep this investigation on quadratic solutions, develop an alternative with a different mechanism, and name an experiment that decides whether it deserves to be followed - concluding that it is not promising is a result too. Ask for an explanation of the mechanism, its conditions of application, a first contrast and the evidence behind it, not a list of ideas. Whether to delegate, and what to ask, is yours to decide; keep enough of your rounds to read its result, test it and decide whether to change direction."
+        }
+      ],
       "agent": {
         "id": "senior",
         "role": "senior",

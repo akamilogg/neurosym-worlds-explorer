@@ -63,6 +63,11 @@ export interface Objective {
   readonly repetitions: number;
   /** Other metrics that may not get worse than by this ratio (1.1: at most 10 % worse). */
   readonly constraints?: readonly { readonly metric: string; readonly direction: 'min' | 'max'; readonly maxRatio: number }[];
+  /** A verdict on how the metric GROWS, not on its size: the candidate's metric over the reference's as a workload parameter
+      grows (its size), the slope of their log-log line - better where it falls by at least `margin` (a slope below -margin)
+      with the confidence. Workloads whose parameter is at most `floor` measure what costs the same at any size (starting,
+      reading): set apart from each version's runs before the slope is taken, so a fixed cost never passes for growth. */
+  readonly growth?: { readonly param: string; readonly floor: number };
 }
 
 export interface ArtifactTask {
@@ -118,6 +123,9 @@ export interface Verdict {
   readonly better: boolean;
   readonly constraints: readonly { readonly metric: string; readonly ratio: number | null; readonly ok: boolean }[];
   readonly why: string;
+  /** With an objective on growth: the slope of the candidate's metric over the reference's against the size (log-log), its
+      interval, the sizes it was taken on, and what each version's fixed cost was taken to be. */
+  readonly growth?: { readonly slope: number; readonly interval: readonly [number, number]; readonly sizes: readonly number[]; readonly fixed: { readonly reference: number; readonly candidate: number } };
 }
 
 /** The ratio candidate / reference of a metric per workload (medians of its repetitions), oriented so that < 1 is better. */
@@ -148,6 +156,7 @@ export function judge(task: ArtifactTask, pairs: readonly Paired[], requires: 'b
     });
   }
   const correct = incorrect.length === 0;
+  if (o.growth) return judgeGrowth(task, pairs, requires, correct, incorrect);
   const rs = ratios(pairs, o.metric, o.direction);
   let ratio: number | null = null, interval: [number, number] | null = null, better = false;
   if (rs && rs.length) {
@@ -173,4 +182,61 @@ export function judge(task: ArtifactTask, pairs: readonly Paired[], requires: 'b
     : constraints.find((k) => !k.ok) ? 'a constraint broken: ' + constraints.filter((k) => !k.ok).map((k) => k.metric).join(', ')
     : requires === 'better' ? 'correct, and better by ' + Math.round((1 - ratio) * 100) + '%' : 'correct, and not worse (ratio ' + ratio.toFixed(3) + ')';
   return { holds, correct, incorrect, ratio, interval, better, constraints, why };
+}
+
+/** The verdict on growth (Objective.growth): correct in every run, and the candidate's metric over the reference's falling as the
+    size grows - the upper end of a bootstrap interval of the log-log slope below -margin (or, where only not being worse is
+    asked, below the tolerance). Each version's fixed cost - the median of its runs at the floor's sizes - is set apart first
+    (never below a twentieth of what was measured). Its growth is read only where the work stands out from the fixed cost: the
+    reference's at the largest size at least its fixed cost again. The interval holds every variation measured: the bootstrap
+    resamples the workloads within each size and the repetitions within each run, seeded by the count. */
+function judgeGrowth(task: ArtifactTask, pairs: readonly Paired[], requires: 'better' | 'not_worse', correct: boolean, incorrect: readonly { workload: string; why: string }[]): Verdict {
+  const o = task.objective, g = o.growth!;
+  const valuesOf = (runs: readonly RunOutcome[]): number[] => runs.map((x) => x.metrics?.[o.metric]).filter((x): x is number => typeof x === 'number' && x > 0);
+  const size = (p: Paired) => Number(p.workload.params[g.param]);
+  /* Each workload's measures, both versions, as numbers: what every estimate below is computed from. */
+  const runs = pairs.map((p) => ({ n: size(p), reference: valuesOf(p.reference), candidate: valuesOf(p.candidate) }));
+  const unread = runs.some((r) => !r.reference.length || !r.candidate.length);
+  const floor = runs.filter((r) => r.n <= g.floor), ladder = runs.filter((r) => r.n > g.floor);
+  const sizes = [...new Set(ladder.map((r) => r.n))].sort((a, b) => a - b);
+  type Draw = (xs: readonly number[]) => number[];
+  /* The estimate from one draw of the measures: the slope, the fixed costs, and the reference's work at the largest size. */
+  const estimate = (pick: Draw, within: (rs: typeof runs) => typeof runs) => {
+    const fixedOf = (who: 'reference' | 'candidate') => median(within(floor).map((r) => median(pick(r[who]))));
+    const fixed = { reference: fixedOf('reference'), candidate: fixedOf('candidate') };
+    const net = (v: number, f: number) => Math.max(v - f, v / 20);
+    const points = sizes.flatMap((n) => within(ladder.filter((r) => r.n === n)).map((r) => {
+      const ref = median(pick(r.reference)), cand = median(pick(r.candidate));
+      return { x: Math.log(n), y: Math.log(net(cand, fixed.candidate) / net(ref, fixed.reference)), work: ref - fixed.reference, top: n === sizes[sizes.length - 1] };
+    }));
+    const mx = points.reduce((a, q) => a + q.x, 0) / points.length, my = points.reduce((a, q) => a + q.y, 0) / points.length;
+    const slope = points.reduce((a, q) => a + (q.x - mx) * (q.y - my), 0) / points.reduce((a, q) => a + (q.x - mx) ** 2, 0);
+    return { slope, fixed, work: median(points.filter((q) => q.top).map((q) => q.work)) };
+  };
+  let growth: Verdict['growth'] | undefined, better = false, faint: string | null = null;
+  if (!unread && floor.length && sizes.length >= 2) {
+    const point = estimate((xs) => [...xs], (rs) => rs);
+    if (!(point.work >= point.fixed.reference)) faint = 'its work does not stand out from its fixed cost: at the largest size the reference spends ' + Math.round(Math.max(0, point.work)) + ' over a fixed ' + Math.round(point.fixed.reference);
+    else {
+      const rnd = mulberry32(runs.length * 7919 + runs.reduce((a, r) => a + r.reference.length + r.candidate.length, 0));
+      const resample = <T,>(xs: readonly T[]): T[] => xs.map(() => xs[Math.floor(rnd() * xs.length)]);
+      const boots: number[] = [];
+      for (let b = 0; b < 2000; b++) boots.push(estimate(resample, (rs) => resample(rs)).slope);
+      boots.sort((a, b) => a - b);
+      const tail = (1 - o.confidence) / 2;
+      const interval: [number, number] = [boots[Math.floor(tail * boots.length)], boots[Math.min(boots.length - 1, Math.ceil((1 - tail) * boots.length) - 1)]];
+      better = requires === 'better' ? interval[1] < -o.margin : interval[1] < (o.tolerance ?? o.margin);
+      growth = { slope: point.slope, interval, sizes, fixed: point.fixed };
+    }
+  }
+  const holds = correct && better;
+  const fmt = (x: number) => (x >= 0 ? '+' : '') + x.toFixed(3);
+  const why = !correct ? incorrect.length + ' incorrect run(s)'
+    : !growth ? 'how "' + o.metric + '" grows could not be read (' + (faint ?? (unread ? 'a run measured nothing' : !floor.length ? 'no workload at the floor, where a fixed cost is measured' : 'fewer than two sizes above ' + g.floor)) + ')'
+    : !better ? (requires === 'better' ? 'its ' + o.metric + ' does not grow more slowly than the reference\'s by n^' + fmt(-o.margin)
+      : 'its ' + o.metric + ' grows faster than the reference\'s by more than n^' + fmt(o.tolerance ?? o.margin))
+      + ' with ' + Math.round(o.confidence * 100) + '% confidence (slope ' + fmt(growth.slope) + ', interval ' + growth.interval.map(fmt).join(' – ') + ')'
+    : requires === 'better' ? 'correct, and its ' + o.metric + ' grows more slowly than the reference\'s (slope ' + fmt(growth.slope) + ')'
+    : 'correct, and it grows no faster than the reference (slope ' + fmt(growth.slope) + ')';
+  return { holds, correct, incorrect, ratio: null, interval: null, better, constraints: [], why, ...(growth ? { growth } : {}) };
 }

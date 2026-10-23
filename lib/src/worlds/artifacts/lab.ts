@@ -6,7 +6,7 @@ import type { World } from '../../core/types.ts';
 import { ArtifactWorld, type Episode as RunsData } from '../../artifacts/world.ts';
 import { processSandbox } from '../../artifacts/sandbox.ts';
 import { dedupTask } from '../../artifacts/tasks/dedup.ts';
-import { threesumTask } from '../../artifacts/tasks/threesum.ts';
+import { threesumSubquadraticTask, threesumTask } from '../../artifacts/tasks/threesum.ts';
 import type { ArtifactTask } from '../../artifacts/task.ts';
 
 /* ============================================================================
@@ -52,7 +52,8 @@ export type ArtifactAct =
   | { readonly change: { readonly from: string; readonly files: Readonly<Record<string, string | null>> } & Reason }
   | { readonly run: { readonly version: string; readonly workloads: number; readonly repetitions: number }; readonly place?: string };
 
-const TASKS: Readonly<Record<string, (scale: number) => ArtifactTask>> = { dedup: (scale) => dedupTask({ scale }), threesum: (scale) => threesumTask({ scale }) };
+const TASKS: Readonly<Record<string, (scale: number) => ArtifactTask>> = { dedup: (scale) => dedupTask({ scale }), threesum: (scale) => threesumTask({ scale }),
+  'threesum-subquadratic': (scale) => threesumSubquadraticTask({ scale }) };
 /** The worlds of the specs generated in this process: the latest version made in each (what the checks run). */
 const latest = new WeakMap<ArtifactWorld, string>();
 const seedOf = (text: string): number => parseInt(createHash('sha256').update(text).digest('hex').slice(0, 8), 16);
@@ -127,7 +128,9 @@ function artifactInterface(task: ArtifactTask, tolerance: number, regression?: b
       '`metric`: ' + o.metric + ' (' + (o.direction === 'min' ? 'lower' : 'higher') + ' is better).',
       ...objectiveLines({ answer: ANSWER, verdictForm: verdictForm(tolerance, regression) }),
       'THE ARTIFACT\'S OWN VERDICT, apart from your model\'s: with your answer you may put forward a version - "artifact": "<version>" - and it is run against the reference, interleaved, on fresh workloads of each of your laboratories. '
-        + 'Per place you are told whether it holds there: every run correct, ' + (o.direction === 'min' ? 'lower' : 'higher') + ' `' + o.metric + '` than the reference by at least ' + Math.round(o.margin * 100) + '% with ' + Math.round(o.confidence * 100) + '% confidence (or, where a place asks only that, not worse), and no constraint broken - never by how much. '
+        + 'Per place you are told whether it holds there: every run correct, ' + (o.growth
+          ? 'and its `' + o.metric + '` growing more slowly than the reference\'s as `' + o.growth.param + '` grows - over the reference\'s, falling at least as n^-' + o.margin + ' across the sizes of the place, with ' + Math.round(o.confidence * 100) + '% confidence; what each version costs at any size (measured where `' + o.growth.param + '` is at most ' + o.growth.floor + ') is set apart first, so a faster constant is never growth'
+          : (o.direction === 'min' ? 'lower' : 'higher') + ' `' + o.metric + '` than the reference by at least ' + Math.round(o.margin * 100) + '% with ' + Math.round(o.confidence * 100) + '% confidence (or, where a place asks only that, not worse), and no constraint broken') + ' - never by how much. '
         + 'Where it holds in every laboratory, "validate_artifact": true takes it to places you have not seen and then to blind ones, as a model is taken. The artifact and your model are accepted apart: one may be accepted and the other not. Every version you put forward is judged against the reference, so more than one may be accepted: the last accepted is your product.',
       [INVESTIGATION, 'Requests:'],
       [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   a stretch of one of your episodes (at most 60 rows): of a VERSION, its files\' lines; of RUNS, each run - the workload, the version, what was measured and whether it was correct'],

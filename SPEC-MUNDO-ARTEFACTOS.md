@@ -919,3 +919,32 @@ apoyaban en ella.
   liga por la versión que nombra la prueba.
 - **Que el senior revise expresamente** los cambios que sobreviven a la caída de su razón: recibe el aviso, pero su papel
   no lo nombra.
+
+### 18.12 3SUM por debajo de O(n²): un veredicto sobre el crecimiento (21/10/2026)
+
+El veredicto de `threesum@1` compara con la base cúbica en tamaños fijos. Demuestra una mejora práctica, pero no distingue
+lo subcuadrático de lo cuadrático. La tarea nueva `threesum-subquadratic@1` (`--artifact threesum-subquadratic`) pasa
+**sólo si la complejidad es menor que la cuadrática**. `threesum@1` queda como estaba, y también sus workloads.
+
+- **Base y referencia cuadráticas:** ordenar y cerrar dos punteros.
+- **`Objective.growth`, general para cualquier tarea:** el veredicto juzga cómo crece la métrica con un parámetro del
+  workload, no su tamaño.
+  1. Los workloads con el parámetro igual o por debajo del suelo miden el coste fijo de cada versión (arranque, lectura),
+     que se descuenta. El resto nunca baja de 1/20 de lo medido.
+  2. Se toma la pendiente log-log del cociente candidata/referencia frente al tamaño.
+  3. La versión pasa si el extremo superior del intervalo bootstrap queda por debajo de −margen.
+  4. El bootstrap remuestrea los workloads dentro de cada tamaño y las repeticiones dentro de cada run, para que el
+     intervalo recoja todo el ruido medido.
+  5. Si el trabajo de la referencia en el tamaño mayor no llega a su coste fijo, el crecimiento no se lee, y el veredicto
+     lo dice.
+- **Lugares:** escaleras de n = 2000, 4000 y 8000, más el suelo n = 3. Los valores van en ±1e12, sorteados con resolución
+  fina (dos extracciones), para que no salgan ternas por azar ni quepa ningún truco sobre el rango. La familia no tiene
+  ternas, la mitad del laboratorio las tiene plantadas a lo largo de la escalera, y los ciegos al final. Margen: −0,05,
+  con un 90 % de confianza.
+- **Lo que mide la base contra sí misma:** una pendiente de −0,002, con un intervalo de −0,028 a +0,022. Un check con 2
+  workloads por tamaño tarda un minuto.
+- **Límite:** el tiempo sólo revela la complejidad en el régimen medido. Una mejora de factores logarítmicos puede quedar
+  bajo el margen, así que el veredicto exige una mejora de crecimiento visible, no una cota asintótica.
+- **Pruebas:** `lib/test/threesum-subquadratic.test.ts`. El piloto de delegación
+  (`lib/examples/batch.artifacts-threesum-delegation.json`) usa esta tarea.
+

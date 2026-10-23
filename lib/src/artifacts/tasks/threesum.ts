@@ -24,7 +24,10 @@ const BASE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..',
 export function threesumInput(w: Workload): string {
   const rnd = mulberry32(w.seed);
   const n = Math.max(3, Number(w.params.n)), range = Number(w.params.range);
-  const numbers = Array.from({ length: n }, () => Math.floor(rnd() * (2 * range + 1)) - range);
+  /* A range wider than the generator's 2^32 values draws twice (a finer fraction): never a lattice of values, where triples
+     would come by chance. A narrower range draws as it always did (the same workloads for threesum@1). */
+  const draw = range * 2 + 1 > 2 ** 32 ? () => rnd() + rnd() / 2 ** 32 : rnd;
+  const numbers = Array.from({ length: n }, () => Math.floor(draw() * (2 * range + 1)) - range);
   const planted = w.params.planted;
   if (planted === 'random' || planted === 'end') {
     const at = planted === 'end' ? [n - 3, n - 2, n - 1] : (() => {
@@ -74,5 +77,57 @@ export function threesumTask(options: { scale?: number; python?: string } = {}):
     oracle: (candidate, reference) => (candidate.output !== null && candidate.output === reference.output ? { ok: true }
       : { ok: false, why: candidate.output === null ? 'it left no out.txt' : 'its answer differs from the reference\'s' }),
     objective: { metric: 'wall_ms', direction: 'min', margin: 0.1, confidence: 0.9, repetitions: 3 }
+  };
+}
+
+/* ============================================================================
+ * 3SUM below O(n^2) (threesum-subquadratic@1): the same question, judged on how a version's time GROWS, not on its size.
+ * The base - also the reference - is quadratic: sort, then for each number two pointers closing in. A version holds where
+ * its time over the reference's falls as n grows (Objective.growth): a faster constant, a fixed cost, or a trick for a
+ * bounded range of values never passes for it. The values span a wide range (+-1e12), so no table or transform over the
+ * range fits; there is no triple in the family (all the work), half of the laboratory's have one, the blind ones have it
+ * at the very end. Each place's workloads are a ladder of sizes, and the smallest (n = 3) measure each version's fixed
+ * cost - starting, reading - set apart before the slope is taken.
+ * ========================================================================== */
+
+const BASE_SUBQUADRATIC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'examples', 'artifacts', 'threesum-subquadratic', 'base');
+
+/** The sizes of a place's ladder (n), relative to the scale, and the floor's: what a fixed cost is measured at. */
+export const SUBQUADRATIC_LADDER = [2000, 4000, 8000] as const;
+const FLOOR = 3;
+
+/** A family whose workloads climb a ladder of sizes: `count` at each size, and `count` at the floor - what varies, varying
+    along the whole ladder (one workload per size still alternates). */
+const ladder = (id: string, about: string, role: Family['role'], params: Workload['params'], sizes: readonly number[], vary?: (i: number) => Partial<Workload['params']>): Family => ({
+  id, about, role, requires: 'better',
+  workloads: (seed, count) => [FLOOR, ...sizes].flatMap((n, k) => Array.from({ length: count }, (_, i) => ({ family: id, id: id + '-' + seed + '-' + n + '-' + i,
+    seed: seed * 7919 + k * 1009 + i * 131 + id.length, params: { ...params, ...(vary ? vary(k * count + i) : {}), n } as Workload['params'] })))
+});
+
+export function threesumSubquadraticTask(options: { scale?: number; python?: string } = {}): ArtifactTask {
+  const s = options.scale ?? 1;
+  const python = options.python ?? process.env.ARTIFACT_PYTHON ?? 'python';
+  const sizes = SUBQUADRATIC_LADDER.map((x) => Math.max(FLOOR + 1, Math.round(x * s)));
+  return {
+    id: 'threesum-subquadratic@1',
+    about: 'decide whether three of n integers sum to zero, in time that grows more slowly than n^2 - the base, the reference, is quadratic',
+    base: BASE_SUBQUADRATIC,
+    run: {
+      command: () => [python, 'src/main.py'],
+      inputs: (w) => ({ 'input.txt': threesumInput(w) }),
+      outputs: ['out.txt'],
+      environment: [[python, '--version']],
+      timeoutMs: 120000
+    },
+    read: (files, measured) => ({ metrics: { wall_ms: measured.wallMs }, output: files['out.txt']?.trim() ?? null }),
+    families: [
+      ladder('ladder', 'a ladder of sizes in a wide range of values, a triple planted in every other workload', 'laboratory', { range: 1e12, planted: 'none' }, sizes,
+        (i) => ({ planted: i % 2 === 1 ? 'random' : 'none' })),
+      ladder('ladder-none', 'a ladder of sizes in a wide range of values, no triple planted', 'family', { range: 1e12, planted: 'none' }, sizes),
+      ladder('ladder-late', 'a ladder of sizes in a wide range of values, a triple planted at the very end', 'blind', { range: 1e12, planted: 'end' }, sizes)
+    ],
+    oracle: (candidate, reference) => (candidate.output !== null && candidate.output === reference.output ? { ok: true }
+      : { ok: false, why: candidate.output === null ? 'it left no out.txt' : 'its answer differs from the reference\'s' }),
+    objective: { metric: 'wall_ms', direction: 'min', margin: 0.05, confidence: 0.9, repetitions: 3, growth: { param: 'n', floor: FLOOR } }
   };
 }
