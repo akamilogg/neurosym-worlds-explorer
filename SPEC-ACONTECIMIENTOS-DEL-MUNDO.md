@@ -1,6 +1,7 @@
 # SPEC · Mundo vivo: actores, acontecimientos e investigación reactiva
 
 Estado (23/10/2026): **diseño consolidado para implementación; arquitectura completa, sin implementar**.
+Revisión conciliada: puente con el investigador asistido, autoridad de actuación, hitos e integración K1–K5.
 Sustituye la versión anterior limitada a acontecimientos dentro de episodios. Los contratos son normativos;
 los nombres de interfaces y operaciones designan capacidades que se deben implementar, no APIs ya existentes.
 
@@ -42,7 +43,12 @@ No se posponen los mundos compartidos ni la comunicación a una extensión futur
 | Canal | Publicaciones y entregas con origen, destino y permisos |
 | Evaluador | Realizaciones reservadas, aisladas de los actores exploratorios |
 
-Junior y senior comparten identidad de actor y permisos físicos; mantienen decisiones y consumos separados por rol.
+Junior y senior comparten identidad de actor y vista autorizada; mantienen decisiones y consumos separados por rol.
+**Sólo el junior emite intenciones físicas en nombre de ese actor.** El senior conserva su función actual de lectura,
+orientación y delegación autorizada; no llama `act` ni `wait` sobre el cuerpo del junior. Compartir identidad no le
+concede un segundo turno. Hay como máximo un lote sellado por actor y ventana, siempre atribuible al junior.
+Un senior que solicita una rama `shared` crea otro investigador con identidad y lote propios, no un segundo escritor
+del lote del padre. Convertir un rol estratégico en actor físico exige un alta explícita de actor por el operador.
 Otro investigador es otro actor. Un proceso físico no necesita conversaciones ni un LLM.
 Investigar realizaciones distintas en paralelo e investigar un mismo estado son condiciones diferentes, declaradas.
 
@@ -109,6 +115,10 @@ integran conjuntamente. Un adaptador puede declarar y versionar una resolución 
 
 Las respuestas tardías no se aplican a otro estado. Cada ventana tiene límites de llamadas y tiempo de pared; un
 timeout produce `no_op` y consumo conocido o incierto registrado. No se espera indefinidamente a un actor.
+La independencia del ritmo del LLM rige cuando las decisiones llegan dentro de esos límites. Un timeout es una
+excepción operativa que sí puede cambiar la trayectoria de una nueva ejecución; conservarlo permite replay, no
+garantiza que otra ejecución en vivo alcance el mismo estado. Las comparaciones fijan límites iguales y holgados,
+registran frecuencia y actores afectados y muestran resultados con/sin episodios afectados, sin borrar los fallos.
 Leer memoria y desarrollar código consume recursos operativos, pero no tiempo físico simulado adicional. Las acciones
 físicas se sellan para su ventana; las operaciones internas de investigación no avanzan el mundo por accidente.
 
@@ -125,6 +135,65 @@ ofrece secuencias, IDs de operación y recuperación por cursor.
 Sin idempotencia, una respuesta perdida deja el efecto incierto: se reconcilia, no se reenvía automáticamente. Una
 laguna irrecuperable se registra y limita la reproducción. Si el servicio no admite pausa, detener al investigador no
 pausa el mundo: al volver se recupera el flujo disponible y se identifican pérdidas.
+
+### 5.3 Puente con las rondas del investigador actual
+
+`living-world@1` integra **el investigador asistido** y conserva su bucle de investigación, propuesta, checks,
+validación, reflexión y cierre de ronda. El investigador puro `unknown-world`, congelado, queda fuera de esta
+integración y no se modifica. La sesión coordina el mundo; cada actor mantiene su run asistido, contador de rondas,
+pasos, acciones, cuaderno y modelo. Una ventana del mundo no equivale a una ronda científica.
+
+Una **llamada de decisión** es una petición al modelo y su respuesta, que puede contener varios pasos. Una **ventana**
+puede contener varias llamadas de consulta por actor, acotadas por límites operativos; termina cuando los actores
+activos ceden su lote o vencen sus límites. Una **ronda** puede atravesar varias ventanas y sólo termina por propuesta,
+`close_round` o cierre operativo conforme al protocolo. Despertar no reinicia contadores ni crea una ronda gratuita.
+
+| Operación del investigador | Efecto en la ventana y el reloj |
+|---|---|
+| `view`, `table`, memoria, experiencia, lectura de canales | Lee datos autorizados de la revisión o registros fijados; no avanza el mundo |
+| `measure` o instrumento sobre datos ya obtenidos | Cálculo local, sin transición física |
+| Medición invasiva o adquisición con duración | Intención física tipada, igual que `act` |
+| Edición de cuadernos, artefactos o pruebas propias | Persiste el trabajo local; no avanza el mundo |
+| `act` y `wait` | Sellan un lote para la ventana actual; su ejecución ocurre tras la barrera conjunta |
+| Envío, `share`, alta/cambio de vigilante o rama compartida | Se prepara y confirma para la frontera; no se hace visible a otros en mitad de su decisión |
+| Propuesta o `close_round` | Sella un lote físico vacío si no hay otro; cede la ventana y cierra la ronda científica |
+
+Las consultas no consumen tiempo simulado, **pero no son gratuitas**: gastan pasos, inferencia y recursos habituales.
+Una observación de estado actual fija su revisión. Los cálculos no acceden al estado futuro mientras se prepara el
+lote. El manifiesto limita llamadas locales por ventana; alcanzar ese límite cede un lote vacío y conserva la ronda
+en curso para la siguiente activación, sin reiniciar `steps_left` ni `acts_left`. Agotar el presupuesto de la ronda
+utiliza el cierre/propuesta del protocolo existente; nunca fuerza nuevas acciones para continuar el reloj.
+
+Una respuesta puede agrupar consultas previas y varias intenciones físicas independientes. La primera intención
+inicia el lote: no se permiten consultas que pretendan leer sus resultados aún no ejecutados en esa misma respuesta,
+ni combinar un lote físico con propuesta/cierre. Se valida el formato completo antes de producir efectos; un lote
+mal formado se rechaza con motivo. Los `act` agrupados tienen orden declarado y no incorporan decisiones nuevas entre
+ellos. Las acciones dependientes de un resultado se piden después de recibirlo, en otra ventana.
+
+Cada actuación conserva ID y consume el cupo previsto; se devuelven aceptación, rechazo o conflicto por intención.
+La aceptación inicial no inventa un episodio ya terminado. En la siguiente activación se añaden resultados
+confirmados; operaciones largas entregan un recibo y luego su finalización. Sus trazas se exponen como episodios o
+segmentos inmutables con `session`, intervalo y revisiones, compatibles con `view` y los instrumentos actuales.
+Los avisos no solicitados usan el canal; las respuestas a acciones conservan su vínculo petición/respuesta.
+
+### 5.4 Propuestas, Objective y validación
+
+Una propuesta congela candidato y referencias en la revisión de su decisión. No es una acción física ni una
+perturbación. Cede un lote vacío; la sesión completa su barrera ordinaria y ejecuta la evaluación reservada antes de
+entregar el veredicto en una activación posterior. El tiempo de cómputo del check no añade tiempo físico en modo
+simulado; en `realtime` el servicio continúa. En ambos casos la evaluación no modifica el estado compartido.
+
+`evaluate(candidate, reservedConfig)` **no introduce un segundo juez de `holds`**. Es el adaptador de ejecución de
+casos para `lib/src/learn/objective.ts` y `lib/src/learn/protocol.ts`: traduce realizaciones reservadas a casos con
+lugar, propósito (`check`, `validation`, `blind`, `rerun`, `test`), contexto permitido, respuesta esperada o resultado
+de actuación y hechos de comparación. `Objective` conserva forma de respuesta, comparación y criterio; el protocolo
+conserva validación por familia, confirmación y regresión sobre los casos anteriores exigidos. `holds` requiere todas
+las comprobaciones aplicables, no sólo nuevos casos. Los datos exclusivos del operador siguen separados.
+
+Para objetivos de actuación el candidato es una política congelada que se ejecuta en realizaciones reservadas;
+para predicción es el modelo que responde casos. Un resultado exploratorio observado no se convierte por sí solo en
+aceptación. Si el adaptador no puede aportar casos compatibles con el Objective declarado, la configuración se
+rechaza antes del run. No se sustituye por un veredicto libre del coordinador ni se acepta por consenso de actores.
 
 ## 6. Acontecimiento, percepción y atención
 
@@ -241,6 +310,12 @@ dirección de mejora, tolerancia y tratamiento de faltantes. `no_improvement` re
 válidas sin mejora superior a la tolerancia; falta de datos no es estancamiento. Se admiten señales declaradas por
 el investigador, indicadores operativos o jueces configurados. Un juez conserva entradas, regla, respuesta y consumo;
 no existe un diagnóstico universal implícito.
+En comparaciones de agenda frente a estancamiento, **el manifiesto fija antes del run el productor, la fórmula,
+entradas, ventana y tolerancia de la señal**, y el investigador no puede sustituirlos. Una autodeclaración puede ser
+entrada, pero entonces la condición se etiqueta `self_reported`, no diagnóstico independiente. Una señal que el
+investigador configura o provoca expresamente es `requested_surprise`: pedir una perturbación es legítimo dentro de
+su autorización, pero se registra y analiza separado de `operator_fixed`. Las etiquetas y cambios de versión forman
+parte de la condición y de su identidad (§15.1); los faltantes no disparan ninguna de ellas.
 
 Se evalúa al confirmar una frontera y se programa para una frontera futura. Una condición sostenida dispara una vez;
 se rearma después de dejar de cumplirse y volver a cumplirse, respetando enfriamiento. Recurrencias temporales son
@@ -383,12 +458,62 @@ Sin etiquetas significa no entregar la explicación correcta al aprendiz. El ope
 Aprendizaje entre runs exige declarar qué se conserva —memoria, métodos, reglas o parámetros— y probar transferencia
 con realizaciones nuevas. Esta arquitectura no impone entrenamiento de pesos como requisito.
 
+### 15.1 Resultados K1–K5 e identidad experimental
+
+La integración amplía `lib/src/orchestra/results.ts`, `traces.ts` y `lib/src/runtime/generators.ts`; no crea un informe
+paralelo incompatible. Cada actor conserva su finding y la sesión añade un agregado enlazado, con versión de esquema.
+
+- **K1:** preservar O1 aceptación predictiva/modelo y artefacto, O2 evidencia discriminante, O3 adecuación a criterios
+  previos y O4 recuperación mecanística cuando se pueda medir. No evaluable sigue siendo no evaluable. Añadir coste
+  del mundo, sensores, comunicación e intervenciones a los costes por rol, con IDs de consumo únicos. Una rama
+  compartida puede figurar en el desglose del solicitante y como actor, pero el agregado de sesión la suma una vez.
+  Coste desconocido y reservas retenidas nunca son cero ni gasto confirmado. Latencia de sesión y tiempo de cómputo
+  acumulado son magnitudes distintas.
+- **K2:** agrupar por generador, mundo/condición, versión de código y criterios. Congelar referencias. No mezclar
+  `operator_fixed`, `self_reported`, `requested_surprise`, intervención dirigida y ausencia de intervención.
+- **K3:** declarar comparaciones antes del lote, incluidos modelos, señales, agendas, comunicación, presupuestos y
+  límites de timeout. Las acciones divergentes se conservan; no se fuerza a los actores a producir datos pareados.
+- **K4:** añadir ventanas, despertares, lotes, conflictos, mensajes y entregas, vigilantes, disparos, timeouts y lecturas
+  posteriores a las trazas. Son descripciones del proceso, no puntuaciones de creatividad o método.
+- **K5:** la unidad independiente es la sesión/realización, no sus actores, ventanas o mensajes. Las comparaciones
+  pareadas usan realizaciones independientes por par y respetan la dependencia dentro de sesión. Con datos insuficientes
+  se informa así; no se aplican controles estadísticos como si cada actor fuese una réplica independiente.
+
+El manifiesto completo, saneado de credenciales, se conserva con hash canónico. No se incorpora sin distinguirlo todo
+al hash del generador: se mantiene la separación actual entre generador y población del mundo.
+
+`generatorOf` incorpora modelos y ajustes de junior/senior/investigadores, límites, reloj y resolución de ventanas,
+reactividad, permisos de comunicación, política de delegación, señal de estancamiento y política de intervención
+adaptativa. El hash de condición del mundo incorpora adaptador, leyes, regímenes, políticas de actores del entorno,
+sensores iniciales, distribuciones y agendas físicas, y evaluador. La semilla realizada y el estado inicial identifican
+la realización, no un nuevo generador por réplica. La clave de comparabilidad incluye ambos hashes y criterios.
+
+Se excluyen nombres operativos: directorios, archivos de diarios o libros, endpoints equivalentes, PID y marcas de
+pared. Las referencias operativas se resuelven a hashes de contenido; identidades se normalizan preservando roles,
+conexiones y permisos. Cambiar un nombre de ruta no cambia condición; cambiar código de sensor o agenda sí. Un endpoint
+que cambia el comportamiento del servicio requiere otra identidad/versionado del adaptador, no se oculta como ruta.
+
+Cambios manuales producen revisiones enlazadas y un historial de intervenciones. El run se marca `adapted` y no se
+agrupa como condición fija original; mantiene configuración inicial y efectiva. No se deriva identidad de las salidas
+del modelo o del éxito observado. Pruebas obligatorias: misma condición en otras rutas conserva hashes; cambiar señal,
+regla, permisos o política cambia la identidad correspondiente; variar semilla mantiene generador y distingue réplica.
+
 ## 16. Configuración, herramientas y consola
 
 Un manifiesto `living-world@1` se ejecuta con `lab live <manifest>` y puede referenciarse desde batch mediante `session`.
 Contiene adaptador y versión, reloj, actores y modelos, junior/senior, permisos, global, instrumentos iniciales,
 programas, presupuestos y evaluaciones. Se validan referencias, efectos, disparadores, aislamiento y límites antes
 de consumir inferencia. No hay recursos ilimitados implícitos.
+
+Invariantes de integración:
+
+- Sólo se integra el investigador asistido (§5.3); no se modifica el investigador puro congelado.
+- Conversación append-only: avisos, respuestas diferidas y reflejos al senior se añaden, no se reescriben. Debe seguir
+  pasando `lib/test/append-only.test.ts` y añadirse cobertura de ventanas, mensajes y reanudación.
+- Sandbox de procesos locales, **sin Docker como dependencia ni requisito**. Límites y permisos del sandbox existente
+  se aplican a instrumentos, políticas y servicios; no se ejecuta código del actor dentro del coordinador con privilegios.
+- La terminología normativa es «investigador reactivo» para despertar por percepción (§9), y «perturbación reactiva
+  del entorno» para disparar por estancamiento (§10). El nombre de condición y el finding distinguen ambos ejes.
 
 Herramientas del actor: acciones del mundo, `wait`, instrumentos, memoria, lectores de canal, `message.send`, `share`
 y `delegate`, según permisos. Rechazos explícitos para acciones desconocidas o no autorizadas. Los mensajes no son
@@ -406,6 +531,24 @@ hasta medición, entrega y decisión, y un global hasta recibos individuales. Oc
 Orden por dependencias: adaptador/coordinador; persistencia y recursos; canales; actores e instrumentos; reactividad
 y programas; delegación; evaluación, paquete y consola. Es un orden de construcción de la arquitectura completa,
 no una decisión de dejar capacidades para otra SPEC.
+
+### 17.1 Hitos verificables
+
+| Hito | Entrega integrada | Puerta de aceptación |
+|---|---|---|
+| H1 | Mundo persistente, un asistido real en su bucle, puente Objective, diario y recursos | Prueba 1; prueba 4 sin delegar (ignorar o contrastar); prueba 12 para transiciones y entregas de las observaciones de un actor; prueba 17 sin retirada de actores. Una ronda cruza varias ventanas, consulta sin avanzar y propone sin actuar; append-only |
+| H2 | Varios actores, autoridad exclusiva del junior, canales y compartición | Pruebas 2, 5, 6, 9, 11 y 15; prueba 12 para publicación y entrega de mensajes; prueba 17 con retirada de actores; sin ventaja por orden de respuestas dentro del plazo; replay del intercambio |
+| H3 | Vigilantes, reactividad y todos los disparadores del operador | Pruebas 3, 7 y 8; señal fija frente a autodeclarada; sin duplicación de activaciones ni avance gratis |
+| H4 | Ramas aisladas/compartidas y protocolo externo | Pruebas 10 y 14; prueba 4 con delegación; recursos, cierre y recuperación del árbol y servicio simulado |
+| H5 | Integración de resultados, consola y paquete completo | Pruebas 13, 16 y 18; hashes de §15.1, agregación sin doble coste ni pseudorreplicación; conjunto completo de regresiones |
+
+Una prueba repartida entre hitos sólo cuenta como superada cuando lo está en todas sus partes.
+Cada hito entrega un escenario ejecutable con decisiones simuladas, diagnósticos de fallo y verificación offline.
+Permite medir y corregir antes del siguiente. H1 ya incluye propuestas y evaluación: no deja el puente científico
+para el final. Los hitos posteriores amplían la cobertura del mismo contrato. La aceptación final exige todas las
+pruebas con el conjunto integrado; aprobar un hito no autoriza a declarar completa la arquitectura ni a recortar alcance.
+
+### 17.2 Mundo y batería de aceptación
 
 Se implementa un mundo interno de referencia, pequeño y determinista: muestras persistentes sobre rejilla, recursos,
 contaminación, limpieza y actores que consumen o trasladan recursos. Leyes fijadas por semilla, accesibles sólo por
