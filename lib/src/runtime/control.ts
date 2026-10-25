@@ -147,6 +147,12 @@ export function startRunAt(journal: string, lab: string, args: readonly string[]
   return launch(journal, ['--lab', lab, ...args, '--out', journal], env);
 }
 
+/** Starts an evolutionary branch's supervisor (SPEC-DELEGACION-EVOLUTIVA §14) in a process of its own: its request in
+    `spec`, its record at `journal`. Resumed the same way: it recovers each transition from its record. */
+export function startEvolveAt(journal: string, spec: string, env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
+  return launchScript('run-evolve.ts', journal, ['--spec', spec, '--out', journal], env);
+}
+
 /** Resumes a run in a process of its own, as a run derived from it (the journal resumed stays as it was). */
 export function resumeRun(journal: string, options: { args?: readonly string[]; policy?: string; env?: NodeJS.ProcessEnv } = {}): { journal: string; pid: number } {
   const lab = Object.entries(LAB_IDS).find(([, id]) => id === readJson(journal)?.experiment)?.[0];
@@ -161,9 +167,13 @@ const LAB_IDS: Readonly<Record<string, string>> = Object.fromEntries(Object.entr
 export const labNameOf = (id: string): string => Object.entries(LAB_IDS).find(([, v]) => v === id)?.[0] ?? id;
 
 function launch(journal: string, args: readonly string[], env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
+  return launchScript('run-lab.ts', journal, args, env);
+}
+
+function launchScript(script: string, journal: string, args: readonly string[], env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
   fs.mkdirSync(path.dirname(journal), { recursive: true });
   const out = fs.openSync(runFiles(journal).log, 'a');
-  const child = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings=ExperimentalWarning', path.join(LIB, 'scripts', 'run-lab.ts'), ...args],
+  const child = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings=ExperimentalWarning', path.join(LIB, 'scripts', script), ...args],
     { cwd: LIB, env: env ?? process.env, detached: true, stdio: ['ignore', out, out], windowsHide: true });
   child.unref();
   fs.closeSync(out);

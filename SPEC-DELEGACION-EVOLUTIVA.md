@@ -1,6 +1,6 @@
 # SPEC · Delegación evolutiva: abrir caminos mediante búsqueda de programas
 
-Estado (25/10/2026): **contrato consolidado para desarrollo; H1 implementada (§16.1), H2 especificada, sin implementar**.
+Estado (25/10/2026): **contrato consolidado para desarrollo; H1 y H2 implementadas (§16.1, §16.2)**.
 Las decisiones normativas están incorporadas en el cuerpo. §16 define entregas y pruebas; §17, los límites de integración.
 Reformula el borrador «evolucionar primero, explicar después» aportado por el autor. Esta versión es autocontenida:
 no requiere una SPEC de búsqueda diversa ni un archivo especializado ya implementado.
@@ -621,6 +621,41 @@ Pruebas obligatorias:
    candidatos e índice con su estado; no dependen de que exista un cuaderno convencional.
 4. El padre continúa una búsqueda sellada mediante nueva delegación y reserva; `lab pack` y `lab verify` recuperan
    también el material heredado. Se mantienen las pruebas existentes de delegación, permisos y registro append-only.
+
+### 16.2 H2 implementada (25/10/2026)
+
+Pruebas en `lib/test/evolve-delegation.test.ts`. La primera es de integración completa con el laboratorio de artefactos:
+el padre delega, recibe el resultado una vez, adopta un candidato por su contenido y lo ejecuta, y el paquete se verifica
+offline. Las demás cubren caídas en cada transición, cancelación, liquidación con consolidación fallida o búsqueda
+parcial, y `continue_from` con empaquetado.
+
+- **Operador:** `--delegation-evolve N` habilita el modo, con un máximo de N evaluaciones por rama;
+  `--delegation-evolve-workloads` fija las cargas de cada familia de laboratorio. Sólo hay evaluador en el mundo de
+  artefactos; en otro mundo se rechaza antes de reservar nada.
+- **`delegate` con `mode: "evolve"`** (en `lib/src/learn/assisted/delegation.ts`):
+  - un modo desconocido, o `start` junto con `continue_from`, se rechaza;
+  - `start` es una versión del solicitante, o su última versión, y se pasa por su contenido. El senior la obtiene
+    reconstruyendo el mundo desde el diario del junior;
+  - `continue_from` es el hash o el ID de una búsqueda sellada de una rama propia que ya terminó.
+
+  La concesión reparte los tokens: 75 % para la búsqueda y 25 % protegido para la consolidación.
+- **El supervisor** (`lib/src/runtime/evolve-branch.ts`, proceso propio con `scripts/run-evolve.ts`, lanzado por
+  `startEvolveAt`) escribe el formato común de ciclo de vida: diario con `end`, status con latido y pid, inbox y un
+  finding cuyo total suma las dos fases. Además:
+  - al reanudar, una búsqueda que terminó no se repite, y una consolidación que empezó se reanuda en lugar de lanzarse
+    otra vez;
+  - lo exportado (élites y candidatos en desarrollo, nunca el inicio) se confirma con realizaciones nuevas.
+- **La consolidación** es un run del investigador asistido. Lee la búsqueda con `--evolution-search` como experiencia
+  `search`, a través de su propio adaptador (`lib/src/learn/evolve/experience.ts`), con los tipos `candidates`,
+  `attempts` y `decisions`.
+- **El informe evolutivo** (adaptador por modo) lleva:
+  - los candidatos enteros, con sus medidas y su confirmación;
+  - el inicio aparte;
+  - cómo adoptar un candidato;
+  - la consolidación, o `unreviewed` con su motivo;
+  - la búsqueda sellada para continuarla;
+  - el coste por fase.
+- **`read` sobre la rama** usa ese mismo adaptador.
 
 ### H3. Uso real en ThreeSum
 

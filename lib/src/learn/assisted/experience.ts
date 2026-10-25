@@ -35,6 +35,8 @@ export interface ExperienceRun {
   readonly label: string;
   readonly journal: Record<string, any>;
   readonly sameWorld: boolean;
+  /** A record that is not an assisted journal (an evolutionary search), read through an adapter of its own. */
+  readonly reader?: { counts(): Record<string, number>; run(q: Record<string, unknown>): Promise<unknown> };
 }
 
 /** What it is told once it has experience (appended to its system prompt). */
@@ -54,7 +56,7 @@ export const experienceSection = (mode: ExperienceMode, scope: ExperienceScope =
 
 export class Experience {
   private readonly runs: readonly ExperienceRun[];
-  private readonly readers = new Map<string, JournalMemory>();
+  private readonly readers = new Map<string, Pick<JournalMemory, 'counts' | 'run'>>();
   private readonly options: { readonly selector?: LineSelector; readonly onSelect?: (record: SelectionRecord & Record<string, unknown>) => void; readonly openLimit?: number; readonly scope?: ExperienceScope };
   private readonly scope: ExperienceScope;
 
@@ -67,9 +69,10 @@ export class Experience {
   /** Whether an investigation request is one of these. */
   static accepts(q: Record<string, unknown>): boolean { return typeof q.experience === 'string'; }
 
-  private reader(label: string): JournalMemory | null {
+  private reader(label: string): Pick<JournalMemory, 'counts' | 'run'> | null {
     const run = this.runs.find((r) => r.label === label);
     if (!run) return null;
+    if (run.reader) return run.reader;
     if (!this.readers.has(label)) {
       this.readers.set(label, journalReader(run.journal, { openLimit: this.options.openLimit ?? 4000,
         ...(this.options.selector ? { selector: this.options.selector } : {}),
@@ -90,7 +93,7 @@ export class Experience {
     const labels = this.runs.map((r) => r.label);
     if (what === 'runs') {
       return { experience: 'runs', runs: this.runs.map((r) => ({ run: r.label, environment: r.sameWorld ? 'this same one' : 'another',
-        researcher: r.journal.researcher === 'assisted' ? 'assisted' : 'unaided', items: this.counts(r.label) })) };
+        researcher: r.reader ? r.journal.researcher : r.journal.researcher === 'assisted' ? 'assisted' : 'unaided', items: this.counts(r.label) })) };
     }
     if (!['list', 'open', 'find'].includes(what)) return { experience: what, error: 'experience is "runs", "list", "open" or "find"' };
     /* Only the fields of these requests pass to the reader, and the operation is the one asked as "experience": a field of

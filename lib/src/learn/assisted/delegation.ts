@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Experience } from './experience.ts';
+import { searchReader } from '../evolve/experience.ts';
+import type { SearchManifest } from '../evolve/engine.ts';
 
 /* ============================================================================
  * DELEGATING AN INVESTIGATION FROM ANOTHER (SPEC-DELEGACION-INVESTIGACIONES): a researcher opens a BRANCH to investigate a
@@ -27,11 +29,17 @@ export interface DelegationConfig {
   readonly tokens: number;
   readonly rounds: number;
   readonly maxRounds: number;
+  /** A branch may be an evolutionary search (SPEC-DELEGACION-EVOLUTIVA): at most this many evaluations, and the workloads
+      of each laboratory family in one. Absent, the mode is not enabled. */
+  readonly evolve?: { readonly evaluations: number; readonly workloads: number };
 }
+
+/** What the search part of an evolutionary branch may spend of its grant; the rest is the consolidation's, protected (§12). */
+const SEARCH_SHARE = 0.75;
 
 /** How a branch is started: a run of the laboratory `lab` with `args`, writing `journal` (a process of its own, or - in
     tests - the same process). */
-export type Launcher = (o: { readonly journal: string; readonly lab: string; readonly args: readonly string[] }) => void | { readonly pid?: number } | Promise<void | { readonly pid?: number }>;
+export type Launcher = (o: { readonly journal: string; readonly lab: string; readonly args: readonly string[]; readonly evolve?: string }) => void | { readonly pid?: number } | Promise<void | { readonly pid?: number }>;
 
 /** Whether a process is alive (a signal 0 asks the system without touching it). */
 function processAlive(pid: unknown): boolean {
@@ -59,6 +67,8 @@ interface Branch {
   /** What it spent is not known: what its record showed (at least, all that was observed), and what the fund holds for it
       (its grant - held, never a bound on its spending: the limit is checked between calls, and a call may pass it). */
   uncertain?: Uncertain;
+  /** An evolutionary search (its supervisor's record), not a run of the general investigator. */
+  mode?: 'evolve';
 }
 
 /** A spending not known: observed at least, and held in the fund. */
@@ -85,7 +95,8 @@ export const DELEGATION_SECTION = (c: DelegationConfig): string => [
   'DELEGATING AN INVESTIGATION. You may open a BRANCH: another researcher, with your record readable as it stands when you ask, its own laboratory in this same world, and its own budget, investigates a question of yours while you go on. Generating or questioning hypotheses, exploring an anomaly, testing an assumption or a rival explanation: any question you can investigate. Inside "investigate":',
   '  {"delegate": {"question": "what to investigate - the branch knows nothing else of your intent", "refs": ["optional: items of your record to start from, e.g. model:r4, note:<id>"], "expected": "optional: what you want back", "budget": {"rounds": <n>, "tokens": <n>}}}',
   '  It answers at once whether it was accepted, with its id and what it was given; its result comes to you later as a message (`research_result`) with its findings, the directions it proposes and what tells them apart, its evidence and its uncertainties - a contribution, never an order: take what serves you, test it with your instruments. {"delegation": {"id": "<id>", "status": true}} says how it goes; {"delegation": {"id": "<id>", "read": {"experience": "list" | "open" | "find", ...}}} reads its record as you read experience; {"delegation": {"id": "<id>", "cancel": true}} stops it.',
-  '  One branch at a time. The fund for branches is ' + c.fund + ' tokens in all, at most ' + c.tokens + ' tokens and ' + c.maxRounds + ' rounds a branch (' + c.rounds + ' when you ask none); each request costs a step of yours, the branch\'s work is counted apart.'
+  '  One branch at a time. The fund for branches is ' + c.fund + ' tokens in all, at most ' + c.tokens + ' tokens and ' + c.maxRounds + ' rounds a branch (' + c.rounds + ' when you ask none); each request costs a step of yours, the branch\'s work is counted apart.',
+  ...(c.evolve ? ['  A branch may also be an EVOLUTIONARY SEARCH: {"delegate": {"mode": "evolve", "question": "...", "start": "optional: a version of yours (default: your latest)", "budget": {"evaluations": <at most ' + c.evolve.evaluations + '>, "tokens": <n>, "rounds": <n>}}}. It tries many transformations of programs, runs each on exploration workloads, keeps alternatives and goes on from them; then a researcher consolidates what it found. Its result: candidates whole (adopt one with a change of yours, then your checks), what was measured of each, why to look at each again, and a sealed search you may continue: {"delegate": {"mode": "evolve", "continue_from": "<its hash>", "question": "..."}}.'] : [])
 ].join('\n');
 
 export class Delegations {
@@ -110,6 +121,13 @@ export class Delegations {
     readonly history: readonly J[];
     /** Why a branch cannot be opened in this world at all (an environment outside the harness), or null. */
     readonly unsupported: string | null;
+    /** An evolutionary branch's world and where it starts: present only where the world has an evaluator (artifacts). */
+    readonly evolve?: {
+      readonly seed: number;
+      readonly options: Readonly<Record<string, string>>;
+      /** A program of the requester's by its name (or its latest, when none is named), by its content. */
+      resolveStart(start: string | undefined): { hash: string; files: Readonly<Record<string, string>> } | { error: string };
+    };
     /** The fund's ledger, shared by every requester of the run (its junior and its senior): one fund, never one each. */
     readonly ledger?: string;
     /** Who asks, in that ledger. */
@@ -135,7 +153,8 @@ export class Delegations {
     let pending: J[] = [];
     for (const e of o.history) {
       if (e.type === 'delegation_requested') {
-        this.branches.push({ id: e.id, round: e.round, question: e.question, journal: path.resolve(path.dirname(o.journalFile), e.journal), granted: e.granted, state: 'running', spent: null, delivered: false });
+        this.branches.push({ id: e.id, round: e.round, question: e.question, journal: path.resolve(path.dirname(o.journalFile), e.journal), granted: e.granted, state: 'running', spent: null, delivered: false,
+          ...(e.mode === 'evolve' ? { mode: 'evolve' as const } : {}) });
         this.reserved += Number(e.granted?.tokens) || 0;
         this.perRound.set(e.round, Math.max(this.perRound.get(e.round) ?? 0, Number(String(e.id).split('.').pop()) || 0));
       }
@@ -295,6 +314,13 @@ export class Delegations {
     if (d.read && typeof d.read === 'object') {
       const journal = readJson(b.journal);
       if (!journal) return { delegation: b.id, error: 'its record is not there yet' };
+      if (b.mode === 'evolve') {
+        const files = evolveFiles(b.journal);
+        const manifest = readJson(files.manifest) as SearchManifest | null;
+        if (!manifest) return { delegation: b.id, state: b.state, error: 'its search has not finished yet: its record is read once it is sealed' };
+        const reader = new Experience([{ label: 'branch', journal: { researcher: 'evolutionary search' }, sameWorld: true, reader: searchReader(manifest, readLines(files.search) as never) }]);
+        return { delegation: b.id, state: b.state, read: await reader.run({ ...(d.read as J), run: 'branch' }) };
+      }
       const reader = new Experience([{ label: 'branch', journal, sameWorld: true }]);
       return { delegation: b.id, state: b.state, read: await reader.run({ ...(d.read as J), run: 'branch' }) };
     }
@@ -304,6 +330,14 @@ export class Delegations {
   private async decide(r: J | null, question: string, round: number): Promise<Record<string, unknown>> {
     if (!question) return { delegate: null, error: '"question": what to investigate - the branch knows nothing else of your intent' };
     if (this.o.unsupported) return { delegate: { question }, error: 'not here: ' + this.o.unsupported };
+    const mode = r!.mode ?? 'investigate';
+    if (mode !== 'investigate' && mode !== 'evolve') return { delegate: { question }, error: '"mode": "investigate" (the default) or "evolve" - not ' + JSON.stringify(mode) };
+    if (mode === 'investigate' && (r!.start !== undefined || r!.continue_from !== undefined)) return { delegate: { question }, error: '"start" and "continue_from" are of "mode": "evolve"' };
+    if (mode === 'evolve') {
+      if (!this.o.config.evolve) return { delegate: { question, mode }, error: 'the evolutionary mode is not enabled in this run' };
+      if (!this.o.evolve) return { delegate: { question, mode }, error: 'no evaluator for an evolutionary search in this world' };
+      if (r!.start !== undefined && r!.continue_from !== undefined) return { delegate: { question, mode }, error: '"start" or "continue_from", not both' };
+    }
     if (r!.refs !== undefined && (!Array.isArray(r!.refs) || !r!.refs.every((x: unknown) => typeof x === 'string'))) return { delegate: { question }, error: '"refs": ids of items of your record' };
     if (this.o.ledger) { const t = this.ledgerNow(); if ('problem' in t) return { delegate: { question }, error: 'the fund cannot be known: ' + t.problem + ' - no branch is opened until it can' }; }
     const active = this.active();
@@ -313,6 +347,23 @@ export class Delegations {
     const rounds = Math.max(1, Math.min(c.maxRounds, Number.isInteger(asked.rounds) ? asked.rounds : c.rounds));
     const tokens = Math.min(c.tokens, this.fundLeft(), Number(asked.tokens) > 0 ? Math.floor(Number(asked.tokens)) : c.tokens);
     if (tokens <= 0) return { delegate: { question }, error: 'the fund for branches is spent', fund_left: 0 };
+    /* An evolutionary branch: where it starts (a program of the requester's by its content, or a sealed search of one of its
+       branches), checked before anything is reserved. */
+    let evolve: { start: { hash: string; files: Readonly<Record<string, string>> } | null; continueFrom: string | null; evaluations: number } | null = null;
+    if (mode === 'evolve') {
+      const evaluations = Math.max(1, Math.min(c.evolve!.evaluations, Number.isInteger(asked.evaluations) ? asked.evaluations : c.evolve!.evaluations));
+      if (r!.continue_from !== undefined) {
+        const from = this.branches.find((x) => x.mode === 'evolve' && (x.id === r!.continue_from || readJson(evolveFiles(x.journal).manifest)?.hash === r!.continue_from));
+        const manifest = from ? evolveFiles(from.journal).manifest : null;
+        if (!from || !manifest || !fs.existsSync(manifest)) return { delegate: { question, mode }, error: '"continue_from": a sealed search of an evolutionary branch of yours, by its id or its hash' };
+        if (from.state === 'running' || from.state === 'accepted') return { delegate: { question, mode }, error: '"continue_from": ' + from.id + ' has not ended: a search is continued once its origin is settled' };
+        evolve = { start: null, continueFrom: manifest, evaluations };
+      } else {
+        const start = this.o.evolve!.resolveStart(typeof r!.start === 'string' ? r!.start.replace(/^artifact:/, '') : undefined);
+        if ('error' in start) return { delegate: { question, mode }, error: '"start": ' + start.error };
+        evolve = { start, continueFrom: null, evaluations };
+      }
+    }
     const k = (this.perRound.get(round) ?? 0) + 1;
     this.perRound.set(round, k);
     const id = 'delegation:r' + round + '.' + k;
@@ -337,13 +388,23 @@ export class Delegations {
       'Investigate with your own instruments. What you find goes back to it: write it down as you go - what you investigated, what you found, the directions you propose and what tells them apart, your evidence apart from your interpretation, the alternatives you ruled out, your uncertainties. Strengthening its view, refuting an alternative, or finding no direction you can defend are results too. You need not end with a model: close your rounds when a model would add nothing.'].join('\n');
     const args = [...this.o.worldArgs, '--researcher', 'assisted', '--attempts', String(rounds), '--max-tokens', String(tokens), '--task', task,
       '--experience', cutFile, '--experience-mode', 'meta', '--experience-scope', 'all', '--no-grade', '--no-ablation'];
-    const granted = { rounds, tokens };
+    const granted = { rounds, tokens, ...(evolve ? { evaluations: evolve.evaluations } : {}) };
+    /* Its supervisor's request: the search's part of the grant and the consolidation's, protected (§12). */
+    const specFile = path.join(base + '.branches', name + '.evolve.json');
+    if (evolve) {
+      const search = Math.floor(tokens * SEARCH_SHARE);
+      fs.writeFileSync(specFile, JSON.stringify({ format: 'evolution-branch@1', id, question, expected, refs, cut: cutFile, seed: this.o.evolve!.seed, options: this.o.evolve!.options,
+        worldArgs: this.o.worldArgs, start: evolve.start, continueFrom: evolve.continueFrom, exploration: { workloads: c.evolve!.workloads, seed: 104729 * (round + 1) + k },
+        limits: { evaluations: evolve.evaluations, attempts: evolve.evaluations * 3, tokens: search }, consolidation: { tokens: tokens - search, rounds } }, null, 2));
+    }
     /* Recorded before it is started: who asked what, with what, from which cut, in which laboratory, and what is reserved. */
     this.o.log('delegation_requested', { id, round, question, refs, ...(expected ? { expected } : {}), granted,
+      ...(evolve ? { mode: 'evolve', evolve: path.relative(path.dirname(this.o.journalFile), specFile).split(path.sep).join('/'),
+        ...(evolve.start ? { start: evolve.start.hash } : {}), ...(evolve.continueFrom ? { continue_from: readJson(evolve.continueFrom)?.hash } : {}) } : {}),
       journal: path.relative(path.dirname(this.o.journalFile), journal).split(path.sep).join('/'),
       cut: { file: path.relative(path.dirname(this.o.journalFile), cutFile).split(path.sep).join('/'), sha256: createHash('sha256').update(cutText).digest('hex'), events: (snap.events ?? []).length },
       laboratory: 'the same world (its seed and options), in an instance of its own: what it does there is not done in yours', args });
-    const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false };
+    const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false, ...(evolve ? { mode: 'evolve' as const } : {}) };
     this.branches.push(b);
     this.reserved += tokens;
     /* The fund is one for the run: reserved in its ledger, and checked again - another requester may have reserved meanwhile. */
@@ -356,7 +417,7 @@ export class Delegations {
       return { delegation: id, state: 'failed', error: 'the fund for branches is spent', fund_left: this.fundLeft() };
     }
     let launched: void | { readonly pid?: number };
-    try { launched = await this.o.launcher({ journal, lab: this.o.lab, args }); }
+    try { launched = await this.o.launcher({ journal, lab: this.o.lab, args, ...(evolve ? { evolve: specFile } : {}) }); }
     catch (e) {
       b.state = 'failed';
       this.o.log('delegation_state', { id, state: 'failed', why: 'it could not be started: ' + String((e as Error)?.message ?? e).slice(0, 200), spent: 0 });
@@ -366,7 +427,8 @@ export class Delegations {
     b.state = 'running';
     if (launched && typeof launched.pid === 'number') b.pid = launched.pid;
     this.o.log('delegation_state', { id, state: 'running', ...(b.pid !== undefined ? { pid: b.pid } : {}) });
-    return { delegation: id, state: 'accepted', granted, fund_left: this.fundLeft(), note: 'its result comes to you as a message when it ends; go on meanwhile' };
+    return { delegation: id, state: 'accepted', ...(evolve ? { mode: 'evolve', ...(evolve.start ? { start: evolve.start.hash } : { continue_from: readJson(evolve.continueFrom!)?.hash }) } : {}), granted, fund_left: this.fundLeft(),
+      note: 'its result comes to you as a message when it ends; go on meanwhile' };
   }
 
   /** The branches that ended since, read from their records: their state, what they spent (the reservation released). Nothing is
@@ -381,7 +443,7 @@ export class Delegations {
         continue;
       }
       const spent = Number(readJson(b.journal.replace(/\.json$/, '.finding.json'))?.cost?.total?.llm_tokens) || Number(end.console_usage?.llm_tokens_live ?? 0) + Number(end.console_usage?.llm_tokens_replayed ?? 0);
-      b.state = end.stoppedBy === 'cancelled' ? 'cancelled' : end.stoppedBy === 'llm_error' || end.stoppedBy === 'diverged' ? 'failed' : 'completed';
+      b.state = end.stoppedBy === 'cancelled' ? 'cancelled' : end.stoppedBy === 'llm_error' || end.stoppedBy === 'diverged' || end.stoppedBy === 'failed' ? 'failed' : 'completed';
       this.settle(b, spent, true);
     }
   }
@@ -442,8 +504,58 @@ function ledgerTotals(entries: readonly J[]): { reserved: number; spent: number 
   return { reserved, spent };
 }
 
+const readLines = (f: string): J[] => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : []);
+/** An evolutionary branch's files, beside its record (runtime/evolve-branch.ts writes them). */
+const evolveFiles = (journal: string) => { const base = journal.replace(/\.json$/, ''); return { manifest: base + '.search.manifest.json', search: base + '.search.jsonl' }; };
+
+/** A branch's report, by its mode. */
+function reportOf(b: Branch): Record<string, unknown> { return b.mode === 'evolve' ? evolveReportOf(b) : investigationReportOf(b); }
+
+/** An evolutionary branch's report (§4): its candidates, materialized and runnable (their files whole), what was measured
+    of each against the start and whether a confirmation on new workloads held it, why to look at each again, the state of
+    their explanations (the consolidation's, or `unreviewed`), its sealed search to continue from, and its cost by phase -
+    never empty for lacking a notebook. */
+function evolveReportOf(b: Branch): Record<string, unknown> {
+  const record = readJson(b.journal) ?? {};
+  const events = (record.events ?? []) as J[];
+  const end = endOf(record) ?? {};
+  const finished = events.find((e) => e.type === 'search_finished');
+  const manifest = readJson(evolveFiles(b.journal).manifest) as SearchManifest | null;
+  const why = new Map<string, string>();
+  for (const e of readLines(evolveFiles(b.journal).search)) if (e.type === 'candidate' && e.result === 'new' && e.hash && e.why) why.set(e.hash, e.why);
+  const s = manifest?.state;
+  const startHash = s?.order[0];
+  const start = startHash ? s!.candidates[startHash] : undefined;
+  const confirmed = new Map(((finished?.confirmations ?? []) as J[]).map((c) => [c.program, c]));
+  const candidates = ((finished?.exported ?? []) as string[]).filter((h) => s?.candidates[h]).map((h) => {
+    const c = s!.candidates[h];
+    const conf = confirmed.get(h);
+    return { program: h, files: c.files, parents: c.parents, origin: c.origin, correct: c.evaluation?.correct ?? 'unchecked', quality: c.evaluation?.quality ?? null,
+      measures: c.evaluation?.feedback ?? null, roles: [s!.elites.includes(h) ? 'elite' : '', s!.development.some((d) => d.hash === h) ? 'in development' : ''].filter(Boolean),
+      ...(why.has(h) ? { declared_why: why.get(h) } : {}),
+      confirmation: conf ? { on: 'new workloads of the same families', correct: conf.correct, quality: conf.quality } : 'not confirmed' };
+  });
+  const cons = end.consolidation ?? null;
+  const consJournal = cons ? path.resolve(path.dirname(b.journal), cons.journal) : null;
+  const consolidation = consJournal && cons.state === 'reviewed'
+    ? investigationReportOf({ ...b, journal: consJournal, mode: undefined })
+    : { state: 'unreviewed', why: events.find((e) => e.type === 'consolidation_failed')?.why ?? (cons ? 'its consolidation did not end' : 'no consolidation ran') };
+  const finding = readJson(b.journal.replace(/\.json$/, '.finding.json'));
+  return {
+    branch: b.id, mode: 'evolve', question: b.question, state: b.state, ...(b.why ? { why: b.why } : {}), ...spendingOf(b),
+    search: finished ? { stoppedBy: finished.stoppedBy, attempts: finished.cost?.attempts, evaluations: finished.cost?.evaluations, sealed: finished.hash,
+      continue_with: '{"delegate": {"mode": "evolve", "continue_from": "' + finished.hash + '", "question": "..."}}' } : 'it did not finish',
+    start: start ? { program: start.hash, correct: start.evaluation?.correct ?? 'unchecked', quality: start.evaluation?.quality ?? null } : null,
+    candidates,
+    adopt: 'a candidate is adopted by a change of yours with its files (whole): {"act": {"change": {"from": "<base or a version of yours>", "files": {...}, "why": "...", "expect": "..."}}} - then your own checks, as any version',
+    consolidation,
+    ...(finding?.cost ? { cost: { search: finding.cost.search, consolidation: finding.cost.consolidation, ...(finding.cost.unknown ? { unknown: finding.cost.unknown } : {}) } } : {}),
+    record: 'read the search whole: {"delegation": {"id": "' + b.id + '", "read": {"experience": "list", "of": "candidates"}}} (also "attempts", "decisions")'
+  };
+}
+
 /** A branch's report, from its record: what it investigated and found, in its own words, with the references to the whole. */
-function reportOf(b: Branch): Record<string, unknown> {
+function investigationReportOf(b: Branch): Record<string, unknown> {
   const journal = readJson(b.journal) ?? {};
   const events = (journal.events ?? []) as J[];
   const end = endOf(journal) ?? {};

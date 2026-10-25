@@ -21,6 +21,8 @@ export interface ArtifactExploration {
   readonly maxFiles?: number;
   /** A behaviour's cell, when the branch declares descriptors (optional). */
   readonly descriptor?: (checks: readonly { family: string; verdict: Verdict }[]) => string | null;
+  /** Where the search starts, by its content (a program of the requester's): the base when absent. */
+  readonly start?: { readonly hash: string; readonly files: Readonly<Record<string, string>> };
 }
 
 type Checks = readonly { readonly family: string; readonly verdict: Verdict }[];
@@ -43,7 +45,7 @@ export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration):
   const blind = x.families.filter((f) => world.task.families.find((g) => g.id === f)?.role !== 'laboratory');
   if (blind.length || !x.families.length) throw new Error('an evolutionary branch selects on its laboratories only: ' + (blind.join(', ') || 'none given'));
   let identity: string | null = null;
-  return {
+  const ev: Evaluator = {
     async identity() {
       identity ??= 'artifacts:' + world.task.id + ':' + world.reference + ':' + x.families.join(',') + ':' + x.workloads + ':' + x.seed + ':' + (await world.environment()).fingerprint;
       return identity;
@@ -51,7 +53,7 @@ export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration):
     contract: () => ({ about: world.task.about, metric: world.task.objective.metric, direction: world.task.objective.direction,
       ...(world.task.objective.growth ? { judged_on: 'how ' + world.task.objective.metric + ' grows with ' + world.task.objective.growth.param + ' against the reference: the slope, lower is better' } : {}),
       files: [...world.store.get(world.reference)!.files.keys()], keep: 'what it answers: every answer must be the reference\'s on the same input' }),
-    start: () => ({ hash: world.reference, files: Object.fromEntries(world.store.get(world.reference)!.files) }),
+    start: () => (x.start ? { hash: x.start.hash, files: x.start.files } : { hash: world.reference, files: Object.fromEntries(world.store.get(world.reference)!.files) }),
     validate(files) {
       const paths = Object.keys(files);
       if (paths.length > (x.maxFiles ?? 8)) return 'at most ' + (x.maxFiles ?? 8) + ' files in a change';
@@ -84,7 +86,10 @@ export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration):
       const crashed = incorrect.filter((i) => /^(exited with|timed out)/.test(i.why)).length;
       return { executable: crashed < runs, correct: checks.every((c) => c.verdict.correct) ? 'yes' : 'no', quality: qualityOf(checks),
         descriptor: x.descriptor ? x.descriptor(checks) : null, feedback: feedbackOf(checks),
-        diagnostics: [...new Set(incorrect.map((i) => i.workload + ': ' + i.why))].slice(0, 3), evaluator: await this.identity() };
+        diagnostics: [...new Set(incorrect.map((i) => i.workload + ': ' + i.why))].slice(0, 3), evaluator: await ev.identity() };
     }
   };
+  /* A start of the requester's, made known by its content - refused if it does not hash to what it says. */
+  if (x.start) { const why = ev.adopt(x.start.hash, x.start.files); if (why) throw new Error('the start ' + x.start.hash + ' cannot be taken: ' + why); }
+  return ev;
 }

@@ -33,6 +33,10 @@ import { Instruments, instrumentsSection } from '../learn/assisted/instruments.t
 import { Channel, PINS_SECTION, applyPins, type ChannelPublication, type PinOp } from '../learn/assisted/channel.ts';
 import { MEMORY_SECTION } from '../learn/assisted/memory.ts';
 import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, type ExperienceMode, type ExperienceRun, type ExperienceScope } from '../learn/assisted/experience.ts';
+import { searchReader } from '../learn/evolve/experience.ts';
+import { evolveCapability } from './evolve-branch.ts';
+import type { ArtifactWorld } from '../artifacts/world.ts';
+import type { SearchManifest } from '../learn/evolve/engine.ts';
 import { createHash } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
@@ -65,6 +69,9 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'delegation-tokens', default: '200000', help: 'at most N tokens a branch' },
   { name: 'delegation-rounds', default: '3', help: 'the rounds a branch gets when it asks none' },
   { name: 'delegation-max-rounds', default: '6', help: 'at most N rounds a branch' },
+  { name: 'delegation-evolve', default: '0', help: 'N > 0: a branch may be an evolutionary search ("mode": "evolve", SPEC-DELEGACION-EVOLUTIVA), with at most N evaluations of candidates; in worlds with an evaluator (artifacts)' },
+  { name: 'delegation-evolve-workloads', default: '2', help: 'workloads of each laboratory family in an evaluation of an evolutionary branch' },
+  { name: 'evolution-search', default: '', help: 'a sealed evolutionary search the assisted researcher reads as experience (run "search"): the consolidation of an evolutionary branch' },
   { name: 'own-tests', default: '0', help: 'N > 0: a model is confirmed blind only after N severe tests of the assisted researcher\'s own, registered with it (SPEC-PRUEBAS-PROPIAS §7)' },
   { name: 'confirm-places', default: '2', help: 'places per blind confirmation set, two sets' },
   { name: 'tools', default: 'all', help: 'the instruments, a,b,... ("all" or "none")' },
@@ -460,6 +467,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     close_round: !flag('no-close-round'),
     ...(Number(arg('delegation-fund')) > 0 ? { delegation: { fund: Math.floor(Number(arg('delegation-fund'))), tokens: Math.max(1, Math.floor(Number(arg('delegation-tokens', '200000')) || 200000)),
       rounds: Math.max(1, Math.floor(Number(arg('delegation-rounds', '3')) || 3)), max_rounds: Math.max(1, Math.floor(Number(arg('delegation-max-rounds', '6')) || 6)),
+      ...(Number(arg('delegation-evolve')) > 0 ? { evolve: { evaluations: Math.floor(Number(arg('delegation-evolve'))), workloads: Math.max(1, Math.floor(Number(arg('delegation-evolve-workloads', '2')) || 2)) } } : {}),
       /* The fund's ledger, one for the run's lineage: a run resumed keeps the one it began with (set below for a new run). */
       ...(previous?.config?.delegation?.ledger ? { ledger: String(previous.config.delegation.ledger) } : {}) } } : {}),
     stated_task: !flag('task-as-model'),
@@ -470,7 +478,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {}),
     ...(arg('memory') ? { memory: arg('memory') } : {}),
     ...(arg('team') ? { team: arg('team'), member: arg('member') } : {}),
-    ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all' } : {})
+    ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all' } : {}),
+    ...(arg('evolution-search') ? { evolution_search: path.basename(arg('evolution-search')) } : {})
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
   Object.defineProperty(worldOptions, '__focus', { value: arg('focus') || '', enumerable: false });
@@ -522,9 +531,12 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   options.onJournal?.(run.outFile);
   /* The experience it was given (§12): which runs, in which mode, whether of this same world, and each file's hash (a resumed
      run reads the same ones). What the Judge picked for it is the operator's (experience_select). */
-  const experience = experienceRuns ? { mode: experienceRuns.mode, scope: experienceRuns.scope, reader: new Experience(experienceRuns.runs, { scope: experienceRuns.scope,
+  /* An evolutionary search, read as experience through its own adapter (SPEC-DELEGACION-EVOLUTIVA §9): the run "search". */
+  const searchRun = arg('evolution-search') ? loadSearch(arg('evolution-search'), researcher) : null;
+  const allRuns = [...(experienceRuns?.runs ?? []), ...(searchRun ? [searchRun.run] : [])];
+  const experience = allRuns.length ? { mode: experienceRuns?.mode ?? ('meta' as ExperienceMode), scope: experienceRuns?.scope ?? ('all' as ExperienceScope), reader: new Experience(allRuns, { scope: experienceRuns?.scope ?? 'all',
     ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), onSelect: (record) => run.log('experience_select', record) }) } : null;
-  if (experienceRuns) run.log('experience', { mode: experienceRuns.mode, scope: experienceRuns.scope, runs: experienceRuns.given });
+  if (experienceRuns || searchRun) run.log('experience', { mode: experience!.mode, scope: experience!.scope, runs: [...(experienceRuns?.given ?? []), ...(searchRun ? [searchRun.given] : [])] });
   Object.defineProperty(cfg, '__experience', { value: experience, enumerable: false });
   /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
   /* The assisted researcher of a laboratory with a loop of its own: the operator's messages with its questions (resuming,
@@ -580,6 +592,18 @@ function openTeam(lab: AnyLab, dir: string, member: string, researcher: string, 
 
 /** The runs given as experience (SPEC-INVESTIGADOR-ASISTIDO §12), read and checked before the run starts: finished journals,
     labelled in the order given; a run of this same world (same experiment, seed and level) only in the meta mode. */
+/** A sealed evolutionary search to read as experience: its manifest and its events beside it, under the label "search". */
+function loadSearch(file: string, researcher: string): { run: ExperienceRun; given: Record<string, unknown> } {
+  if (researcher !== 'assisted') throw new LabError('--evolution-search: only the assisted researcher reads a search');
+  let text: string, manifest: SearchManifest;
+  try { text = fs.readFileSync(file, 'utf8'); manifest = JSON.parse(text); } catch (e) { throw new LabError('--evolution-search: cannot read ' + file + ': ' + String((e as Error).message ?? e)); }
+  if (manifest.format !== 'evolution-search@1') throw new LabError('--evolution-search: ' + file + ' is not a sealed search');
+  const eventsFile = file.replace(/\.manifest\.json$/, '.jsonl');
+  const events = fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  return { run: { label: 'search', journal: { researcher: 'evolutionary search' }, sameWorld: true, reader: searchReader(manifest, events) },
+    given: { label: 'search', file: path.basename(file), sha256: createHash('sha256').update(text).digest('hex'), search: manifest.hash } };
+}
+
 function loadExperience(lab: AnyLab, cfg: Record<string, any>, list: string, modeAsked: string, scopeAsked: string, researcher: string, assistedAfter: number | null,
   previous: Record<string, any> | null, root: string): { mode: ExperienceMode; scope: ExperienceScope; runs: ExperienceRun[]; given: Record<string, unknown>[] } | null {
   if (!list) {
@@ -1601,13 +1625,15 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     if (journal.config?.delegation) journal.config.delegation.ledger = delegationCfg.ledger;
   }
   const delegations = delegationCfg ? new Delegations({
-    config: { fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds },
+    config: { fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds,
+      ...((delegationCfg as { evolve?: { evaluations: number; workloads: number } }).evolve ? { evolve: (delegationCfg as { evolve?: { evaluations: number; workloads: number } }).evolve } : {}) },
     journalFile: run.outFile, snapshot: () => JSON.parse(JSON.stringify(journal)), lab: lab.id,
+    ...((delegationCfg as { evolve?: unknown }).evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptions as Record<string, string>, () => (spec as { world: ArtifactWorld }).world) } : {}),
     worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptions).flatMap(([k, v]) => ['--' + k, String(v)]),
       ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
     /* A run in a process of its own, with the keys of this process's environment (loaded when first needed: control.ts reads
        every laboratory). */
-    launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); return { pid: c.startRunAt(l.journal, c.labNameOf(l.lab), l.args).pid }; }), log,
+    launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); return { pid: (l.evolve ? c.startEvolveAt(l.journal, l.evolve) : c.startRunAt(l.journal, c.labNameOf(l.lab), l.args)).pid }; }), log,
     /* The run that begins the lineage's fund opens it (a new run, or a continuation given one now); a run resumed finds it -
        or its loss, said so. */
     ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous?.config?.delegation } : {}),

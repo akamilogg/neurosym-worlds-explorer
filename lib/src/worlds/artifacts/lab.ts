@@ -56,6 +56,8 @@ const TASKS: Readonly<Record<string, (scale: number) => ArtifactTask>> = { dedup
   'threesum-subquadratic': (scale) => threesumSubquadraticTask({ scale }) };
 /** The worlds of the specs generated in this process: the latest version made in each (what the checks run). */
 const latest = new WeakMap<ArtifactWorld, string>();
+/** The latest version made in a world (its base when none): where an evolutionary branch starts when none is named. */
+export const latestVersionOf = (w: ArtifactWorld): string => latest.get(w) ?? w.reference;
 const seedOf = (text: string): number => parseInt(createHash('sha256').update(text).digest('hex').slice(0, 8), 16);
 
 function pointOf(world: ArtifactWorld, version: string, family: string, workload: ArtifactPoint['workload']): ArtifactPoint {

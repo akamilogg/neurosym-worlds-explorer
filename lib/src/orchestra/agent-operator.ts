@@ -13,7 +13,8 @@ import { emptySeniorState, keepNotebook, notebookBrief, seniorMemory, seniorNote
 import { Delegations, SENIOR_DELEGATION_SECTION, type Launcher } from '../learn/assisted/delegation.ts';
 import { worldOptionsIn } from './reader.ts';
 import { LABS } from '../worlds/labs.ts';
-import { startRunAt, labNameOf } from '../runtime/control.ts';
+import { startRunAt, startEvolveAt, labNameOf } from '../runtime/control.ts';
+import { evolveCapability, worldFromJournal } from '../runtime/evolve-branch.ts';
 
 /* ============================================================================
  * The AGENT OPERATOR (SPEC-ORQUESTADOR §3, R1): an agent that follows an assisted run and does
@@ -215,11 +216,14 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
     if (role !== 'senior' || !cfg.delegation || typeof cfg.capabilities_from?.delegation !== 'number' || !lab) return (branchesOf = null);
     branchesOf = new Delegations({
-      config: { fund: cfg.delegation.fund, tokens: cfg.delegation.tokens, rounds: cfg.delegation.rounds, maxRounds: cfg.delegation.max_rounds },
+      config: { fund: cfg.delegation.fund, tokens: cfg.delegation.tokens, rounds: cfg.delegation.rounds, maxRounds: cfg.delegation.max_rounds, ...(cfg.delegation.evolve ? { evolve: cfg.delegation.evolve } : {}) },
       journalFile: file, snapshot: () => JSON.parse(fs.readFileSync(o.journal, 'utf8')), lab: lab.id,
+      /* An evolutionary branch of the senior's starts from the junior's versions, its world made again from its record. */
+      ...(cfg.delegation.evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptionsIn(lab.options, cfg) as Record<string, string>,
+        () => worldFromJournal(JSON.parse(fs.readFileSync(o.journal, 'utf8')), cfg.seed, worldOptionsIn(lab.options, cfg) as Record<string, string>)) } : {}),
       worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptionsIn(lab.options, cfg)).flatMap(([k, v]) => ['--' + k, String(v)]),
         ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
-      launcher: o.delegate ?? (async (l) => ({ pid: startRunAt(l.journal, labNameOf(l.lab), l.args).pid })),
+      launcher: o.delegate ?? (async (l) => ({ pid: (l.evolve ? startEvolveAt(l.journal, l.evolve) : startRunAt(l.journal, labNameOf(l.lab), l.args)).pid })),
       log: (type, data) => { (record.delegation_log ??= []).push({ at: new Date().toISOString(), type, ...data }); save(); },
       history: (record.delegation_log ?? []) as Record<string, any>[],
       unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
