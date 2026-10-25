@@ -7,7 +7,11 @@ import path from 'node:path';
 import { stableStringify } from '../src/core/hash.ts';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { artifactsLab } from '../src/worlds/artifacts/lab.ts';
-import { runEvolutionBranch, branchFiles, type EvolveBranchSpec } from '../src/runtime/evolve-branch.ts';
+import { runEvolutionBranch, branchFiles, consolidationTask, type EvolveBranchSpec } from '../src/runtime/evolve-branch.ts';
+import { processTraces } from '../src/orchestra/traces.ts';
+import { runSearch } from '../src/learn/evolve/engine.ts';
+import { balanced } from '../src/learn/evolve/policy.ts';
+import { verifySearch } from '../src/learn/evolve/verify.ts';
 import { Delegations } from '../src/learn/assisted/delegation.ts';
 import type { Evaluator, Mutator } from '../src/learn/evolve/engine.ts';
 import { runResults } from '../src/orchestra/results.ts';
@@ -106,6 +110,17 @@ test('H2.1 the requester delegates a search, gets its result once, imports a can
   for (const suffix of ['.search.jsonl', '.search.manifest.json', '.consolidation.json', '.finding.json']) assert.ok(packed.manifest.files.some((f) => f.path === rel + suffix), rel + suffix);
   const v = await verifyPackage(packed.dir);
   assert.equal(v.reconstruction.holds, true, JSON.stringify(v.reconstruction));
+  /* Its search rebuilt from its record, without a model or a measure. */
+  assert.equal(v.searches.length, 1);
+  assert.equal(v.searches[0].holds, true, v.searches[0].why);
+  /* K1 and the traces read the evolutionary branch apart: by phase, what it searched, exported and what was adopted. */
+  const evo = runResults(r.journal).cost.tokens.evolutionary!;
+  assert.equal(evo.branches, 1);
+  assert.equal(evo.search + (evo.consolidation ?? 0), bf.cost.total.llm_tokens, 'its phases add up to what it was settled at');
+  assert.ok(evo.evaluations >= 1 && evo.exported >= 1 && evo.machine_seconds > 0);
+  assert.equal(evo.adopted, 1);
+  const traces = processTraces(r.journal).branches;
+  assert.deepEqual([traces.evolutionary, traces.candidates_adopted], [1, 1]);
 });
 
 /* --- The supervisor alone, with an evaluator of its own (fast): crashes, cancellation, partial deliveries -------------- */
@@ -197,7 +212,7 @@ test('H2.3 settled with both phases; a failed consolidation or a partial search 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-settle-'));
   const journalFile = path.join(dir, 'run.json');
   const launched: string[] = [];
-  const evolve = { seed: 1, options: spec(dir).options, resolveStart: () => ({ hash: 'base', files: { 'main.py': 'q=1' } }) };
+  const evolve = { seed: 1, options: spec(dir).options, isolated: false, resolveStart: () => ({ hash: 'base', files: { 'main.py': 'q=1' } }) };
   const d = new Delegations({ config: { fund: 10000, tokens: 4000, rounds: 1, maxRounds: 2, evolve: { evaluations: 3, workloads: 1 } }, journalFile, snapshot: () => ({ events: [] }), lab: 'artifacts@1',
     worldArgs: [], launcher: (l) => { launched.push(l.evolve!); }, log: () => {}, history: [], unsupported: null, evolve });
   const a = await d.run({ delegate: { mode: 'evolve', question: 'q', budget: { evaluations: 2 } } }, 1);
@@ -226,6 +241,42 @@ test('H2.3 settled with both phases; a failed consolidation or a partial search 
   const off = new Delegations({ config: { fund: 10000, tokens: 4000, rounds: 1, maxRounds: 2 }, journalFile: path.join(dir, 'other.json'), snapshot: () => ({ events: [] }), lab: 'cells@1',
     worldArgs: [], launcher: () => {}, log: () => {}, history: [], unsupported: null });
   assert.match(String((await off.run({ delegate: { mode: 'evolve', question: 'q' } }, 1)).error), /not enabled/);
+  /* A capability not implemented in this delivery, or a field it does not know: refused, never ignored. */
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['run:x'] } }, 3)).error), /not implemented in this delivery: "seeds"/);
+  assert.match(String((await d.run({ delegate: { question: 'q', seeds: ['run:x'] } }, 3)).error), /not implemented in this delivery/);
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', budget: { generations: 9 } } }, 3)).error), /unknown field\(s\): budget\.generations/);
+  /* Isolation required where the sandbox gives none: refused before anything is spent. */
+  const strict = new Delegations({ config: { fund: 10000, tokens: 4000, rounds: 1, maxRounds: 2, evolve: { evaluations: 3, workloads: 1, isolated: true } }, journalFile: path.join(dir, 'strict.json'),
+    snapshot: () => ({ events: [] }), lab: 'artifacts@1', worldArgs: [], launcher: () => { throw new Error('never launched'); }, log: () => {}, history: [], unsupported: null, evolve });
+  assert.match(String((await strict.run({ delegate: { mode: 'evolve', question: 'q' } }, 1)).error), /isolates files and network/);
+  assert.equal(strict.fundLeft(), 10000, 'nothing reserved');
+  /* What the requester suggested starting from reaches the consolidation's task. */
+  assert.match(consolidationTask({ ...spec(dir), refs: ['model:r4', 'note:x'] }), /model:r4, note:x/);
+});
+
+test('H2.5 the branch\'s machine time and wall time bound the search; a sealed search tampered with is not verified', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-limits-'));
+  const slow: Evaluator = { ...fakeEvaluator(), async evaluate(h: string) { await new Promise((r) => setTimeout(r, 30)); return { executable: true, correct: 'yes', quality: [1], descriptor: null, feedback: null, diagnostics: [], evaluator: 'fake' }; } };
+  const m = await runSearch({ evaluator: slow, mutator: variant(), profile: balanced(0.05), question: 'q', limits: { evaluations: 50, attempts: 50, tokens: 1e9, machineSeconds: 0.08 }, out: path.join(dir, 's.jsonl') });
+  assert.equal(m.manifest.stoppedBy, 'machine_seconds');
+  assert.ok(m.manifest.cost.machine_seconds! >= 0.08);
+  let clock = 1000;
+  const w = await runSearch({ evaluator: fakeEvaluator(), mutator: { async propose(ctx: any) { clock += 400; return variant().propose(ctx); } }, profile: balanced(0.05), question: 'q',
+    limits: { evaluations: 50, attempts: 50, tokens: 1e9 }, out: path.join(dir, 'w.jsonl'), deadline: 2000, now: () => clock });
+  assert.equal(w.manifest.stoppedBy, 'wall_time');
+  assert.ok(w.manifest.cost.attempts <= 3);
+  /* Verified from its record; with its sealed state changed, not. */
+  fs.writeFileSync(path.join(dir, 's.manifest.json'), JSON.stringify(m.manifest));
+  assert.equal((await verifySearch(path.join(dir, 's.jsonl'), path.join(dir, 's.manifest.json'), () => null)).holds, false, 'a fake evaluator\'s programs are not artifacts: their hashes do not match');
+  const journal = path.join(dir, 'b.json');
+  await runEvolutionBranch({ journal, spec: spec(dir), mutator: variant(), consolidate: counting().run });
+  const f = branchFiles(journal);
+  const ok = await verifySearch(f.search, f.manifest, () => null);
+  assert.equal(ok.holds, true, ok.why);
+  const tampered = JSON.parse(fs.readFileSync(f.manifest, 'utf8'));
+  tampered.state.elites = [];
+  fs.writeFileSync(f.manifest, JSON.stringify(tampered));
+  assert.equal((await verifySearch(f.search, f.manifest, () => null)).holds, false);
 });
 
 test('H2.4 a sealed search continued by a new delegation: its own reserve, the earlier cost apart, both packed', async () => {
@@ -233,7 +284,7 @@ test('H2.4 a sealed search continued by a new delegation: its own reserve, the e
   const journalFile = path.join(dir, 'run.json');
   const logged: any[] = [];
   const launched: { journal: string; evolve: string }[] = [];
-  const evolve = { seed: 1, options: spec(dir).options, resolveStart: () => ({ hash: 'base', files: { 'main.py': 'q=1' } }) };
+  const evolve = { seed: 1, options: spec(dir).options, isolated: false, resolveStart: () => ({ hash: 'base', files: { 'main.py': 'q=1' } }) };
   const d = new Delegations({ config: { fund: 20000, tokens: 4000, rounds: 1, maxRounds: 2, evolve: { evaluations: 3, workloads: 1 } }, journalFile, snapshot: () => ({ events: [] }), lab: 'artifacts@1',
     worldArgs: [], launcher: (l) => { launched.push({ journal: l.journal, evolve: l.evolve! }); }, log: (type, data) => logged.push({ type, ...data }), history: [], unsupported: null, evolve });
   await d.run({ delegate: { mode: 'evolve', question: 'q' } }, 1);

@@ -135,6 +135,9 @@ export class ArtifactWorld {
     return store;
   }
 
+  /** Whether its sandbox isolates files and network (the local process backend does not). */
+  get isolated(): boolean { return this.sandbox.isolated; }
+
   /** The reference every candidate is compared with: the base. */
   get reference(): string { return this.store.base; }
 

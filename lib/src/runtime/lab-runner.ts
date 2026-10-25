@@ -36,7 +36,8 @@ import { EXPERIENCE_MODES, EXPERIENCE_SCOPES, Experience, experienceSection, typ
 import { searchReader } from '../learn/evolve/experience.ts';
 import { evolveCapability } from './evolve-branch.ts';
 import type { ArtifactWorld } from '../artifacts/world.ts';
-import type { SearchManifest } from '../learn/evolve/engine.ts';
+import { EVOLVE_ENGINE, type SearchManifest } from '../learn/evolve/engine.ts';
+import { evolveConfigOf } from './evolve-branch.ts';
 import { createHash } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
@@ -71,6 +72,8 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'delegation-max-rounds', default: '6', help: 'at most N rounds a branch' },
   { name: 'delegation-evolve', default: '0', help: 'N > 0: a branch may be an evolutionary search ("mode": "evolve", SPEC-DELEGACION-EVOLUTIVA), with at most N evaluations of candidates; in worlds with an evaluator (artifacts)' },
   { name: 'delegation-evolve-workloads', default: '2', help: 'workloads of each laboratory family in an evaluation of an evolutionary branch' },
+  { name: 'delegation-evolve-machine-seconds', default: '3600', help: 'seconds of the machine the evaluations of an evolutionary branch may take in all' },
+  { name: 'delegation-evolve-wall-seconds', default: '10800', help: 'seconds of the clock an evolutionary branch may take, both phases' },
   { name: 'evolution-search', default: '', help: 'a sealed evolutionary search the assisted researcher reads as experience (run "search"): the consolidation of an evolutionary branch' },
   { name: 'own-tests', default: '0', help: 'N > 0: a model is confirmed blind only after N severe tests of the assisted researcher\'s own, registered with it (SPEC-PRUEBAS-PROPIAS §7)' },
   { name: 'confirm-places', default: '2', help: 'places per blind confirmation set, two sets' },
@@ -467,7 +470,11 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     close_round: !flag('no-close-round'),
     ...(Number(arg('delegation-fund')) > 0 ? { delegation: { fund: Math.floor(Number(arg('delegation-fund'))), tokens: Math.max(1, Math.floor(Number(arg('delegation-tokens', '200000')) || 200000)),
       rounds: Math.max(1, Math.floor(Number(arg('delegation-rounds', '3')) || 3)), max_rounds: Math.max(1, Math.floor(Number(arg('delegation-max-rounds', '6')) || 6)),
-      ...(Number(arg('delegation-evolve')) > 0 ? { evolve: { evaluations: Math.floor(Number(arg('delegation-evolve'))), workloads: Math.max(1, Math.floor(Number(arg('delegation-evolve-workloads', '2')) || 2)) } } : {}),
+      ...(Number(arg('delegation-evolve')) > 0 ? { evolve: { evaluations: Math.floor(Number(arg('delegation-evolve'))), workloads: Math.max(1, Math.floor(Number(arg('delegation-evolve-workloads', '2')) || 2)),
+        machine_seconds: Math.max(1, Math.floor(Number(arg('delegation-evolve-machine-seconds', '3600')) || 3600)), wall_seconds: Math.max(1, Math.floor(Number(arg('delegation-evolve-wall-seconds', '10800')) || 10800)),
+        ...(flag('delegation-evolve-isolated') ? { isolated: true } : {}),
+        /* What searches, part of the generator's identity (§15): its policy's profile and its engine. */
+        profile: 'balanced@1', engine: EVOLVE_ENGINE } } : {}),
       /* The fund's ledger, one for the run's lineage: a run resumed keeps the one it began with (set below for a new run). */
       ...(previous?.config?.delegation?.ledger ? { ledger: String(previous.config.delegation.ledger) } : {}) } } : {}),
     stated_task: !flag('task-as-model'),
@@ -1626,7 +1633,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   }
   const delegations = delegationCfg ? new Delegations({
     config: { fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds,
-      ...((delegationCfg as { evolve?: { evaluations: number; workloads: number } }).evolve ? { evolve: (delegationCfg as { evolve?: { evaluations: number; workloads: number } }).evolve } : {}) },
+      ...((delegationCfg as { evolve?: Record<string, any> }).evolve ? { evolve: evolveConfigOf((delegationCfg as { evolve?: Record<string, any> }).evolve!) } : {}) },
     journalFile: run.outFile, snapshot: () => JSON.parse(JSON.stringify(journal)), lab: lab.id,
     ...((delegationCfg as { evolve?: unknown }).evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptions as Record<string, string>, () => (spec as { world: ArtifactWorld }).world) } : {}),
     worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptions).flatMap(([k, v]) => ['--' + k, String(v)]),

@@ -31,8 +31,18 @@ export interface DelegationConfig {
   readonly maxRounds: number;
   /** A branch may be an evolutionary search (SPEC-DELEGACION-EVOLUTIVA): at most this many evaluations, and the workloads
       of each laboratory family in one. Absent, the mode is not enabled. */
-  readonly evolve?: { readonly evaluations: number; readonly workloads: number };
+  readonly evolve?: { readonly evaluations: number; readonly workloads: number;
+    /** Seconds of the machine and of the clock a branch may take (its evaluations; the whole branch). */
+    readonly machineSeconds?: number; readonly wallSeconds?: number;
+    /** Whether a branch requires a sandbox that isolates files and network: refused where there is none. */
+    readonly isolated?: boolean };
 }
+
+/** What an evolutionary request may carry, and what is of a capability not implemented in this delivery (§16, H4):
+    refused before anything is spent - never accepted to be ignored. */
+const EVOLVE_FIELDS = new Set(['mode', 'question', 'start', 'continue_from', 'refs', 'expected', 'budget']);
+const NOT_IMPLEMENTED = new Set(['seeds', 'analogies', 'analogy', 'profile', 'descriptors', 'models', 'mutator', 'islands', 'novelty']);
+const BUDGET_FIELDS = new Set(['evaluations', 'tokens', 'rounds']);
 
 /** What the search part of an evolutionary branch may spend of its grant; the rest is the consolidation's, protected (§12). */
 const SEARCH_SHARE = 0.75;
@@ -125,6 +135,8 @@ export class Delegations {
     readonly evolve?: {
       readonly seed: number;
       readonly options: Readonly<Record<string, string>>;
+      /** Whether its world's sandbox isolates files and network. */
+      readonly isolated: boolean;
       /** A program of the requester's by its name (or its latest, when none is named), by its content. */
       resolveStart(start: string | undefined): { hash: string; files: Readonly<Record<string, string>> } | { error: string };
     };
@@ -333,10 +345,15 @@ export class Delegations {
     const mode = r!.mode ?? 'investigate';
     if (mode !== 'investigate' && mode !== 'evolve') return { delegate: { question }, error: '"mode": "investigate" (the default) or "evolve" - not ' + JSON.stringify(mode) };
     if (mode === 'investigate' && (r!.start !== undefined || r!.continue_from !== undefined)) return { delegate: { question }, error: '"start" and "continue_from" are of "mode": "evolve"' };
+    const notYet = Object.keys(r!).filter((k) => NOT_IMPLEMENTED.has(k));
+    if (notYet.length) return { delegate: { question, mode }, error: 'not implemented in this delivery: ' + notYet.map((k) => '"' + k + '"').join(', ') + ' - refused before anything is spent' };
     if (mode === 'evolve') {
       if (!this.o.config.evolve) return { delegate: { question, mode }, error: 'the evolutionary mode is not enabled in this run' };
       if (!this.o.evolve) return { delegate: { question, mode }, error: 'no evaluator for an evolutionary search in this world' };
       if (r!.start !== undefined && r!.continue_from !== undefined) return { delegate: { question, mode }, error: '"start" or "continue_from", not both' };
+      const unknown = [...Object.keys(r!).filter((k) => !EVOLVE_FIELDS.has(k)), ...Object.keys((r!.budget ?? {}) as J).filter((k) => !BUDGET_FIELDS.has(k)).map((k) => 'budget.' + k)];
+      if (unknown.length) return { delegate: { question, mode }, error: 'unknown field(s): ' + unknown.join(', ') + ' (' + [...EVOLVE_FIELDS].join(', ') + '; budget: ' + [...BUDGET_FIELDS].join(', ') + ')' };
+      if (this.o.config.evolve.isolated && !this.o.evolve.isolated) return { delegate: { question, mode }, error: 'it requires a sandbox that isolates files and network, and this one does not (isolated: false): refused before anything is spent' };
     }
     if (r!.refs !== undefined && (!Array.isArray(r!.refs) || !r!.refs.every((x: unknown) => typeof x === 'string'))) return { delegate: { question }, error: '"refs": ids of items of your record' };
     if (this.o.ledger) { const t = this.ledgerNow(); if ('problem' in t) return { delegate: { question }, error: 'the fund cannot be known: ' + t.problem + ' - no branch is opened until it can' }; }
@@ -395,7 +412,8 @@ export class Delegations {
       const search = Math.floor(tokens * SEARCH_SHARE);
       fs.writeFileSync(specFile, JSON.stringify({ format: 'evolution-branch@1', id, question, expected, refs, cut: cutFile, seed: this.o.evolve!.seed, options: this.o.evolve!.options,
         worldArgs: this.o.worldArgs, start: evolve.start, continueFrom: evolve.continueFrom, exploration: { workloads: c.evolve!.workloads, seed: 104729 * (round + 1) + k },
-        limits: { evaluations: evolve.evaluations, attempts: evolve.evaluations * 3, tokens: search }, consolidation: { tokens: tokens - search, rounds } }, null, 2));
+        limits: { evaluations: evolve.evaluations, attempts: evolve.evaluations * 3, tokens: search, ...(c.evolve!.machineSeconds ? { machineSeconds: c.evolve!.machineSeconds } : {}) },
+        ...(c.evolve!.wallSeconds ? { wallSeconds: c.evolve!.wallSeconds } : {}), consolidation: { tokens: tokens - search, rounds } }, null, 2));
     }
     /* Recorded before it is started: who asked what, with what, from which cut, in which laboratory, and what is reserved. */
     this.o.log('delegation_requested', { id, round, question, refs, ...(expected ? { expected } : {}), granted,

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 /* ============================================================================
  * TRACES OF THE PROCESS, WITHOUT VALUATION (SPEC-CONTROL-ARNES K4, §4.3): how a run went, as a description - never as "losses"
@@ -32,7 +33,9 @@ export interface ProcessTraces {
   readonly told_its_senior: number;
   readonly other_help: number;
   /** Its branches (SPEC-DELEGACION-INVESTIGACIONES): opened, and their results delivered to it. */
-  readonly branches: { readonly opened: number; readonly results_delivered: number };
+  readonly branches: { readonly opened: number; readonly results_delivered: number;
+    /** Of them, evolutionary searches (SPEC-DELEGACION-EVOLUTIVA), and the candidates it made a version of its own of. */
+    readonly evolutionary: number; readonly candidates_adopted: number };
   readonly reading: string;
 }
 
@@ -67,7 +70,23 @@ export function processTraces(journalFile: string): ProcessTraces {
       reported_not_carried_out: reported.filter((r) => r?.not_done).length, not_reported: reported.filter((r) => !r).length },
     told_its_senior: events.filter((e) => e.type === 'junior_report').length,
     other_help: messages.filter((m) => !m.directive).length,
-    branches: { opened: events.filter((e) => e.type === 'delegation_requested').length, results_delivered: all.filter((m) => m.research_result).length },
+    branches: { opened: events.filter((e) => e.type === 'delegation_requested').length, results_delivered: all.filter((m) => m.research_result).length,
+      evolutionary: events.filter((e) => e.type === 'delegation_requested' && e.mode === 'evolve').length, candidates_adopted: adoptedOf(journalFile, events).length },
     reading: 'a description of how it went - never its performance; effects only from controlled comparisons'
   };
+}
+
+/** The versions it made that are candidates its evolutionary branches exported (by content: the same program, the same
+    version): what it adopted, whatever it did with them next. */
+export function adoptedOf(journalFile: string, events: readonly J[]): string[] {
+  const exported = new Set<string>();
+  for (const e of events) if (e.type === 'delegation_requested' && e.mode === 'evolve' && typeof e.journal === 'string') {
+    try {
+      const rec = JSON.parse(fs.readFileSync(path.resolve(path.dirname(journalFile), e.journal), 'utf8'));
+      for (const h of ((rec.events ?? []) as J[]).find((x) => x.type === 'search_finished')?.exported ?? []) exported.add(String(h));
+    } catch { /* not there */ }
+  }
+  const made = events.filter((e) => e.type === 'investigation').flatMap((e) => (e.results ?? []) as J[])
+    .filter((x) => x && x.accepted && typeof x.version === 'string' && !('runs' in x)).map((x) => x.version as string);
+  return [...new Set(made.filter((v) => exported.has(v)))];
 }

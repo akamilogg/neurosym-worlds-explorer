@@ -602,8 +602,7 @@ y el evaluador de artefactos sobre un `ArtifactWorld` real):
 casualidad de que conoce. Al continuar una búsqueda sellada en otra rama, su store no tiene los programas importados:
 el motor se los pasa con su contenido, y el evaluador comprueba que ese contenido da el hash.
 
-**Queda para H2:** los límites de segundos de máquina y de tiempo de pared (§12) son del supervisor de rama, que es
-quien reserva y liquida. El motor de H1 limita intentos, evaluaciones y tokens.
+Los límites de segundos de máquina y de tiempo de pared (§12) se añadieron después, con H2 (§16.3).
 
 ### H2. Delegación y entrega utilizable
 
@@ -656,6 +655,38 @@ parcial, y `continue_from` con empaquetado.
   - la búsqueda sellada para continuarla;
   - el coste por fase.
 - **`read` sobre la rama** usa ese mismo adaptador.
+
+### 16.3 Cierre de H1–H2 (25/10/2026)
+
+Repasada la spec contra el código, se cerraron los huecos que quedaban. Las pruebas están en
+`lib/test/evolve-delegation.test.ts` (H2.1, H2.3 y H2.5):
+1. **Las capacidades no implementadas se rechazan (§3, H4).** `seeds`, `analogies`, `profile`, `descriptors`, `models`
+   y otras se rechazan antes de gastar nada, en los dos modos. En el modo evolutivo, un campo desconocido, también dentro
+   de `budget`, se rechaza con la lista de los admitidos.
+2. **Límites de recursos (§12):**
+   - `--delegation-evolve-machine-seconds` acota la suma de lo que tardan sus evaluaciones; se registra por evaluación y
+     el replay usa lo registrado;
+   - `--delegation-evolve-wall-seconds` cuenta desde el inicio de la rama, también tras reanudarla: la búsqueda se para
+     ahí y la consolidación recibe el resto como `--max-minutes`.
+
+   La verificación no usa el reloj.
+3. **`lab verify` reconstruye cada búsqueda (§13).** `lib/src/learn/evolve/verify.ts` rehace los programas por su
+   contenido y sirve del registro cada respuesta y cada medida. Después compara el estado reconstruido con el que se
+   selló: candidatos, selección, cuotas y cursores. Una búsqueda continuada se reconstruye con la que continúa, que tiene
+   que estar en el paquete. El resultado va en `verification.searches`.
+4. **K1 y trazas (§15).** `cost.tokens.evolutionary` desglosa, sin contarlo dos veces porque ya está en el coste
+   delegado:
+   - la búsqueda y la consolidación;
+   - intentos, evaluaciones y segundos de máquina;
+   - candidatos exportados, adoptados y aceptados por el mundo.
+
+   Las trazas cuentan las ramas evolutivas y los candidatos adoptados. Un candidato cuenta como adoptado cuando el padre
+   crea, por contenido, una versión igual a uno que se exportó.
+5. **Identidad (§15).** La configuración del modo lleva el perfil (`balanced@1`) y el motor (`EVOLVE_ENGINE`,
+   `native@1`), así que forman parte del generador.
+6. **Aislamiento exigido (§14).** Con `--delegation-evolve-isolated`, una rama en un sandbox que no aísla se rechaza
+   antes de reservar nada. `ArtifactWorld.isolated` dice si el sandbox aísla.
+7. **`refs` (§3).** Llegan al texto de la consolidación.
 
 ### H3. Uso real en ThreeSum
 

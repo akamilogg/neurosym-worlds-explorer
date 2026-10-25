@@ -12,6 +12,9 @@ import { dispatched, evaluated, initialState, markStale, next, register, respond
  * call whose answer is not known is never dispatched again.
  * ========================================================================== */
 
+/** The engine's version, part of a generator's identity (SPEC-DELEGACION-EVOLUTIVA §15). */
+export const EVOLVE_ENGINE = 'native@1';
+
 export interface Evaluator {
   /** What its measures depend on (task, workloads, environment): evidence of another identity is stale. */
   identity(): Promise<string>;
@@ -36,7 +39,11 @@ export interface Mutator {
 
 export type SearchEvent = Record<string, any> & { readonly type: string };
 
-export interface SearchLimits { readonly evaluations: number; readonly attempts: number; readonly tokens: number }
+export interface SearchLimits {
+  readonly evaluations: number; readonly attempts: number; readonly tokens: number;
+  /** Seconds of the machine its evaluations may take in all (each measured, and served from the record on a replay). */
+  readonly machineSeconds?: number;
+}
 
 export interface SearchManifest {
   readonly format: 'evolution-search@1';
@@ -52,7 +59,7 @@ export interface SearchManifest {
   readonly hash: string;
 }
 
-export interface Cost { readonly attempts: number; readonly evaluations: number; readonly tokens: number; readonly tokens_unknown: number }
+export interface Cost { readonly attempts: number; readonly evaluations: number; readonly tokens: number; readonly tokens_unknown: number; readonly machine_seconds?: number }
 
 export interface SearchOptions {
   readonly evaluator: Evaluator;
@@ -70,6 +77,9 @@ export interface SearchOptions {
   readonly continueFrom?: SearchManifest;
   /** The most a mutator's context may hold, in characters: a context that does not fit is refused, never cut (§7.2). */
   readonly maxContext?: number;
+  /** When its time is up (the branch's wall time), and the clock: not checked when a record is only verified. */
+  readonly deadline?: number;
+  readonly now?: () => number;
   readonly signal?: AbortSignal;
 }
 
@@ -139,7 +149,8 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
   log({ type: 'search_started', profile: o.profile, evaluator: identity, question: o.question, limits: o.limits, ...(o.continueFrom ? { continues: o.continueFrom.hash } : {}) });
   if (o.continueFrom && o.continueFrom.evaluator !== identity) log({ type: 'evidence_stale', from: o.continueFrom.evaluator, to: identity, candidates: markStale(state, identity) });
 
-  const cost = { attempts: 0, evaluations: 0, tokens: 0, tokens_unknown: 0 };
+  const cost = { attempts: 0, evaluations: 0, tokens: 0, tokens_unknown: 0, machine_seconds: 0 };
+  const verifying = Boolean(o.recorded) && !o.live;
   let evalSeq = 0, stoppedBy = '';
   const stop = (why: string) => { stoppedBy = why; };
 
@@ -147,14 +158,18 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
      changes nothing outside the branch). */
   const evaluate = async (hash: string, plan: Plan | null, reevaluation: boolean): Promise<boolean> => {
     if (cost.evaluations >= o.limits.evaluations) { stop('evaluations'); return false; }
+    if (o.limits.machineSeconds !== undefined && cost.machine_seconds >= o.limits.machineSeconds) { stop('machine_seconds'); return false; }
     const id = 'evaluation:' + (++evalSeq) + (o.continueFrom ? '@' + o.continueFrom.hash : '');
     log({ type: 'evaluation_planned', evaluation: id, hash, reevaluation });
     cost.evaluations++;
     const done = recorded('evaluation', id);
     if (done && done.hash !== hash) throw new Error('replay diverged at ' + id + ': it evaluated ' + done.hash + ', now ' + hash);
     if (!done && o.recorded && !o.live) { stop('record_end'); return false; }
+    const began = Date.now();
     const e: Evaluation = done ? done.result : await o.evaluator.evaluate(hash);
-    log({ type: 'evaluation', evaluation: id, hash, result: e });
+    const seconds = done ? Number(done.seconds) || 0 : (Date.now() - began) / 1000;
+    cost.machine_seconds += seconds;
+    log({ type: 'evaluation', evaluation: id, hash, result: e, seconds });
     evaluated(state, hash, e, { plan, reevaluation });
     return true;
   };
@@ -169,6 +184,7 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
   while (!stoppedBy) {
     if (o.signal?.aborted) { stop('cancelled'); break; }
     if (cost.tokens >= o.limits.tokens) { stop('tokens'); break; }
+    if (o.deadline !== undefined && !verifying && (o.now?.() ?? Date.now()) >= o.deadline) { stop('wall_time'); break; }
     /* Stale evidence the search would go on from is measured again first, in registration order. */
     const stale = staleActive(state);
     if (stale.length) { await evaluate(stale[0], null, true); continue; }
@@ -236,4 +252,5 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
   return { manifest, events };
 }
 
-const addCost = (a: Cost, b: Cost): Cost => ({ attempts: a.attempts + b.attempts, evaluations: a.evaluations + b.evaluations, tokens: a.tokens + b.tokens, tokens_unknown: a.tokens_unknown + b.tokens_unknown });
+const addCost = (a: Cost, b: Cost): Cost => ({ attempts: a.attempts + b.attempts, evaluations: a.evaluations + b.evaluations, tokens: a.tokens + b.tokens, tokens_unknown: a.tokens_unknown + b.tokens_unknown,
+  machine_seconds: (a.machine_seconds ?? 0) + (b.machine_seconds ?? 0) });

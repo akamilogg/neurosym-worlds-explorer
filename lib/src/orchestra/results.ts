@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { adoptedOf } from './traces.ts';
 import path from 'node:path';
 import { describe, rate, type Described, type Rate } from '../runtime/statistics.ts';
 import { generatorOf } from '../runtime/generators.ts';
@@ -61,7 +62,10 @@ export interface RunCost {
     /** What its branches spent (SPEC-DELEGACION-INVESTIGACIONES §6): direct, delegated and total, never counted twice. */
     readonly delegated: number | null; readonly total_at_least: number;
     /** What the fund holds for branches whose spending is not known (§10.4): held, neither spent nor a bound - apart. */
-    readonly delegated_held_uncertain?: number };
+    readonly delegated_held_uncertain?: number;
+    /** Of the delegated cost, what its evolutionary branches spent, by phase (SPEC-DELEGACION-EVOLUTIVA §15). */
+    readonly evolutionary?: { readonly branches: number; readonly search: number; readonly consolidation: number | null; readonly attempts: number; readonly evaluations: number;
+      readonly machine_seconds: number; readonly exported: number; readonly adopted: number; readonly adopted_accepted: number } };
   readonly money: { readonly known: number; readonly unknown: readonly string[] };
   readonly seconds: number | null;
   readonly judge_calls: number | null;
@@ -128,7 +132,7 @@ export function runResults(journalFile: string, criteria?: Criteria): RunResults
     o3_adequacy: o3,
     o4_mechanistic_recovery: recovery !== null ? { score: recovery, grader_version: rec.grader_version ?? null } : 'no truth to grade against, or not graded',
     ...(model && recovery !== null ? { prediction_and_mechanism: { accepted: true, recovery } } : {}),
-    cost: { tokens: { junior, agents: agentTokens, delegated, total_at_least: (junior ?? 0) + (agentTokens ?? 0) + (delegated ?? 0), ...(held ? { delegated_held_uncertain: held } : {}) }, money: { known: Math.round(money * 1e6) / 1e6, unknown: moneyUnknown },
+    cost: { tokens: { junior, agents: agentTokens, delegated, total_at_least: (junior ?? 0) + (agentTokens ?? 0) + (delegated ?? 0), ...(held ? { delegated_held_uncertain: held } : {}), ...evolutionaryOf(journalFile, events) }, money: { known: Math.round(money * 1e6) / 1e6, unknown: moneyUnknown },
       seconds, judge_calls: typeof end.jev?.calls === 'number' ? end.jev.calls : null, unknown },
     started: journal.started ?? null, ended_at_seconds: seconds
   };
@@ -226,3 +230,29 @@ export function batchTimes(started: string, ended: string | undefined, rows: rea
 /** What a summary of branches holds for those whose spending is not known (a summary of an earlier version: its grant each). */
 const heldOf = (d: J | undefined): number => typeof d?.held_uncertain === 'number' ? d.held_uncertain
   : ((d?.branches ?? []) as J[]).filter((b) => b.spent_uncertain).reduce((a, b) => a + (Number(b.spent_uncertain.held ?? b.granted?.tokens) || 0), 0);
+
+/** Its evolutionary branches, apart: what each phase spent (from each branch's finding, never counted twice - it is
+    already in the delegated cost), how much they searched, what they exported, what it adopted, and of that, what its
+    world accepted. */
+function evolutionaryOf(journalFile: string, events: readonly J[]): { evolutionary?: NonNullable<RunResults['cost']['tokens']['evolutionary']> } {
+  const branches = events.filter((e) => e.type === 'delegation_requested' && e.mode === 'evolve' && typeof e.journal === 'string');
+  if (!branches.length) return {};
+  let search = 0, consolidation: number | null = 0, attempts = 0, evaluations = 0, machine = 0, exported = 0;
+  for (const b of branches) {
+    const file = path.resolve(path.dirname(journalFile), b.journal);
+    const finding = readJson(file.replace(/\.json$/, '.finding.json'));
+    const rec = readJson(file);
+    const done = ((rec?.events ?? []) as J[]).find((e) => e.type === 'search_finished');
+    search += Number(finding?.cost?.search?.llm_tokens) || 0;
+    const c = finding?.cost?.consolidation?.llm_tokens;
+    consolidation = consolidation === null || typeof c !== 'number' ? (typeof c === 'number' || !finding ? consolidation : null) : consolidation + c;
+    attempts += Number(done?.cost?.attempts) || 0;
+    evaluations += Number(done?.cost?.evaluations) || 0;
+    machine += Number(done?.cost?.machine_seconds) || 0;
+    exported += ((done?.exported ?? []) as unknown[]).length;
+  }
+  const adopted = adoptedOf(journalFile, events);
+  const accepted = new Set(events.filter((e) => e.type === 'artifact_accepted').map((e) => String(e.version)));
+  return { evolutionary: { branches: branches.length, search, consolidation, attempts, evaluations, machine_seconds: Math.round(machine * 10) / 10, exported, adopted: adopted.length,
+    adopted_accepted: adopted.filter((v) => accepted.has(v)).length } };
+}

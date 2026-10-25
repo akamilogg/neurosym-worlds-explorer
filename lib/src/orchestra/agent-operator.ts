@@ -14,7 +14,7 @@ import { Delegations, SENIOR_DELEGATION_SECTION, type Launcher } from '../learn/
 import { worldOptionsIn } from './reader.ts';
 import { LABS } from '../worlds/labs.ts';
 import { startRunAt, startEvolveAt, labNameOf } from '../runtime/control.ts';
-import { evolveCapability, worldFromJournal } from '../runtime/evolve-branch.ts';
+import { evolveCapability, evolveConfigOf, worldFromJournal } from '../runtime/evolve-branch.ts';
 
 /* ============================================================================
  * The AGENT OPERATOR (SPEC-ORQUESTADOR §3, R1): an agent that follows an assisted run and does
@@ -216,7 +216,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
     if (role !== 'senior' || !cfg.delegation || typeof cfg.capabilities_from?.delegation !== 'number' || !lab) return (branchesOf = null);
     branchesOf = new Delegations({
-      config: { fund: cfg.delegation.fund, tokens: cfg.delegation.tokens, rounds: cfg.delegation.rounds, maxRounds: cfg.delegation.max_rounds, ...(cfg.delegation.evolve ? { evolve: cfg.delegation.evolve } : {}) },
+      config: { fund: cfg.delegation.fund, tokens: cfg.delegation.tokens, rounds: cfg.delegation.rounds, maxRounds: cfg.delegation.max_rounds, ...(cfg.delegation.evolve ? { evolve: evolveConfigOf(cfg.delegation.evolve) } : {}) },
       journalFile: file, snapshot: () => JSON.parse(fs.readFileSync(o.journal, 'utf8')), lab: lab.id,
       /* An evolutionary branch of the senior's starts from the junior's versions, its world made again from its record. */
       ...(cfg.delegation.evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptionsIn(lab.options, cfg) as Record<string, string>,

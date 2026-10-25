@@ -42,17 +42,25 @@ export interface EvolveBranchSpec {
   /** A sealed search to continue (its manifest's file), instead of a start. */
   readonly continueFrom: string | null;
   readonly exploration: { readonly workloads: number; readonly seed: number };
-  readonly limits: { readonly evaluations: number; readonly attempts: number; readonly tokens: number };
+  readonly limits: { readonly evaluations: number; readonly attempts: number; readonly tokens: number; readonly machineSeconds?: number };
+  /** Seconds of the clock the whole branch may take, from its start: the search stops there, the consolidation is given the rest. */
+  readonly wallSeconds?: number;
   readonly consolidation: { readonly tokens: number; readonly rounds: number };
 }
 
 type J = Record<string, any>;
 
+/** The evolutionary mode as a run's configuration keeps it, as the delegation reads it. */
+export function evolveConfigOf(e: J): NonNullable<ConstructorParameters<typeof Delegations>[0]['config']['evolve']> {
+  return { evaluations: Number(e.evaluations), workloads: Number(e.workloads) || 1, ...(e.machine_seconds ? { machineSeconds: Number(e.machine_seconds) } : {}),
+    ...(e.wall_seconds ? { wallSeconds: Number(e.wall_seconds) } : {}), ...(e.isolated ? { isolated: true } : {}) };
+}
+
 /** What a requester's delegation needs for an evolutionary branch: its world's seed and options, and where a search starts
     - a version of the requester's by its name, or its latest - by its content. Only in a world with an evaluator. */
 export function evolveCapability(labId: string, seed: number, options: Readonly<Record<string, string>>, world: () => ArtifactWorld): ConstructorParameters<typeof Delegations>[0]['evolve'] {
   if (labId !== artifactsLab.id) return undefined;
-  return { seed, options, resolveStart(start) {
+  return { seed, options, get isolated() { return world().isolated; }, resolveStart(start) {
     const w = world();
     const name = start ?? latestVersionOf(w);
     const v = w.store.get(name);
@@ -82,6 +90,7 @@ export const branchFiles = (journal: string) => {
 export function consolidationTask(spec: EvolveBranchSpec): string {
   return ['THE CONSOLIDATION OF AN EVOLUTIONARY SEARCH. Another researcher, investigating this same environment, delegated a search of programs. Its question:', spec.question,
     ...(spec.expected ? ['What it wants back: ' + spec.expected] : []),
+    ...(spec.refs.length ? ['Where it suggested starting, in its record: ' + spec.refs.join(', ')] : []),
     'The search is readable as experience (run "search"): its candidates (each program whole, its parents, its measures on the exploration workloads, its roles: elite, in development, under repair), its attempts and the decisions of its policy. What a mutator declared of a change is its declaration, not a fact. The requester\'s record, as it stood when it asked, is readable too (run "exp1").',
     'Make the delivery USABLE: reproduce what matters - a candidate becomes a version of yours with a change of its files, and you can run it - detect shortcuts or losses, say which candidates deserve adoption and why, and propose the next experiment. You may explain a mechanism where a decision depends on it; you need not write a theory of each candidate. Write down what you find as you go; close your rounds when a model would add nothing.'].join('\n');
 }
@@ -121,6 +130,9 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
   const beat = setInterval(() => { poll(); status('running'); }, o.heartbeatMs ?? 2000);
   beat.unref?.();
   const rel = (p: string) => path.relative(path.dirname(o.journal), p).split(path.sep).join('/');
+  /* Its wall time counts from when it began, across resumptions. */
+  const deadline = spec.wallSeconds ? Date.parse(record.started) + spec.wallSeconds * 1000 : undefined;
+  const minutesLeft = () => (deadline === undefined ? [] : ['--max-minutes', String(Math.max(1, Math.ceil((deadline - Date.now()) / 60000)))]);
 
   try {
     const world = artifactsLab.generate(spec.seed, spec.options as never).world as ArtifactWorld;
@@ -135,7 +147,8 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
       const recorded = lines(f.search);
       const evaluator = evaluatorAt(spec.exploration.seed);
       const { manifest } = await runSearch({ evaluator, mutator: o.mutator, profile: balanced(world.task.objective.margin), question: spec.question,
-        limits: spec.limits, out: f.search, ...(recorded.length ? { recorded, live: true } : {}), ...(continueFrom ? { continueFrom } : {}), signal: controller.signal });
+        limits: spec.limits, out: f.search, ...(recorded.length ? { recorded, live: true } : {}), ...(continueFrom ? { continueFrom } : {}), signal: controller.signal,
+        ...(deadline !== undefined ? { deadline } : {}) });
       spentSoFar = manifest.cost.tokens;
       fs.writeFileSync(f.manifest, JSON.stringify(manifest, null, 2));
       /* What it exports, confirmed on NEW realizations of the same families (§5): selected on fixed workloads, a program
@@ -174,7 +187,7 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
         } else {
           await o.consolidate([...spec.worldArgs, '--researcher', 'assisted', '--attempts', String(spec.consolidation.rounds), '--max-tokens', String(spec.consolidation.tokens),
             '--task', consolidationTask(spec), '--experience', spec.cut, '--experience-mode', 'meta', '--experience-scope', 'all', '--evolution-search', f.manifest,
-            '--no-grade', '--no-ablation', '--out', current()]);
+            '--no-grade', '--no-ablation', ...minutesLeft(), '--out', current()]);
         }
       } catch (e) { log('consolidation_failed', { why: String((e as Error)?.message ?? e).slice(0, 300) }); }
     }

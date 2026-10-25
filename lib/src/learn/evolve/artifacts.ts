@@ -41,6 +41,17 @@ function feedbackOf(checks: Checks): unknown {
     ...(v.incorrect.length ? { incorrect: v.incorrect.slice(0, 3) } : {}) }));
 }
 
+/** Why a patch is refused: too many files, or a path that is not a plain relative one of the artifact (null: none). */
+export function validatePatch(files: Readonly<Record<string, string | null>>, maxFiles = 8): string | null {
+  const paths = Object.keys(files);
+  if (paths.length > maxFiles) return 'at most ' + maxFiles + ' files in a change';
+  for (const p of paths) {
+    const n = path.posix.normalize(p.replace(/\\/g, '/'));
+    if (!p || path.isAbsolute(p) || n.startsWith('..') || n !== p.replace(/\\/g, '/') || p.includes('\0')) return 'the path "' + p + '" is not a plain relative path of the artifact';
+  }
+  return null;
+}
+
 export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration): Evaluator {
   const blind = x.families.filter((f) => world.task.families.find((g) => g.id === f)?.role !== 'laboratory');
   if (blind.length || !x.families.length) throw new Error('an evolutionary branch selects on its laboratories only: ' + (blind.join(', ') || 'none given'));
@@ -54,15 +65,7 @@ export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration):
       ...(world.task.objective.growth ? { judged_on: 'how ' + world.task.objective.metric + ' grows with ' + world.task.objective.growth.param + ' against the reference: the slope, lower is better' } : {}),
       files: [...world.store.get(world.reference)!.files.keys()], keep: 'what it answers: every answer must be the reference\'s on the same input' }),
     start: () => (x.start ? { hash: x.start.hash, files: x.start.files } : { hash: world.reference, files: Object.fromEntries(world.store.get(world.reference)!.files) }),
-    validate(files) {
-      const paths = Object.keys(files);
-      if (paths.length > (x.maxFiles ?? 8)) return 'at most ' + (x.maxFiles ?? 8) + ' files in a change';
-      for (const p of paths) {
-        const n = path.posix.normalize(p.replace(/\\/g, '/'));
-        if (!p || path.isAbsolute(p) || n.startsWith('..') || n !== p.replace(/\\/g, '/') || p.includes('\0')) return 'the path "' + p + '" is not a plain relative path of the artifact';
-      }
-      return null;
-    },
+    validate: (files) => validatePatch(files, x.maxFiles ?? 8),
     materialize(from, files) {
       const made = world.change(from, { files });
       if ('error' in made) return made;

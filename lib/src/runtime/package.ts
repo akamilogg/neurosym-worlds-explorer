@@ -1,3 +1,5 @@
+import { verifySearch } from '../learn/evolve/verify.ts';
+import type { SearchManifest } from '../learn/evolve/engine.ts';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -133,6 +135,8 @@ export interface PackageVerification {
     /** Events after its end: the operator's later readings (a regrade), not a part of the run rebuilt. */
     readonly later_readings?: number };
   /** Guarantees 2 and 3, named so that nobody takes the first for them. */
+  /** Each evolutionary search it holds, rebuilt from its record without a model or a measure (SPEC-DELEGACION-EVOLUTIVA §13). */
+  readonly searches: readonly { readonly file: string; readonly holds: boolean; readonly why: string }[];
   readonly re_execution: { readonly done: false; readonly needs: string; readonly environments_recorded: readonly string[] };
   readonly reproduction: { readonly done: false; readonly needs: string };
 }
@@ -222,9 +226,15 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
       ...(laterReadings > 0 && endOf(original) ? { later_readings: laterReadings } : {}) };
     fs.rmSync(scratch, { recursive: true, force: true });
   }
+  /* Its evolutionary searches: each rebuilt from its record and compared with the manifest it sealed. */
+  const searchFiles = present.filter((p) => p.endsWith('.search.jsonl') && present.includes(p.replace(/\.jsonl$/, '.manifest.json')));
+  const manifests = new Map<string, SearchManifest>();
+  for (const p of present.filter((x) => x.endsWith('.search.manifest.json'))) { try { const m = JSON.parse(fs.readFileSync(path.join(dir, p), 'utf8')); manifests.set(m.hash, m); } catch { /* not one */ } }
+  const searches: { file: string; holds: boolean; why: string }[] = [];
+  for (const p of searchFiles) searches.push({ file: p, ...(await verifySearch(path.join(dir, p), path.join(dir, p.replace(/\.jsonl$/, '.manifest.json')), (h) => manifests.get(h) ?? null)) });
   const environments = [...new Set(JSON.stringify(original).match(/"fingerprint":\s*"[0-9a-f]{16}"/g) ?? [])].map((m) => m.replace(/.*"([0-9a-f]{16})"/, '$1'));
   return {
-    format: 'research_verification@1', verified: new Date().toISOString(), manifest_sha256: sha(manifestFile), integrity, reconstruction,
+    format: 'research_verification@1', verified: new Date().toISOString(), manifest_sha256: sha(manifestFile), integrity, reconstruction, searches,
     re_execution: { done: false, needs: 'the same acts run again against the instrument now, with its dependencies and environment as recorded, and compared with what was recorded', environments_recorded: environments },
     reproduction: { done: false, needs: 'the experiment repeated, its conclusion judged again by the criteria it declared (the same verdict, not the same numbers)' }
   };
