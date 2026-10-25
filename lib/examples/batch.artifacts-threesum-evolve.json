@@ -1,0 +1,72 @@
+{
+  "format": "batch@1",
+  "id": "artifacts-threesum-evolve",
+  "concurrency": 1,
+  "budget": {
+    "tokens_per_run": 4000000
+  },
+  "runs": [
+    {
+      "id": "threesum-evolve-free",
+      "lab": "artifacts",
+      "condition": "3SUM below O(n^2), judged on growth (threesum-subquadratic@1), from its quadratic base, with a fund for branches in which a branch may also be an evolutionary search (SPEC-DELEGACION-EVOLUTIVA H3), at most 30 evaluations a branch; nothing said of it: does it use it, and does the search leave it something usable?",
+      "researcher": "assisted",
+      "args": [
+        "--artifact", "threesum-subquadratic",
+        "--seed", "1",
+        "--attempts", "16",
+        "--validations", "5",
+        "--memory", "selective",
+        "--max-minutes", "600",
+        "--help-budget", "8",
+        "--delegation-fund", "1200000",
+        "--delegation-tokens", "600000",
+        "--delegation-rounds", "3",
+        "--delegation-max-rounds", "6",
+        "--delegation-evolve", "30",
+        "--delegation-evolve-workloads", "1",
+        "--task", "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    },
+    {
+      "id": "threesum-evolve-invited",
+      "lab": "artifacts",
+      "condition": "The same, with one message of the operator at round 6 inviting it to delegate an evolutionary search from its current version (no algorithm, no family named): what the search's candidates, restarts and consolidation give it, and whether it adopts, tests or discards them with reasons. Help, counted as such",
+      "researcher": "assisted",
+      "args": [
+        "--artifact", "threesum-subquadratic",
+        "--seed", "1",
+        "--attempts", "16",
+        "--validations", "5",
+        "--memory", "selective",
+        "--max-minutes", "600",
+        "--help-budget", "8",
+        "--delegation-fund", "1200000",
+        "--delegation-tokens", "600000",
+        "--delegation-rounds", "3",
+        "--delegation-max-rounds", "6",
+        "--delegation-evolve", "30",
+        "--delegation-evolve-workloads", "1",
+        "--task", "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
+      ],
+      "messages": [
+        {
+          "round": 6,
+          "text": "Your branches may also be evolutionary searches: {\"delegate\": {\"mode\": \"evolve\", ...}} tries many transformations of a version of yours, runs each on exploration workloads, keeps alternatives - not only the best - and goes on from them, with restarts that do not see your current program; then a researcher consolidates what it found. Consider one from your current version when your own changes stop opening a way. What it returns are candidates to test, not results: adopt one with a change of yours and judge it with your own runs and checks. Whether to delegate it, and what to ask, is yours to decide; keep enough rounds to read its result and decide."
+        }
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    }
+  ]
+}
