@@ -58,7 +58,8 @@ export async function verifySearch(eventsFile: string, manifestFile: string, man
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-search-')), 'rebuilt.jsonl');
   try {
     const { manifest } = await runSearch({ evaluator: recordedEvaluator(events, startFiles, start), mutator: { propose: async () => { throw new Error('verification is offline: an answer the record does not hold is not asked'); } },
-      profile: started.profile, question: started.question, limits: started.limits, out, recorded: events, live: false, ...(continueFrom ? { continueFrom } : {}) });
+      profile: started.profile, question: started.question, limits: started.limits, out, recorded: events, live: false, ...(continueFrom ? { continueFrom } : {}),
+      ...(started.seeds ? { seeds: started.seeds } : {}) });
     if (stableStringify(manifest.state) !== stableStringify(sealed.state)) return { holds: false, why: 'rebuilt from its record, its state differs from the one it sealed' };
     return { holds: true, why: 'rebuilt from its record without a model or a measure: the same candidates, selection, quotas and cursors as it sealed' };
   } catch (e) {

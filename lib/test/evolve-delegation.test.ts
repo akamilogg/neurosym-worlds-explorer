@@ -7,7 +7,7 @@ import path from 'node:path';
 import { stableStringify } from '../src/core/hash.ts';
 import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { artifactsLab } from '../src/worlds/artifacts/lab.ts';
-import { runEvolutionBranch, branchFiles, consolidationTask, type EvolveBranchSpec } from '../src/runtime/evolve-branch.ts';
+import { runEvolutionBranch, branchFiles, consolidationTask, evolveCapability, type EvolveBranchSpec } from '../src/runtime/evolve-branch.ts';
 import { processTraces } from '../src/orchestra/traces.ts';
 import { runSearch } from '../src/learn/evolve/engine.ts';
 import { balanced } from '../src/learn/evolve/policy.ts';
@@ -242,8 +242,10 @@ test('H2.3 settled with both phases; a failed consolidation or a partial search 
     worldArgs: [], launcher: () => {}, log: () => {}, history: [], unsupported: null });
   assert.match(String((await off.run({ delegate: { mode: 'evolve', question: 'q' } }, 1)).error), /not enabled/);
   /* A capability not implemented in this delivery, or a field it does not know: refused, never ignored. */
-  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['run:x'] } }, 3)).error), /not implemented in this delivery: "seeds"/);
-  assert.match(String((await d.run({ delegate: { question: 'q', seeds: ['run:x'] } }, 3)).error), /not implemented in this delivery/);
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', analogies: ['a'] } }, 3)).error), /not implemented in this delivery: "analogies"/);
+  assert.match(String((await d.run({ delegate: { question: 'q', analogies: ['a'] } }, 3)).error), /not implemented in this delivery/);
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['artifact:x'] } }, 3)).error), /"seeds": not enabled in this run/);
+  assert.match(String((await d.run({ delegate: { question: 'q', seeds: ['artifact:x'] } }, 3)).error), /are of "mode": "evolve"/);
   assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', budget: { generations: 9 } } }, 3)).error), /unknown field\(s\): budget\.generations/);
   /* Isolation required where the sandbox gives none: refused before anything is spent. */
   const strict = new Delegations({ config: { fund: 10000, tokens: 4000, rounds: 1, maxRounds: 2, evolve: { evaluations: 3, workloads: 1, isolated: true } }, journalFile: path.join(dir, 'strict.json'),
@@ -309,3 +311,68 @@ test('H2.4 a sealed search continued by a new delegation: its own reserve, the e
     for (const suffix of ['.json', '.search.jsonl', '.search.manifest.json', '.evolve.json']) assert.ok(files.includes(rel.replace(/\.json$/, suffix)), rel + suffix + ' packed');
   }
 });
+
+test('H4 seeds: from authorized sources by their ids, by content, measured again in the branch, roots of their own, verified', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-seeds-'));
+  const journalFile = path.join(dir, 'run.json');
+  const launched: { journal: string; evolve: string }[] = [];
+  const base = artifactsLab.generate(1, spec(dir).options as never).world;
+  const baseMain = base.store.get(base.reference)!.files.get('main.py')!;
+  const mine = base.change(base.reference, { files: { 'main.py': baseMain + '\n# a version of mine\n' } }) as { version: string };
+  const evolve = { seed: 1, options: spec(dir).options, isolated: false,
+    resolveStart: (v?: string) => { const x = base.store.get(v ?? base.reference); return x ? { hash: v ?? base.reference, files: Object.fromEntries(x.files) } : { error: 'no version "' + v + '"' }; } };
+  const d = new Delegations({ config: { fund: 50000, tokens: 4000, rounds: 1, maxRounds: 2, evolve: { evaluations: 4, workloads: 1, seeds: { max: 2, sources: ['own', 'searches'] } } }, journalFile,
+    snapshot: () => ({ events: [] }), lab: 'artifacts@1', worldArgs: [], launcher: (l) => { launched.push({ journal: l.journal, evolve: l.evolve! }); }, log: () => {}, history: [], unsupported: null, evolve });
+  /* Refused before anything is reserved: an unknown id, a source not authorized, too many. */
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['nonsense'] } }, 1)).error), /no such id/);
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['exp:exp1#artifact:x'] } }, 1)).error), /not authorized/);
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['artifact:a', 'artifact:b', 'artifact:c'] } }, 1)).error), /at most 2/);
+  assert.match(String((await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['artifact:missing'] } }, 1)).error), /no version "missing"/);
+  assert.equal(d.fundLeft(), 50000, 'nothing reserved');
+  const a = await d.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['artifact:' + mine.version] } }, 1);
+  assert.equal(a.state, 'accepted', JSON.stringify(a));
+  const s = JSON.parse(fs.readFileSync(launched[0].evolve, 'utf8')) as EvolveBranchSpec;
+  assert.deepEqual(s.seeds!.map((x) => [x.id, x.source, x.hash, x.knows_task]), [['artifact:' + mine.version, 'requester', mine.version, true]]);
+  /* The supervisor: the seed measured in the branch's own laboratory, a root of its own lineage. */
+  await runEvolutionBranch({ journal: launched[0].journal, spec: s, mutator: variant(), consolidate: counting().run });
+  const f = branchFiles(launched[0].journal);
+  const m = JSON.parse(fs.readFileSync(f.manifest, 'utf8'));
+  const seeded = m.state.candidates[mine.version];
+  assert.equal(seeded.origin, 'seed:artifact:' + mine.version);
+  assert.deepEqual(seeded.roots, [mine.version], 'a root of its own');
+  assert.ok(seeded.evaluation, 'measured here');
+  assert.ok(fs.readFileSync(f.search, 'utf8').includes('"origin":"seed"'));
+  assert.equal((await verifySearch(f.search, f.manifest, () => null)).holds, true, 'verified with its seeds');
+  /* A candidate of that sealed search, as a seed of the next branch. */
+  d.results();
+  const other = m.state.order.find((h: string) => h !== m.state.order[0] && h !== mine.version);
+  const b = await d.run({ delegate: { mode: 'evolve', question: 'q2', seeds: ['search:' + m.hash + '#candidate:' + other] } }, 2);
+  assert.equal(b.state, 'accepted', JSON.stringify(b));
+  assert.equal((JSON.parse(fs.readFileSync(launched[1].evolve, 'utf8')) as EvolveBranchSpec).seeds![0].hash, other);
+  /* A seed whose content is not what it says is refused by the branch, the search goes on without it. */
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-seeds2-'));
+  const j2 = path.join(dir2, 'b.json');
+  await runEvolutionBranch({ journal: j2, spec: spec(dir2, { seeds: [{ id: 'artifact:fake', source: 'requester', hash: 'f'.repeat(16), files: { 'main.py': 'x' }, knows_task: true }] }), mutator: variant(), consolidate: counting().run });
+  assert.ok(fs.readFileSync(branchFiles(j2).search, 'utf8').includes('"type":"seed_refused"'));
+  /* Not enabled in a run without seeds: refused. */
+  const off = new Delegations({ config: { fund: 50000, tokens: 4000, rounds: 1, maxRounds: 2, evolve: { evaluations: 4, workloads: 1 } }, journalFile: path.join(dir, 'o.json'),
+    snapshot: () => ({ events: [] }), lab: 'artifacts@1', worldArgs: [], launcher: () => {}, log: () => {}, history: [], unsupported: null, evolve });
+  assert.match(String((await off.run({ delegate: { mode: 'evolve', question: 'q', seeds: ['artifact:' + mine.version] } }, 1)).error), /not enabled/);
+});
+
+test('H4 a seed from a run read as experience: its world made again from its record, the version found there by content', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evolve-expseed-'));
+  const options = spec(dir).options;
+  const w = artifactsLab.generate(1, options as never).world;
+  const files = { 'main.py': w.store.get(w.reference)!.files.get('main.py')! + '\n# from an earlier run\n' };
+  const made = w.change(w.reference, { files }) as { version: string };
+  const journal = { experiment: 'artifacts@1', config: { seed: 1, ...options }, world_archive: w.archiveBase(),
+    events: [{ type: 'investigation', round: 1, requests: [{ act: { change: { from: w.reference, files, why: 'w', exploratory: true } } }] }] };
+  const cap = evolveCapability('artifacts@1', 1, options, () => w, () => [{ label: 'exp1', journal }])!;
+  const got = cap.resolveExperience!('exp1', made.version);
+  assert.ok('hash' in got && got.hash === made.version && got.files['main.py'] === files['main.py'], JSON.stringify(got).slice(0, 200));
+  assert.match(String((cap.resolveExperience!('exp2', made.version) as { error: string }).error), /no run "exp2"/);
+  assert.match(String((cap.resolveExperience!('exp1', 'nope') as { error: string }).error), /no version "nope"/);
+  assert.equal(evolveCapability('cells@1', 1, {}, () => w), undefined, 'no evaluator for an evolutionary search there');
+});
+

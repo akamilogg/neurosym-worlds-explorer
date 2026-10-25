@@ -39,6 +39,17 @@ export interface Mutator {
 
 export type SearchEvent = Record<string, any> & { readonly type: string };
 
+/** A seed (§8): a program from an authorized source - its id in the run's catalog, where it comes from, its content, and
+    whether its source knew the target task. Materialized and measured again in the branch's laboratory, a root of its
+    own lineage; what it scored elsewhere is never its evidence here. */
+export interface Seed {
+  readonly id: string;
+  readonly source: 'requester' | 'experience' | 'search';
+  readonly hash: string;
+  readonly files: Readonly<Record<string, string>>;
+  readonly knows_task: boolean;
+}
+
 export interface SearchLimits {
   readonly evaluations: number; readonly attempts: number; readonly tokens: number;
   /** Seconds of the machine its evaluations may take in all (each measured, and served from the record on a replay). */
@@ -75,6 +86,8 @@ export interface SearchOptions {
   readonly live?: boolean;
   /** A sealed search to continue from (§13.1): another branch, its state imported, its cost not charged again. */
   readonly continueFrom?: SearchManifest;
+  /** Seeds to start from besides the start (§8). */
+  readonly seeds?: readonly Seed[];
   /** The most a mutator's context may hold, in characters: a context that does not fit is refused, never cut (§7.2). */
   readonly maxContext?: number;
   /** When its time is up (the branch's wall time), and the clock: not checked when a record is only verified. */
@@ -146,7 +159,8 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
       if (why) throw new Error('the sealed search holds ' + h + ', which its evaluator cannot take: ' + why);
     }
   } else state = initialState(o.profile);
-  log({ type: 'search_started', profile: o.profile, evaluator: identity, question: o.question, limits: o.limits, ...(o.continueFrom ? { continues: o.continueFrom.hash } : {}) });
+  log({ type: 'search_started', profile: o.profile, evaluator: identity, question: o.question, limits: o.limits, ...(o.continueFrom ? { continues: o.continueFrom.hash } : {}),
+    ...(o.seeds?.length ? { seeds: o.seeds } : {}) });
   if (o.continueFrom && o.continueFrom.evaluator !== identity) log({ type: 'evidence_stale', from: o.continueFrom.evaluator, to: identity, candidates: markStale(state, identity) });
 
   const cost = { attempts: 0, evaluations: 0, tokens: 0, tokens_unknown: 0, machine_seconds: 0 };
@@ -179,6 +193,17 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
     register(state, { hash: s.hash, files: s.files, parents: [], origin: 'start', root: true });
     log({ type: 'candidate', origin: 'start', hash: s.hash, files: s.files, result: 'new' });
     await evaluate(s.hash, null, false);
+  }
+
+  /* Its seeds: each made known by its content (refused if it does not hash to what it says), a root of its own, measured
+     here like any candidate - a seed already known (the start, or another seed) is not measured twice. */
+  for (const seed of o.seeds ?? []) {
+    if (stoppedBy) break;
+    const why = o.evaluator.adopt(seed.hash, seed.files);
+    if (why) { log({ type: 'seed_refused', seed: seed.id, hash: seed.hash, why }); continue; }
+    const { duplicate } = register(state, { hash: seed.hash, files: seed.files, parents: [], origin: 'seed:' + seed.id, root: true });
+    log({ type: 'candidate', origin: 'seed', seed: seed.id, source: seed.source, knows_task: seed.knows_task, hash: seed.hash, result: duplicate ? 'duplicate' : 'new', ...(duplicate ? {} : { files: seed.files }) });
+    if (!duplicate) await evaluate(seed.hash, null, false);
   }
 
   while (!stoppedBy) {

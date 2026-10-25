@@ -688,6 +688,32 @@ Repasada la spec contra el código, se cerraron los huecos que quedaban. Las pru
    antes de reservar nada. `ArtifactWorld.isolated` dice si el sandbox aísla.
 7. **`refs` (§3).** Llegan al texto de la consolidación.
 
+### 16.4 H4: semillas (25/10/2026)
+
+Es la primera extensión de H4 (§8). Lo habilita el operador:
+- `--delegation-evolve-seeds N`: como mucho N semillas por rama;
+- `--delegation-evolve-seed-sources`: las fuentes autorizadas, entre `own`, `searches` y `experience` (por defecto,
+  `own,searches`).
+
+Una petición evolutiva admite `"seeds": [...]`, con IDs del catálogo del run:
+- `artifact:<versión>`: una versión del solicitante;
+- `search:<hash sellado>#candidate:<programa>`: un candidato de una búsqueda sellada de una rama propia;
+- `exp:<etiqueta>#artifact:<versión>`: una versión de un run que se lee como experiencia. Su mundo se reconstruye desde
+  su diario.
+
+Cada semilla se resuelve por contenido al aceptar la petición, con su fuente y con la declaración de que su fuente
+conocía la tarea. Si una no se puede tomar (ID desconocido, fuente no autorizada, demasiadas o inexistente), se rechaza
+la petición entera antes de reservar nada: nunca se omite una semilla en silencio.
+
+En la rama, cada semilla:
+- se adopta por contenido (si no da su hash, se rechaza con `seed_refused` y la búsqueda sigue sin ella);
+- se registra como raíz de su propio linaje, con origen `seed:<id>`;
+- se vuelve a medir en el laboratorio de la rama: lo que puntuó en otro sitio no es evidencia aquí.
+
+La verificación offline reconstruye también las semillas, a partir de `search_started`. Las analogías, otros modelos o
+políticas, el paralelismo y el perfil de leyes siguen rechazándose como no implementados. Las pruebas están en
+`lib/test/evolve-delegation.test.ts` (H4).
+
 ### H3. Uso real en ThreeSum
 
 Ejecutar `threesum-subquadratic@1` desde su base cuadrática, con historial autorizado y configuración explícita en el

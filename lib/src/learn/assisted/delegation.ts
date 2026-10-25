@@ -35,13 +35,15 @@ export interface DelegationConfig {
     /** Seconds of the machine and of the clock a branch may take (its evaluations; the whole branch). */
     readonly machineSeconds?: number; readonly wallSeconds?: number;
     /** Whether a branch requires a sandbox that isolates files and network: refused where there is none. */
-    readonly isolated?: boolean };
+    readonly isolated?: boolean;
+    /** Seeds (§8): at most `max` a branch, from the sources the operator authorized. Absent, a request with seeds is refused. */
+    readonly seeds?: { readonly max: number; readonly sources: readonly ('own' | 'experience' | 'searches')[] } };
 }
 
 /** What an evolutionary request may carry, and what is of a capability not implemented in this delivery (§16, H4):
     refused before anything is spent - never accepted to be ignored. */
-const EVOLVE_FIELDS = new Set(['mode', 'question', 'start', 'continue_from', 'refs', 'expected', 'budget']);
-const NOT_IMPLEMENTED = new Set(['seeds', 'analogies', 'analogy', 'profile', 'descriptors', 'models', 'mutator', 'islands', 'novelty']);
+const EVOLVE_FIELDS = new Set(['mode', 'question', 'start', 'continue_from', 'refs', 'expected', 'budget', 'seeds']);
+const NOT_IMPLEMENTED = new Set(['analogies', 'analogy', 'profile', 'descriptors', 'models', 'mutator', 'islands', 'novelty']);
 const BUDGET_FIELDS = new Set(['evaluations', 'tokens', 'rounds']);
 
 /** What the search part of an evolutionary branch may spend of its grant; the rest is the consolidation's, protected (§12). */
@@ -106,7 +108,7 @@ export const DELEGATION_SECTION = (c: DelegationConfig): string => [
   '  {"delegate": {"question": "what to investigate - the branch knows nothing else of your intent", "refs": ["optional: items of your record to start from, e.g. model:r4, note:<id>"], "expected": "optional: what you want back", "budget": {"rounds": <n>, "tokens": <n>}}}',
   '  It answers at once whether it was accepted, with its id and what it was given; its result comes to you later as a message (`research_result`) with its findings, the directions it proposes and what tells them apart, its evidence and its uncertainties - a contribution, never an order: take what serves you, test it with your instruments. {"delegation": {"id": "<id>", "status": true}} says how it goes; {"delegation": {"id": "<id>", "read": {"experience": "list" | "open" | "find", ...}}} reads its record as you read experience; {"delegation": {"id": "<id>", "cancel": true}} stops it.',
   '  One branch at a time. The fund for branches is ' + c.fund + ' tokens in all, at most ' + c.tokens + ' tokens and ' + c.maxRounds + ' rounds a branch (' + c.rounds + ' when you ask none); each request costs a step of yours, the branch\'s work is counted apart.',
-  ...(c.evolve ? ['  A branch may also be an EVOLUTIONARY SEARCH: {"delegate": {"mode": "evolve", "question": "...", "start": "optional: a version of yours (default: your latest)", "budget": {"evaluations": <at most ' + c.evolve.evaluations + '>, "tokens": <n>, "rounds": <n>}}}. It tries many transformations of programs, runs each on exploration workloads, keeps alternatives and goes on from them; then a researcher consolidates what it found. Its result: candidates whole (adopt one with a change of yours, then your checks), what was measured of each, why to look at each again, and a sealed search you may continue: {"delegate": {"mode": "evolve", "continue_from": "<its hash>", "question": "..."}}.'] : [])
+  ...(c.evolve ? ['  A branch may also be an EVOLUTIONARY SEARCH: {"delegate": {"mode": "evolve", "question": "...", "start": "optional: a version of yours (default: your latest)", "budget": {"evaluations": <at most ' + c.evolve.evaluations + '>, "tokens": <n>, "rounds": <n>}' + (c.evolve.seeds ? ', "seeds": ["optional, at most ' + c.evolve.seeds.max + ': ' + c.evolve.seeds.sources.map((x) => x === 'own' ? 'artifact:<a version of yours>' : x === 'searches' ? 'search:<a sealed search of yours>#candidate:<program>' : 'exp:<label>#artifact:<a version of a run you read>').join(' | ') + '"]' : '') + '}}. It tries many transformations of programs, runs each on exploration workloads, keeps alternatives and goes on from them; then a researcher consolidates what it found. Its result: candidates whole (adopt one with a change of yours, then your checks), what was measured of each, why to look at each again, and a sealed search you may continue: {"delegate": {"mode": "evolve", "continue_from": "<its hash>", "question": "..."}}.'] : [])
 ].join('\n');
 
 export class Delegations {
@@ -139,6 +141,8 @@ export class Delegations {
       readonly isolated: boolean;
       /** A program of the requester's by its name (or its latest, when none is named), by its content. */
       resolveStart(start: string | undefined): { hash: string; files: Readonly<Record<string, string>> } | { error: string };
+      /** A version of a run it reads as experience (its label, the version's name), by its content. */
+      resolveExperience?(label: string, version: string): { hash: string; files: Readonly<Record<string, string>> } | { error: string };
     };
     /** The fund's ledger, shared by every requester of the run (its junior and its senior): one fund, never one each. */
     readonly ledger?: string;
@@ -222,6 +226,36 @@ export class Delegations {
   }
 
   private active(): Branch | undefined { return this.branches.find((b) => b.state === 'accepted' || b.state === 'running'); }
+
+  /** Seeds by their ids in the run's catalog (§8), each from a source the operator authorized, by its content:
+        artifact:<version>                          a version of the requester's
+        search:<sealed hash>#candidate:<program>    a candidate of a sealed search of an evolutionary branch of its own
+        exp:<label>#artifact:<version>              a version of a run it reads as experience
+      Any that cannot be taken refuses the request: never a seed silently left out. */
+  private seedsOf(raw: unknown): { seeds: J[] } | { error: string } {
+    const allowed = this.o.config.evolve?.seeds;
+    if (!allowed) return { error: 'not enabled in this run' };
+    if (!Array.isArray(raw) || !raw.length || !raw.every((x) => typeof x === 'string')) return { error: 'ids of the run\'s catalog, e.g. "artifact:<version>", "search:<hash>#candidate:<program>", "exp:<label>#artifact:<version>"' };
+    if (raw.length > allowed.max) return { error: 'at most ' + allowed.max + ' a branch' };
+    const out: J[] = [];
+    for (const id of raw as string[]) {
+      const own = /^artifact:(.+)$/.exec(id), search = /^search:([^#]+)#candidate:(.+)$/.exec(id), exp = /^exp:([^#]+)#artifact:(.+)$/.exec(id);
+      const source = own ? 'own' : search ? 'searches' : exp ? 'experience' : null;
+      if (!source) return { error: 'no such id "' + id + '"' };
+      if (!allowed.sources.includes(source as 'own')) return { error: 'its source (' + source + ') is not authorized in this run: "' + id + '"' };
+      let got: { hash: string; files: Readonly<Record<string, string>> } | { error: string };
+      if (own) got = this.o.evolve!.resolveStart(own[1]);
+      else if (search) {
+        const m = this.branches.filter((x) => x.mode === 'evolve').map((x) => readJson(evolveFiles(x.journal).manifest) as SearchManifest | null).find((x) => x?.hash === search[1]);
+        const c = m?.state.candidates[search[2]];
+        got = !m ? { error: 'no sealed search ' + search[1] + ' of yours' } : !c ? { error: 'no candidate ' + search[2] + ' in it' } : { hash: c.hash, files: c.files };
+      } else got = this.o.evolve!.resolveExperience ? this.o.evolve!.resolveExperience(exp![1], exp![2]) : { error: 'no run read as experience' };
+      if ('error' in got) return { error: got.error + ' ("' + id + '")' };
+      /* Every source here worked on this same task: what it knew is declared with it. */
+      out.push({ id, source: own ? 'requester' : search ? 'search' : 'experience', hash: got.hash, files: got.files, knows_task: true });
+    }
+    return { seeds: out };
+  }
 
   /** Its cost settled: the reservation released, what it spent kept (in the shared ledger too, once). */
   private settle(b: Branch, spent: number, live = false, uncertain?: Uncertain): void {
@@ -344,7 +378,7 @@ export class Delegations {
     if (this.o.unsupported) return { delegate: { question }, error: 'not here: ' + this.o.unsupported };
     const mode = r!.mode ?? 'investigate';
     if (mode !== 'investigate' && mode !== 'evolve') return { delegate: { question }, error: '"mode": "investigate" (the default) or "evolve" - not ' + JSON.stringify(mode) };
-    if (mode === 'investigate' && (r!.start !== undefined || r!.continue_from !== undefined)) return { delegate: { question }, error: '"start" and "continue_from" are of "mode": "evolve"' };
+    if (mode === 'investigate' && (r!.start !== undefined || r!.continue_from !== undefined || r!.seeds !== undefined)) return { delegate: { question }, error: '"start", "continue_from" and "seeds" are of "mode": "evolve"' };
     const notYet = Object.keys(r!).filter((k) => NOT_IMPLEMENTED.has(k));
     if (notYet.length) return { delegate: { question, mode }, error: 'not implemented in this delivery: ' + notYet.map((k) => '"' + k + '"').join(', ') + ' - refused before anything is spent' };
     if (mode === 'evolve') {
@@ -354,6 +388,10 @@ export class Delegations {
       const unknown = [...Object.keys(r!).filter((k) => !EVOLVE_FIELDS.has(k)), ...Object.keys((r!.budget ?? {}) as J).filter((k) => !BUDGET_FIELDS.has(k)).map((k) => 'budget.' + k)];
       if (unknown.length) return { delegate: { question, mode }, error: 'unknown field(s): ' + unknown.join(', ') + ' (' + [...EVOLVE_FIELDS].join(', ') + '; budget: ' + [...BUDGET_FIELDS].join(', ') + ')' };
       if (this.o.config.evolve.isolated && !this.o.evolve.isolated) return { delegate: { question, mode }, error: 'it requires a sandbox that isolates files and network, and this one does not (isolated: false): refused before anything is spent' };
+      if (r!.seeds !== undefined) {
+        const seeds = this.seedsOf(r!.seeds);
+        if ('error' in seeds) return { delegate: { question, mode }, error: '"seeds": ' + seeds.error };
+      }
     }
     if (r!.refs !== undefined && (!Array.isArray(r!.refs) || !r!.refs.every((x: unknown) => typeof x === 'string'))) return { delegate: { question }, error: '"refs": ids of items of your record' };
     if (this.o.ledger) { const t = this.ledgerNow(); if ('problem' in t) return { delegate: { question }, error: 'the fund cannot be known: ' + t.problem + ' - no branch is opened until it can' }; }
@@ -366,7 +404,7 @@ export class Delegations {
     if (tokens <= 0) return { delegate: { question }, error: 'the fund for branches is spent', fund_left: 0 };
     /* An evolutionary branch: where it starts (a program of the requester's by its content, or a sealed search of one of its
        branches), checked before anything is reserved. */
-    let evolve: { start: { hash: string; files: Readonly<Record<string, string>> } | null; continueFrom: string | null; evaluations: number } | null = null;
+    let evolve: { start: { hash: string; files: Readonly<Record<string, string>> } | null; continueFrom: string | null; evaluations: number; seeds: J[] } | null = null;
     if (mode === 'evolve') {
       const evaluations = Math.max(1, Math.min(c.evolve!.evaluations, Number.isInteger(asked.evaluations) ? asked.evaluations : c.evolve!.evaluations));
       if (r!.continue_from !== undefined) {
@@ -374,12 +412,13 @@ export class Delegations {
         const manifest = from ? evolveFiles(from.journal).manifest : null;
         if (!from || !manifest || !fs.existsSync(manifest)) return { delegate: { question, mode }, error: '"continue_from": a sealed search of an evolutionary branch of yours, by its id or its hash' };
         if (from.state === 'running' || from.state === 'accepted') return { delegate: { question, mode }, error: '"continue_from": ' + from.id + ' has not ended: a search is continued once its origin is settled' };
-        evolve = { start: null, continueFrom: manifest, evaluations };
+        evolve = { start: null, continueFrom: manifest, evaluations, seeds: [] };
       } else {
         const start = this.o.evolve!.resolveStart(typeof r!.start === 'string' ? r!.start.replace(/^artifact:/, '') : undefined);
         if ('error' in start) return { delegate: { question, mode }, error: '"start": ' + start.error };
-        evolve = { start, continueFrom: null, evaluations };
+        evolve = { start, continueFrom: null, evaluations, seeds: [] };
       }
+      if (r!.seeds !== undefined) evolve.seeds = (this.seedsOf(r!.seeds) as { seeds: J[] }).seeds;
     }
     const k = (this.perRound.get(round) ?? 0) + 1;
     this.perRound.set(round, k);
@@ -411,14 +450,15 @@ export class Delegations {
     if (evolve) {
       const search = Math.floor(tokens * SEARCH_SHARE);
       fs.writeFileSync(specFile, JSON.stringify({ format: 'evolution-branch@1', id, question, expected, refs, cut: cutFile, seed: this.o.evolve!.seed, options: this.o.evolve!.options,
-        worldArgs: this.o.worldArgs, start: evolve.start, continueFrom: evolve.continueFrom, exploration: { workloads: c.evolve!.workloads, seed: 104729 * (round + 1) + k },
+        worldArgs: this.o.worldArgs, start: evolve.start, continueFrom: evolve.continueFrom, seeds: evolve.seeds, exploration: { workloads: c.evolve!.workloads, seed: 104729 * (round + 1) + k },
         limits: { evaluations: evolve.evaluations, attempts: evolve.evaluations * 3, tokens: search, ...(c.evolve!.machineSeconds ? { machineSeconds: c.evolve!.machineSeconds } : {}) },
         ...(c.evolve!.wallSeconds ? { wallSeconds: c.evolve!.wallSeconds } : {}), consolidation: { tokens: tokens - search, rounds } }, null, 2));
     }
     /* Recorded before it is started: who asked what, with what, from which cut, in which laboratory, and what is reserved. */
     this.o.log('delegation_requested', { id, round, question, refs, ...(expected ? { expected } : {}), granted,
       ...(evolve ? { mode: 'evolve', evolve: path.relative(path.dirname(this.o.journalFile), specFile).split(path.sep).join('/'),
-        ...(evolve.start ? { start: evolve.start.hash } : {}), ...(evolve.continueFrom ? { continue_from: readJson(evolve.continueFrom)?.hash } : {}) } : {}),
+        ...(evolve.start ? { start: evolve.start.hash } : {}), ...(evolve.continueFrom ? { continue_from: readJson(evolve.continueFrom)?.hash } : {}),
+        ...(evolve.seeds.length ? { seeds: evolve.seeds.map((x) => ({ id: x.id, source: x.source, hash: x.hash, knows_task: x.knows_task })) } : {}) } : {}),
       journal: path.relative(path.dirname(this.o.journalFile), journal).split(path.sep).join('/'),
       cut: { file: path.relative(path.dirname(this.o.journalFile), cutFile).split(path.sep).join('/'), sha256: createHash('sha256').update(cutText).digest('hex'), events: (snap.events ?? []).length },
       laboratory: 'the same world (its seed and options), in an instance of its own: what it does there is not done in yours', args });

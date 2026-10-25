@@ -74,6 +74,8 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'delegation-evolve-workloads', default: '2', help: 'workloads of each laboratory family in an evaluation of an evolutionary branch' },
   { name: 'delegation-evolve-machine-seconds', default: '3600', help: 'seconds of the machine the evaluations of an evolutionary branch may take in all' },
   { name: 'delegation-evolve-wall-seconds', default: '10800', help: 'seconds of the clock an evolutionary branch may take, both phases' },
+  { name: 'delegation-evolve-seeds', default: '0', help: 'N > 0: an evolutionary branch may start from up to N seeds besides its start (SPEC-DELEGACION-EVOLUTIVA §8)' },
+  { name: 'delegation-evolve-seed-sources', default: 'own,searches', help: 'where seeds may come from: own (the researcher\'s versions), searches (candidates of its sealed searches), experience (versions of the runs it reads)' },
   { name: 'evolution-search', default: '', help: 'a sealed evolutionary search the assisted researcher reads as experience (run "search"): the consolidation of an evolutionary branch' },
   { name: 'own-tests', default: '0', help: 'N > 0: a model is confirmed blind only after N severe tests of the assisted researcher\'s own, registered with it (SPEC-PRUEBAS-PROPIAS §7)' },
   { name: 'confirm-places', default: '2', help: 'places per blind confirmation set, two sets' },
@@ -473,6 +475,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       ...(Number(arg('delegation-evolve')) > 0 ? { evolve: { evaluations: Math.floor(Number(arg('delegation-evolve'))), workloads: Math.max(1, Math.floor(Number(arg('delegation-evolve-workloads', '2')) || 2)),
         machine_seconds: Math.max(1, Math.floor(Number(arg('delegation-evolve-machine-seconds', '3600')) || 3600)), wall_seconds: Math.max(1, Math.floor(Number(arg('delegation-evolve-wall-seconds', '10800')) || 10800)),
         ...(flag('delegation-evolve-isolated') ? { isolated: true } : {}),
+        ...(Number(arg('delegation-evolve-seeds')) > 0 ? { seeds: { max: Math.floor(Number(arg('delegation-evolve-seeds'))),
+          sources: arg('delegation-evolve-seed-sources', 'own,searches').split(',').map((x) => x.trim()).filter((x) => ['own', 'searches', 'experience'].includes(x)) } } : {}),
         /* What searches, part of the generator's identity (§15): its policy's profile and its engine. */
         profile: 'balanced@1', engine: EVOLVE_ENGINE } } : {}),
       /* The fund's ledger, one for the run's lineage: a run resumed keeps the one it began with (set below for a new run). */
@@ -545,6 +549,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), onSelect: (record) => run.log('experience_select', record) }) } : null;
   if (experienceRuns || searchRun) run.log('experience', { mode: experience!.mode, scope: experience!.scope, runs: [...(experienceRuns?.given ?? []), ...(searchRun ? [searchRun.given] : [])] });
   Object.defineProperty(cfg, '__experience', { value: experience, enumerable: false });
+  /* The runs it reads as experience, as an evolutionary branch's seeds may come from them (SPEC-DELEGACION-EVOLUTIVA §8). */
+  Object.defineProperty(cfg, '__experienceRuns', { value: experienceRuns?.runs ?? [], enumerable: false });
   /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
   /* The assisted researcher of a laboratory with a loop of its own: the operator's messages with its questions (resuming,
      delivered again at the same questions), and its selective memory, with the Judge to select for it (none in --flat). */
@@ -1635,7 +1641,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     config: { fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds,
       ...((delegationCfg as { evolve?: Record<string, any> }).evolve ? { evolve: evolveConfigOf((delegationCfg as { evolve?: Record<string, any> }).evolve!) } : {}) },
     journalFile: run.outFile, snapshot: () => JSON.parse(JSON.stringify(journal)), lab: lab.id,
-    ...((delegationCfg as { evolve?: unknown }).evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptions as Record<string, string>, () => (spec as { world: ArtifactWorld }).world) } : {}),
+    ...((delegationCfg as { evolve?: unknown }).evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptions as Record<string, string>, () => (spec as { world: ArtifactWorld }).world,
+      () => (cfg as { __experienceRuns?: ExperienceRun[] }).__experienceRuns ?? []) } : {}),
     worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptions).flatMap(([k, v]) => ['--' + k, String(v)]),
       ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
     /* A run in a process of its own, with the keys of this process's environment (loaded when first needed: control.ts reads

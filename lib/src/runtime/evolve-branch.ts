@@ -4,7 +4,7 @@ import { artifactsLab, latestVersionOf } from '../worlds/artifacts/lab.ts';
 import type { Delegations } from '../learn/assisted/delegation.ts';
 import { ArtifactWorld } from '../artifacts/world.ts';
 import { artifactEvaluator } from '../learn/evolve/artifacts.ts';
-import { runSearch, type Evaluator, type Mutator, type SearchEvent, type SearchManifest } from '../learn/evolve/engine.ts';
+import { runSearch, type Evaluator, type Mutator, type SearchEvent, type SearchManifest, type Seed } from '../learn/evolve/engine.ts';
 import { balanced } from '../learn/evolve/policy.ts';
 
 /* ============================================================================
@@ -41,6 +41,8 @@ export interface EvolveBranchSpec {
   readonly start: { readonly hash: string; readonly files: Readonly<Record<string, string>> } | null;
   /** A sealed search to continue (its manifest's file), instead of a start. */
   readonly continueFrom: string | null;
+  /** Seeds to start from besides the start, resolved by content when the request was accepted (§8). */
+  readonly seeds?: readonly Seed[];
   readonly exploration: { readonly workloads: number; readonly seed: number };
   readonly limits: { readonly evaluations: number; readonly attempts: number; readonly tokens: number; readonly machineSeconds?: number };
   /** Seconds of the clock the whole branch may take, from its start: the search stops there, the consolidation is given the rest. */
@@ -53,14 +55,30 @@ type J = Record<string, any>;
 /** The evolutionary mode as a run's configuration keeps it, as the delegation reads it. */
 export function evolveConfigOf(e: J): NonNullable<ConstructorParameters<typeof Delegations>[0]['config']['evolve']> {
   return { evaluations: Number(e.evaluations), workloads: Number(e.workloads) || 1, ...(e.machine_seconds ? { machineSeconds: Number(e.machine_seconds) } : {}),
-    ...(e.wall_seconds ? { wallSeconds: Number(e.wall_seconds) } : {}), ...(e.isolated ? { isolated: true } : {}) };
+    ...(e.wall_seconds ? { wallSeconds: Number(e.wall_seconds) } : {}), ...(e.isolated ? { isolated: true } : {}),
+    ...(e.seeds ? { seeds: { max: Number(e.seeds.max), sources: e.seeds.sources } } : {}) };
 }
 
 /** What a requester's delegation needs for an evolutionary branch: its world's seed and options, and where a search starts
     - a version of the requester's by its name, or its latest - by its content. Only in a world with an evaluator. */
-export function evolveCapability(labId: string, seed: number, options: Readonly<Record<string, string>>, world: () => ArtifactWorld): ConstructorParameters<typeof Delegations>[0]['evolve'] {
+export function evolveCapability(labId: string, seed: number, options: Readonly<Record<string, string>>, world: () => ArtifactWorld,
+  experience: () => readonly { readonly label: string; readonly journal: J }[] = () => []): ConstructorParameters<typeof Delegations>[0]['evolve'] {
   if (labId !== artifactsLab.id) return undefined;
-  return { seed, options, get isolated() { return world().isolated; }, resolveStart(start) {
+  const versionOf = (w: ArtifactWorld, name: string): { hash: string; files: Readonly<Record<string, string>> } | { error: string } => {
+    const v = w.store.get(name);
+    return v ? { hash: name, files: Object.fromEntries(v.files) } : { error: 'no version "' + name + '"' };
+  };
+  return { seed, options, get isolated() { return world().isolated; },
+    /* A version of a run read as experience: its world made again from its record, the version found there. */
+    resolveExperience(label, version) {
+      const run = experience().find((r) => r.label === label);
+      if (!run) return { error: 'no run "' + label + '" read as experience' };
+      if (run.journal.experiment !== artifactsLab.id) return { error: 'run "' + label + '" is not of this world' };
+      const cfg = run.journal.config ?? {};
+      return versionOf(worldFromJournal(run.journal, Number(cfg.seed), { artifact: String(cfg.artifact ?? options.artifact), scale: String(cfg.scale ?? options.scale ?? '1'),
+        acts: String(cfg.acts ?? '3'), tolerance: String(cfg.tolerance ?? '0.25'), workloads: String(cfg.workloads ?? '2') }), version);
+    },
+    resolveStart(start) {
     const w = world();
     const name = start ?? latestVersionOf(w);
     const v = w.store.get(name);
@@ -148,7 +166,7 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
       const evaluator = evaluatorAt(spec.exploration.seed);
       const { manifest } = await runSearch({ evaluator, mutator: o.mutator, profile: balanced(world.task.objective.margin), question: spec.question,
         limits: spec.limits, out: f.search, ...(recorded.length ? { recorded, live: true } : {}), ...(continueFrom ? { continueFrom } : {}), signal: controller.signal,
-        ...(deadline !== undefined ? { deadline } : {}) });
+        ...(deadline !== undefined ? { deadline } : {}), ...(spec.seeds?.length ? { seeds: spec.seeds } : {}) });
       spentSoFar = manifest.cost.tokens;
       fs.writeFileSync(f.manifest, JSON.stringify(manifest, null, 2));
       /* What it exports, confirmed on NEW realizations of the same families (§5): selected on fixed workloads, a program
