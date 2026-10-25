@@ -1,6 +1,6 @@
 # SPEC · Delegación evolutiva: abrir caminos mediante búsqueda de programas
 
-Estado (25/10/2026): **contrato consolidado para desarrollo; H1 y H2 especificadas, sin implementar**.
+Estado (25/10/2026): **contrato consolidado para desarrollo; H1 implementada (§16.1), H2 especificada, sin implementar**.
 Las decisiones normativas están incorporadas en el cuerpo. §16 define entregas y pruebas; §17, los límites de integración.
 Reformula el borrador «evolucionar primero, explicar después» aportado por el autor. Esta versión es autocontenida:
 no requiere una SPEC de búsqueda diversa ni un archivo especializado ya implementado.
@@ -587,6 +587,23 @@ Pruebas obligatorias:
 7. **Cerrar a cualquier altura.** Límites, cancelación y caídas antes/después de respuesta, evaluación y selección dejan
    estado recuperable. Una respuesta incierta no se despacha otra vez. Lo ejecutado parcialmente y su coste quedan
    visibles aunque todavía no haya un candidato exportable.
+
+### 16.1 H1 implementada (25/10/2026)
+
+En `lib/src/learn/evolve/`, con sus pruebas en `lib/test/evolve.test.ts` (las siete obligatorias, el límite de contexto
+y el evaluador de artefactos sobre un `ArtifactWorld` real):
+- `policy.ts`: la política `balanced@1`, pura y reconstruible desde eventos (§6–§7).
+- `engine.ts`: el motor. Cada efecto tiene ID e intención registrada antes del despacho; hay replay sin modelo ni
+  medidas, reanudación sin repetir lo que tiene recibo, y manifiesto sellado `evolution-search@1` con continuación.
+- `mutator.ts`: el mutador por el `ChatClient` del arnés.
+- `artifacts.ts`: el evaluador sobre `ArtifactWorld`. Sólo usa laboratorios, y su calidad es la de `judge`.
+
+**Un añadido al contrato del evaluador:** `adopt(hash, files)`. Un evaluador juzga contenido, nunca un hash que da la
+casualidad de que conoce. Al continuar una búsqueda sellada en otra rama, su store no tiene los programas importados:
+el motor se los pasa con su contenido, y el evaluador comprueba que ese contenido da el hash.
+
+**Queda para H2:** los límites de segundos de máquina y de tiempo de pared (§12) son del supervisor de rama, que es
+quien reserva y liquida. El motor de H1 limita intentos, evaluaciones y tokens.
 
 ### H2. Delegación y entrega utilizable
 
