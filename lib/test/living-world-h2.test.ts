@@ -25,7 +25,8 @@ function world(actors: readonly (string | ActorDecl)[], o: { file?: string | nul
 const plate = (s: LivingSession<unknown, unknown>, a: string) => s.observe(a).view as PlatesFrame;
 const emptyWell = (f: PlatesFrame): string => { const i = f.colony.replace(/\//g, '').split('').findIndex((c, k) => c === '0' && f.nutrient.replace(/\//g, '')[k] !== '0'); return 'ABCD'[Math.floor(i / 6)] + (i % 6 + 1); };
 const lines = (f: string) => fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-const strip = (entries: Record<string, unknown>[]) => entries.map(({ at: _a, ...e }) => e);
+/* Two sessions in two folders: their closings and retirements name their own stretch (where their record is) - the rest the same. */
+const strip = (entries: Record<string, unknown>[]) => entries.map(({ at: _a, ...e }) => ({ ...e, key: String(e.key).replace(/\.[^.@]+-[0-9a-z]+$/, '') }));
 
 test('2: members decide on one revision; a conflict and compatible acts resolved by the seed\'s order, whoever sealed first', () => {
   const play = (first: 'a' | 'b') => {

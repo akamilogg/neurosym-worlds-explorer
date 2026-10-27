@@ -156,7 +156,10 @@ export class WorldJournal {
 
   /** The stretch of execution this journal records (its own file's name): what tells a closing apart from the one of the
       record it continues. */
-  get stretch(): string { return this.file ? path.basename(this.file).replace(/\.world\.jsonl$|\.jsonl$/, '') : 'unwritten'; }
+  get stretch(): string {
+    /* Its name and where it is: two records of the same name in two folders are two stretches. */
+    return this.file ? path.basename(this.file).replace(/\.world\.jsonl$|\.jsonl$/, '') + '-' + hashString(path.resolve(this.file).toLowerCase()).slice(0, 6) : 'unwritten';
+  }
 
   /** The entries of the record continued whose key starts so (what a resumed run applies again where it was applied). */
   previous(prefix: string): Record<string, unknown>[] { return [...this.before.values()].filter((e) => String(e.key).startsWith(prefix)); }
@@ -416,7 +419,6 @@ export class LivingSession<St, F> {
   private readonly watchers: Watchers | null;
   private readonly compile: ((source: string) => (input: unknown) => unknown) | null;
   /** Each member's latest projection (what its watchers compare with), its rounds as its run says them. */
-  private readonly lastFrames = new Map<string, unknown>();
   private readonly rounds = new Map<string, number>();
   /** The operator's changes waiting for the next window, and those applied (by their key). */
   private orders: ProgramOrder[] = [];
@@ -591,11 +593,12 @@ export class LivingSession<St, F> {
     if (this.ended) return { intent: '', kind: 'wait', accepted: false, reason: 'the world has reached its horizon (tick ' + this.clock.horizon + '): it does not advance any more' };
     if (s.batch !== null) return { intent: '', kind: 'wait', accepted: false, reason: 'your batch for this window is already sealed' };
     if (basis !== undefined && basis < this.revision) { this.use.late++; return { intent: '', kind: 'wait', accepted: false, reason: 'late: you decided on revision ' + basis + ' and the world went on to revision ' + this.revision + ' without you - look at it again' }; }
-    s.batch = [];
-    s.watches = true;
+    /* Every check before anything of the actor changes: a wait refused seals nothing. */
     const a = s.decl.activation;
     const refused = wake.filter((k) => !(k === 'observation' ? a?.on_observation : k === 'message' ? a?.on_message : false));
     if (refused.length) return { intent: '', kind: 'wait', accepted: false, reason: 'nothing of ' + refused.join(', ') + ' may wake you in this world' + (a ? '' : ': only your time') };
+    s.batch = [];
+    s.watches = true;
     s.until = Math.min(this.clock.horizon, this.tick + n);
     s.state = 'waiting';
     s.wake = wake.length ? new Set(wake) : null;
@@ -695,10 +698,7 @@ export class LivingSession<St, F> {
         const readings = this.watchers.measure(t + 1, (actor) => {
           const s = this.actors.get(actor);
           if (!s || s.state === 'stopped') return null;
-          const frame = this.adapter.observe(this.state, actor);
-          const previous = this.lastFrames.get(actor) ?? null;
-          this.lastFrames.set(actor, frame);
-          return { frame, previous };
+          return this.adapter.observe(this.state, actor);
         });
         for (const r of readings) this.post('instrument:' + String(r.body.watch), [r.actor], { actor: r.actor }, 'reading', r.body, window);
       }

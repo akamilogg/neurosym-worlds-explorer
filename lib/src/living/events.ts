@@ -301,6 +301,8 @@ interface Watch {
   samples: number;
   failures: number;
   stopped: string | null;
+  /** What its owner perceived at its own previous sample: each watcher its own, whatever others measure. */
+  prev: unknown;
 }
 
 /** Why a watcher cannot be taken, or null. */
@@ -331,11 +333,12 @@ export class Watchers {
     const issue = watchIssue(d);
     if (issue) return { refused: issue };
     const mine = this.byActor.get(actor) ?? new Map<string, Watch>();
-    if (!mine.has(d.id) && [...mine.values()].filter((w) => !w.stopped).length >= this.limit) return { refused: 'at most ' + this.limit + ' watchers of yours at once' };
+    /* The others measuring now: a new one, or one stopped and registered again, takes a place of its own. */
+    if ([...mine.values()].filter((w) => !w.stopped && w.decl.id !== d.id).length >= this.limit) return { refused: 'at most ' + this.limit + ' watchers of yours at once' };
     let fn: (input: unknown) => unknown;
     try { fn = this.compile(d.measure); } catch (e) { return { refused: 'its measure does not compile: ' + String((e as Error).message ?? e) }; }
     const version = (mine.get(d.id)?.version ?? 0) + 1;
-    mine.set(d.id, { decl: d, version, fn, since: tick, last: null, noticed: 0, lastNotice: null, samples: 0, failures: 0, stopped: null });
+    mine.set(d.id, { decl: d, version, fn, since: tick, last: null, noticed: 0, lastNotice: null, samples: 0, failures: 0, stopped: null, prev: null });
     this.byActor.set(actor, mine);
     return { version };
   }
@@ -353,17 +356,22 @@ export class Watchers {
 
   /** The measures due at a tick, on what each owner perceives: the readings that meet their condition (notices), and the
       failures - never a normal reading in place of a failure. */
-  measure(tick: number, frameOf: (actor: string) => { frame: unknown; previous: unknown } | null): { actor: string; body: Record<string, unknown> }[] {
+  measure(tick: number, frameOf: (actor: string) => unknown | null): { actor: string; body: Record<string, unknown> }[] {
     const out: { actor: string; body: Record<string, unknown> }[] = [];
+    /* One capture of what each owner perceives at this tick, the same for all its watchers. */
+    const now = new Map<string, unknown>();
     for (const [actor, mine] of this.byActor) {
       for (const w of mine.values()) {
         if (w.stopped) continue;
         if (tick > w.since + w.decl.for) { w.stopped = 'its time ended'; continue; }
         if ((tick - w.since) % w.decl.every !== 0) continue;
-        const input = frameOf(actor);
-        if (!input) continue;
+        if (!now.has(actor)) now.set(actor, frameOf(actor));
+        const frame = now.get(actor);
+        if (frame === null || frame === undefined) continue;
+        const previous = w.prev;
+        w.prev = frame;
         let v: unknown;
-        try { v = w.fn({ ...input, tick }); } catch (e) {
+        try { v = w.fn({ frame, previous, tick }); } catch (e) {
           w.failures++; this.use.failures++;
           out.push({ actor, body: { watch: w.decl.id, version: w.version, tick, failed: String((e as Error).message ?? e).slice(0, 200) } });
           if (w.failures >= 3) w.stopped = 'it failed three times';
@@ -373,11 +381,11 @@ export class Watchers {
         if (typeof v !== 'number' || !Number.isFinite(v)) { w.last = null; continue; }
         const c = w.decl.when;
         const met = (c.above !== undefined && v > c.above) || (c.below !== undefined && v < c.below) || (c.changes_by !== undefined && w.last !== null && Math.abs(v - w.last) >= c.changes_by);
-        const previous = w.last;
+        const before = w.last;
         w.last = v;
         if (!met || w.noticed >= w.decl.notices || (w.lastNotice !== null && tick - w.lastNotice < (w.decl.cooldown ?? w.decl.every))) continue;
         w.noticed++; w.lastNotice = tick; this.use.notices++;
-        out.push({ actor, body: { watch: w.decl.id, version: w.version, tick, measured: v, ...(previous !== null ? { before: previous } : {}), condition: c,
+        out.push({ actor, body: { watch: w.decl.id, version: w.version, tick, measured: v, ...(before !== null ? { before } : {}), condition: c,
           ...(w.noticed >= w.decl.notices ? { its_last_notice: true } : {}) } });
       }
     }

@@ -744,6 +744,18 @@ Decisiones tomadas al implementar:
 
 Pendiente: activación reactiva propia del senior y señales producidas por jueces configurados.
 
+Revisión de H3 conciliada (27/10/2026):
+
+- **Entradas de los vigilantes.** Las capturas de un tick se toman una vez por dueño, y cada vigilante recibe como
+  `previous` lo que su dueño percibía en su propia muestra anterior. Dos vigilantes iguales leen lo mismo, sea cual sea
+  el orden de registro.
+- **`wait` rechazado.** Un `wait` se valida por completo, incluido `wake_on`, antes de tocar al actor: si se rechaza, no
+  queda nada sellado.
+- **Límite de vigilantes.** Al contarlo se excluye sólo el vigilante que se actualiza. Uno detenido y registrado de nuevo
+  ocupa su propia plaza.
+- **Tramo de ejecución.** Se identifica por el nombre del diario más un hash de dónde está. Dos diarios con el mismo nombre
+  en carpetas distintas son tramos distintos, aunque el reloj no se haya movido.
+
 ### 18.5 H4 (27/10/2026)
 
 Código: los modos de rama en `lib/src/learn/assisted/delegation.ts`, la copia (`fork`) de la sesión y de `plates`, el

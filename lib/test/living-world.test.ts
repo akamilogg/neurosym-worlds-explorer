@@ -87,7 +87,7 @@ test('17 (no actor retired): a pause freezes the clock; closing keeps what was i
   assert.deepEqual((closed.pending as { kind: string }[]).map((p) => p.kind), ['clean'], 'the cleaning begun at tick 6 is kept as pending');
   const entries = lines(path.join(dir, 'w.world.jsonl'));
   assert.ok(entries.some((e) => e.key === 'pause@w0.1') && entries.some((e) => e.key === 'resume@w0.1'));
-  assert.match(entries[entries.length - 1].key, /^close@w3\.t7\.w$/, 'under where it closed, and by which stretch of execution');
+  assert.match(entries[entries.length - 1].key, /^close@w3\.t7\.w-[0-9a-z]+$/, 'under where it closed, and by which stretch of execution');
 });
 
 test('12: a crash before or after a transition or a delivery - derived again, nothing twice, nothing lost; a divergence said so', () => {

@@ -13,6 +13,7 @@ import { readManifest } from '../src/living/manifest.ts';
 import { LABS } from '../src/worlds/labs.ts';
 import type { FetchLike } from '../src/core/net.ts';
 import { userOf } from './support.ts';
+import { nodeVmRunner } from '../src/runtime/node-vm.ts';
 
 /* An external review of H2 (27/10/2026), reconciled: a continuation closes where it closes, never as the run it continues;
    a window waits only so long for a member asleep too; the order of a window's publications is the window's, never who
@@ -146,4 +147,50 @@ test('at the horizon a message is refused: no window will carry it', () => {
   s.seal('a', []); s.seal('b', []); s.settle();
   assert.equal(s.ended, true);
   assert.match((s.send('a', { actor: 'b' }, 'notice', { text: 'late' }) as { reason: string }).reason, /horizon/);
+});
+
+/* A review of H3 (27/10/2026), reconciled: each watcher its own consistent inputs, whatever others measure; a wait refused
+   seals nothing; a watcher registered again takes a place of its own; a closing told apart by where its record is too. */
+
+test('watchers: two identical ones read the same capture and the same previous - never one another\'s', () => {
+  const s = new LivingSession({ adapter: platesAdapter as never, id: 'w', config: { layout: 5 }, seed: 5, actors: ['a'], clock: { decision_interval: 1, horizon: 20 },
+    limits: { calls_per_window: 2, intents_per_window: 2, watchers: 2 }, journal: new WorldJournal(null),
+    compile: (src) => { const fn = nodeVmRunner({ timeoutMs: 500 }).compile(src); return (i: unknown) => fn(i as never); } });
+  const d = { measure: '(o) => o.previous ? o.frame.tick - o.previous.tick : -1', every: 1, when: { above: 0 }, for: 10, notices: 5, cooldown: 0 };
+  s.watch('a', { id: 'one', ...d }); s.watch('a', { id: 'two', ...d });
+  for (let k = 0; k < 3; k++) { s.seal('a', []); s.settle(); }
+  const by = (id: string) => s.inbox('a').messages.filter((m) => m.from === 'instrument:' + id).map((m) => [m.body.tick, m.body.measured]);
+  assert.deepEqual(by('one'), by('two'));
+  assert.ok(by('one').length >= 2 && by('one').every(([, v]) => v === 1));
+});
+
+test('a wait refused seals nothing: the next act of the window is taken', () => {
+  const s = new LivingSession({ adapter: platesAdapter as never, id: 'w', config: { layout: 5 }, seed: 5, actors: ['a'], clock: { decision_interval: 3, horizon: 20 },
+    limits: { calls_per_window: 2, intents_per_window: 2 }, journal: new WorldJournal(null) });
+  assert.equal(s.wait('a', 5, undefined, ['message']).accepted, false);
+  assert.equal(s.seal('a', [{ kind: 'feed', params: { well: 'A1', amount: 1 } }])[0].accepted, true);
+});
+
+test('a watcher stopped and registered again takes a place of its own within the limit', () => {
+  const s = new LivingSession({ adapter: platesAdapter as never, id: 'w', config: { layout: 5 }, seed: 5, actors: ['a'], clock: { decision_interval: 3, horizon: 20 },
+    limits: { calls_per_window: 2, intents_per_window: 2, watchers: 1 }, journal: new WorldJournal(null),
+    compile: (src) => { const fn = nodeVmRunner({ timeoutMs: 500 }).compile(src); return (i: unknown) => fn(i as never); } });
+  const d = { measure: '(o) => 1', every: 1, when: { above: 0 }, for: 10, notices: 1 };
+  assert.ok('version' in s.watch('a', { id: 'one', ...d }));
+  assert.equal(s.unwatch('a', 'one'), true);
+  assert.ok('version' in s.watch('a', { id: 'two', ...d }));
+  assert.match((s.watch('a', { id: 'one', ...d }) as { refused: string }).refused, /at most 1 watchers/);
+  assert.ok('version' in s.watch('a', { id: 'two', ...d }), 'a new version of one measuring: its own place');
+});
+
+test('a continuation into another folder, under the same name, where the clock did not move, closes as itself', async () => {
+  const root = tmp('rev3-folders');
+  fs.mkdirSync(path.join(root, 'a')); fs.mkdirSync(path.join(root, 'b'));
+  const script = { 1: [{ investigate: [{ observe: true }] }, MODEL], 2: [{ investigate: [{ observe: true }] }, { investigate: [{ observe: true }] }, MODEL] };
+  const args = ['--seed', '1', '--researcher', 'assisted', '--flat', '--no-grade', '--no-reflection', '--no-ablation', '--explore', '1', '--steps', '4', '--horizon', '3'];
+  const first = await runLaboratory(platesLab, { args: [...args, '--attempts', '1', '--out', path.join(root, 'a', 'run.json')], root, llm: { url: 'http://x.test/c', model: 's' }, fetch: researcher(script) });
+  const out = path.join(root, 'b', 'run.json');
+  const more = await runLaboratory(platesLab, { args: ['--resume', first.journal, '--attempts', '2', '--out', out], root, llm: { url: 'http://x.test/c', model: 's' }, fetch: researcher(script) });
+  const events = JSON.parse(fs.readFileSync(more.journal, 'utf8')).events as Record<string, any>[];
+  assert.ok(!events.some((e) => e.type === 'world_diverged'), JSON.stringify(events.filter((e) => e.type === 'world_diverged')));
 });
