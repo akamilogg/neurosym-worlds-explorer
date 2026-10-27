@@ -96,7 +96,7 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
   }
   /* The fund's ledger of its lineage (it may be named after the run that began it): without it, what was spent is not known. */
   const ledger = journal.config?.delegation?.ledger;
-  if (typeof ledger === 'string' && fs.existsSync(path.join(folder, ledger))) fs.copyFileSync(path.join(folder, ledger), path.join(dir, path.basename(ledger)));
+  if (typeof ledger === 'string' && fs.existsSync(path.resolve(folder, ledger))) fs.copyFileSync(path.resolve(folder, ledger), path.join(dir, path.basename(ledger)));
   const { dir: blobs, cited } = blobsOf(journalFile);
   const missing: string[] = [], corrupt: string[] = [];
   for (const b of cited) {

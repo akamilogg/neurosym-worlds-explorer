@@ -135,6 +135,9 @@ export class Delegations {
     log(type: string, data: Record<string, unknown>): void;
     /** The events of the run it resumes: its requests answered as they were, its branches as they ended. */
     readonly history: readonly J[];
+    /** The folder of the record those events were written in (a run resumed in another folder): their paths are relative to
+        it. By default, this run's own folder. */
+    readonly historyDir?: string;
     /** Why a branch cannot be opened in this world at all (an environment outside the harness), or null. */
     readonly unsupported: string | null;
     /** The runs the requester reads as experience (their files, in its order): a branch reads them too, under the same
@@ -176,7 +179,7 @@ export class Delegations {
     let pending: J[] = [];
     for (const e of o.history) {
       if (e.type === 'delegation_requested') {
-        this.branches.push({ id: e.id, round: e.round, question: e.question, journal: path.resolve(path.dirname(o.journalFile), e.journal), granted: e.granted, state: 'running', spent: null, delivered: false,
+        this.branches.push({ id: e.id, round: e.round, question: e.question, journal: path.resolve(o.historyDir ?? path.dirname(o.journalFile), e.journal), granted: e.granted, state: 'running', spent: null, delivered: false,
           ...(e.mode === 'evolve' ? { mode: 'evolve' as const } : {}) });
         this.reserved += Number(e.granted?.tokens) || 0;
         this.perRound.set(e.round, Math.max(this.perRound.get(e.round) ?? 0, Number(String(e.id).split('.').pop()) || 0));
@@ -338,7 +341,8 @@ export class Delegations {
     const head = this.answered[0];
     if (head && head.round === round && head.request === request) {
       this.answered.shift();
-      for (const { t: _t, type, ...e } of head.events) this.o.log(type, e);
+      /* Logged again as they were - their paths made relative to this run's folder, wherever its history was written. */
+      for (const { t: _t, type, ...e } of head.events) this.o.log(type, rebaseDelegationEvent(e, this.o.historyDir ?? path.dirname(this.o.journalFile), path.dirname(this.o.journalFile)));
       this.o.log('delegation_answered', { round, request, answer: head.answer });
       return head.answer;
     }
@@ -553,6 +557,20 @@ export class Delegations {
       branches: this.branches.map((b) => ({ id: b.id, journal: path.relative(path.dirname(this.o.journalFile), b.journal).split(path.sep).join('/'), state: b.state, spent: this.observed(b), granted: b.granted,
         ...(b.uncertain ? { spent_uncertain: b.uncertain } : {}) })) };
   }
+}
+
+/** A delegation event's paths (its branch's record, its cut, its request), written relative to the folder of the record
+    that holds it, made relative to another folder: what a run resumed or continued in another folder keeps of its history
+    (27/10/2026: a continuation in another folder looked for its branch there, took it as never started, and settled it at
+    nothing). Absolute paths, and paths of no event of this kind, are left as they are. */
+export function rebaseDelegationEvent<T extends Record<string, any>>(e: T, fromDir: string, toDir: string): T {
+  if (path.resolve(fromDir) === path.resolve(toDir)) return e;
+  const re = (p: unknown) => (typeof p === 'string' && !path.isAbsolute(p) ? path.relative(toDir, path.resolve(fromDir, p)).split(path.sep).join('/') : p);
+  const out: Record<string, any> = { ...e };
+  if (typeof out.journal === 'string') out.journal = re(out.journal);
+  if (typeof out.evolve === 'string') out.evolve = re(out.evolve);
+  if (out.cut && typeof out.cut === 'object' && typeof out.cut.file === 'string') out.cut = { ...out.cut, file: re(out.cut.file) };
+  return out as T;
 }
 
 /** The fund's ledger: every reservation and settlement of every requester of the run, in order. */

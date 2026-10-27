@@ -10,7 +10,7 @@ import { followUpDue, journalReader, juniorBrief, juniorInstruments, juniorPerce
 import { UserParts } from '../learn/system2.ts';
 import { Channel, applyPins, parsePins } from '../learn/assisted/channel.ts';
 import { emptySeniorState, keepNotebook, notebookBrief, seniorMemory, seniorNotebook, tokensOf, writeNotebook, type SeniorState } from './senior.ts';
-import { Delegations, SENIOR_DELEGATION_SECTION, type Launcher } from '../learn/assisted/delegation.ts';
+import { Delegations, SENIOR_DELEGATION_SECTION, type Launcher, rebaseDelegationEvent } from '../learn/assisted/delegation.ts';
 import { worldOptionsIn } from './reader.ts';
 import { LABS } from '../worlds/labs.ts';
 import { startRunAt, startEvolveAt, labNameOf } from '../runtime/control.ts';
@@ -241,7 +241,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       history: (record.delegation_log ?? []) as Record<string, any>[],
       unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
       experience: experienceFiles,
-      ...(cfg.delegation.ledger ? { ledger: path.join(path.dirname(o.journal), cfg.delegation.ledger), requester: 'agent:' + o.id } : {})
+      ...(cfg.delegation.ledger ? { ledger: path.resolve(path.dirname(o.journal), cfg.delegation.ledger), requester: 'agent:' + o.id } : {})
     });
     return branchesOf;
   };
@@ -260,7 +260,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
           record.continued_from = from!;
           record.earlier = { decisions: [...(earlier.earlier?.decisions ?? []), ...(earlier.decisions ?? [])] };
           /* Its branches too: their requests, reservations, spending and results given - the same branches, never new ones. */
-          if (Array.isArray(earlier.delegation_log)) { record.delegation_log = [...earlier.delegation_log]; branchesOf = undefined; }
+          /* Its delegations as its earlier record has them, their paths made relative to this record's folder. */
+          if (Array.isArray(earlier.delegation_log)) { record.delegation_log = earlier.delegation_log.map((e: Record<string, any>) => rebaseDelegationEvent(e, path.dirname(from!), path.dirname(file))); branchesOf = undefined; }
           for (const k of record.senior.followed_up ?? []) followedUp.add(k);
           for (const r of record.senior.called_in_round ?? []) calledInRound.add(r);
           /* What it had pinned, pinned again in its channel (which lives as long as this process). */

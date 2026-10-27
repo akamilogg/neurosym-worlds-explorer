@@ -329,3 +329,45 @@ test('a continuation opens a fund for its new rounds; a lineage with one keeps i
   const same = await runLaboratory(cellsLab, { args: ['--resume', r.journal, '--attempts', '4', '--delegation-fund', '1000', '--delegation-tokens', '400', '--out', path.join(dir, 'same.json')], root: dir, llm, fetch, delegate: () => {} });
   assert.equal(JSON.parse(fs.readFileSync(same.journal, 'utf8')).config.delegation.ledger, journal.config.delegation.ledger, 'the ledger of its lineage');
 });
+
+/* A run continued in another folder (27/10/2026): its branches found where its history was written, its lineage's ledger
+   kept - never a branch taken as never started, never a fresh ledger beside it. */
+
+test('a continuation in another folder finds its branches and keeps its lineage\'s ledger', async () => {
+  const { rebaseDelegationEvent } = await import('../src/learn/assisted/delegation.ts');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'deleg-crossdir-'));
+  const a = path.join(root, 'a'), b = path.join(root, 'b');
+  fs.mkdirSync(a); fs.mkdirSync(b);
+  const llm = { url: 'http://x.test/v1/chat/completions', model: 's' };
+  const MODEL = { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p) => p.rows[p.rows.length - 1]', validate: false, lessons: ['l'], next_experiment: 'n', beliefs: [] };
+  const fetch: FetchLike = async (_url, init) => {
+    const user = JSON.parse(userOf(JSON.parse(String(init.body))));
+    const content = 'task' in user ? { rationale: 'r', beliefs: [], lessons: ['l'], next_experiment: 'n' }
+      : user.round === 1 && !(user.investigation ?? []).length ? { investigate: [{ delegate: { question: 'q' } }] } : MODEL;
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const common = ['--seed', '1', '--level', '1', '--flat', '--researcher', 'assisted', '--no-grade', '--no-reflection', '--no-ablation'];
+  const first = path.join(a, 'run.json');
+  await runLaboratory(cellsLab, { args: [...common, '--attempts', '1', '--delegation-fund', '1000', '--delegation-tokens', '400', '--out', first], root, llm, fetch, delegate: () => {} });
+  const req = JSON.parse(fs.readFileSync(first, 'utf8')).events.find((e: any) => e.type === 'delegation_requested');
+  /* Its branch ended after its run did, beside it. */
+  const branch = path.join(a, req.journal);
+  fs.writeFileSync(branch, JSON.stringify({ events: [{ type: 'end', stoppedBy: 'budget', notebook: { beliefs: [{ id: 'x', status: 'held', statement: 'found it' }], notes: [] } }] }));
+  fs.writeFileSync(branch.replace(/\.json$/, '.finding.json'), JSON.stringify({ cost: { total: { llm_tokens: 150 } } }));
+  const r = await runLaboratory(cellsLab, { args: ['--resume', first, '--attempts', '2', '--out', path.join(b, 'c.json')], root, llm, fetch });
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as any[];
+  const delivered = events.filter((e) => e.type === 'operator_message').flatMap((e) => e.messages).filter((m: any) => m.research_result);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].result_state, 'completed', 'found where its history was written, not taken as never started');
+  assert.equal(delivered[0].result_spent, 150);
+  assert.match(delivered[0].text, /found it/);
+  assert.equal(events.find((e) => e.type === 'delegation_requested').journal, '../a/' + req.journal, 'its path relative to the new folder');
+  assert.ok(!fs.readdirSync(b).some((f) => f.includes('delegation-fund')), 'no fresh ledger beside it');
+  const ledger = fs.readFileSync(path.join(a, 'run.delegation-fund.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(ledger.some((e) => e.id === req.id && e.settle === 150), 'settled in its lineage\'s ledger');
+  /* A senior's record carried to another folder: its paths made relative to it. */
+  const moved = rebaseDelegationEvent({ type: 'delegation_requested', journal: 'run.agent-senior.branches/d.json', cut: { file: 'run.agent-senior.branches/d.cut.json' } }, a, b);
+  assert.deepEqual([moved.journal, moved.cut.file], ['../a/run.agent-senior.branches/d.json', '../a/run.agent-senior.branches/d.cut.json']);
+  assert.equal(rebaseDelegationEvent({ journal: 'x.json' }, a, a).journal, 'x.json', 'the same folder: as it was');
+});

@@ -480,7 +480,9 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
         /* What searches, part of the generator's identity (§15): its policy's profile and its engine. */
         profile: 'balanced@1', engine: EVOLVE_ENGINE } } : {}),
       /* The fund's ledger, one for the run's lineage: a run resumed keeps the one it began with (set below for a new run). */
-      ...(previous?.config?.delegation?.ledger ? { ledger: String(previous.config.delegation.ledger) } : {}) } } : {}),
+      /* Relative to this run's folder: a run resumed in another folder keeps its lineage's ledger, where it is. */
+      ...(previous?.config?.delegation?.ledger ? { ledger: derived ? path.relative(path.dirname(path.resolve(derived)), path.resolve(path.dirname(path.resolve(resumeFrom!)), String(previous.config.delegation.ledger))).split(path.sep).join('/')
+        : String(previous.config.delegation.ledger) } : {}) } } : {}),
     stated_task: !flag('task-as-model'),
     reflection: !flag('no-reflection') && !flag('quick'),
     flat: flag('flat'),
@@ -1657,8 +1659,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); return { pid: (l.evolve ? c.startEvolveAt(l.journal, l.evolve) : c.startRunAt(l.journal, c.labNameOf(l.lab), l.args)).pid }; }), log,
     /* The run that begins the lineage's fund opens it (a new run, or a continuation given one now); a run resumed finds it -
        or its loss, said so. */
-    ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous?.config?.delegation } : {}),
+    ...(delegationCfg.ledger ? { ledger: path.resolve(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous?.config?.delegation } : {}),
     history: (previous?.events ?? []) as Record<string, any>[],
+    /* Its history was written beside the run it resumes, wherever that is. */
+    ...(previous && resumeFrom ? { historyDir: path.dirname(path.resolve(resumeFrom)) } : {}),
     unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
     experience: (cfg as { __experienceFiles?: string[] }).__experienceFiles ?? []
   }) : null;
