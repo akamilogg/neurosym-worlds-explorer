@@ -84,8 +84,10 @@ test('the first case: the base runs and is its own reference; a faster version i
   const [same] = await world.check(cosmetic.version, ['unique'], 2, 9);
   assert.equal(same.verdict.holds, false, same.verdict.why);
   assert.equal(same.verdict.correct, true);
-  /* Where little is to be gained, only not being worse is asked: the fast version passes there too. */
-  const [guard] = await world.check(fast.version, ['duplicates'], 2, 11);
+  /* Where little is to be gained, only not being worse is asked: the fast version passes there too. Its runs there are
+     short, their time mostly the interpreter's start, and a machine loaded by other tests can throw one workload off: on 6
+     workloads (not 2) one such workload cannot carry the interval past the tolerance - more evidence, the same margin. */
+  const [guard] = await world.check(fast.version, ['duplicates'], 6, 11);
   assert.equal(guard.verdict.holds, true, guard.verdict.why);
   assert.match(guard.verdict.why, /not worse/);
 });
