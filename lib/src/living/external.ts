@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { WorldJournal } from './world.ts';
 
 /* ============================================================================
@@ -97,6 +98,11 @@ export class SimulatedService implements ServiceTransport {
 export class ExternalWorld {
   private cursor = 0;
   private opSeq = 0;
+  private reads = 0;
+  private pauses = 0;
+  /** Its session with the service: an identity of its own, kept in its record - operation ids never repeat across sessions,
+      and a session resumed goes on with its own. */
+  readonly session: string;
   readonly uncertain: string[] = [];
   readonly gaps: { from: number; to: number }[] = [];
   readonly seen: ServiceEvent[] = [];
@@ -104,14 +110,25 @@ export class ExternalWorld {
 
   constructor(o: { transport: ServiceTransport; guarantees: ServiceGuarantees; journal: WorldJournal; actor: string }) {
     this.o = o;
-    o.journal.write({ key: 'x.manifest', actor: o.actor, guarantees: o.guarantees,
+    /* Resumed from its record: its session, its counters, its cursor and what it observed, as recorded - never started afresh. */
+    const before = o.journal.known('x.manifest')[0];
+    this.session = typeof before?.session === 'string' ? before.session : randomUUID();
+    o.journal.write({ key: 'x.manifest', session: this.session, actor: o.actor, guarantees: o.guarantees,
       promises: { exactly_once: o.guarantees.idempotent, reconciled: o.guarantees.idempotent || o.guarantees.lookup, pause: o.guarantees.pause } });
+    this.opSeq = o.journal.known('x.op.').filter((e) => String(e.key).endsWith('.prepare')).length;
+    for (const e of o.journal.known('x.op.')) if (!String(e.key).endsWith('.prepare') && e.state === 'uncertain') this.uncertain.push(String(e.op));
+    const reads = o.journal.known('x.read.');
+    this.reads = reads.length;
+    this.cursor = Math.max(0, ...reads.map((e) => Number(e.cursor) || 0));
+    for (const e of o.journal.known('x.events.').sort((a, b) => Number(a.from) - Number(b.from))) this.seen.push(...((e.events ?? []) as ServiceEvent[]));
+    for (const e of o.journal.known('x.gap.')) this.gaps.push({ from: Number(e.from), to: Number(e.to) });
+    this.pauses = o.journal.known('x.pause.').length;
   }
 
   /** An operation: done and answered, done for certain after a repeat (idempotent) or a lookup, or UNCERTAIN - recorded so,
       never sent again. */
   async act(intents: readonly Record<string, unknown>[]): Promise<{ op: string; state: 'applied' | 'uncertain' | 'refused'; result?: Record<string, unknown>; why?: string }> {
-    const op = this.o.actor + ':op' + (++this.opSeq);
+    const op = this.session + ':' + this.o.actor + ':op' + (++this.opSeq);
     this.o.journal.write({ key: 'x.op.' + op + '.prepare', op, intents });
     const done = (state: 'applied' | 'uncertain' | 'refused', extra: Record<string, unknown>) => {
       this.o.journal.write({ key: 'x.op.' + op, op, state, ...extra });
@@ -125,12 +142,17 @@ export class ExternalWorld {
       const lost = String((e as Error).message ?? e);
       /* Sent again under its id: done once, by the service's own guarantee. */
       if (this.o.guarantees.idempotent) {
-        try { const r = await this.o.transport.request('/act', { op, actor: this.o.actor, intents }); return done('applied', { result: r.body, after: 'its answer was lost (' + lost + '); asked again under its id' }); } catch { /* lost again: as below */ }
+        try {
+          const r = await this.o.transport.request('/act', { op, actor: this.o.actor, intents });
+          /* Only an answer that says it was done says so: any other leaves it as uncertain as before. */
+          if (r.status === 200 && r.body.state === 'applied') return done('applied', { result: r.body, after: 'its answer was lost (' + lost + '); asked again under its id' });
+        } catch { /* lost again: as below */ }
       }
       /* Asked about by its id: what the service says it did. */
       if (this.o.guarantees.lookup) {
         try {
           const r = await this.o.transport.request('/op', { op });
+          if (r.status !== 200) throw new Error('HTTP ' + r.status);
           if (r.body.state === 'applied') return done('applied', { result: r.body, after: 'its answer was lost; the service says it was done' });
           if (r.body.state === 'unknown') return done('refused', { why: 'its answer was lost; the service has no record of it: not done' });
         } catch { /* lost again: uncertain */ }
@@ -142,6 +164,7 @@ export class ExternalWorld {
   /** What happened since the cursor: the events it still keeps, and a gap where it kept no more. */
   async read(): Promise<{ events: ServiceEvent[]; gap?: { from: number; to: number } }> {
     const r = await this.o.transport.request('/events', { after: this.cursor });
+    if (r.status !== 200) throw new Error('the service did not answer what happened: HTTP ' + r.status);
     const events = (r.body.events ?? []) as ServiceEvent[];
     let gap: { from: number; to: number } | undefined;
     if (Number(r.body.oldest) > this.cursor + 1 && Number(r.body.latest) > this.cursor) {
@@ -149,17 +172,20 @@ export class ExternalWorld {
       this.gaps.push(gap);
       this.o.journal.write({ key: 'x.gap.' + gap.from + '-' + gap.to, ...gap, why: 'the service keeps its latest ' + this.o.guarantees.retention + ' events only: these are lost to the record' });
     }
+    /* What was observed, whole, in the record before the cursor moves past it: the service need not keep it. */
+    if (events.length) this.o.journal.write({ key: 'x.events.' + events[0].seq + '-' + events[events.length - 1].seq, from: events[0].seq, to: events[events.length - 1].seq, events });
     for (const e of events) this.seen.push(e);
     if (events.length) this.cursor = events[events.length - 1].seq;
-    this.o.journal.write({ key: 'x.read.' + (this.cursor), cursor: this.cursor, events: events.length, ...(gap ? { gap } : {}) });
+    this.o.journal.write({ key: 'x.read.' + (++this.reads), cursor: this.cursor, events: events.length, ...(gap ? { gap } : {}) });
     return { events, ...(gap ? { gap } : {}) };
   }
 
   /** The researcher stops: the world is paused if the service can be; otherwise it goes on, said so. */
   async pause(): Promise<{ paused: boolean; why?: string }> {
     const r = await this.o.transport.request('/pause', {});
-    if (r.status === 200) { this.o.journal.write({ key: 'x.pause@' + this.cursor, paused: true }); return { paused: true }; }
-    this.o.journal.write({ key: 'x.pause@' + this.cursor, paused: false, why: 'the service cannot be paused: the world goes on without the researcher' });
+    const key = 'x.pause.' + (++this.pauses);
+    if (r.status === 200) { this.o.journal.write({ key, cursor: this.cursor, paused: true }); return { paused: true }; }
+    this.o.journal.write({ key, cursor: this.cursor, paused: false, why: 'the service cannot be paused: the world goes on without the researcher' });
     return { paused: false, why: 'the service cannot be paused: the world goes on without the researcher' };
   }
 

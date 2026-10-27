@@ -788,6 +788,17 @@ Decisiones tomadas al implementar:
     como `limited` y se dice por qué.
   - `SimulatedService` reproduce esas condiciones: respuestas perdidas, retrasos, retención limitada y pausa opcional.
 
+Revisión de H4 conciliada (27/10/2026):
+
+- **Reanudaciones sucesivas.** Cada reanudación de una rama compartida escribe su propio registro, con el primer número
+  libre: nunca el que reanuda ni uno de una reanudación anterior. Dos reconstrucciones seguidas dan el mismo mundo.
+- **Identidad de las operaciones externas.** El cliente tiene una sesión propia (`session`) guardada en su registro. Los
+  ids de operación la incluyen, así que nunca se repiten entre sesiones. Un cliente reanudado recupera su sesión, sus
+  contadores, su cursor, lo observado, sus lagunas y sus operaciones inciertas.
+- **Lo observado.** Se guarda completo en el registro (`x.events.<desde>-<hasta>`) antes de que el cursor lo deje atrás.
+- **Errores en un reintento.** Una operación sólo se da por aplicada si la respuesta lo dice expresamente. Un reintento o
+  una consulta que responden con error la dejan incierta.
+
 Pendiente:
 - integrar un mundo externo en tiempo real con el bucle del investigador (el manifiesto sigue rechazando
   `clock: realtime`);

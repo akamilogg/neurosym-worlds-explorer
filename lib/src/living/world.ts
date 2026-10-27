@@ -161,6 +161,14 @@ export class WorldJournal {
     return this.file ? path.basename(this.file).replace(/\.world\.jsonl$|\.jsonl$/, '') + '-' + hashString(path.resolve(this.file).toLowerCase()).slice(0, 6) : 'unwritten';
   }
 
+  /** Every entry known under a prefix: written here, or in the record continued (what a client resumed recovers its counters
+      and what it observed from). */
+  known(prefix: string): Record<string, unknown>[] {
+    const out = new Map<string, Record<string, unknown>>();
+    for (const [k, e] of [...this.before, ...this.written]) if (k.startsWith(prefix)) out.set(k, e);
+    return [...out.values()];
+  }
+
   /** The entries of the record continued whose key starts so (what a resumed run applies again where it was applied). */
   previous(prefix: string): Record<string, unknown>[] { return [...this.before.values()].filter((e) => String(e.key).startsWith(prefix)); }
 

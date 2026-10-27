@@ -1799,7 +1799,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         const joined = living.join({ id: b.actor, kind: 'researcher', ...(living.actionsOf(actor) ? { actions: living.actionsOf(actor)! } : {}) });
         if (!joined.accepted) return joined.reason;
         /* Resumed: a record of its own, derived from the one it continues - never the same file written twice. */
-        const out = b.resume ? b.resume.replace(/(\.resumed-\d+)?\.json$/, '') + '.resumed-' + (sharedRuns.length + 1) + '.json' : b.journal;
+        let out = b.journal;
+        if (b.resume) {
+          /* The first number no record has: never the record it resumes, never one written by an earlier resumption. */
+          const base = b.resume.replace(/(\.resumed-\d+)?\.json$/, '');
+          let k = 1;
+          while (fs.existsSync(base + '.resumed-' + k + '.json') || path.resolve(base + '.resumed-' + k + '.json') === path.resolve(b.resume)) k++;
+          out = base + '.resumed-' + k + '.json';
+        }
         const args = b.resume ? ['--resume', b.resume, '--out', out] : [...b.args, '--out', out];
         const done = runLaboratory(lab, { args, root: c.root, llm: c.llm, ...(c.judge ? { judge: c.judge } : {}), ...(c.fetch ? { fetch: c.fetch } : {}), living: { session: living, actor: b.actor },
           ...(b.stopAs ? { stopAsRecorded: b.stopAs } : {}) })

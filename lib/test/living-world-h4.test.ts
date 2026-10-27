@@ -100,6 +100,16 @@ test('the tree recovered: a requester stopped by its budget, reconstructed - its
   const a = lines(first.journal.replace(/\.json$/, '.world.jsonl')).find((e) => e.key.startsWith('close@'))!;
   const b = lines(out.replace(/\.json$/, '.world.jsonl')).find((e) => e.key.startsWith('close@'))!;
   assert.equal(b.state, a.state, 'the same world');
+  /* Reconstructed again: its branch resumed under a record of its own once more - never the one it resumes. */
+  const out2 = path.join(dir, 'again2.json');
+  const twice = await runLaboratory(platesLab, { args: ['--resume', first.journal, '--out', out2], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch, stopAsRecorded: 'token_budget' });
+  const e2 = JSON.parse(fs.readFileSync(twice.journal, 'utf8')).events as Record<string, any>[];
+  const resumed = e2.filter((e) => e.type === 'delegation_state' && e.resumed);
+  assert.equal(resumed.length, 1);
+  assert.ok(!e2.some((e) => e.type === 'world_diverged' || e.type === 'delegation_branch_failed'), JSON.stringify(e2.filter((e) => /diverged|failed/.test(e.type))));
+  const firstResumed = events.find((e) => e.type === 'delegation_state' && e.resumed)!.journal;
+  assert.notEqual(resumed[0].journal, firstResumed, 'a record of its own each time');
+  assert.equal(lines(out2.replace(/\.json$/, '.world.jsonl')).find((e) => e.key.startsWith('close@'))!.state, a.state);
 });
 
 /* --- 14: a world outside the harness --------------------------------------------------------------------------------------- */
@@ -149,4 +159,51 @@ test('14: delays, gaps and a pause it does not support - read by cursor, what wa
   const r = await v.resume();
   assert.equal(r.lost, undefined);
   assert.equal(v.summary().reproduction, 'complete');
+});
+
+/* A review of H4 (27/10/2026), reconciled: an operation's id never repeats across sessions; what was observed kept whole
+   before the cursor moves; a repeat answered with an error leaves the operation uncertain. */
+
+test('14: two sessions with one service never share an operation id: each operation done as asked', async () => {
+  const s = new SimulatedService({ guarantees: G({ idempotent: true }) });
+  const a = await external(s).act([{ feed: 'A1' }]);
+  const b = await external(s).act([{ clean: 'B2' }]);
+  assert.notEqual(a.op, b.op);
+  assert.equal(b.state, 'applied');
+  assert.equal((b.result as { repeated?: boolean }).repeated, undefined, 'not the answer of another operation');
+  assert.equal(s.done.length, 2);
+});
+
+test('14: what was observed is kept whole in the record before the cursor moves - a client resumed recovers it, its session and its counters', async () => {
+  const dir = tmp('h4-events');
+  const file = path.join(dir, 'x.jsonl');
+  const s = new SimulatedService({ guarantees: G({ idempotent: true, retention: 3 }) });
+  const w = external(s, file);
+  s.advance(3);
+  await w.read();
+  await w.act([{ feed: 'A1' }]);
+  const kept = lines(file).filter((e) => e.key.startsWith('x.events.')).flatMap((e) => e.events);
+  assert.equal(kept.length, 3);
+  assert.deepEqual(kept[0].body, { tick: 1 });
+  /* Its process lost; the service keeps no more of them. Resumed from its record: nothing observed is lost. */
+  s.advance(10);
+  const again = new ExternalWorld({ transport: s, guarantees: s.guarantees, journal: new WorldJournal(file), actor: 'r' });
+  assert.equal(again.session, w.session);
+  assert.equal(again.seen.length, 3);
+  const next = await again.act([{ clean: 'B2' }]);
+  assert.match(next.op, /:op2$/, 'its counter goes on');
+  assert.equal(next.state, 'applied');
+});
+
+test('14: a repeat answered with an error leaves the operation uncertain - never applied by default', async () => {
+  let n = 0;
+  const flaky = { request: async (route: string) => {
+    n++;
+    if (route === '/act' && n === 1) throw new Error('timeout');
+    return { status: 503, body: { error: 'unavailable' } };
+  } };
+  const w = new ExternalWorld({ transport: flaky, guarantees: G({ idempotent: true }), journal: new WorldJournal(null), actor: 'r' });
+  const r = await w.act([{ feed: 'A1' }]);
+  assert.equal(r.state, 'uncertain');
+  assert.equal(w.summary().reproduction, 'limited');
 });
