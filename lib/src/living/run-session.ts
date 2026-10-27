@@ -4,6 +4,8 @@ import { runLaboratory, type LabConnection, type LabResult } from '../runtime/la
 import type { FetchLike } from '../core/net.ts';
 import type { LawLab } from '../learn/lab.ts';
 import { WorldJournal, type ActorDecl, type SessionClock, type SessionLimits } from './world.ts';
+import type { ProgramDecl, SignalDecl, WatchDecl } from './events.ts';
+import { nodeVmRunner } from '../runtime/node-vm.ts';
 
 /* ============================================================================
  * A SHARED SESSION (SPEC-ACONTECIMIENTOS-DEL-MUNDO §4, §8): one living world, several members - researchers, each the
@@ -30,6 +32,10 @@ export interface SessionPlan {
   readonly actors: readonly (ResearcherDecl | ActorDecl)[];
   readonly explore?: number;
   readonly check_episodes?: number;
+  /** The operator's programs, the signals they read, the instruments installed before the start (§7, §10). */
+  readonly programs?: readonly ProgramDecl[];
+  readonly signals?: readonly SignalDecl[];
+  readonly sensors?: readonly (WatchDecl & { readonly actor: string })[];
 }
 
 export interface SessionRun {
@@ -61,7 +67,10 @@ export async function runLivingSession(lab: LawLab, o: { plan: SessionPlan; dir:
   const session = lab.living.open(spec, { journal: new WorldJournal(worldFile), actors: plan.actors.map(({ ...d }) => {
     const { rounds: _r, steps: _s, acts: _a, max_tokens: _t, max_minutes: _m, ...decl } = d as ResearcherDecl;
     return decl;
-  }), options });
+  }), options, limits: { ...(plan.limits.watchers !== undefined ? { watchers: plan.limits.watchers } : {}) },
+  /* Watchers and state predicates run in the sandbox, never in the host. */
+  events: { ...(plan.programs ? { programs: plan.programs } : {}), ...(plan.signals ? { signals: plan.signals } : {}), ...(plan.sensors ? { sensors: plan.sensors } : {}),
+    compile: (source: string) => { const fn = nodeVmRunner({ timeoutMs: 500 }).compile(source); return (input: unknown) => fn(input as never); } } });
   const researchers = plan.actors.filter((a): a is ResearcherDecl => a.kind === 'researcher');
   const runs: Record<string, { journal: string | null; stoppedBy?: string; error?: string }> = {};
   await Promise.all(researchers.map(async (r) => {

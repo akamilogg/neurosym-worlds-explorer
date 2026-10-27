@@ -149,6 +149,10 @@ export function platesFrame(s: PlatesState): PlatesFrame {
   return { tick: s.tick, colony: layer(s, (i) => String(s.colony[i])), nutrient: layer(s, (i) => String(s.nutrient[i])), marks: layer(s, (i) => (s.marks[i] ? '*' : '.')) };
 }
 
+/** The well an effect names: "well", or "at" (a fraction drawn) over the plate. */
+const wellAt = (s: PlatesState, p: Readonly<Record<string, unknown>>): number | null =>
+  p.well !== undefined ? wellIndex(s, p.well) : typeof p.at === 'number' && p.at >= 0 && p.at < 1 ? Math.floor(p.at * s.rows * s.cols) : null;
+
 /** The adapter (§3): its actions, its laws by tick, and every actor perceiving the same projection (the plate as seen). */
 export const platesAdapter: LivingWorldAdapter<PlatesState, PlatesFrame> = {
   id: 'plates@1',
@@ -157,6 +161,19 @@ export const platesAdapter: LivingWorldAdapter<PlatesState, PlatesFrame> = {
   create: (config, seed) => platesState(platesLaws(seed), Number(config.layout ?? seed), {
     ...(config.rows !== undefined ? { rows: Number(config.rows) } : {}), ...(config.cols !== undefined ? { cols: Number(config.cols) } : {}),
     contaminated: Number(config.contaminated ?? 0), arrivals: config.arrivals !== false }),
+  /* The operator's effects (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10): its own laws - a contamination, a pulse of nutrient, a
+     mark - never a message. A well named, or drawn from the program's own stream. */
+  effects: {
+    contaminate: { about: 'a well is contaminated (named, or drawn)',
+      apply: (s, p) => { const w = wellAt(s, p); if (w === null) return 'no such well'; if (s.contaminated[w]) return wellName(s, w) + ' is contaminated already';
+        return { state: { ...s, contaminated: s.contaminated.map((c, i) => c || i === w) } }; },
+      draw: (next) => ({ at: next() }) },
+    nutrient_pulse: { about: 'every well gains nutrient (up to 9)',
+      apply: (s, p) => { const k = Number(p.amount ?? 2); if (!Number.isInteger(k) || k < 1 || k > 5) return 'a pulse is 1 to 5'; return { state: { ...s, nutrient: s.nutrient.map((n) => Math.min(9, n + k)) } }; } },
+    smudge: { about: 'a mark appears on a well, or goes (of no consequence)',
+      apply: (s, p) => { const w = wellAt(s, p); if (w === null) return 'no such well'; return { state: { ...s, marks: s.marks.map((m, i) => (i === w ? !m : m)) } }; },
+      draw: (next) => ({ at: next() }) }
+  },
   policies: {
     consumer: (p) => consumerPolicy(p),
     adversary: (p) => adversaryPolicy(p),

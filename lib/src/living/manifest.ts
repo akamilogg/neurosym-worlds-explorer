@@ -1,6 +1,7 @@
 import { isGameLab, type AnyLab } from '../learn/lab.ts';
 import type { ActorDecl, SessionLimits } from './world.ts';
 import type { ResearcherDecl, SessionPlan } from './run-session.ts';
+import { programIssue, signalIssue, watchIssue, type ProgramDecl, type SignalDecl, type WatchDecl } from './events.ts';
 
 /* ============================================================================
  * A `living-world@1` MANIFEST (SPEC-ACONTECIMIENTOS-DEL-MUNDO §16): the session as the operator declares it - its
@@ -23,10 +24,10 @@ import type { ResearcherDecl, SessionPlan } from './run-session.ts';
  * One researcher alone, without messages: a run of its own (its session is its run's). Anything more: a shared session.
  * ========================================================================== */
 
-const FIELDS = ['format', 'adapter', 'seed', 'clock', 'limits', 'actors', 'explore', 'check_episodes', 'flat'];
+const FIELDS = ['format', 'adapter', 'seed', 'clock', 'limits', 'actors', 'explore', 'check_episodes', 'flat', 'programs', 'signals', 'sensors'];
 const CLOCK = ['mode', 'decision_interval', 'horizon'];
-const LIMITS = ['calls_per_window', 'intents_per_window', 'actors', 'messages_per_window', 'message_chars', 'delivery_per_decision', 'window_ms'];
-const RESEARCHER = ['id', 'kind', 'rounds', 'steps', 'acts', 'max_tokens', 'max_minutes', 'actions', 'history'];
+const LIMITS = ['calls_per_window', 'intents_per_window', 'actors', 'messages_per_window', 'message_chars', 'delivery_per_decision', 'window_ms', 'watchers'];
+const RESEARCHER = ['id', 'kind', 'rounds', 'steps', 'acts', 'max_tokens', 'max_minutes', 'actions', 'history', 'activation'];
 const OTHER = ['id', 'kind', 'policy', 'params', 'actions', 'history'];
 const KINDS = ['researcher', 'policy', 'adversary', 'population'];
 
@@ -61,7 +62,7 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
   else {
     errors.push(...extra(limits, LIMITS, '"limits"'));
     for (const k of ['calls_per_window', 'intents_per_window']) if (!whole(limits[k])) errors.push('"limits.' + k + '" is a whole number, at least 1');
-    for (const k of ['actors', 'messages_per_window', 'message_chars', 'delivery_per_decision', 'window_ms']) if (limits[k] !== undefined && !whole(limits[k])) errors.push('"limits.' + k + '" is a whole number, at least 1');
+    for (const k of ['actors', 'messages_per_window', 'message_chars', 'delivery_per_decision', 'window_ms', 'watchers']) if (limits[k] !== undefined && !whole(limits[k])) errors.push('"limits.' + k + '" is a whole number, at least 1');
     if ((limits.messages_per_window === undefined) !== (limits.message_chars === undefined)) errors.push('"limits.messages_per_window" and "limits.message_chars" go together: messages, and how long one may be');
   }
   const actors = Array.isArray(m.actors) ? m.actors.map((a) => (a && typeof a === 'object' && !Array.isArray(a) ? a as Record<string, unknown> : null)) : null;
@@ -79,6 +80,10 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
     if (a.kind === 'researcher') {
       for (const k of ['rounds', 'steps', 'acts']) if (!whole(a[k])) errors.push(at + ': "' + k + '" is a whole number, at least 1');
       for (const k of ['max_tokens', 'max_minutes']) if (a[k] !== undefined && !(typeof a[k] === 'number' && (a[k] as number) > 0)) errors.push(at + ': "' + k + '" is a number above 0');
+      const act = a.activation as Record<string, unknown> | undefined;
+      if (act !== undefined && (!act || typeof act !== 'object' || !whole(act.max) || (act.cooldown_windows !== undefined && !whole(act.cooldown_windows, 0))
+        || Object.keys(act).some((k) => !['on_observation', 'on_message', 'cooldown_windows', 'max'].includes(k))))
+        errors.push(at + ': "activation" is {"on_observation": bool, "on_message": bool, "cooldown_windows": n, "max": n}: what may wake it, how often, how many times in all');
     } else {
       if (!kinds.has(String(a.policy))) errors.push(at + ': "policy" is one of the world\'s: ' + [...kinds].join(', '));
       if (a.params !== undefined && (typeof a.params !== 'object' || Array.isArray(a.params))) errors.push(at + ': "params" is an object');
@@ -91,6 +96,22 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
   if (actors?.length && !researchers.length) errors.push('"actors": at least one researcher');
   if (researchers.length > 1 && limits && limits.window_ms === undefined) errors.push('"limits.window_ms": with more than one researcher, how long a window waits for them');
   if (limits && whole(limits.actors) && actors && (limits.actors as number) < actors.length) errors.push('"limits.actors": less than the members declared');
+  /* What happens that nobody asked for (§7, §10): checked as the session will run it. */
+  const members = (actors ?? []).map((a) => String(a?.id));
+  const signals = Array.isArray(m.signals) ? m.signals : m.signals === undefined ? [] : null;
+  if (!signals) errors.push('"signals" is a list');
+  for (const sg of signals ?? []) { const e = signalIssue(sg, members); if (e) errors.push(e); }
+  const programs = Array.isArray(m.programs) ? m.programs : m.programs === undefined ? [] : null;
+  if (!programs) errors.push('"programs" is a list');
+  for (const p of programs ?? []) { const e = programIssue(p, { effects: Object.keys(living?.adapter.effects ?? {}), signals: (signals ?? []).map((x: any) => String(x?.id)), actors: members, predicates: true }); if (e) errors.push(e); }
+  const sensors = Array.isArray(m.sensors) ? m.sensors : m.sensors === undefined ? [] : null;
+  if (!sensors) errors.push('"sensors" is a list');
+  for (const sn of sensors ?? []) {
+    const e = watchIssue(sn);
+    if (e) errors.push('sensor: ' + e);
+    if (!members.includes(String((sn as any)?.actor))) errors.push('sensor: its "actor" is a member of the world');
+  }
+  if ((sensors ?? []).length && !(limits && whole(limits.watchers))) errors.push('"limits.watchers": instruments installed need a limit of watchers');
   for (const k of ['explore', 'check_episodes']) if (m[k] !== undefined && !whole(m[k], k === 'explore' ? 0 : 1)) errors.push('"' + k + '" is a whole number');
   if (m.flat !== undefined && typeof m.flat !== 'boolean') errors.push('"flat" is true or false');
   if (errors.length) return { errors };
@@ -98,9 +119,13 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
   const plan: SessionPlan = {
     seed: m.seed as number, clock: { decision_interval: c.decision_interval as number, horizon: c.horizon as number }, limits: l as unknown as SessionLimits,
     actors: actors!.map((a) => a as unknown as ResearcherDecl | ActorDecl),
-    ...(m.explore !== undefined ? { explore: m.explore as number } : {}), ...(m.check_episodes !== undefined ? { check_episodes: m.check_episodes as number } : {})
+    ...(m.explore !== undefined ? { explore: m.explore as number } : {}), ...(m.check_episodes !== undefined ? { check_episodes: m.check_episodes as number } : {}),
+    ...(programs!.length ? { programs: programs as ProgramDecl[] } : {}), ...(signals!.length ? { signals: signals as SignalDecl[] } : {}),
+    ...(sensors!.length ? { sensors: sensors as (WatchDecl & { actor: string })[] } : {})
   };
-  const alone = researchers.length === 1 && actors!.length === 1 && l.messages_per_window === undefined ? researchers[0]! : null;
+  /* A run of its own only when nothing but its own world is in it: no other member, no messages, no programs or instruments. */
+  const alone = researchers.length === 1 && actors!.length === 1 && l.messages_per_window === undefined && l.watchers === undefined && !programs!.length && !signals!.length && !sensors!.length
+    && researchers[0]!.activation === undefined ? researchers[0]! : null;
   return {
     lab: entry![0], plan, flat: m.flat === true, actor: String(researchers[0]!.id),
     args: alone ? ['--researcher', 'assisted', '--seed', String(m.seed), '--interval', String(c.decision_interval), '--horizon', String(c.horizon),

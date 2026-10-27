@@ -56,7 +56,9 @@ export const sharedName = (from: string, name: string): string =>
 export class LivingBridge<A> {
   private readonly h: BridgeHost<A>;
   /** The step's batch, as asked: acts, or a wait. */
-  private asked: ({ act: A } | { wait: number })[] = [];
+  private asked: ({ act: A } | { wait: number; wake: string[] })[] = [];
+  /** Its own reports of a signal so far (their keys). */
+  private reports = 0;
   private readonly placeholders: Pending[] = [];
   /** The round's acts left, as the session counts them: each act taken, and a wait, spends one. */
   private budget: { acts: number } | null = null;
@@ -78,7 +80,39 @@ export class LivingBridge<A> {
   static readonly AFTER_ACT = 'not answered: it comes after an act or a wait in the same answer, whose results do not exist yet - ask it in your next answer';
 
   /** The requests of its own a living world answers: the world now, a wait, the members and their messages. */
-  static accepts(q: Record<string, unknown>): boolean { return 'observe' in q || 'wait' in q || 'send' in q || 'share' in q || 'read' in q || 'members' in q; }
+  static accepts(q: Record<string, unknown>): boolean { return ['observe', 'wait', 'send', 'share', 'read', 'members', 'watch', 'progress', 'perturb'].some((k) => k in q); }
+
+  /** Its round, as its run reaches it (what an operator's "round" trigger reads). */
+  round(n: number): void { this.h.session.round(this.h.actor, n); }
+
+  /** A watcher of its own (§7): registered, a new version of it, or stopped; or the list of them. */
+  watcher(q: Record<string, unknown>): Record<string, unknown> {
+    const s = this.h.session, actor = this.h.actor;
+    const w = q.watch;
+    if (w === 'list' || w === true) return { watch: 'list', watchers: s.watching(actor) };
+    if (w && typeof w === 'object' && typeof (w as Record<string, unknown>).stop === 'string') {
+      const id = String((w as Record<string, unknown>).stop);
+      return s.unwatch(actor, id) ? { watch: 'stopped', id } : { watch: 'refused', reason: 'no watcher "' + id + '" of yours measuring' };
+    }
+    const r = s.watch(actor, w as never);
+    this.h.log('watcher', { ...(w && typeof w === 'object' ? { id: (w as Record<string, unknown>).id } : {}), ...('version' in r ? { version: r.version } : { refused: r.refused }) });
+    return 'version' in r ? { watch: 'registered', id: (w as { id: string }).id, version: r.version, measures_from_tick: s.tick } : { watch: 'refused', reason: r.refused };
+  }
+
+  /** A sample of a signal it reports itself (§10): self-reported, and said so wherever it counts. */
+  progress(q: Record<string, unknown>, round: number): Record<string, unknown> {
+    const o = q.progress && typeof q.progress === 'object' ? q.progress as Record<string, unknown> : null;
+    if (!o || typeof o.signal !== 'string' || !(typeof o.value === 'number' || o.value === null)) return { progress: q.progress, error: '{"progress": {"signal": "<yours>", "value": <number> | null}}' };
+    const why = this.h.session.sample(o.signal, 'r' + round + '.' + (++this.reports), o.value as number | null, { actor: this.h.actor });
+    return why ? { progress: 'refused', reason: why } : { progress: 'recorded', signal: o.signal };
+  }
+
+  /** A program it may ask for, asked (§10: a requested surprise): what it does in the world is the world's. */
+  perturb(q: Record<string, unknown>): Record<string, unknown> {
+    const why = typeof q.perturb === 'string' ? this.h.session.ask(this.h.actor, q.perturb) : 'name the program: {"perturb": "<program>"}';
+    this.h.log('perturbation_asked', { program: q.perturb, ...(why ? { refused: why } : {}) });
+    return why ? { perturb: 'refused', reason: why } : { perturb: 'asked', program: q.perturb };
+  }
 
   /** The world as it is now, for the researcher (a query). */
   observe(): Record<string, unknown> {
@@ -146,10 +180,10 @@ export class LivingBridge<A> {
   }
 
   /** A wait taken into the step's batch. */
-  wait(ticks: unknown, budget: { acts: number }): unknown {
+  wait(ticks: unknown, budget: { acts: number }, wake: unknown = []): unknown {
     if (budget.acts - this.asked.length <= 0) return { wait: ticks, error: 'no acts left this round' };
     this.budget = budget;
-    this.asked.push({ wait: Number(ticks) });
+    this.asked.push({ wait: Number(ticks), wake: Array.isArray(wake) ? wake.map(String) : typeof wake === 'string' ? [wake] : [] });
     return this.placeholder();
   }
 
@@ -252,6 +286,9 @@ export class LivingBridge<A> {
   /** A message as its recipient is given it: its references in its author's names (they give no access), what was shared
       kept as an episode of the recipient's own, with its version and its author. */
   private received(m: Message, round: number): Record<string, unknown> {
+    /* An instrument's reading, the operator's announcement: each with its own provenance, never another member's word. */
+    if (m.kind === 'reading') return { message: m.id, from: m.from, window: m.window, reading: m.body };
+    if (m.kind === 'announcement') return { message: m.id, from: 'operator', window: m.window, ...m.body };
     const body = m.body as { text?: string; refs?: string[]; shared?: Record<string, unknown> };
     const shared = body.shared;
     let kept: Record<string, unknown> | null = null;
@@ -264,7 +301,7 @@ export class LivingBridge<A> {
   }
 
   /** The batch: its acts sealed together (a wait alone), the window applied - as many as a wait lasts - and each answered. */
-  private async apply(round: number, asked: ({ act: A } | { wait: number })[]): Promise<unknown[]> {
+  private async apply(round: number, asked: ({ act: A } | { wait: number; wake: string[] })[]): Promise<unknown[]> {
     const s = this.h.session, actor = this.h.actor;
     const waits = asked.map((a, i) => ('wait' in a ? i : -1)).filter((i) => i >= 0);
     const acts = asked.map((a, i) => ('act' in a ? i : -1)).filter((i) => i >= 0);
@@ -280,7 +317,7 @@ export class LivingBridge<A> {
     let receipts: Receipt[] = [];
     if (wait !== null) {
       const ticks = (asked[wait] as { wait: number }).wait;
-      const r = s.wait(actor, ticks, this.basis);
+      const r = s.wait(actor, ticks, this.basis, (asked[wait] as { wake: string[] }).wake);
       if (!r.accepted) { answers[wait] = { wait: ticks, accepted: false, reason: r.reason }; return this.finishEmpty(round, answers); }
     } else receipts = s.seal(actor, acts.map((i) => this.h.intent((asked[i] as { act: A }).act)), this.basis);
     acts.forEach((i, k) => { if (!receipts[k]?.accepted) answers[i] = { act: this.h.asWritten((asked[i] as { act: A }).act), accepted: false, reason: receipts[k]?.reason ?? 'not sealed' }; });
@@ -302,7 +339,9 @@ export class LivingBridge<A> {
       const a = asked[first];
       return 'act' in a ? { act: this.h.asWritten(a.act), accepted: true, ...this.outcomeOf(outcomes.get(ids.get(first)!)), ...describe(n) } : { wait: a.wait, accepted: true, ...describe(n) };
     });
-    if (wait !== null) answers[wait] = { wait: (asked[wait] as { wait: number }).wait, accepted: true, ...describe(name) };
+    /* Woken before its time: said so, with what woke it (it reaches it in its channel). */
+    if (wait !== null) answers[wait] = { wait: (asked[wait] as { wait: number }).wait, accepted: true, ...describe(name),
+      ...(segment.to < segment.from + (asked[wait] as { wait: number }).wait && !s.ended ? { woken_at_tick: segment.to } : {}) };
     taken.forEach((i, k) => {
       const o = outcomes.get(ids.get(i)!);
       const act = this.h.asWritten((asked[i] as { act: A }).act);

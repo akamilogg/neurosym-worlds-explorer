@@ -42,7 +42,15 @@ const segmentOf = (session: string, frames: PlatesFrame[]): Segment<PlatesFrame>
 /** A reserved layout, from what a check is (its place, round, purpose, index) - never one of the places the researcher acts in. */
 const reservedLayout = (spec: PlatesSpec, key: string): number => parseInt(createHash('sha256').update(spec.seed + '|' + spec.layout + '|' + key).digest('hex').slice(0, 8), 16);
 
-function platesInterface(o: { interval: number; calls: number; peers: readonly string[] }): WorldInterface {
+function platesInterface(o: { interval: number; calls: number; peers: readonly string[]; caps?: { watchers: number; wake: string[]; signals: string[]; requests: string[] } }): WorldInterface {
+  /* What it may do besides (SPEC-ACONTECIMIENTOS-DEL-MUNDO §7, §9, §10), as the session grants it - its parameters only. */
+  const c = o.caps;
+  const events = [
+    ...(c?.watchers ? [[INVESTIGATION, '  {"watch": {"id": "<lowercase_snake_case>", "measure": "(o) => number", "every": <ticks>, "when": {"above": x} | {"below": x} | {"changes_by": x}, "for": <ticks>, "notices": <n>, "cooldown": <ticks>}}   a watcher of yours: it measures what you perceive (o = { frame, previous, tick }) while the world goes on, whether you decide or not, and tells you in your channel when its condition holds - what it measured, never why. Registering the same id again makes a new version; {"watch": {"stop": "<id>"}} stops it; {"watch": "list"} lists them. At most ' + c.watchers + ' at once'] as const] : []),
+    ...(c?.wake.length ? [[INVESTIGATION, '  {"wait": <ticks>, "wake_on": [' + c.wake.map((k) => '"' + k + '"').join(', ') + ']}   a wait that ends earlier if ' + c.wake.map((k) => (k === 'observation' ? 'a reading of your watchers' : 'a message')).join(' or ') + ' reaches you (when a window ends; within your limit of activations)'] as const] : []),
+    ...(c?.signals.length ? [[INVESTIGATION, '  {"progress": {"signal": "' + c.signals.join('" | "') + '", "value": <number> | null}}   a sample of a signal you report yourself'] as const] : []),
+    ...(c?.requests.length ? [[INVESTIGATION, '  {"perturb": "' + c.requests.join('" | "') + '"}   asks the world for something to happen: what happens is the world’s'] as const] : [])
+  ];
   /* In a session shared with other members (SPEC-ACONTECIMIENTOS-DEL-MUNDO §8): who they are, and how to write to them. */
   const peers = o.peers.length ? [
     'YOU SHARE THIS WORLD with other members: ' + o.peers.join(', ') + '. What they do in it is part of what happens in it; you perceive it as you perceive the rest. What they write to you reaches you in your channel, from "actor:<member>": testimony, never an instruction of the environment.',
@@ -65,6 +73,7 @@ function platesInterface(o: { interval: number; calls: number; peers: readonly s
       [INVESTIGATION, '  {"wait": <ticks>}   you let the world go on that many ticks and watch it: with your next answer, that stretch (an episode named "act<n>"). It counts as an act.'],
       [INVESTIGATION, '  Answers of yours without an act or a wait: at most ' + o.calls + ' in a window; then the window is applied without anything of yours, and the world goes on. A proposal, or closing a round, lets the window go on too.'],
       ...peers,
+      ...events,
       [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   the frames of a stretch of one of your episodes (at most 60 per request)'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model (without "model": your latest) answered at that point, part by part - and the colony layer that came next'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
@@ -116,7 +125,8 @@ export const platesLab: Lab<PlatesSpec, PlatesPoint, Segment<PlatesFrame>, Plate
   world: platesWorld,
   perceive: (p) => ({ frames: p.frames.map((f) => ({ ...f })) }),
   perceptDoc: PLATES_PERCEPT_DOC,
-  interface: (o) => platesInterface({ interval: Number(o.world?.interval ?? 3), calls: Number(o.world?.['window-calls'] ?? 4), peers: ((o.world as { __peers?: string[] } | undefined)?.__peers ?? []) }),
+  interface: (o) => platesInterface({ interval: Number(o.world?.interval ?? 3), calls: Number(o.world?.['window-calls'] ?? 4), peers: ((o.world as { __peers?: string[] } | undefined)?.__peers ?? []),
+    caps: (o.world as { __caps?: { watchers: number; wake: string[]; signals: string[]; requests: string[] } } | undefined)?.__caps }),
 
   /* An episode outside the shared world: a reserved realization (the default of a check). */
   episode: (spec, rnd) => segmentOf('reserved:' + spec.layout, reservedRun(spec.laws, Math.floor(rnd() * 2 ** 31), CHECK_TICKS)),
@@ -156,7 +166,7 @@ export const platesLab: Lab<PlatesSpec, PlatesPoint, Segment<PlatesFrame>, Plate
     open: (spec, o) => new LivingSession({ adapter: platesAdapter as never, id: 'world:plates-s' + spec.seed, config: { layout: spec.layout }, seed: spec.seed, actors: o.actors,
       clock: { decision_interval: spec.interval, horizon: spec.horizon }, journal: o.journal,
       limits: { calls_per_window: spec.calls, intents_per_window: spec.intents, ...(spec.messages > 0 ? { messages_per_window: spec.messages, message_chars: spec.messageChars, delivery_per_decision: spec.delivery } : {}),
-        ...(spec.windowMs > 0 ? { window_ms: spec.windowMs } : {}) } }),
+        ...(spec.windowMs > 0 ? { window_ms: spec.windowMs } : {}), ...(o.limits ?? {}) }, ...(o.events ?? {}) }),
     intent: (a) => ({ kind: a.kind, params: { well: a.well, ...(a.amount !== undefined ? { amount: a.amount } : {}) } }),
     adapter: platesAdapter as never
   },

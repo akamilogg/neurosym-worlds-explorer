@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { hashString, stableStringify } from '../core/hash.ts';
+import { Agenda, Watchers, programIssue, signalIssue, type EffectDecl, type Firing, type ProgramDecl, type SignalDecl, type WatchDecl } from './events.ts';
 
 /* ============================================================================
  * A LIVING WORLD (SPEC-ACONTECIMIENTOS-DEL-MUNDO): a world that exists and goes on during the investigation, one state
@@ -51,7 +52,8 @@ export interface Message {
   readonly session: string;
   readonly from: string;
   readonly to: { readonly actor: string } | { readonly channel: 'global' };
-  readonly kind: 'notice' | 'share';
+  /** `reading`: an instrument's (§7), `announcement`: the operator's (§10.1) - each with its own provenance. */
+  readonly kind: 'notice' | 'share' | 'reading' | 'announcement';
   readonly body: Readonly<Record<string, unknown>>;
   /** The window it was published in: delivered once that window is committed, never in the middle of a decision. */
   readonly window: number;
@@ -77,6 +79,8 @@ export interface LivingWorldAdapter<St, F> {
   readonly guarantees: { readonly replay: 'deterministic'; readonly fork: boolean };
   /** The policies its non-researcher actors may follow, by name (§4). */
   readonly policies?: Readonly<Record<string, (params: Readonly<Record<string, unknown>>) => PolicyActor<F>>>;
+  /** The effects the operator's programs may cause (§10): its own laws, typed. */
+  readonly effects?: Readonly<Record<string, EffectDecl<St>>>;
   /** The initial state of a realization. */
   create(config: Readonly<Record<string, unknown>>, seed: number): St;
   /** Why an intent cannot be taken in this state (an action it does not have, a parameter out of range, a precondition), or
@@ -146,6 +150,9 @@ export class WorldJournal {
   /** Whether the record continued holds an entry under this key (a transition it prepared, a delivery it made). */
   recorded(key: string): Record<string, unknown> | null { return this.written.get(key) ?? this.before.get(key) ?? null; }
 
+  /** The entries of the record continued whose key starts so (what a resumed run applies again where it was applied). */
+  previous(prefix: string): Record<string, unknown>[] { return [...this.before.values()].filter((e) => String(e.key).startsWith(prefix)); }
+
   /** Writes an entry once. Answers whether it is new (false: it was in the record, carried or already written). */
   write(entry: WorldEntry): boolean {
     const now = { ...entry, at: new Date().toISOString() };
@@ -201,6 +208,8 @@ export interface SessionLimits {
   /** Wall time a window waits for its researchers once one has sealed (ms): the missing ones are sealed empty (a no-op),
       recorded as timeouts. Absent: it waits for every one. */
   readonly window_ms?: number;
+  /** Watchers a member may keep at once (§7). Absent: none - nothing is unlimited by default. */
+  readonly watchers?: number;
 }
 
 /** A member of the session, as the manifest declares it (§4, §16). */
@@ -214,6 +223,9 @@ export interface ActorDecl {
   readonly params?: Readonly<Record<string, unknown>>;
   /** Whether it may read the global channel's history from before it joined (§8). Default true. */
   readonly history?: boolean;
+  /** What may wake it while it waits (§9): an instrument's reading, a message; at most once a window, `cooldown_windows`
+      apart, `max` times in all. Absent: only its time. */
+  readonly activation?: { readonly on_observation?: boolean; readonly on_message?: boolean; readonly cooldown_windows?: number; readonly max: number };
 }
 
 /** A stretch of the world as one actor perceived it (§5.3): the projection at every tick of the interval, its session,
@@ -253,6 +265,10 @@ export interface WindowRecord<F> {
 }
 
 interface ActorSlot {
+  /** What may wake it in the wait in course, and how often it was woken. */
+  wake: ReadonlySet<string> | null;
+  activations: number;
+  lastActivation: number | null;
   readonly decl: ActorDecl;
   readonly actions: ReadonlySet<string>;
   readonly policy: PolicyActor<unknown> | null;
@@ -291,6 +307,22 @@ export interface LivingSessionOptions<St, F> {
   readonly clock: SessionClock;
   readonly limits: SessionLimits;
   readonly journal: WorldJournal;
+  /** The operator's programs and the signals they read (§10), and the instruments installed before the start (§7). */
+  readonly programs?: readonly ProgramDecl[];
+  readonly signals?: readonly SignalDecl[];
+  readonly sensors?: readonly (WatchDecl & { readonly actor: string })[];
+  /** The sandbox the session runs code in (watchers, state predicates): never the host. */
+  readonly compile?: (source: string) => (input: unknown) => unknown;
+}
+
+/** A change of the operator's to the programs during the run (§10): to add or replace one, disable one, fire one now. */
+export interface ProgramOrder {
+  readonly id: string;
+  readonly op: 'add' | 'replace' | 'disable' | 'fire';
+  readonly program?: ProgramDecl;
+  readonly target?: string;
+  readonly by: string;
+  readonly why?: string;
 }
 
 /** A small generator over a state of its own (mulberry32 by steps): its state is a number, kept in a snapshot. */
@@ -344,8 +376,131 @@ export class LivingSession<St, F> {
     for (const d of decls) this.actors.set(d.id, this.slotOf(d, 0));
     this.journal.write({ key: 'manifest', session: o.id, adapter: o.adapter.id, seed: o.seed, config: o.config, clock: o.clock, limits: o.limits,
       actors: decls.map((d) => ({ ...d, actions: [...this.actors.get(d.id)!.actions] })), actions: o.adapter.actions, guarantees: o.adapter.guarantees, state: stateHash(o.adapter, this.state) });
+    this.compile = o.compile ?? null;
+    this.agenda = new Agenda<St>({ seed: o.seed, effects: o.adapter.effects ?? {}, ...(o.compile ? { predicate: o.compile } : {}) });
+    const members = decls.map((d) => d.id);
+    for (const sg of o.signals ?? []) { const issue = signalIssue(sg, members); if (issue) throw new Error(issue); this.agenda.signal(sg); }
+    for (const p of o.programs ?? []) {
+      const issue = programIssue(p, { effects: Object.keys(o.adapter.effects ?? {}), signals: (o.signals ?? []).map((x) => x.id), actors: members, predicates: Boolean(o.compile) });
+      if (issue) throw new Error(issue);
+      this.agenda.add(p, false);
+    }
+    this.watchers = o.compile ? new Watchers(o.compile, o.limits.watchers ?? 0) : null;
+    for (const sn of o.sensors ?? []) {
+      if (!this.watchers || !(o.limits.watchers! >= 1)) throw new Error('an instrument installed needs the sandbox and a limit of watchers');
+      const r = this.watchers.register(sn.actor, sn, 0);
+      if ('refused' in r) throw new Error('sensor "' + sn.id + '": ' + r.refused);
+    }
+    if (o.programs?.length || o.signals?.length || o.sensors?.length) this.journal.write({ key: 'events', programs: o.programs ?? [], signals: o.signals ?? [], sensors: o.sensors ?? [] });
     this.status = 'running';
     this.sealPolicies();
+  }
+
+  /* --- What happens that nobody in the world asked for (§7, §9, §10) ---------------------------------------------------- */
+
+  private readonly agenda: Agenda<St>;
+  private readonly watchers: Watchers | null;
+  private readonly compile: ((source: string) => (input: unknown) => unknown) | null;
+  /** Each member's latest projection (what its watchers compare with), its rounds as its run says them. */
+  private readonly lastFrames = new Map<string, unknown>();
+  private readonly rounds = new Map<string, number>();
+  /** The operator's changes waiting for the next window, and those applied (by their key). */
+  private orders: ProgramOrder[] = [];
+  private readonly applied = new Set<string>();
+  private readonly posted = new Map<string, number>();
+
+  /** What a member may do of these here: watch, be woken, report a signal, ask for a program. */
+  capabilities(actor: string): { watchers: number; wake: string[]; signals: string[]; requests: string[] } {
+    const s = this.slot(actor);
+    const a = s.decl.activation;
+    return { watchers: this.watchers ? this.limits.watchers ?? 0 : 0, wake: [...(a?.on_observation ? ['observation'] : []), ...(a?.on_message ? ['message'] : [])],
+      signals: this.agenda.selfReported(actor), requests: this.agenda.requestable(actor) };
+  }
+
+  /** The signals of a member's a producer gives samples of. */
+  signalsFrom(actor: string, producer: 'checks' | 'self_reported'): string[] {
+    return this.agenda.signalIds().filter((id) => { const d = this.agenda.signalOf(id)!; return d.actor === actor && d.producer === producer; });
+  }
+
+  /** A member's round, as its run reaches it: what a "round" trigger reads. */
+  round(actor: string, n: number): void { this.slot(actor); this.rounds.set(actor, Math.max(n, this.rounds.get(actor) ?? 0)); }
+
+  /** A sample of a signal (§10): the harness's for a signal of checks, the member's own for one it reports itself. */
+  sample(signal: string, key: string, value: number | null, by: { harness: true } | { actor: string }): string | null {
+    const d = this.agenda.signalOf(signal);
+    if (!d) return 'no signal "' + signal + '"';
+    if ('actor' in by ? d.producer !== 'self_reported' || d.actor !== by.actor : d.producer !== 'checks') return 'signal "' + signal + '" is not yours to report';
+    if (this.agenda.sample(signal, key, value)) this.journal.write({ key: 's.' + signal + '.' + key, signal, value, window: this.window, by: 'actor' in by ? by.actor : 'harness' });
+    return null;
+  }
+
+  /** A member asks for a program its request names (a requested surprise, §10): scheduled like any firing, labelled so. */
+  ask(actor: string, program: string): string | null {
+    this.slot(actor);
+    const before = this.agenda.fired.length;
+    const why = this.agenda.ask(program, this.tick, { actor });
+    this.recordFirings(before);
+    return why;
+  }
+
+  /** The operator's change to the programs (§10): applied when the next window opens, recorded with who, when and why. */
+  control(order: ProgramOrder): string | null {
+    if (order.op === 'add' || order.op === 'replace') {
+      if (!order.program) return 'a program to ' + order.op;
+      const issue = programIssue(order.program, { effects: Object.keys(this.adapter.effects ?? {}), signals: this.agenda.signalIds(), actors: [...this.actors.keys()], predicates: Boolean(this.compile) });
+      const exists = this.agenda.has(order.program.id);
+      if (issue) return issue;
+      if (order.op === 'add' && exists) return 'program "' + order.program.id + '" exists: replace it';
+      if (order.op === 'replace' && !exists) return 'no program "' + order.program.id + '" to replace';
+    } else if (!order.target || !this.agenda.has(order.target)) return 'no program "' + order.target + '"';
+    this.orders.push(order);
+    return null;
+  }
+
+  /** A watcher of a member's: registered (or a new version of it), or stopped (§7). */
+  watch(actor: string, d: WatchDecl): { version: number } | { refused: string } {
+    this.slot(actor);
+    if (!this.watchers || !(this.limits.watchers! >= 1)) return { refused: 'no watchers in this world' };
+    const r = this.watchers.register(actor, d, this.tick);
+    if ('version' in r) this.journal.write({ key: 'watch.' + actor + '.' + d.id + '.v' + r.version, actor, ...d, version: r.version, tick: this.tick });
+    return r;
+  }
+  unwatch(actor: string, id: string): boolean {
+    const ok = this.watchers?.stop(actor, id) ?? false;
+    if (ok) this.journal.write({ key: 'unwatch.' + actor + '.' + id + '@t' + this.tick, actor, id, tick: this.tick });
+    return ok;
+  }
+  watching(actor: string): Record<string, unknown>[] { return this.watchers?.list(actor) ?? []; }
+
+  /** Firings scheduled since `before`: written ahead, each once. */
+  private recordFirings(before: number): void {
+    for (const f of this.agenda.fired.slice(before)) this.journal.write({ key: 'fire.' + f.id, ...f, decided_at: this.tick, window: this.window });
+  }
+
+  /** A message the session itself publishes for the window being applied: an instrument's reading, the operator's
+      announcement. */
+  private post(from: string, recipients: readonly string[], to: Message['to'], kind: Message['kind'], body: Readonly<Record<string, unknown>>, window: number): void {
+    const k = (this.posted.get(from + '@' + window) ?? 0) + 1;
+    this.posted.set(from + '@' + window, k);
+    const m = { id: 'message:w' + window + '.' + from + '.' + k, session: this.id, from, to, kind, body, window, seq: 0, recipients, k };
+    this.messages.push(m);
+    const { seq: _q, k: _k, ...published } = m;
+    this.journal.write({ key: 'm.' + m.id, ...published });
+  }
+
+  /** The operator's changes due now: those recorded in the record continued for this window, then those given since. */
+  private applyOrders(window: number): void {
+    const recorded = this.journal.previous('prog.').filter((e) => e.window === window).map((e) => e.order as ProgramOrder);
+    for (const o of [...recorded, ...this.orders]) {
+      const key = 'prog.' + o.id;
+      if (this.applied.has(key)) continue;
+      this.applied.add(key);
+      if (o.op === 'add' || o.op === 'replace') this.agenda.add(o.program!, true);
+      else if (o.op === 'disable') this.agenda.disable(o.target!);
+      else { const before = this.agenda.fired.length; const why = this.agenda.ask(o.target!, this.tick, { operator: o.by }); this.recordFirings(before); if (why) this.journal.write({ key: key + '.refused', reason: why }); }
+      this.journal.write({ key, window, tick: this.tick, order: o, versions: this.agenda.versions() });
+    }
+    this.orders = [];
   }
 
   get tick(): number { return this.adapter.tickOf(this.state); }
@@ -405,7 +560,7 @@ export class LivingSession<St, F> {
 
   /** `wait(ticks)` (§5.1): seals an empty batch and sleeps until then; it watches what happens meanwhile. One action when
       asked, never one per tick. */
-  wait(actor: string, ticks: number, basis?: number): Receipt {
+  wait(actor: string, ticks: number, basis?: number, wake: readonly string[] = []): Receipt {
     const s = this.slot(actor);
     const n = Math.floor(ticks);
     if (!(n >= 1)) return { intent: '', kind: 'wait', accepted: false, reason: 'wait asks for a whole number of ticks, at least 1' };
@@ -415,8 +570,12 @@ export class LivingSession<St, F> {
     if (basis !== undefined && basis < this.revision) { this.use.late++; return { intent: '', kind: 'wait', accepted: false, reason: 'late: you decided on revision ' + basis + ' and the world went on to revision ' + this.revision + ' without you - look at it again' }; }
     s.batch = [];
     s.watches = true;
+    const a = s.decl.activation;
+    const refused = wake.filter((k) => !(k === 'observation' ? a?.on_observation : k === 'message' ? a?.on_message : false));
+    if (refused.length) return { intent: '', kind: 'wait', accepted: false, reason: 'nothing of ' + refused.join(', ') + ' may wake you in this world' + (a ? '' : ': only your time') };
     s.until = Math.min(this.clock.horizon, this.tick + n);
     s.state = 'waiting';
+    s.wake = wake.length ? new Set(wake) : null;
     this.arm();
     return { intent: actor + ':wait@' + this.tick, kind: 'wait', accepted: true };
   }
@@ -473,6 +632,11 @@ export class LivingSession<St, F> {
     const order = this.order(window);
     const batches = order.map((a) => ({ actor: a, intents: this.actors.get(a)!.batch ?? [] }));
     const policies = Object.fromEntries([...this.actors.values()].filter((s) => s.policy).map((s) => [s.decl.id, hashString(stableStringify(s.policyState))]));
+    /* The operator's changes take effect as the window opens; its agenda's instants within it are scheduled exactly. */
+    this.applyOrders(window);
+    const fired = this.agenda.fired.length;
+    this.agenda.schedule(from, to);
+    this.recordFirings(fired);
     this.journal.write({ key: 'w' + window + '.prepare', window, from, to, revision: this.revision, state: stateHash(this.adapter, this.state),
       order, batches: batches.map((b) => ({ actor: b.actor, intents: b.intents.map((i) => ({ id: i.id, kind: i.kind, params: i.params })) })),
       ...(Object.keys(policies).length ? { policies } : {}), ...(timeouts.length ? { timeouts } : {}) });
@@ -487,11 +651,34 @@ export class LivingSession<St, F> {
       outcomes.push(r.outcome);
     }
     const occurred: Record<string, unknown>[] = [];
+    const effects: Record<string, unknown>[] = [];
     for (let t = from; t < to; t++) {
+      /* The operator's effects due at this tick, in their order: the world's own, or refused as their precondition says. */
+      for (const f of this.agenda.due(t)) {
+        const r = this.agenda.apply(this.state, f);
+        this.state = r.state;
+        effects.push({ firing: f.id, tick: t, ...(r.refused ? { refused: r.refused } : { applied: true }) });
+        if (!r.refused && f.exposure === 'announce_action') {
+          const members = [...this.actors.values()].filter((s) => s.decl.kind === 'researcher' && s.state !== 'stopped').map((s) => s.decl.id);
+          this.post('operator', members, { channel: 'global' }, 'announcement', { announcement: f.announcement ?? 'the operator acted on the world', tick: t }, window);
+        }
+      }
       const next = this.adapter.advance(this.state);
       this.state = next.state;
       occurred.push(...next.occurred.map((o) => ({ tick: t, ...o })));
       for (const [a, f] of frames) f.push(this.adapter.observe(this.state, a));
+      /* The watchers measure what their owners perceive, whether their owners decide or not. */
+      if (this.watchers) {
+        const readings = this.watchers.measure(t + 1, (actor) => {
+          const s = this.actors.get(actor);
+          if (!s || s.state === 'stopped') return null;
+          const frame = this.adapter.observe(this.state, actor);
+          const previous = this.lastFrames.get(actor) ?? null;
+          this.lastFrames.set(actor, frame);
+          return { frame, previous };
+        });
+        for (const r of readings) this.post('instrument:' + String(r.body.watch), [r.actor], { actor: r.actor }, 'reading', r.body, window);
+      }
     }
     this.revision++;
     this.window = window;
@@ -505,7 +692,12 @@ export class LivingSession<St, F> {
       if (s && o.outcome === 'applied') s.use.applied++; else if (s && o.outcome === 'conflict') s.use.conflicts++;
     }
     this.journal.write({ key: 'w' + window + '.commit', window, from, to, revision: this.revision, state: stateHash(this.adapter, this.state), outcomes, occurred,
-      pending: this.adapter.pending(this.state), ...(published.length ? { messages: published.map((m) => m.id) } : {}) });
+      pending: this.adapter.pending(this.state), ...(published.length ? { messages: published.map((m) => m.id) } : {}), ...(effects.length ? { effects } : {}) });
+    /* The triggers, on what the window committed: what fires is scheduled for a later tick, never this one again. */
+    const before = this.agenda.fired.length;
+    this.agenda.evaluate({ tick: this.tick, state: this.adapter.snapshot(this.state), rounds: this.rounds,
+      applied: outcomes.filter((o) => o.outcome === 'applied').map((o) => { const actor = o.intent.split(':')[0]; return { actor, kind: batches.flatMap((b) => b.intents).find((i) => i.id === o.intent)?.kind ?? '' }; }) });
+    this.recordFirings(before);
     const segments = new Map<string, Segment<F>>();
     for (const [a, f] of frames) {
       const mine = batches.find((b) => b.actor === a)?.intents.map((i) => i.id) ?? [];
@@ -518,7 +710,19 @@ export class LivingSession<St, F> {
     for (const s of this.actors.values()) {
       s.batch = null; s.calls = 0; s.sent = 0;
       delete s.timedOut;
-      if (s.until !== null && s.until <= this.tick) { s.until = null; if (s.state === 'waiting') { s.state = 'ready'; woke.push(s.decl.id); } }
+      if (s.until !== null && s.until <= this.tick) { s.until = null; s.wake = null; if (s.state === 'waiting') { s.state = 'ready'; woke.push(s.decl.id); } }
+      /* Woken before its time (§9): by what it said may wake it, once a window at most, within its limits. */
+      else if (s.state === 'waiting' && s.wake) {
+        const a = s.decl.activation!;
+        const due = this.messages.filter((m) => m.recipients.includes(s.decl.id) && m.window <= this.window && !s.received.has(m.id))
+          .filter((m) => s.wake!.has(m.kind === 'reading' ? 'observation' : 'message'));
+        const cool = s.lastActivation === null || this.window - s.lastActivation >= (a.cooldown_windows ?? 0);
+        if (due.length && cool && s.activations < a.max) {
+          s.until = null; s.wake = null; s.state = 'ready'; s.activations++; s.lastActivation = this.window;
+          woke.push(s.decl.id);
+          this.journal.write({ key: 'wake.' + s.decl.id + '.w' + this.window, actor: s.decl.id, window: this.window, tick: this.tick, by: due.map((m) => m.id) });
+        }
+      }
       s.watches = s.until !== null;
       if (s.until !== null || !DECIDING.includes(s.state)) s.batch = [];
     }
@@ -649,7 +853,7 @@ export class LivingSession<St, F> {
     const pending = this.adapter.pending(this.state);
     /* Under where it closed: a continuation that goes further closes elsewhere, never as the run it continues closed. */
     this.journal.write({ key: 'close@w' + this.window + '.t' + this.tick, reason, window: this.window, tick: this.tick, revision: this.revision, state: stateHash(this.adapter, this.state), pending,
-      snapshot: this.adapter.snapshot(this.state), policies: Object.fromEntries([...this.actors.values()].filter((s) => s.policy).map((s) => [s.decl.id, s.policyState])), use: this.use });
+      snapshot: this.adapter.snapshot(this.state), agenda: this.agenda.snapshot(), policies: Object.fromEntries([...this.actors.values()].filter((s) => s.policy).map((s) => [s.decl.id, s.policyState])), use: this.use });
     this.status = 'completed';
     this.release();
     return { ...this.summary(), closed: reason, pending };
@@ -658,7 +862,8 @@ export class LivingSession<St, F> {
   /** What the run's record keeps of the session (§13): its counters, each member's, and where it is. */
   summary(): Record<string, unknown> {
     return { session: this.id, adapter: this.adapter.id, status: this.status, tick: this.tick, horizon: this.clock.horizon, window: this.window, revision: this.revision,
-      state: stateHash(this.adapter, this.state), ...this.use, members: Object.fromEntries([...this.actors.values()].map((s) => [s.decl.id, { kind: s.decl.kind, state: s.state, ...s.use }])),
+      state: stateHash(this.adapter, this.state), ...this.use,
+      interventions: { ...this.agenda.use, programs: this.agenda.versions() }, ...(this.watchers ? { watchers: this.watchers.use } : {}), members: Object.fromEntries([...this.actors.values()].map((s) => [s.decl.id, { kind: s.decl.kind, state: s.state, ...s.use }])),
       ...(this.journal.diverged.length ? { diverged: this.journal.diverged.map((d) => d.key) } : {}) };
   }
 
@@ -724,7 +929,7 @@ export class LivingSession<St, F> {
       policy = make(d.params ?? {}) as PolicyActor<unknown>;
       if (policy.kind !== d.kind) throw new Error('"' + d.id + '": the policy ' + d.policy + ' is a ' + policy.kind + ', not a ' + d.kind);
     }
-    return { decl: d, actions, policy, policyState: policy ? policy.initial(hashString(this.seed + ':' + d.id).split('').reduce((n, c) => (n * 36 + parseInt(c, 36)) >>> 0, 0)) : null,
+    return { wake: null, activations: 0, lastActivation: null, decl: d, actions, policy, policyState: policy ? policy.initial(hashString(this.seed + ':' + d.id).split('').reduce((n, c) => (n * 36 + parseInt(c, 36)) >>> 0, 0)) : null,
       state: 'ready', batch: null, watches: false, until: null, calls: 0, intents: 0, sent: 0, joined, watched: [], received: new Set(),
       use: { intents: 0, applied: 0, conflicts: 0, calls: 0, sent: 0, received: 0, timeouts: 0 } };
   }

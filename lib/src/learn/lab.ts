@@ -263,7 +263,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       with the next answer. Only the assisted researcher investigates it (§5.3). Its checks run in realizations of their own
       (`checkEpisodes`), never in the shared state (§5.4); `act.start` is never asked. */
   readonly living?: {
-    open(spec: S, o: { readonly journal: import('../living/world.ts').WorldJournal; readonly actors: readonly (string | import('../living/world.ts').ActorDecl)[]; readonly options: LabOptions }): import('../living/world.ts').LivingSession<unknown, unknown>;
+    open(spec: S, o: { readonly journal: import('../living/world.ts').WorldJournal; readonly actors: readonly (string | import('../living/world.ts').ActorDecl)[]; readonly options: LabOptions;
+      /** The operator's programs, their signals and the instruments installed (§7, §10), with the sandbox they run in. */
+      readonly events?: Pick<import('../living/world.ts').LivingSessionOptions<unknown, unknown>, 'programs' | 'signals' | 'sensors' | 'compile'>;
+      readonly limits?: Partial<import('../living/world.ts').SessionLimits> }): import('../living/world.ts').LivingSession<unknown, unknown>;
     /** An act, read as an intent of the world. */
     intent(act: A): { readonly kind: string; readonly params: Readonly<Record<string, unknown>> };
     /** Its adapter: its actions and the policies of its members that are not researchers (what a manifest is checked on). */

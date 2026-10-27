@@ -47,6 +47,7 @@ export interface CliContext {
 export const CLI_USAGE = [
   'lab start <lab> [--researcher R] [--policy P] [args...]   start a run in a process of its own (labs: ' + Object.keys(LABS).join(', ') + ')',
   'lab live <manifest.json>                                  a living world\'s session, as its manifest declares it (living-world@1)',
+  'lab world <run> add|replace <program.json> | disable|fire <program>   change the programs of a living world (the operator, never help)',
   'lab list                                                  the runs, newest first',
   'lab status <run>                                          a run\'s state and its latest events',
   'lab watch <run>                                           its events as they come, until it ends',
@@ -270,6 +271,25 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const { id } = send(journal, order);
         const outcome = await acknowledged(journal, id, ctx);
         out(order.kind + ' ' + outcome);
+        return outcome.startsWith('refused') ? 1 : 0;
+      }
+      case 'world': {
+        /* The operator's change to a living world's programs (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10): applied as the next window
+           opens, recorded with who and why; never help. */
+        const journal = resolveRun(ctx.root, args[0]);
+        const op = String(args[1] ?? '');
+        if (!['add', 'replace', 'disable', 'fire'].includes(op) || !args[2]) { out('lab world <run> add|replace <program.json> [why] | disable|fire <program> [why]'); return 2; }
+        let order: RunOrder;
+        if (op === 'add' || op === 'replace') {
+          let program: Record<string, unknown>;
+          try { program = JSON.parse(fs.readFileSync(path.resolve(ctx.root, args[2]), 'utf8')); } catch (e) { out('cannot read the program ' + args[2] + ': ' + String((e as Error).message ?? e)); return 2; }
+          order = { kind: 'world', op, program, ...(args[3] ? { why: args.slice(3).join(' ') } : {}), by: 'operator' };
+        } else order = { kind: 'world', op: op as 'disable' | 'fire', target: args[2], ...(args[3] ? { why: args.slice(3).join(' ') } : {}), by: 'operator' };
+        const state = runStatus(journal).state;
+        if (state === 'ended' || state === 'interrupted') { out('the run is ' + state + ': it reads no orders'); return 1; }
+        const { id } = send(journal, order);
+        const outcome = await acknowledged(journal, id, ctx);
+        out('world ' + op + ' ' + outcome);
         return outcome.startsWith('refused') ? 1 : 0;
       }
       case 'resume': {

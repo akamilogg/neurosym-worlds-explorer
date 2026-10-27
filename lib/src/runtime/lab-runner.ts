@@ -551,6 +551,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (options.living && (isGameLab(lab) || !lab.living)) throw new LabError('a shared session is a living world\'s: ' + lab.id + ' is not one');
   /* Who else is in the world it shares: what its interface says it may write to. */
   if (options.living) Object.defineProperty(worldOptions, '__peers', { value: options.living.session.members().filter((m) => m.id !== options.living!.actor).map((m) => m.id), enumerable: false });
+  /* What else it may do there: watch, be woken, report a signal, ask for a program (its interface says so, nothing more). */
+  if (options.living) Object.defineProperty(worldOptions, '__caps', { value: options.living.session.capabilities(options.living.actor), enumerable: false });
   const teamBoard = openTeam(lab, arg('team'), arg('member'), researcher, options.root);
   const experienceRuns = loadExperience(lab, cfg, arg('experience'), arg('experience-mode'), arg('experience-scope'), researcher, assistedAfter, previous, options.root);
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
@@ -712,7 +714,9 @@ interface OpenRun {
   readonly recorded: <T>(route: string, body: unknown, compute: () => Promise<T>) => Promise<T>;
   /** The operator's messages accepted and not yet delivered (the assisted researcher takes them). */
   /** `round`: the round in course - a message held for a later round stays (with none known, everything is taken). */
-  readonly operator: { take(round?: number): OperatorMessage[] };
+  readonly operator: { take(round?: number): OperatorMessage[];
+    /** The operator's changes to a living world's programs (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10), not yet applied: never help. */
+    world(): Record<string, unknown>[] };
   /** The agent whose first hypothesis the run waits for (SPEC-ORQUESTADOR §3.3.4), and for how long; null when none, or
       when the run resumes a history that had it. */
   readonly opening: { readonly agent: string; readonly ms: number } | null;
@@ -834,6 +838,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   let stopRequested = false;
   let consumed = 0;
   const waiting: OperatorMessage[] = [];
+  const worldOrders: Record<string, unknown>[] = [];
   const lastRound = (): number | null => { for (let i = journal.events.length - 1; i >= 0; i--) if (typeof journal.events[i].round === 'number') return journal.events[i].round; return null; };
   function writeStatus(): void {
     try {
@@ -871,6 +876,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         log('operator_command_refused', { ...who, reason: 'the help budget of this run is spent (' + helpBudget + ')' });
         continue;
       }
+      /* A change to a living world's programs: the operator's control of the world, never help - applied by its session. */
+      if (order.kind === 'world') { worldOrders.push(order as Record<string, unknown>); continue; }
       if (order.kind === 'stop') {
         stopRequested = true;
         state = 'stopping';
@@ -1067,7 +1074,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       const due = waiting.filter((m) => m.round === undefined || round === undefined || m.round <= round);
       for (const m of due) waiting.splice(waiting.indexOf(m), 1);
       return due;
-    } },
+    }, world: () => worldOrders.splice(0) },
     opening, awaitOpening,
     sourceFetch: replay.wrap('source', sourceFetch(network)) };
 }
@@ -1333,7 +1340,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* A living world: its acts and waits into the step's batch; a query of the world after one of them is not answered. */
     if (bridge) {
       const extra = 'extra' in req ? req.extra : null;
-      if (extra && 'wait' in extra) return bridge.wait(extra.wait, budget);
+      if (extra && 'wait' in extra) return bridge.wait(extra.wait, budget, extra.wake_on);
       if ('act' in req) return tools.has('act') ? bridge.act(req.act, budget) : { act: req.act, error: '"act" is not available in this experiment' };
       if (bridge.sealing) return { ...(extra ?? { [Object.keys(req)[0]]: Object.values(req)[0] }), error: LivingBridge.AFTER_ACT };
       if (extra && 'observe' in extra) return bridge.observe();
@@ -1341,6 +1348,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       if (extra && 'send' in extra) return bridge.send(extra);
       if (extra && 'share' in extra) return bridge.share(extra);
       if (extra && 'read' in extra) return bridge.read(extra, session.currentRound);
+      if (extra && 'watch' in extra) return bridge.watcher(extra);
+      if (extra && 'progress' in extra) return bridge.progress(extra, session.currentRound);
+      if (extra && 'perturb' in extra) return bridge.perturb(extra);
     }
     /* A researcher's own instrument is answered by that researcher (the assisted one's library), never by the world. */
     if ('extra' in req) return { error: 'no such instrument here' };
@@ -1497,10 +1507,27 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     },
     own: (ref) => { const r = ref.trim(); return shareable(r.split('@')[0]) !== null || session.notebook.documents.has(r); },
     deliver: (messages, waiting) => {
-      for (const m of messages) channelNow()?.publish(('actor:' + m.from) as never, { kind: 'notice', body: m });
+      /* Each with its provenance: a member's word, an instrument's reading (the world, as measured), the operator's announcement. */
+      for (const m of messages) channelNow()?.publish((m.reading ? 'world' : m.from === 'operator' ? 'operator' : 'actor:' + m.from) as never, { kind: 'notice', body: m });
       if (waiting) channelNow()?.publish('harness', { kind: 'notice', body: { messages_waiting: waiting, read_them: '{"read": "inbox"}' } });
       log('messages_delivered', { round: session.currentRound, messages: messages.map((m) => m.message), ...(waiting ? { waiting } : {}) });
     }, log, say }) : null;
+  /* The operator's changes to the programs (`lab world`), taken before each question: applied when the next window opens. */
+  const controlWorld = (): void => {
+    for (const o of run.operator.world()) {
+      const who = { id: o.id ?? null, kind: 'world', ...(o.by ? { by: o.by } : {}) };
+      const why = !living ? 'this run has no living world' : living.control({ id: String(o.id), op: o.op as never, ...(o.program ? { program: o.program as never } : {}),
+        ...(typeof o.target === 'string' ? { target: o.target } : {}), by: String(o.by ?? 'operator'), ...(typeof o.why === 'string' ? { why: o.why } : {}) });
+      log(why ? 'operator_command_refused' : 'operator_command', { ...who, ...(why ? { reason: why } : { accepted: true, op: o.op }) });
+    }
+  };
+  /* What its checks say, as a signal the operator declared on them (§10): a sample per round; none for a round without one. */
+  const checkSample = (round: number, laboratories: readonly Record<string, any>[] | null): void => {
+    if (!living) return;
+    const pts = laboratories?.reduce((n, l) => n + (typeof l.points === 'number' ? l.points : 0), 0) ?? 0;
+    const value = !laboratories ? null : pts > 0 ? laboratories.reduce((n, l) => n + (Number(l.exact) || 0), 0) / pts : laboratories.filter((l) => l.holds).length / Math.max(1, laboratories.length);
+    for (const sg of living.signalsFrom(actor, 'checks')) living.sample(sg, 'r' + round, value, { harness: true });
+  };
   if (living) journal.world = { session: living.id, adapter: living.adapter.id, actor, ...(shared ? { shared: true, journal: living.journal.file ? path.relative(path.dirname(outFile), living.journal.file).split(path.sep).join('/') : null }
     : { journal: path.basename(worldJournalOf(outFile)) }), clock: living.clock, limits: living.limits };
   /* Every investigation step, as it was asked and answered: what a publication may cite ("r<round>.<step>"). */
@@ -1601,9 +1628,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* Its closing (the reflection that leaves what it could not answer) is asked even when a budget stopped the
        investigation: a budget ends the research, not its account (SPEC-INVESTIGADOR-ASISTIDO §14.9). */
     /* Asked before every question: a living world's decision rests on the revision it has now (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.1). */
-    log: logged, say, halt: () => { bridge?.decide(); const h = halt(); return closing && (h === 'token_budget' || h === 'time_budget') ? null : h; },
+    log: logged, say, halt: () => { bridge?.decide(); controlWorld(); const h = halt(); return closing && (h === 'token_budget' || h === 'time_budget') ? null : h; },
     /* A member of a team tells the board where it is: the versions every member has passed are sealed. */
-    ...(team ? { onRound: (round: number) => team.board.reach(team.member, round) } : {})
+    ...(team ? { onRound: (round: number) => team.board.reach(team.member, round) } : bridge ? { onRound: (round: number) => bridge.round(round) } : {})
   };
   /* The sources the assisted researcher may read (SPEC-INVESTIGADOR-ASISTIDO §6.3): the origins the operator allows, at the
      start and during the run. It reads them itself; the Judge picks lines for it only when it asks (`find` with `select`),
@@ -1982,6 +2009,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     }
     if (!record) {
       if (session.fatal) break;
+      checkSample(session.currentRound, null);
       /* Closed by the researcher without a new model (PLAN-Y-SI, Entrega 1): what this round registered runs now - its
          results with the next round, as with a check - and nothing is closed of the counterexamples of any model. */
       if (session.roundEnd.kind === 'closed' && ownTests) {
@@ -1992,6 +2020,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       continue;
     }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });
+    checkSample(record.round, (outcome.journal as { laboratories?: Record<string, any>[] }).laboratories ?? []);
     record.accepted = outcome.accepted;
     const detail = outcome.laboratories[0]?.detail ?? null;
     const own = lab.operator?.check?.({ law: record.law, round: record.round, reused: outcome.reused, detail, cost: outcome.cost,

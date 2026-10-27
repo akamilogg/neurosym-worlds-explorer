@@ -46,6 +46,8 @@ export type RunOrder =
       /** A senior's order to register a test of the junior's own, with its message (SPEC-PRUEBAS-PROPIAS §8). */ readonly test?: Readonly<Record<string, unknown>> }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string }
+  /** The operator's change to a living world's programs (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10): never help. */
+  | { readonly kind: 'world'; readonly op: 'add' | 'replace' | 'disable' | 'fire'; readonly program?: Readonly<Record<string, unknown>>; readonly target?: string; readonly why?: string; readonly by?: string }
   /** A senior's suspicion of the instrument (SPEC-CALIBRACION-INSTRUMENTOS §4.3): logged by the run, never delivered. */
   | { readonly kind: 'instrument_report'; readonly what: string; readonly evidence: readonly string[]; readonly report_kind: string; readonly by?: string };
 

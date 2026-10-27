@@ -1,6 +1,6 @@
 # SPEC · Mundo vivo: actores, acontecimientos e investigación reactiva
 
-Estado (27/10/2026): **H1 y H2 implementados (§18); H3–H5 pendientes**. Diseño consolidado el 23/10/2026.
+Estado (27/10/2026): **H1, H2 y H3 implementados (§18); H4–H5 pendientes**. Diseño consolidado el 23/10/2026.
 Revisión conciliada: puente con el investigador asistido, autoridad de actuación, hitos e integración K1–K5.
 Sustituye la versión anterior limitada a acontecimientos dentro de episodios. Los contratos son normativos;
 los nombres de interfaces y operaciones designan capacidades que se deben implementar, no APIs ya existentes.
@@ -689,3 +689,47 @@ Pruebas en `lib/test/living-world-review.test.ts`.
   nombre de un episodio no admite (`-c` mayúscula, `-u` guion bajo, `-h` guion) y se separa con `--` del nombre propio
   (`from-a--act3`).
 - **Delegación del senior.** En un mundo vivo también se rechaza la delegación del senior, igual que la del junior.
+
+### 18.4 H3 (27/10/2026)
+
+Código en `lib/src/living/events.ts`: `Agenda` (programas y señales) y `Watchers`, integrados en `LivingSession`; efectos de
+`plates@1` (`contaminate`, `nutrient_pulse`, `smudge`); `lab world`. Pruebas en `lib/test/living-world-h3.test.ts`.
+
+Decisiones tomadas al implementar:
+
+- **Programas.** Cada programa declara disparador, efecto tipado del adaptador, calendario (`max_firings` obligatorio,
+  `delay_ticks`, `cooldown_ticks`), prioridad y exposición.
+  - Instantes y recurrencias de la agenda se programan exactamente en su tick al abrirse la ventana.
+  - Los demás disparadores se evalúan al confirmarse una ventana y se programan para un tick posterior. Son
+    `round`, `interaction`, `state` (predicado en el sandbox sobre la instantánea), `stagnation`, `request` y `manual`.
+  - Una condición sostenida dispara una vez y se rearma cuando deja de cumplirse.
+  - Lo no evaluable (predicado que falla, muestras insuficientes) no dispara ni rearma.
+  - Un efecto cuya precondición no se cumple se registra como rechazado y no se sustituye por otro.
+- **Parámetros.** Si el programa no los fija, salen del flujo propio de cada programa: el disparo k recibe lo mismo
+  se dispare cuando se dispare.
+- **Modo y etiqueta.** Cada disparo lleva modo y etiqueta, que nunca se mezclan.
+  - Modos: `agenda`, `reactive` y `directed`, este último para lo añadido o disparado por el operador durante el run.
+  - Etiquetas: `operator_fixed`, `self_reported`, `requested_surprise` y `directed`.
+  - El resumen de la sesión cuenta las intervenciones por modo y etiqueta, aparte de la ayuda.
+- **Señales.** Las fija el manifiesto, con productor, unidad, dirección y tolerancia.
+  - `checks` lo produce el arnés tras cada check (proporción de puntos exactos); una ronda sin check aporta una muestra
+    faltante.
+  - `self_reported` sólo lo reporta su propio investigador (`progress`).
+  - `no_improvement` exige una ventana completa de muestras válidas y un mejor valor previo con el que comparar.
+- **Vigilantes.** `watch` registra versiones de una medida que se ejecuta en el sandbox sobre lo que su dueño puede
+  percibir (`frame`, `previous`, `tick`), con cadencia, condición, enfriamiento, vigencia y máximo de avisos.
+  - Miden aunque el dueño no decida.
+  - El aviso llega como lectura de `instrument:<id>`: dice qué se midió, nunca la causa.
+  - Un fallo es un aviso de fallo; tras tres fallos el vigilante se detiene.
+  - Los sensores preinstalados usan el mismo contrato. Sin `limits.watchers`, nadie puede registrar vigilantes.
+- **Investigador reactivo.** `wait` con `wake_on` (`observation`, `message`), dentro de la política `activation` declarada
+  para el actor (`max` obligatorio, `cooldown_windows`).
+  - El despertar se produce al confirmarse una ventana, como mucho una vez por ventana.
+  - No cuesta decisiones ni hace avanzar el reloj de más.
+- **Exposición.** `sensors_only` no avisa a nadie. `announce_action` publica un anuncio del operador (`announcement`),
+  distinto de un aviso de sensor y que no consume ayuda.
+- **Control durante el run.** `lab world <run> add|replace|disable|fire` crea una orden (`kind: world`, no ayuda) que se
+  aplica al abrirse la siguiente ventana, registrada con quién y por qué (`prog.<id>`). Un run que continúa el registro la
+  vuelve a aplicar en la misma ventana.
+
+Pendiente: activación reactiva propia del senior y señales producidas por jueces configurados.
