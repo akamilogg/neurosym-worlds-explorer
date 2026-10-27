@@ -9,6 +9,7 @@ import { isGameLab } from '../learn/lab.ts';
 import { listProjects, projectStatus, projectText, sendProject } from '../orchestra/project.ts';
 import { readProjectFile, startProject } from '../orchestra/launch.ts';
 import { researchConsole } from '../console/api.ts';
+import { livingTimeline, readWorld, worldFileOf } from '../living/record.ts';
 
 /* ============================================================================
  * The CONSOLE (SPEC-INVESTIGADOR-ASISTIDO §8, A3): a local page over the control API, the
@@ -90,8 +91,22 @@ export function runView(journal: string, since = 0): Json {
       places: [...(check.laboratories ?? []), ...(check.validation?.family ?? [])].map((p: Json) => ({ place: p.place, holds: Boolean(p.holds) })),
       blind: check.validation?.blind_confirmation ? Boolean(check.validation.blind_confirmation.confirmed) : null } : null,
     beliefs,
+    /* A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §16): where it stands, and what its researcher perceived of it. */
+    ...(j.world ? { living: livingOf(journal, j, 'actor') } : {}),
     finding: status.state === 'ended' ? { operator: findingText(finding(journal, 'operator')), researcher: findingText(finding(journal, 'researcher')) } : null
   };
+}
+
+/** A living world's state and timeline (§16): as the auditor sees it, or as the run's researcher perceived it - told apart. */
+export function livingOf(journalFile: string, j: Json, view: 'auditor' | 'actor'): Json {
+  const file = worldFileOf(journalFile, j);
+  const entries = file ? readWorld(file) : [];
+  const actor = String(j.world?.actor ?? 'researcher');
+  const commits = entries.filter((e) => /^w\d+\.commit$/.test(e.key));
+  const last = commits[commits.length - 1];
+  const manifest = entries.find((e) => e.key === 'manifest');
+  return { session: j.world?.session ?? null, actor, view, tick: last?.to ?? 0, window: last?.window ?? 0, members: (manifest?.actors ?? []).map((a: Json) => ({ id: a.id, kind: a.kind })),
+    timeline: livingTimeline(entries, view === 'auditor' ? 'auditor' : { actor }).slice(-200) };
 }
 
 /** The laboratories one can start, with their options (for the page's form). */
@@ -138,6 +153,11 @@ export function serveConsole(options: ConsoleOptions): Promise<{ url: string; cl
         const run = runByName(root, parts[2]);
         if (!run) return send_(404, { error: 'no run named ' + parts[2] });
         if (req.method === 'GET' && parts.length === 3) return send_(200, runView(run.journal, Number(url.searchParams.get('since') ?? 0) || 0));
+        if (req.method === 'GET' && parts[3] === 'world') {
+          const j = readJson(run.journal) ?? {};
+          if (!j.world) return send_(404, { error: 'not a living world' });
+          return send_(200, livingOf(run.journal, j, url.searchParams.get('view') === 'auditor' ? 'auditor' : 'actor'));
+        }
         if (req.method === 'POST' && parts[3] === 'orders') {
           if (run.state === 'ended' || run.state === 'interrupted') return send_(409, { error: 'the run is ' + run.state + ': it reads no orders' });
           const b = await body(req);
@@ -363,10 +383,14 @@ async function refreshDetail(full = false) {
           facet, el('button', { disabled: pure || !live, onclick: () => order('focus', { facet: facet.value }, fb) }, 'Cambiar foco'),
           source, el('button', { disabled: pure || !live, onclick: () => order('source', { source: source.value }, fb) }, 'Permitir origen'))),
       el('h3', {}, 'Eventos'), timeline,
+      v.living ? el('div', { id: 'living' }, el('h3', {}, 'Mundo vivo'), el('div', { class: 'actions' },
+        el('button', { onclick: () => worldView('actor') }, 'Lo que percibió el investigador'),
+        el('button', { onclick: () => worldView('auditor') }, 'Vista del auditor')), el('div', { class: 'muted', id: 'living-head' }), el('pre', { class: 'code', id: 'living-lines' })) : null,
       el('div', { class: 'two' }, el('div', {}, el('h3', {}, 'Modelo actual'), el('pre', { class: 'code', id: 'model' })),
         el('div', {}, el('h3', {}, 'Última comprobación'), el('div', { id: 'check' }), el('h3', {}, 'Creencias'), el('div', { id: 'beliefs' }))),
       el('div', { id: 'finding' }));
     since = 0;
+    if (v.living) worldView('actor');
   }
   for (const e of v.events) timeline.append(el('div', { class: 'ev-' + e.type }, e.line));
   if (v.events.length) timeline.scrollTop = timeline.scrollHeight;
@@ -386,6 +410,15 @@ async function refreshDetail(full = false) {
       el('button', { onclick: () => { pre.textContent = v.finding.operator; } }, 'Vista del operador'),
       el('button', { onclick: () => { pre.textContent = v.finding.researcher; } }, 'Vista del investigador')), pre);
   }
+}
+
+async function worldView(view) {
+  try {
+    const w = await api('/api/runs/' + encodeURIComponent(selected) + '/world?view=' + view);
+    $('living-head').textContent = (view === 'auditor' ? 'Auditor: todo lo ocurrido, también lo no percibido' : 'Lo que percibió ' + w.actor) + ' - tick ' + w.tick + ', ventana ' + w.window + ', miembros: ' + w.members.map((m) => m.id + ' (' + m.kind + ')').join(', ');
+    $('living-lines').textContent = w.timeline.map((l) => (l.window ? '[w' + l.window + '] ' : '') + l.line).join('
+');
+  } catch (e) { $('living-head').textContent = e.message; }
 }
 
 async function openStart() {

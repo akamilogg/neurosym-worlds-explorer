@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { livingTraces, readWorld, worldFileOf } from '../living/record.ts';
 
 /* ============================================================================
  * TRACES OF THE PROCESS, WITHOUT VALUATION (SPEC-CONTROL-ARNES K4, §4.3): how a run went, as a description - never as "losses"
@@ -36,6 +37,9 @@ export interface ProcessTraces {
   readonly branches: { readonly opened: number; readonly results_delivered: number;
     /** Of them, evolutionary searches (SPEC-DELEGACION-EVOLUTIVA), and the candidates it made a version of its own of. */
     readonly evolutionary: number; readonly candidates_adopted: number };
+  /** In a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §15.1 K4): its windows, batches, conflicts, messages, instruments,
+      wakes, timeouts and later reads. */
+  readonly world?: Record<string, unknown>;
   readonly reading: string;
 }
 
@@ -72,6 +76,7 @@ export function processTraces(journalFile: string): ProcessTraces {
     other_help: messages.filter((m) => !m.directive).length,
     branches: { opened: events.filter((e) => e.type === 'delegation_requested').length, results_delivered: all.filter((m) => m.research_result).length,
       evolutionary: events.filter((e) => e.type === 'delegation_requested' && e.mode === 'evolve').length, candidates_adopted: adoptedOf(journalFile, events).length },
+    ...(journal.world ? { world: livingTraces(events, readWorld(worldFileOf(journalFile, journal) ?? ''), String(journal.world.actor ?? 'researcher')) } : {}),
     reading: 'a description of how it went - never its performance; effects only from controlled comparisons'
   };
 }

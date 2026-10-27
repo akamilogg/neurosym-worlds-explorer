@@ -158,7 +158,7 @@ export class WorldJournal {
       record it continues. */
   get stretch(): string {
     /* Its name and where it is: two records of the same name in two folders are two stretches. */
-    return this.file ? path.basename(this.file).replace(/\.world\.jsonl$|\.jsonl$/, '') + '-' + hashString(path.resolve(this.file).toLowerCase()).slice(0, 6) : 'unwritten';
+    return this.file ? path.basename(this.file).replace(/\.world\.jsonl$|\.jsonl$/, '') + '~' + hashString(path.resolve(this.file).toLowerCase()).slice(0, 6) : 'unwritten';
   }
 
   /** Every entry known under a prefix: written here, or in the record continued (what a client resumed recovers its counters

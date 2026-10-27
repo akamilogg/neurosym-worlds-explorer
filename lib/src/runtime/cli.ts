@@ -437,6 +437,14 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         return 2;
       }
       case 'pack': {
+        /* A shared living world's session: the whole of it, by its record. */
+        if (/\.session\.json$/.test(String(args[0] ?? ''))) {
+          const { packSession } = await import('./package.ts');
+          const outDir = take(args.slice(1), 'out') ?? take(args, 'out');
+          const { dir, manifest } = packSession(path.resolve(ctx.root, String(args[0])), outDir ? path.resolve(outDir) : undefined);
+          out('packed the session ' + manifest.session + ': ' + manifest.files.length + ' files into ' + dir);
+          return 0;
+        }
         const journal = resolveRun(ctx.root, args.shift());
         const { packRun } = await import('./package.ts');
         const outDir = take(args, 'out');
@@ -449,6 +457,15 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       case 'verify': {
         const dir = path.resolve(args[0] ?? '');
         if (!fs.existsSync(path.join(dir, 'manifest.json'))) { out('not a package (no manifest.json): ' + dir); return 1; }
+        if (JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).format === 'session_package@1') {
+          const { verifySessionPackage } = await import('./package.ts');
+          const v = await verifySessionPackage(dir) as Record<string, any>;
+          fs.writeFileSync(path.join(dir, 'verification.json'), JSON.stringify(v, null, 2));
+          out('integrity: ' + (v.integrity.holds ? 'holds' : 'does NOT hold'));
+          out('its world\u2019s journal: ' + (v.world_record.holds ? 'holds' : 'does NOT hold: ' + v.world_record.problems.join('; ')));
+          out('the whole session rebuilt offline: ' + (v.reconstruction.holds ? 'holds' : 'does NOT hold'));
+          return v.integrity.holds && v.world_record.holds && v.reconstruction.holds ? 0 : 1;
+        }
         const { verifyPackage } = await import('./package.ts');
         const llmPath = take(args, 'llm-path');
         const v = await verifyPackage(dir, llmPath ? { llmPath } : {});
@@ -456,9 +473,11 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const i = v.integrity, r = v.reconstruction;
         out('integrity: ' + (i.holds ? 'holds' : 'does NOT hold' + (i.changed.length ? '; changed ' + i.changed.join(', ') : '') + (i.missing.length ? '; missing ' + i.missing.join(', ') : '') + (i.unlisted.length ? '; not in its manifest ' + i.unlisted.join(', ') : '') + (i.missing_blobs.length ? '; ' + i.missing_blobs.length + ' blobs never packed' : '')));
         out('reconstruction from its record (offline): ' + (r.holds ? 'holds' : 'does NOT hold') + ' - ' + r.events_compared + ' events compared' + (r.first_difference !== undefined ? ', the first different at ' + r.first_difference : '') + ', stopped by ' + r.stopped_by + (r.requests_refused ? ', ' + r.requests_refused + ' requests it would have made refused' : ''));
+        if (v.world) out('its living world: ' + (v.world.holds ? 'holds' : 'does NOT hold') + ' - its journal ' + (v.world.record.holds ? 'holds together' : 'does not: ' + v.world.record.problems.join('; '))
+          + ', derived again ' + (v.world.rebuilt.holds ? 'the same' : 'differently'));
         for (const s of v.searches) out('evolutionary search ' + s.file + ': ' + (s.holds ? 'holds' : 'does NOT hold') + ' - ' + s.why);
         out('re-execution: not done; reproduction: not done (verification.json says what each needs)');
-        return i.holds && r.holds && v.searches.every((s) => s.holds) ? 0 : 1;
+        return i.holds && r.holds && (!v.world || v.world.holds) && v.searches.every((s) => s.holds) ? 0 : 1;
       }
       case 'audit': {
         /* Calibration against a person (MA4): a blind sample to label, and the agreement of the labels with the Judge. */

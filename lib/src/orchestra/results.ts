@@ -5,6 +5,7 @@ import { describe, rate, type Described, type Rate } from '../runtime/statistics
 import { generatorOf } from '../runtime/generators.ts';
 import { agentUsage } from './agent-operator.ts';
 import { processTraces, type ProcessTraces } from './traces.ts';
+import { interventionLabels, livingCost, livingIdentity, readWorld, worldFileOf } from '../living/record.ts';
 
 /* ============================================================================
  * RESULTS APART, AND WHAT THEY COST (SPEC-CONTROL-ARNES K1, §4.1, §4.2, §6.1, §6.2; SPEC-RIESGO-MODELOS M2).
@@ -71,6 +72,9 @@ export interface RunCost {
   readonly judge_calls: number | null;
   /** The parts whose cost was not reported: the totals are then lower bounds. */
   readonly unknown: readonly string[];
+  /** A living world's (SPEC-ACONTECIMIENTOS-DEL-MUNDO §15.1 K1): what the world did and cost - its windows, messages,
+      instruments, and the operator's interventions by mode and label, apart from help. In a shared session, the session's. */
+  readonly world?: Record<string, unknown>;
 }
 
 const evaluate = (c: Condition, r: { model: boolean; artifact?: boolean; severe: number | null; recovery: number | null }): boolean | null =>
@@ -133,13 +137,16 @@ export function runResults(journalFile: string, criteria?: Criteria): RunResults
     o4_mechanistic_recovery: recovery !== null ? { score: recovery, grader_version: rec.grader_version ?? null } : 'no truth to grade against, or not graded',
     ...(model && recovery !== null ? { prediction_and_mechanism: { accepted: true, recovery } } : {}),
     cost: { tokens: { junior, agents: agentTokens, delegated, total_at_least: (junior ?? 0) + (agentTokens ?? 0) + (delegated ?? 0), ...(held ? { delegated_held_uncertain: held } : {}), ...evolutionaryOf(journalFile, events) }, money: { known: Math.round(money * 1e6) / 1e6, unknown: moneyUnknown },
-      seconds, judge_calls: typeof end.jev?.calls === 'number' ? end.jev.calls : null, unknown },
+      seconds, judge_calls: typeof end.jev?.calls === 'number' ? end.jev.calls : null, unknown, ...worldCostOf(journalFile, journal) },
     started: journal.started ?? null, ended_at_seconds: seconds
   };
 }
 
 export interface GroupResults {
-  readonly group: { readonly condition: string; readonly world: string; readonly code_version: string | null; readonly generator: string; readonly criteria: readonly string[] };
+  readonly group: { readonly condition: string; readonly world: string; readonly code_version: string | null; readonly generator: string; readonly criteria: readonly string[];
+    /** A living world's (§15.1 K2): its condition, whether the operator changed its programs during the run, and the labels of
+        what the environment did - never mixed. */
+    readonly world_condition?: string; readonly adapted?: boolean; readonly interventions?: readonly string[] };
   readonly runs: number;
   readonly o1_predictive_acceptance: { readonly model: Rate; readonly artifact?: Rate };
   readonly o2_severe_passed_as_preregistered: Described;
@@ -168,7 +175,11 @@ export function groupResults(rows: readonly { readonly condition: string; readon
     const journal = readJson(row.journal);
     if (!journal) continue;
     const gen = generatorOf(journal, path.dirname(row.journal), path.basename(row.journal, '.json'));
-    const key = { condition: row.condition, world: String(journal.experiment), code_version: journal.commit ?? null, generator: gen.id, criteria: Object.keys(criteria ?? {}) };
+    const wf = worldFileOf(row.journal, journal);
+    const entries = wf ? readWorld(wf) : [];
+    const living = entries.length ? livingIdentity(entries) : null;
+    const key = { condition: row.condition, world: String(journal.experiment), code_version: journal.commit ?? null, generator: gen.id, criteria: Object.keys(criteria ?? {}),
+      ...(living ? { world_condition: living.condition, adapted: living.adapted, interventions: interventionLabels(entries) } : {}) };
     const id = JSON.stringify(key);
     const g = groups.get(id) ?? { key, runs: [] as (RunResults & { started: string | null })[], traces: [] as ProcessTraces[] };
     g.runs.push(runResults(row.journal, criteria));
@@ -225,6 +236,30 @@ export function batchTimes(started: string, ended: string | undefined, rows: rea
       ...Object.fromEntries(Object.keys(criteria ?? {}).map((id) => [id, first((r) => (r.o3_adequacy as Record<string, string>)[id] === 'yes')])) },
     accumulated_run_seconds: runs.reduce((a, x) => a + (x.r.ended_at_seconds ?? 0), 0)
   };
+}
+
+/** A living world's cost (§15.1 K1), from its session's journal. */
+function worldCostOf(journalFile: string, journal: J): { world?: Record<string, unknown> } {
+  const wf = worldFileOf(journalFile, journal);
+  const c = wf ? livingCost(readWorld(wf)) : null;
+  return c ? { world: { ...c, ...(journal.world?.shared ? { of: 'the shared session (every member)' } : {}) } } : {};
+}
+
+/** A SHARED SESSION's results (§15.1 K1, K5): the session is the unit - never its members, windows or messages counted as
+    replicas. Its members' results each apart; its cost the sum of each member's once (a shared branch is in its requester's
+    delegated cost, and never again as a member: it has no run of the session's own); the world's cost once. */
+export function sessionResults(sessionFile: string, criteria?: Criteria): Record<string, unknown> {
+  const s = readJson(sessionFile) ?? {};
+  const dir = path.dirname(sessionFile);
+  const members = Object.entries((s.runs ?? {}) as Record<string, J>).filter(([, r]) => typeof r.journal === 'string')
+    .map(([id, r]) => ({ id, ...runResults(path.resolve(dir, r.journal), criteria) }));
+  const entries = readWorld(path.join(dir, String(s.world)));
+  const identity = entries.length ? livingIdentity(entries) : null;
+  const tokens = members.reduce((n, m) => n + (m.cost.tokens.junior ?? 0) + (m.cost.tokens.agents ?? 0) + (m.cost.tokens.delegated ?? 0), 0);
+  return { unit: 'the session: one realization, whatever its members', members: members.map(({ id, cost: { world: _w, ...cost }, ...m }) => ({ id, ...m, cost })),
+    ...(identity ? { identity: { generator: identity.generator, condition: identity.condition, realization: identity.realization, adapted: identity.adapted, interventions: interventionLabels(entries) } } : {}),
+    cost: { tokens_total_at_least: tokens, world: livingCost(entries), unknown: [...new Set(members.flatMap((m) => m.cost.unknown))] },
+    reading: 'one session is one observation (K5): its members are not replicas of one another' };
 }
 
 /** What a summary of branches holds for those whose spending is not known (a summary of an earlier version: its grant each). */

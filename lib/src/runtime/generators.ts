@@ -5,6 +5,7 @@ import { LABS } from '../worlds/labs.ts';
 import { worldOptionsIn } from '../orchestra/reader.ts';
 import type { BatchReport } from '../orchestra/batch.ts';
 import { describe } from './statistics.ts';
+import { livingIdentity, readWorld, worldFileOf } from '../living/record.ts';
 
 /* ============================================================================
  * THE CHARACTERIZATION OF A GENERATING CONFIGURATION (SPEC-RIESGO-MODELOS §8.2, M5): what a configuration of the harness
@@ -38,8 +39,12 @@ export function generatorOf(journal: J, folder: string, base: string): { id: str
       /* Every setting of its requests (its reasoning effort, temperature...) and of its role (orders, patience...): a senior
          at low and one at high are two conditions (an external review, 16/10/2026). */
       llm_config: a!.llm_config ?? null, settings: a!.settings ?? null })).sort((a, b) => String(a.role).localeCompare(String(b.role))) : [];
+  /* A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §15.1): what its researcher was given to work with - its clock, limits,
+     reactivity, communication, delegation, the signals and reactions that read it - is part of the generator, by its hash. */
+  const worldFile = worldFileOf(path.join(folder, base + '.json'), journal);
+  const living = worldFile ? livingIdentity(readWorld(worldFile), { delegation: { modes: config.branches ?? null, fund: config.delegation ? (({ ledger: _l, ...rest }) => rest)(config.delegation) : null } }) : null;
   const configuration = { llm_model: config.llm_model ?? null, llm_provider: config.llm_provider ?? null, llm_tuning: config.llm_tuning ?? null,
-    jev_model: config.jev_model ?? null, researcher: journal.researcher ?? null, agents, harness };
+    jev_model: config.jev_model ?? null, researcher: journal.researcher ?? null, agents, harness, ...(living ? { living: living.generator } : {}) };
   const hash = createHash('sha256').update(JSON.stringify(configuration)).digest('hex').slice(0, 10);
   const clean = (s: unknown) => String(s ?? 'unknown').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 40);
   return { id: hash, file: clean(config.llm_provider) + '-' + clean(config.llm_model) + '-' + hash + '.json', configuration };

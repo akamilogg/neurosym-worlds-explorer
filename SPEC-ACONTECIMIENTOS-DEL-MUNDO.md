@@ -1,6 +1,6 @@
 # SPEC · Mundo vivo: actores, acontecimientos e investigación reactiva
 
-Estado (27/10/2026): **H1–H4 implementados (§18); H5 pendiente**. Diseño consolidado el 23/10/2026.
+Estado (27/10/2026): **H1–H5 implementados (§18)**; queda la prueba real con investigadores LLM (§17.2) y los pendientes de §18. Diseño consolidado el 23/10/2026.
 Revisión conciliada: puente con el investigador asistido, autoridad de actuación, hitos e integración K1–K5.
 Sustituye la versión anterior limitada a acontecimientos dentro de episodios. Los contratos son normativos;
 los nombres de interfaces y operaciones designan capacidades que se deben implementar, no APIs ya existentes.
@@ -805,3 +805,44 @@ Pendiente:
 - delegación declarada en el manifiesto `living-world@1`;
 - que una continuación que va más allá del punto de parada del solicitante vuelva a derivar las ventanas que una rama
   compartida pasó sola; hoy se registran como divergencia.
+
+### 18.6 H5 (27/10/2026)
+
+Código en `lib/src/living/record.ts`: identidad, verificación, comparación, línea temporal, coste y trazas del registro de
+un mundo vivo. Se integra en `generators.ts`, `results.ts`, `traces.ts`, `package.ts`, `run-session.ts`
+(`rebuildLivingSession`) y la consola. Pruebas en `lib/test/living-world-h5.test.ts`.
+
+Decisiones tomadas al implementar:
+
+- **Identidad (§15.1).** Se calcula a partir del diario de la sesión y tiene tres hashes. Los miembros se identifican por
+  rol, nunca por nombre, y nunca entran rutas ni horas.
+  - **Generador:** reloj, límites, investigadores con sus permisos y su activación, señales, reacciones (los programas que
+    no son de agenda) y política de delegación. Se incorpora a `generatorOf`.
+  - **Condición del mundo:** adaptador, régimen, garantías, acciones, políticas de los otros actores, sensores, agenda y
+    evaluador.
+  - **Realización:** semilla, estado inicial y linaje.
+  - Una sesión cuyos programas cambió el operador durante el run queda como `adapted`.
+- **Resultados (K1, K2, K5).**
+  - `runResults` añade el coste del mundo (ventanas, ticks, mensajes, entregas, vigilantes, intervenciones por modo y
+    etiqueta), aparte de la ayuda.
+  - `groupResults` agrupa además por condición del mundo, `adapted` y etiquetas de intervención, sin mezclarlas.
+  - `sessionResults` toma la sesión como unidad: los miembros aparecen por separado y no como réplicas, y el coste de cada
+    uno se suma una sola vez (una rama compartida sólo cuenta en el coste delegado de quien la pidió).
+- **Trazas (K4).** `processTraces` añade ventanas según qué las cerró, lotes, conflictos, mensajes, compartidos, entregas,
+  lecturas posteriores, vigilantes, despertares, timeouts y perturbaciones pedidas.
+- **Paquete (§14).**
+  - **Run solo:** el paquete incluye su diario del mundo. `lab verify` comprueba que el diario se sostiene (cada transición
+    preparada y luego confirmada, revisiones en orden, recibos de lo publicado y a su destinatario, disparos aplicados o
+    rechazados, contadores que cuadran) y que la reconstrucción lo vuelve a derivar entrada por entrada.
+  - **Sesión compartida:** `lab pack <x.session.json>` la empaqueta entera y `lab verify` la reconstruye entera sin red, con
+    todos los investigadores reanudados a la vez desde sus propios registros.
+  - El tramo de ejecución que aparece en las claves de cierre y retirada lleva el separador `~`, que nunca se confunde con
+    otras claves.
+- **Consola (§16).** Panel del mundo vivo con dos vistas: la del auditor (todo lo ocurrido, lo no percibido incluido) y la
+  de lo que percibió el investigador (sus actos y su resultado, lo que le llegó, sus despertares). Se sirve en
+  `GET /api/runs/<run>/world?view=auditor|actor`.
+
+Pruebas de aceptación cubiertas: la 13 (reproducción completa sin red de un run y de una sesión, cada destinatario con sus
+recibos; el orden de llegada ya estaba cubierto en H2), la 16 (las evaluaciones reservadas son las mismas con mensajes,
+efectos del operador y vigilantes o sin ellos) y la 18 (el auditor distingue lo ocurrido de lo percibido; un paquete
+alterado deja de sostenerse).

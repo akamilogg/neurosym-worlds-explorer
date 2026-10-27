@@ -56,6 +56,48 @@ export function planOptions(lab: LawLab, plan: SessionPlan): Record<string, stri
     ...(l.window_ms !== undefined ? { 'window-ms': String(l.window_ms) } : {}) };
 }
 
+/** The session of a plan, its journal given: its members, limits, programs, signals, instruments and sandbox. */
+function openShared(lab: LawLab, plan: SessionPlan, journal: WorldJournal) {
+  const options = planOptions(lab, plan);
+  const spec = lab.generate(plan.seed, options);
+  return lab.living!.open(spec, { journal, actors: plan.actors.map(({ ...d }) => {
+    const { rounds: _r, steps: _s, acts: _a, max_tokens: _t, max_minutes: _m, ...decl } = d as ResearcherDecl;
+    return decl;
+  }), options, limits: { ...(plan.limits.watchers !== undefined ? { watchers: plan.limits.watchers } : {}) },
+  /* Watchers and state predicates run in the sandbox, never in the host. */
+  events: { ...(plan.programs ? { programs: plan.programs } : {}), ...(plan.signals ? { signals: plan.signals } : {}), ...(plan.sensors ? { sensors: plan.sensors } : {}),
+    compile: (source: string) => { const fn = nodeVmRunner({ timeoutMs: 500 }).compile(source); return (input: unknown) => fn(input as never); } } });
+}
+
+/** The stops that leave a record short: a reconstruction stops where they did. */
+const SHORT = new Set(['token_budget', 'time_budget', 'cancelled']);
+
+/** A shared session REBUILT from its record (§14: the whole of it, not only one researcher): its world derived again against
+    the journal it continues, every researcher resumed from its own log at once, in this process - each stopped where its record
+    stopped. With an offline connection, nothing goes out: an answer the record does not hold is a failure, never asked. */
+export async function rebuildLivingSession(lab: LawLab, o: { sessionFile: string; dir: string; name: string; root: string;
+  connection: (actor: string) => { llm: LabConnection; judge?: LabConnection; fetch?: FetchLike }; signal?: AbortSignal }): Promise<SessionRun> {
+  const recorded = JSON.parse(fs.readFileSync(o.sessionFile, 'utf8'));
+  const from = path.dirname(o.sessionFile);
+  const plan = recorded.plan as SessionPlan;
+  fs.mkdirSync(o.dir, { recursive: true });
+  const worldFile = path.join(o.dir, o.name + '.world.jsonl');
+  const session = openShared(lab, plan, new WorldJournal(worldFile, { from: path.join(from, String(recorded.world)) }));
+  const runs: Record<string, { journal: string | null; stoppedBy?: string; error?: string }> = {};
+  await Promise.all(Object.entries((recorded.runs ?? {}) as Record<string, { journal: string | null; stoppedBy?: string }>).map(async ([id, r]) => {
+    if (!r.journal) { session.retire(id, 'failed'); runs[id] = { journal: null, error: 'its record holds no run' }; return; }
+    const out = path.join(o.dir, o.name + '.' + actorSlug(id) + '.json');
+    const c = o.connection(id);
+    try {
+      const result = await runLaboratory(lab, { args: ['--resume', path.join(from, r.journal), '--out', out], root: o.root, llm: c.llm, ...(c.judge ? { judge: c.judge } : {}), ...(c.fetch ? { fetch: c.fetch } : {}),
+        ...(o.signal ? { signal: o.signal } : {}), living: { session, actor: id }, ...(r.stoppedBy && SHORT.has(r.stoppedBy) ? { stopAsRecorded: r.stoppedBy } : {}) });
+      runs[id] = { journal: result.journal, stoppedBy: result.stoppedBy };
+    } catch (e) { session.retire(id, 'failed'); runs[id] = { journal: fs.existsSync(out) ? out : null, error: String((e as Error).message ?? e) }; }
+  }));
+  const summary = session.close('every researcher left');
+  return { world: worldFile, runs, summary };
+}
+
 /** Runs a shared session to its end: every researcher's run at once, the session closed when the last has left. */
 export async function runLivingSession(lab: LawLab, o: { plan: SessionPlan; dir: string; name: string; root: string;
   connection: (actor: string) => { llm: LabConnection; judge?: LabConnection; fetch?: FetchLike }; args?: readonly string[]; signal?: AbortSignal }): Promise<SessionRun> {
@@ -64,14 +106,7 @@ export async function runLivingSession(lab: LawLab, o: { plan: SessionPlan; dir:
   const options = planOptions(lab, plan);
   fs.mkdirSync(o.dir, { recursive: true });
   const worldFile = path.join(o.dir, o.name + '.world.jsonl');
-  const spec = lab.generate(plan.seed, options);
-  const session = lab.living.open(spec, { journal: new WorldJournal(worldFile), actors: plan.actors.map(({ ...d }) => {
-    const { rounds: _r, steps: _s, acts: _a, max_tokens: _t, max_minutes: _m, ...decl } = d as ResearcherDecl;
-    return decl;
-  }), options, limits: { ...(plan.limits.watchers !== undefined ? { watchers: plan.limits.watchers } : {}) },
-  /* Watchers and state predicates run in the sandbox, never in the host. */
-  events: { ...(plan.programs ? { programs: plan.programs } : {}), ...(plan.signals ? { signals: plan.signals } : {}), ...(plan.sensors ? { sensors: plan.sensors } : {}),
-    compile: (source: string) => { const fn = nodeVmRunner({ timeoutMs: 500 }).compile(source); return (input: unknown) => fn(input as never); } } });
+  const session = openShared(lab, plan, new WorldJournal(worldFile));
   const researchers = plan.actors.filter((a): a is ResearcherDecl => a.kind === 'researcher');
   const runs: Record<string, { journal: string | null; stoppedBy?: string; error?: string }> = {};
   await Promise.all(researchers.map(async (r) => {
