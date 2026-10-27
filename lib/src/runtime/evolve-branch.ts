@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { artifactsLab, latestVersionOf } from '../worlds/artifacts/lab.ts';
-import type { Delegations } from '../learn/assisted/delegation.ts';
+import { cutLabel, type Delegations } from '../learn/assisted/delegation.ts';
 import { ArtifactWorld } from '../artifacts/world.ts';
 import { artifactEvaluator } from '../learn/evolve/artifacts.ts';
-import { runSearch, type Evaluator, type Mutator, type SearchEvent, type SearchManifest, type Seed } from '../learn/evolve/engine.ts';
+import { EXPORTED_AT_MOST, runSearch, type Evaluator, type Mutator, type SearchEvent, type SearchManifest, type Seed } from '../learn/evolve/engine.ts';
 import { balanced } from '../learn/evolve/policy.ts';
 
 /* ============================================================================
@@ -33,6 +33,8 @@ export interface EvolveBranchSpec {
   readonly refs: readonly string[];
   /** The requester's record as it stood, readable by the consolidation as experience. */
   readonly cut: string;
+  /** The runs the requester reads as experience: readable by the consolidation too, under the same labels. */
+  readonly experience?: readonly string[];
   readonly seed: number;
   readonly options: Readonly<Record<string, string>>;
   /** The arguments of its world, as a run of it is started (the consolidation's). */
@@ -45,6 +47,8 @@ export interface EvolveBranchSpec {
   readonly seeds?: readonly Seed[];
   readonly exploration: { readonly workloads: number; readonly seed: number };
   readonly limits: { readonly evaluations: number; readonly attempts: number; readonly tokens: number; readonly machineSeconds?: number };
+  /** Evaluations protected for confirming what it exports, besides what the search leaves of its own. */
+  readonly confirmations?: number;
   /** Seconds of the clock the whole branch may take, from its start: the search stops there, the consolidation is given the rest. */
   readonly wallSeconds?: number;
   readonly consolidation: { readonly tokens: number; readonly rounds: number };
@@ -109,7 +113,8 @@ export function consolidationTask(spec: EvolveBranchSpec): string {
   return ['THE CONSOLIDATION OF AN EVOLUTIONARY SEARCH. Another researcher, investigating this same environment, delegated a search of programs. Its question:', spec.question,
     ...(spec.expected ? ['What it wants back: ' + spec.expected] : []),
     ...(spec.refs.length ? ['Where it suggested starting, in its record: ' + spec.refs.join(', ')] : []),
-    'The search is readable as experience (run "search"): its candidates (each program whole, its parents, its measures on the exploration workloads, its roles: elite, in development, under repair), its attempts and the decisions of its policy. What a mutator declared of a change is its declaration, not a fact. The requester\'s record, as it stood when it asked, is readable too (run "exp1").',
+    'The search is readable as experience (run "search"): its candidates (each program whole, its parents, its measures on the exploration workloads, its roles: elite, in development, under repair), its attempts and the decisions of its policy. What a mutator declared of a change is its declaration, not a fact. The requester\'s record, as it stood when it asked, is readable too (run "' + cutLabel(spec.experience) + '").',
+    ...((spec.experience ?? []).length ? ['The records the requester reads as experience are readable to you too, under its labels: ' + spec.experience!.map((_f, i) => 'exp' + (i + 1)).join(', ') + '.'] : []),
     'Make the delivery USABLE: reproduce what matters - a candidate becomes a version of yours with a change of its files, and you can run it - detect shortcuts or losses, say which candidates deserve adoption and why, and propose the next experiment. You may explain a mechanism where a decision depends on it; you need not write a theory of each candidate. Write down what you find as you go; close your rounds when a model would add nothing.'].join('\n');
 }
 
@@ -117,8 +122,9 @@ export interface EvolveBranchOptions {
   readonly journal: string;
   readonly spec: EvolveBranchSpec;
   readonly mutator: Mutator;
-  /** Runs the consolidation: a run of the general assisted researcher with these arguments (its own process's laboratory). */
-  readonly consolidate: (args: readonly string[]) => Promise<void>;
+  /** Runs the consolidation: a run of the general assisted researcher with these arguments (its own process's laboratory),
+      stopped by the branch's own stop. */
+  readonly consolidate: (args: readonly string[], signal: AbortSignal) => Promise<void>;
   /** The evaluator over the branch's world (tests give their own). */
   readonly evaluator?: (world: ArtifactWorld, seed: number) => Evaluator;
   readonly heartbeatMs?: number;
@@ -150,7 +156,11 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
   const rel = (p: string) => path.relative(path.dirname(o.journal), p).split(path.sep).join('/');
   /* Its wall time counts from when it began, across resumptions. */
   const deadline = spec.wallSeconds ? Date.parse(record.started) + spec.wallSeconds * 1000 : undefined;
-  const minutesLeft = () => (deadline === undefined ? [] : ['--max-minutes', String(Math.max(1, Math.ceil((deadline - Date.now()) / 60000)))]);
+  /* What is left of it, given to the consolidation as it is - never a minute more. */
+  const msLeft = () => (deadline === undefined ? Infinity : deadline - Date.now());
+  const minutesLeft = () => (deadline === undefined ? [] : ['--max-minutes', (Math.floor(msLeft() / 600) / 100).toFixed(2)]);
+  /* A bound the laboratory can keep: at least a hundredth of a minute (a bound of 0 is no bound at all to it). */
+  const tooLittle = () => msLeft() < 600;
 
   try {
     const world = artifactsLab.generate(spec.seed, spec.options as never).world as ArtifactWorld;
@@ -173,39 +183,57 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
          may fit them; the delivery says whether the confirmation held it. */
       const s = manifest.state;
       /* What the search found - never its start, which the report gives apart, as what each candidate is measured against. */
-      const exported = [...new Set([...s.elites, ...s.development.map((d) => d.hash)])].filter((h) => h !== s.order[0]).slice(0, 6);
+      const exported = [...new Set([...s.elites, ...s.development.map((d) => d.hash)])].filter((h) => h !== s.order[0]).slice(0, EXPORTED_AT_MOST);
+      /* Its confirmations share the branch's budget and time (an external review, 25/10/2026: 4 evaluations granted ran 7):
+         what the search left of its evaluations and machine seconds, before its deadline; a candidate beyond them is
+         delivered as not confirmed, and why. */
       const confirmations: J[] = [];
+      const spent = { evaluations: 0, machine_seconds: 0 };
       if (!controller.signal.aborted && manifest.stoppedBy !== 'cancelled') {
         const confirm = evaluatorAt(spec.exploration.seed + 7919);
         for (const h of exported) {
           if (s.candidates[h]?.evaluation?.correct !== 'yes') continue;
+          const left = spec.limits.evaluations - manifest.cost.evaluations + (spec.confirmations ?? 0) - spent.evaluations;
+          const machineLeft = spec.limits.machineSeconds === undefined ? Infinity : spec.limits.machineSeconds - (manifest.cost.machine_seconds ?? 0) - spent.machine_seconds;
+          if (left <= 0 || machineLeft <= 0 || msLeft() <= 0 || controller.signal.aborted) {
+            confirmations.push({ program: h, not_confirmed: left <= 0 ? 'its evaluations are spent' : machineLeft <= 0 ? 'its machine seconds are spent' : msLeft() <= 0 ? 'its wall time is spent' : 'stopped' });
+            continue;
+          }
           confirm.adopt(h, s.candidates[h].files);
-          const e = await confirm.evaluate(h);
-          confirmations.push({ program: h, correct: e.correct, quality: e.quality, feedback: e.feedback });
+          const began = Date.now();
+          const { evidence, ...e } = await confirm.evaluate(h);
+          const seconds = (Date.now() - began) / 1000;
+          spent.evaluations++; spent.machine_seconds += seconds;
+          confirmations.push({ program: h, correct: e.correct, quality: e.quality, feedback: e.feedback, seconds, ...(evidence !== undefined ? { evidence } : {}) });
         }
       }
-      log('search_finished', { manifest: rel(f.manifest), hash: manifest.hash, stoppedBy: manifest.stoppedBy, cost: manifest.cost, inherited: manifest.inherited, exported, confirmations });
+      log('search_finished', { manifest: rel(f.manifest), hash: manifest.hash, stoppedBy: manifest.stoppedBy,
+        cost: { ...manifest.cost, evaluations: manifest.cost.evaluations + spent.evaluations, machine_seconds: (manifest.cost.machine_seconds ?? 0) + spent.machine_seconds, confirmations: spent },
+        inherited: manifest.inherited, exported, confirmations });
       finished = has('search_finished');
     }
     spentSoFar = Number(finished!.cost?.tokens) || 0;
     if (controller.signal.aborted || finished!.stoppedBy === 'cancelled') return finish('cancelled');
 
     /* --- The consolidation: requested once, launched once, resumed if it began and stopped --------------------------- */
+    /* Never past the branch's wall time: delivered unreviewed, said why. */
+    if (tooLittle() && !has('consolidation_requested')) { log('consolidation_skipped', { why: 'the branch\'s wall time is spent' }); return finish('completed'); }
     phase = 'consolidating';
     if (!has('consolidation_requested')) log('consolidation_requested', { journal: rel(f.consolidation), tokens: spec.consolidation.tokens, rounds: spec.consolidation.rounds });
     const current = (): string => path.resolve(path.dirname(o.journal), [...events].reverse().find((e) => e.type === 'consolidation_resumed' || e.type === 'consolidation_requested')!.journal);
     const consolidation = readJson(current());
     if (!endOf(consolidation)) {
       try {
-        if (consolidation) {
+        if (tooLittle()) log('consolidation_failed', { why: 'the branch\'s wall time is spent: not resumed' });
+        else if (consolidation) {
           const derived = f.base + '.consolidation.r' + (events.filter((e) => e.type === 'consolidation_resumed').length + 1) + '.json';
           const from = current();
           log('consolidation_resumed', { from: rel(from), journal: rel(derived) });
-          await o.consolidate(['--resume', from, '--out', derived]);
+          await o.consolidate(['--resume', from, ...minutesLeft(), '--out', derived], controller.signal);
         } else {
           await o.consolidate([...spec.worldArgs, '--researcher', 'assisted', '--attempts', String(spec.consolidation.rounds), '--max-tokens', String(spec.consolidation.tokens),
-            '--task', consolidationTask(spec), '--experience', spec.cut, '--experience-mode', 'meta', '--experience-scope', 'all', '--evolution-search', f.manifest,
-            '--no-grade', '--no-ablation', ...minutesLeft(), '--out', current()]);
+            '--task', consolidationTask(spec), '--experience', [...(spec.experience ?? []), spec.cut].join(','), '--experience-mode', 'meta', '--experience-scope', 'all', '--evolution-search', f.manifest,
+            '--no-grade', '--no-ablation', ...minutesLeft(), '--out', current()], controller.signal);
         }
       } catch (e) { log('consolidation_failed', { why: String((e as Error)?.message ?? e).slice(0, 300) }); }
     }
@@ -223,6 +251,7 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
     const req = has('consolidation_requested');
     const consJournal = req ? path.resolve(path.dirname(o.journal), [...events].reverse().find((e) => e.type === 'consolidation_resumed' || e.type === 'consolidation_requested')!.journal) : null;
     const consEnded = consJournal ? endOf(readJson(consJournal)) : null;
+    const skipped = has('consolidation_skipped');
     /* Every journal of the consolidation (a resumed one replays its history: its finding counts the whole). */
     const consTokens = consJournal ? readJson(consJournal.replace(/\.json$/, '.finding.json'))?.cost?.total?.llm_tokens : undefined;
     const search = done?.cost ?? { attempts: 0, evaluations: 0, tokens: lines(f.search).filter((e) => e.type === 'attempt_answered').reduce((a, e) => a + (Number(e.tokens) || 0), 0), tokens_unknown: 0 };
@@ -234,7 +263,7 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
       cost: { total: { llm_tokens: total }, search: { llm_tokens: Number(search.tokens) || 0, attempts: search.attempts, evaluations: search.evaluations },
         consolidation: { llm_tokens: typeof consTokens === 'number' ? consTokens : null }, ...(unknown.length ? { unknown } : {}) } }, null, 2));
     log('end', { stoppedBy, search: done ? { manifest: done.manifest, hash: done.hash, stoppedBy: done.stoppedBy } : null,
-      consolidation: consJournal ? { journal: rel(consJournal), state: consEnded ? 'reviewed' : 'unreviewed' } : null, spent: total });
+      consolidation: consJournal ? { journal: rel(consJournal), state: consEnded ? 'reviewed' : 'unreviewed' } : skipped ? { journal: null, state: 'unreviewed', why: skipped.why } : null, spent: total });
     phase = 'ended';
     status('ended');
     return record;

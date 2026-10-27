@@ -714,6 +714,52 @@ La verificación offline reconstruye también las semillas, a partir de `search_
 políticas, el paralelismo y el perfil de leyes siguen rechazándose como no implementados. Las pruebas están en
 `lib/test/evolve-delegation.test.ts` (H4).
 
+### 16.5 Revisión externa de H1–H2 y semillas, conciliada (25/10/2026)
+
+Nueve fallos, corregidos con una prueba de regresión cada uno, sobre el caso que se reprodujo
+(`lib/test/evolve-review.test.ts`):
+1. **Reanudar con el plazo vencido perdía trabajo registrado.** Ahora todo lo que el registro tiene se recupera antes de
+   decidir nada nuevo: la cancelación y el plazo sólo detienen trabajo nuevo. Al reanudar sobre su propio fichero, lo
+   que ya contiene no se reescribe ni se recorta; sólo se añade lo que viene después.
+2. **`lab verify` ignoraba las búsquedas.** Ahora el resultado del comando cuenta `searches[].holds`, y muestra cada
+   búsqueda con su motivo. `verifySearch` comprueba primero el sello y luego compara el manifiesto entero (estado,
+   coste, heredado, parada).
+3. **Los límites no cubrían toda la rama:**
+   - las confirmaciones comparten el presupuesto de evaluaciones y el plazo: de lo concedido, una cuarta parte (al menos
+     una, desde dos) queda protegida para confirmar, y la búsqueda y sus confirmaciones nunca pasan de lo concedido;
+   - un candidato fuera de presupuesto se entrega como no confirmado, con su motivo;
+   - pasado el plazo no hay consolidación (`consolidation_skipped`, entrega `unreviewed`), y la consolidación recibe
+     exactamente lo que queda, sin un minuto mínimo.
+4. **El gasto desconocido se liberaba.** Un finding que declara gasto desconocido se liquida reteniendo la concesión
+   como incierta, con lo observado aparte. Lo mismo para un run con `usage_unknown`.
+5. **Se descartaba la evidencia.** Cada evaluación guarda en su evento las ejecuciones y medidas de las que salió su
+   veredicto, nunca en el estado. La verificación, con la tarea (tomada de la petición de la rama, `.evolve.json`),
+   vuelve a juzgar cada evaluación desde su evidencia (`rejudge`, con `judge`) y exige la calidad y corrección
+   registradas.
+6. **La parada no llegaba a la consolidación.** Ahora `consolidate` recibe la señal del supervisor, y `run-evolve.ts`
+   la pasa a `runLaboratory`.
+7. **El contrato de un reinicio estaba incompleto.** El contrato lleva `io`: el comando, las entradas tal como se dan,
+   las salidas, y un workload de exploración con lo que responde la referencia. Nunca lleva código.
+8. **Una cadena de reparaciones renovaba plaza.** Un programa hecho por una reparación nunca recibe una plaza propia, ni
+   después de agotar su cuota (`repair_exhausted`).
+9. **Al continuar se perdían élites.** Marcar la evidencia como obsoleta conserva las élites: son lo primero que se
+   vuelve a medir, y sólo sus medidas nuevas deciden si siguen.
+
+### 16.6 Segunda revisión de los mismos cambios, conciliada (25/10/2026)
+
+Cinco fallos más, con su prueba de regresión en `lib/test/evolve-review.test.ts`:
+1. **Una consolidación omitida rompía la entrega.** Ahora una consolidación sin diario (omitida por el plazo) se entrega
+   como `unreviewed`, con su motivo.
+2. **Una llamada sin respuesta se liquidaba como gasto cero.** Ahora la llamada cuya respuesta no se conoce (al reanudar
+   tras una caída, o al cancelar en curso) cuenta como gasto desconocido, y la rama retiene su concesión como incierta.
+3. **Se rechazaban búsquedas válidas cerradas por tiempo o cancelación.** Una verificación que agota el registro donde
+   la búsqueda terminó reproduce la causa de cierre registrada, porque el reloj y el solicitante no los decide el
+   registro.
+4. **Se perdían élites pendientes de reevaluación.** La cola de reevaluación (`reevaluate`) se fija al marcar la
+   evidencia como obsoleta (élites primero) y se recorre en ese orden, aunque la selección se recalcule entretanto.
+5. **El redondeo podía desactivar el límite de la consolidación.** Nunca se le da un límite de cero minutos, que para el
+   laboratorio significa sin límite. Con menos de una centésima de minuto no se inicia ni se reanuda la consolidación.
+
 ### H3. Uso real en ThreeSum
 
 Ejecutar `threesum-subquadratic@1` desde su base cuadrática, con historial autorizado y configuración explícita en el

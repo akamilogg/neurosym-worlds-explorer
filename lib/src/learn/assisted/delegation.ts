@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Experience } from './experience.ts';
 import { searchReader } from '../evolve/experience.ts';
-import type { SearchManifest } from '../evolve/engine.ts';
+import { EXPORTED_AT_MOST, type SearchManifest } from '../evolve/engine.ts';
 
 /* ============================================================================
  * DELEGATING AN INVESTIGATION FROM ANOTHER (SPEC-DELEGACION-INVESTIGACIONES): a researcher opens a BRANCH to investigate a
@@ -48,6 +48,10 @@ const BUDGET_FIELDS = new Set(['evaluations', 'tokens', 'rounds']);
 
 /** What the search part of an evolutionary branch may spend of its grant; the rest is the consolidation's, protected (§12). */
 const SEARCH_SHARE = 0.75;
+/** The requester's record in a branch's experience: after the runs it reads (which keep their labels), the next label. */
+export const cutLabel = (experience: readonly string[] | undefined): string => 'exp' + ((experience ?? []).length + 1);
+/** The evaluations of an evolutionary branch protected for confirming what it exports (§5). */
+const confirmShare = (evaluations: number): number => (evaluations >= 2 ? Math.min(EXPORTED_AT_MOST, Math.max(1, Math.floor(evaluations / 4))) : 0);
 
 /** How a branch is started: a run of the laboratory `lab` with `args`, writing `journal` (a process of its own, or - in
     tests - the same process). */
@@ -133,6 +137,9 @@ export class Delegations {
     readonly history: readonly J[];
     /** Why a branch cannot be opened in this world at all (an environment outside the harness), or null. */
     readonly unsupported: string | null;
+    /** The runs the requester reads as experience (their files, in its order): a branch reads them too, under the same
+        labels - access to the same resources, never a summary of them. */
+    readonly experience?: readonly string[];
     /** An evolutionary branch's world and where it starts: present only where the world has an evaluator (artifacts). */
     readonly evolve?: {
       readonly seed: number;
@@ -440,18 +447,22 @@ export class Delegations {
     const task = ['A DELEGATED INVESTIGATION. Another researcher, investigating this same environment, asks you:', question,
       ...(expected ? ['What it wants back: ' + expected] : []),
       ...(refs.length ? ['Where it suggests you start, in its record: ' + refs.join(', ')] : []),
-      'Its record, as it stood when it asked, is readable as experience (run "exp1"): its beliefs, notes, models and experiments - its word, not evidence; test what you take from it here, in your own laboratory.',
+      'Its record, as it stood when it asked, is readable as experience (run "' + cutLabel(this.o.experience) + '"): its beliefs, notes, models and experiments - its word, not evidence; test what you take from it here, in your own laboratory.',
+      ...((this.o.experience ?? []).length ? ['The records it reads as experience are readable to you too, under the same labels it uses: ' + this.o.experience!.map((_f, i) => 'exp' + (i + 1)).join(', ') + '.'] : []),
       'Investigate with your own instruments. What you find goes back to it: write it down as you go - what you investigated, what you found, the directions you propose and what tells them apart, your evidence apart from your interpretation, the alternatives you ruled out, your uncertainties. Strengthening its view, refuting an alternative, or finding no direction you can defend are results too. You need not end with a model: close your rounds when a model would add nothing.'].join('\n');
     const args = [...this.o.worldArgs, '--researcher', 'assisted', '--attempts', String(rounds), '--max-tokens', String(tokens), '--task', task,
-      '--experience', cutFile, '--experience-mode', 'meta', '--experience-scope', 'all', '--no-grade', '--no-ablation'];
+      '--experience', [...(this.o.experience ?? []), cutFile].join(','), '--experience-mode', 'meta', '--experience-scope', 'all', '--no-grade', '--no-ablation'];
     const granted = { rounds, tokens, ...(evolve ? { evaluations: evolve.evaluations } : {}) };
     /* Its supervisor's request: the search's part of the grant and the consolidation's, protected (§12). */
     const specFile = path.join(base + '.branches', name + '.evolve.json');
     if (evolve) {
       const search = Math.floor(tokens * SEARCH_SHARE);
       fs.writeFileSync(specFile, JSON.stringify({ format: 'evolution-branch@1', id, question, expected, refs, cut: cutFile, seed: this.o.evolve!.seed, options: this.o.evolve!.options,
-        worldArgs: this.o.worldArgs, start: evolve.start, continueFrom: evolve.continueFrom, seeds: evolve.seeds, exploration: { workloads: c.evolve!.workloads, seed: 104729 * (round + 1) + k },
-        limits: { evaluations: evolve.evaluations, attempts: evolve.evaluations * 3, tokens: search, ...(c.evolve!.machineSeconds ? { machineSeconds: c.evolve!.machineSeconds } : {}) },
+        worldArgs: this.o.worldArgs, start: evolve.start, continueFrom: evolve.continueFrom, seeds: evolve.seeds, experience: this.o.experience ?? [], exploration: { workloads: c.evolve!.workloads, seed: 104729 * (round + 1) + k },
+        /* Of its evaluations, a quarter (at least one, from two on) protected for confirming what it exports: the search
+           and its confirmations never run more than were granted. */
+        limits: { evaluations: evolve.evaluations - confirmShare(evolve.evaluations), attempts: evolve.evaluations * 3, tokens: search, ...(c.evolve!.machineSeconds ? { machineSeconds: c.evolve!.machineSeconds } : {}) },
+        confirmations: confirmShare(evolve.evaluations),
         ...(c.evolve!.wallSeconds ? { wallSeconds: c.evolve!.wallSeconds } : {}), consolidation: { tokens: tokens - search, rounds } }, null, 2));
     }
     /* Recorded before it is started: who asked what, with what, from which cut, in which laboratory, and what is reserved. */
@@ -500,9 +511,14 @@ export class Delegations {
         if (l.state === 'dead' || l.state === 'never') this.fail(b, l);
         continue;
       }
-      const spent = Number(readJson(b.journal.replace(/\.json$/, '.finding.json'))?.cost?.total?.llm_tokens) || Number(end.console_usage?.llm_tokens_live ?? 0) + Number(end.console_usage?.llm_tokens_replayed ?? 0);
+      const finding = readJson(b.journal.replace(/\.json$/, '.finding.json'));
+      const spent = Number(finding?.cost?.total?.llm_tokens) || Number(end.console_usage?.llm_tokens_live ?? 0) + Number(end.console_usage?.llm_tokens_replayed ?? 0);
       b.state = end.stoppedBy === 'cancelled' ? 'cancelled' : end.stoppedBy === 'llm_error' || end.stoppedBy === 'diverged' || end.stoppedBy === 'failed' ? 'failed' : 'completed';
-      this.settle(b, spent, true);
+      /* A spending its record says it does not know (answers without usage, a phase whose cost was not told): held at its
+         grant, what was observed apart - never released as if it were what it spent (an external review, 25/10/2026). */
+      const unknown = (Array.isArray(finding?.cost?.unknown) && finding.cost.unknown.length > 0) || end.console_usage?.usage_unknown === true;
+      if (unknown) this.settle(b, b.granted.tokens, true, { at_least: spent, held: b.granted.tokens });
+      else this.settle(b, spent, true);
     }
   }
 
@@ -591,13 +607,14 @@ function evolveReportOf(b: Branch): Record<string, unknown> {
     return { program: h, files: c.files, parents: c.parents, origin: c.origin, correct: c.evaluation?.correct ?? 'unchecked', quality: c.evaluation?.quality ?? null,
       measures: c.evaluation?.feedback ?? null, roles: [s!.elites.includes(h) ? 'elite' : '', s!.development.some((d) => d.hash === h) ? 'in development' : ''].filter(Boolean),
       ...(why.has(h) ? { declared_why: why.get(h) } : {}),
-      confirmation: conf ? { on: 'new workloads of the same families', correct: conf.correct, quality: conf.quality } : 'not confirmed' };
+      confirmation: !conf ? 'not confirmed' : conf.not_confirmed ? 'not confirmed: ' + conf.not_confirmed : { on: 'new workloads of the same families', correct: conf.correct, quality: conf.quality } };
   });
   const cons = end.consolidation ?? null;
-  const consJournal = cons ? path.resolve(path.dirname(b.journal), cons.journal) : null;
+  /* A consolidation may have no record at all (skipped: the branch's wall time was spent). */
+  const consJournal = typeof cons?.journal === 'string' ? path.resolve(path.dirname(b.journal), cons.journal) : null;
   const consolidation = consJournal && cons.state === 'reviewed'
     ? investigationReportOf({ ...b, journal: consJournal, mode: undefined })
-    : { state: 'unreviewed', why: events.find((e) => e.type === 'consolidation_failed')?.why ?? (cons ? 'its consolidation did not end' : 'no consolidation ran') };
+    : { state: 'unreviewed', why: events.find((e) => e.type === 'consolidation_failed')?.why ?? cons?.why ?? (consJournal ? 'its consolidation did not end' : 'no consolidation ran') };
   const finding = readJson(b.journal.replace(/\.json$/, '.finding.json'));
   return {
     branch: b.id, mode: 'evolve', question: b.question, state: b.state, ...(b.why ? { why: b.why } : {}), ...spendingOf(b),

@@ -12,6 +12,9 @@ import { dispatched, evaluated, initialState, markStale, next, register, respond
  * call whose answer is not known is never dispatched again.
  * ========================================================================== */
 
+/** The most candidates an evolutionary branch exports, and so confirms (§4, §5). */
+export const EXPORTED_AT_MOST = 6;
+
 /** The engine's version, part of a generator's identity (SPEC-DELEGACION-EVOLUTIVA §15). */
 export const EVOLVE_ENGINE = 'native@1';
 
@@ -27,7 +30,9 @@ export interface Evaluator {
   /** A program known by its content (imported from a sealed search): made known to the evaluator, refused if its content
       does not hash to it. An evaluator judges content, never a hash it happens to know. */
   adopt(hash: string, files: Readonly<Record<string, string>>): string | null;
-  evaluate(hash: string): Promise<Evaluation>;
+  /** A candidate measured: what the policy reads, and the evidence its verdict was computed from (every run, every measure),
+      kept in the record so the verdict can be computed again - never in the search's state. */
+  evaluate(hash: string): Promise<Evaluation & { readonly evidence?: unknown }>;
 }
 
 /** A failure to get an answer at all (the network, the provider): the infrastructure's, never the program's. */
@@ -138,8 +143,13 @@ export function parseAnswer(text: string): { files: Record<string, string | null
 export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchManifest; events: SearchEvent[] }> {
   const identity = await o.evaluator.identity();
   const events: SearchEvent[] = [];
-  fs.writeFileSync(o.out, '');
-  const log = (e: SearchEvent) => { events.push(e); fs.appendFileSync(o.out, JSON.stringify(e) + '\n'); };
+  /* Resumed onto its own record (the file the record was read from): what it holds is never written again nor cut - only
+     what comes after it is appended. Anywhere else (a verification, a copy), the whole record is written. */
+  const sameFile = Boolean(o.recorded?.length) && fs.existsSync(o.out)
+    && fs.readFileSync(o.out, 'utf8').split('\n').filter(Boolean).length === o.recorded!.length;
+  const kept = sameFile ? o.recorded!.length : 0;
+  if (!sameFile) fs.writeFileSync(o.out, '');
+  const log = (e: SearchEvent) => { events.push(e); if (events.length > kept) fs.appendFileSync(o.out, JSON.stringify(e) + '\n'); };
   /* The record served by id: what was answered or measured, and what was planned (a plan without its answer is a call
      whose answer is not known). */
   const rec = new Map<string, SearchEvent[]>();
@@ -180,10 +190,12 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
     if (done && done.hash !== hash) throw new Error('replay diverged at ' + id + ': it evaluated ' + done.hash + ', now ' + hash);
     if (!done && o.recorded && !o.live) { stop('record_end'); return false; }
     const began = Date.now();
-    const e: Evaluation = done ? done.result : await o.evaluator.evaluate(hash);
+    const measured = done ? null : await o.evaluator.evaluate(hash);
+    const { evidence, ...fresh } = measured ?? ({} as Evaluation & { evidence?: unknown });
+    const e: Evaluation = done ? done.result : fresh as Evaluation;
     const seconds = done ? Number(done.seconds) || 0 : (Date.now() - began) / 1000;
     cost.machine_seconds += seconds;
-    log({ type: 'evaluation', evaluation: id, hash, result: e, seconds });
+    log({ type: 'evaluation', evaluation: id, hash, result: e, seconds, ...(done ? (done.evidence !== undefined ? { evidence: done.evidence } : {}) : evidence !== undefined ? { evidence } : {}) });
     evaluated(state, hash, e, { plan, reevaluation });
     return true;
   };
@@ -206,12 +218,20 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
     if (!duplicate) await evaluate(seed.hash, null, false);
   }
 
+  /* What its record holds is recovered whole before anything new is decided: a cancellation or a deadline stops new work,
+     never the rebuilding of what was already done (an external review, 25/10/2026: a search resumed past its deadline
+     kept 1 of its 3 candidates). */
+  const inRecord = (type: string, id: string) => Boolean(rec.get(type + '|' + id)?.length);
+  const nextEvaluation = () => 'evaluation:' + (evalSeq + 1) + (o.continueFrom ? '@' + o.continueFrom.hash : '');
   while (!stoppedBy) {
-    if (o.signal?.aborted) { stop('cancelled'); break; }
-    if (cost.tokens >= o.limits.tokens) { stop('tokens'); break; }
-    if (o.deadline !== undefined && !verifying && (o.now?.() ?? Date.now()) >= o.deadline) { stop('wall_time'); break; }
-    /* Stale evidence the search would go on from is measured again first, in registration order. */
     const stale = staleActive(state);
+    const replaying = stale.length ? inRecord('evaluation', nextEvaluation()) : inRecord('attempt_planned', next(state).attempt);
+    if (!replaying) {
+      if (o.signal?.aborted) { stop('cancelled'); break; }
+      if (o.deadline !== undefined && !verifying && (o.now?.() ?? Date.now()) >= o.deadline) { stop('wall_time'); break; }
+    }
+    if (cost.tokens >= o.limits.tokens) { stop('tokens'); break; }
+    /* Stale evidence the search would go on from is measured again first, in registration order. */
     if (stale.length) { await evaluate(stale[0], null, true); continue; }
     if (cost.attempts >= o.limits.attempts) { stop('attempts'); break; }
     if (cost.evaluations >= o.limits.evaluations) { stop('evaluations'); break; }
@@ -239,11 +259,12 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
     let answer: { text: string; tokens: number | null } | null = null;
     if (answered) answer = { text: answered.text, tokens: answered.tokens };
     else if (failed) { log(failed); responded(state, plan, { kind: 'transport', why: failed.why }); continue; }
-    else if (planned) { log({ type: 'attempt_uncertain', attempt: plan.attempt }); responded(state, plan, { kind: 'uncertain' }); continue; }
+    /* A call whose answer is not known may have been made, and spent: its spending is not known (never zero). */
+    else if (planned) { log({ type: 'attempt_uncertain', attempt: plan.attempt }); responded(state, plan, { kind: 'uncertain' }); cost.tokens_unknown++; continue; }
     else {
       try { answer = await o.mutator.propose(context, o.signal); }
       catch (e) {
-        if (o.signal?.aborted) { log({ type: 'attempt_uncertain', attempt: plan.attempt }); responded(state, plan, { kind: 'uncertain' }); stop('cancelled'); break; }
+        if (o.signal?.aborted) { log({ type: 'attempt_uncertain', attempt: plan.attempt }); responded(state, plan, { kind: 'uncertain' }); cost.tokens_unknown++; stop('cancelled'); break; }
         const why = String((e as Error)?.message ?? e).slice(0, 200);
         log({ type: 'attempt_failed', attempt: plan.attempt, why, transport: e instanceof TransportFailure });
         responded(state, plan, { kind: 'transport', why });
@@ -270,6 +291,9 @@ export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchMan
     responded(state, plan, duplicate ? { kind: 'duplicate', hash: made.hash } : { kind: 'new', hash: made.hash });
     if (!duplicate) await evaluate(made.hash, plan, false);
   }
+  /* A record only verified, used up where its search ended: it ends as the search did (a wall time, a cancellation are
+     the clock's and the requester's, not the record's to decide again). */
+  if (stoppedBy === 'record_end' && verifying) { const ended = (o.recorded ?? []).find((e) => e.type === 'search_finished'); if (ended) stoppedBy = String(ended.stoppedBy); }
   const body = { format: 'evolution-search@1' as const, profile: o.profile, evaluator: identity, question: o.question, state: cloneJson(state),
     events: sha(events), cost, inherited, stoppedBy };
   const manifest: SearchManifest = { ...body, hash: sha(body) };

@@ -342,3 +342,16 @@ Para probar si un investigador estancado delega (`lib/examples/batch.artifacts-t
 Un linaje que ya tiene fondo lo conserva, porque su libro se abrió con él: darle otro se rechaza. Un run reanudado sin
 `--attempts` sigue con el fondo de sus argumentos. Su prueba está en `lib/test/delegation-review.test.ts`.
 
+### 10.7 Una rama lee lo que lee su solicitante (25/10/2026)
+
+Hasta ahora una rama sólo recibía el corte de su solicitante: los runs que el solicitante leía como experiencia no eran
+accesibles para ella, y sólo podía aprovechar lo que el solicitante hubiera leído y dejado registrado. Era un problema de
+acceso a recursos, y se resuelve como tal, nunca con un resumen obligatorio:
+- una rama, y la consolidación de una rama evolutiva, reciben los mismos runs de experiencia que su solicitante, en el
+  mismo orden y con las mismas etiquetas (`exp1`, `exp2`…);
+- el corte del solicitante va detrás, con la etiqueta siguiente, y el texto del encargo nombra cada etiqueta;
+- las ramas del senior reciben los runs que lee el junior, resolviendo las rutas con la raíz del proyecto, que ahora se
+  le pasa al operador de agentes.
+
+La prueba está en `lib/test/evolve-review.test.ts`.
+

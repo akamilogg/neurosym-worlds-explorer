@@ -1,0 +1,114 @@
+{
+  "format": "batch@1",
+  "id": "artifacts-threesum-stall",
+  "concurrency": 1,
+  "budget": {
+    "tokens_per_run": 4000000
+  },
+  "runs": [
+    {
+      "id": "threesum-stall-A-delegation",
+      "lab": "artifacts",
+      "condition": "A - a new investigation of threesum-subquadratic@1 (judged on growth) from its quadratic base, with the records of runs 6 and 7 of 3SUM (judged then on speed against the cubic base) as experience, its branches reading them too; normal investigation and delegation; at round 2 the operator asks it to delegate an investigation to find a direction past the stall, pointing to two programs of those runs. The same as B but for the evolutionary search",
+      "researcher": "assisted",
+      "args": [
+        "--artifact",
+        "threesum-subquadratic",
+        "--seed",
+        "1",
+        "--attempts",
+        "16",
+        "--validations",
+        "5",
+        "--memory",
+        "selective",
+        "--max-minutes",
+        "600",
+        "--help-budget",
+        "8",
+        "--experience",
+        "D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-6/threesum-subquadratic.json,D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-7/threesum-subquadratic.json",
+        "--experience-mode",
+        "meta",
+        "--delegation-fund",
+        "1200000",
+        "--delegation-tokens",
+        "600000",
+        "--delegation-rounds",
+        "3",
+        "--delegation-max-rounds",
+        "6",
+        "--task",
+        "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
+      ],
+      "messages": [
+        {
+          "round": 2,
+          "text": "Earlier investigations of this task (your experience exp1 and exp2, judged then against another base, by speed rather than growth) stalled at quadratic solutions; their programs for bounded ranges did not solve the wide range directly - whether one of them can be adapted is open. Delegate now an investigation to find a direction that gets past that stall: {\"delegate\": {\"question\": \"...\", \"refs\": [\"exp:exp1#artifact:cbdcdfec79540eab\", \"exp:exp2#artifact:37269ec87e0eda7a\"], ...}} - two programs of those runs, of different mechanisms, readable by the branch in those records. What it returns is a contribution to test, not a result: judge it with your own runs and checks, and adopt, change or discard it with evidence."
+        }
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    },
+    {
+      "id": "threesum-stall-B-evolve",
+      "lab": "artifacts",
+      "condition": "B - the same as A (start, experience, budget, request, the same two programs) with the evolutionary search added: at round 2 the operator asks it to delegate an evolutionary search from its current version with those two programs as seeds. Its fund is the same as A's, mutation and consolidation included",
+      "researcher": "assisted",
+      "args": [
+        "--artifact",
+        "threesum-subquadratic",
+        "--seed",
+        "1",
+        "--attempts",
+        "16",
+        "--validations",
+        "5",
+        "--memory",
+        "selective",
+        "--max-minutes",
+        "600",
+        "--help-budget",
+        "8",
+        "--experience",
+        "D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-6/threesum-subquadratic.json,D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-7/threesum-subquadratic.json",
+        "--experience-mode",
+        "meta",
+        "--delegation-fund",
+        "1200000",
+        "--delegation-tokens",
+        "600000",
+        "--delegation-rounds",
+        "3",
+        "--delegation-max-rounds",
+        "6",
+        "--delegation-evolve",
+        "60",
+        "--delegation-evolve-workloads",
+        "1",
+        "--delegation-evolve-seeds",
+        "2",
+        "--delegation-evolve-seed-sources",
+        "own,searches,experience",
+        "--task",
+        "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
+      ],
+      "messages": [
+        {
+          "round": 2,
+          "text": "Earlier investigations of this task (your experience exp1 and exp2, judged then against another base, by speed rather than growth) stalled at quadratic solutions; their programs for bounded ranges did not solve the wide range directly - whether one of them can be adapted is open. Delegate now an evolutionary search to find a direction that gets past that stall, from your current version, with two programs of those runs, of different mechanisms, as seeds: {\"delegate\": {\"mode\": \"evolve\", \"question\": \"...\", \"seeds\": [\"exp:exp1#artifact:cbdcdfec79540eab\", \"exp:exp2#artifact:37269ec87e0eda7a\"], \"budget\": {\"evaluations\": 60}}}. What it returns are candidates to test, not results: adopt one with a change of yours and judge it with your own runs and checks, and adopt, change or discard it with evidence."
+        }
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    }
+  ]
+}

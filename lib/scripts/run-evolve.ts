@@ -25,7 +25,7 @@ const client = openAiChatClient({ url: env.LLM_URL ?? '', apiKey: env.LLM_KEY, m
   ...(tuning.maxTokens ? { maxTokens: tuning.maxTokens } : {}), ...(tuning.timeoutMs ? { timeoutMs: tuning.timeoutMs } : {}), ...(tuning.reasoningEffort ? { reasoningEffort: tuning.reasoningEffort } : {}),
   ...(tuning.extraBody ? { extraBody: tuning.extraBody } : {}), jsonMode: true });
 const end = await runEvolutionBranch({ journal, spec, mutator: chatMutator(client),
-  consolidate: async (args) => { await runLaboratory(artifactsLab, { args, root: ROOT, llm: { url: env.LLM_URL, key: env.LLM_KEY, model: env.LLM_MODEL, ...tuning },
+  consolidate: async (args, signal) => { await runLaboratory(artifactsLab, { args, root: ROOT, signal, llm: { url: env.LLM_URL, key: env.LLM_KEY, model: env.LLM_MODEL, ...tuning },
     /* The Judge, as its requester's run has it (a branch of a run that is not --flat needs it). */
     judge: { url: env.JEV_URL || JEV_DEFAULT_URL, key: env.JEV_KEY, model: env.JEV_MODEL } }); } });
 console.log('evolutionary branch ' + spec.id + ': ' + String([...end.events].reverse().find((e: { type: string }) => e.type === 'end')?.stoppedBy));

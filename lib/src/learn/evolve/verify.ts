@@ -3,7 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { stableStringify } from '../../core/hash.ts';
 import { ArtifactStore } from '../../artifacts/store.ts';
-import { validatePatch } from './artifacts.ts';
+import { qualityOf, rejudge, validatePatch } from './artifacts.ts';
+import type { ArtifactTask } from '../../artifacts/task.ts';
+import { createHash } from 'node:crypto';
 import { runSearch, type Evaluator, type SearchEvent, type SearchManifest } from './engine.ts';
 
 /* ============================================================================
@@ -13,6 +15,7 @@ import { runSearch, type Evaluator, type SearchEvent, type SearchManifest } from
  * re-execution; evolving again, another search.
  * ========================================================================== */
 
+const sha = (v: unknown): string => createHash('sha256').update(stableStringify(v)).digest('hex').slice(0, 16);
 const lines = (f: string): SearchEvent[] => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 /** An evaluator that measures nothing: its identity, contract and start as the record has them, its programs made again
@@ -42,10 +45,22 @@ function recordedEvaluator(events: readonly SearchEvent[], startFiles: Readonly<
   };
 }
 
-/** The search of `eventsFile` rebuilt and compared with its sealed manifest; a search it continued found by its hash. */
-export async function verifySearch(eventsFile: string, manifestFile: string, manifestByHash: (hash: string) => SearchManifest | null): Promise<{ holds: boolean; why: string }> {
+/** The search of `eventsFile` rebuilt and compared with its sealed manifest, whole - its seal checked first; a search it
+    continued found by its hash. With its task, each verdict is computed again from the evidence the record kept, and must
+    give the quality and correctness the policy read. */
+export async function verifySearch(eventsFile: string, manifestFile: string, manifestByHash: (hash: string) => SearchManifest | null, task?: ArtifactTask): Promise<{ holds: boolean; why: string }> {
   const events = lines(eventsFile);
   const sealed = JSON.parse(fs.readFileSync(manifestFile, 'utf8')) as SearchManifest;
+  const { hash: _h, ...body } = sealed;
+  if (sha(body) !== sealed.hash) return { holds: false, why: 'its seal is broken: its manifest does not hash to ' + sealed.hash };
+  if (task) {
+    for (const e of events.filter((x) => x.type === 'evaluation')) {
+      if (e.evidence === undefined) return { holds: false, why: e.evaluation + ' kept no evidence: its verdict cannot be computed again' };
+      const checks = rejudge(task, e.evidence);
+      const q = qualityOf(checks), correct = checks.every((c) => c.verdict.correct) ? 'yes' : 'no';
+      if (stableStringify(q) !== stableStringify(e.result.quality) || correct !== e.result.correct) return { holds: false, why: e.evaluation + ': computed again from its evidence, its verdict is not the one recorded' };
+    }
+  }
   const started = events.find((e) => e.type === 'search_started');
   if (!started) return { holds: false, why: 'its record has no start' };
   const continueFrom = started.continues ? manifestByHash(started.continues) : undefined;
@@ -60,8 +75,9 @@ export async function verifySearch(eventsFile: string, manifestFile: string, man
     const { manifest } = await runSearch({ evaluator: recordedEvaluator(events, startFiles, start), mutator: { propose: async () => { throw new Error('verification is offline: an answer the record does not hold is not asked'); } },
       profile: started.profile, question: started.question, limits: started.limits, out, recorded: events, live: false, ...(continueFrom ? { continueFrom } : {}),
       ...(started.seeds ? { seeds: started.seeds } : {}) });
-    if (stableStringify(manifest.state) !== stableStringify(sealed.state)) return { holds: false, why: 'rebuilt from its record, its state differs from the one it sealed' };
-    return { holds: true, why: 'rebuilt from its record without a model or a measure: the same candidates, selection, quotas and cursors as it sealed' };
+    const differs = (Object.keys({ ...manifest, ...sealed }) as (keyof SearchManifest)[]).filter((k) => stableStringify(manifest[k]) !== stableStringify(sealed[k]));
+    if (differs.length) return { holds: false, why: 'rebuilt from its record, its manifest differs from the one it sealed in: ' + differs.join(', ') };
+    return { holds: true, why: 'rebuilt from its record without a model or a measure: the same manifest it sealed (candidates, selection, quotas, cursors, cost)' + (task ? ', every verdict computed again from its evidence' : '') };
   } catch (e) {
     return { holds: false, why: String((e as Error)?.message ?? e).slice(0, 300) };
   } finally { fs.rmSync(path.dirname(out), { recursive: true, force: true }); }

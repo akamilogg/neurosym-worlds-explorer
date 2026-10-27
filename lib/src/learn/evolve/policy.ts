@@ -110,6 +110,9 @@ export interface SearchState {
   tried: Record<string, { hash: string | null; result: string }[]>;
   /** What became of every decision that is not an attempt (admissions, retirements, recoveries): the policy's own account. */
   log: Record<string, unknown>[];
+  /** The candidates to measure again (stale evidence the search goes on from), queued when marked: measured in this order
+      whatever the selection computed meanwhile. */
+  reevaluate?: string[];
 }
 
 export interface Plan {
@@ -237,6 +240,7 @@ export function evaluated(s: SearchState, hash: string, e: Evaluation, o: { plan
   const wasIncorrect = o.plan?.turn === 'repair';
   c.evaluation = e;
   c.stale = false;
+  if (s.reevaluate) s.reevaluate = s.reevaluate.filter((h) => h !== hash);
   for (const d of e.diagnostics) diagnose(s, hash, d);
   if (!o.reevaluation) {
     if (e.executable) { s.generation.misses = 0; } else miss(s, 'it did not run: ' + (e.diagnostics[0] ?? 'no diagnostic'));
@@ -253,8 +257,10 @@ export function evaluated(s: SearchState, hash: string, e: Evaluation, o: { plan
     if (archive(s, hash)) progress = true;
   } else if (e.correct === 'no') {
     const slot = o.plan?.turn === 'repair' ? s.repairs.find((x) => x.work === o.plan!.parents[0]) : undefined;
-    /* A repair still incorrect updates its slot's working version, on the same quota: never a slot of its own. */
+    /* A repair still incorrect updates its slot's working version, on the same quota: never a slot of its own - nor a new
+       one once its quota ran out (an external review, 25/10/2026: a failing chain got slot after slot). */
     if (slot) { slot.work = hash; c.repaired = true; s.log.push({ event: 'repair_continues', origin: slot.origin, work: hash }); }
+    else if (o.plan?.turn === 'repair') { c.repaired = true; s.log.push({ event: 'repair_exhausted', hash, from: o.plan.parents[0] }); }
     else if (!c.repaired) {
       if (s.repairs.length >= s.profile.repair) s.log.push({ event: 'not_admitted_for_repair', hash, why: 'repair_capacity' });
       else { s.repairs.push({ origin: hash, work: hash, quota: s.profile.repairQuota }); c.repaired = true; s.log.push({ event: 'repair_admitted', hash }); }
@@ -426,14 +432,18 @@ export function dispatched(s: SearchState, plan: Plan): void {
 
 /** The candidates the search would go on from whose evidence is stale: re-evaluated first, by registration order. */
 export function staleActive(s: SearchState): string[] {
-  return active(s).filter((h) => s.candidates[h]?.stale).sort((a, b) => s.candidates[a].seq - s.candidates[b].seq);
+  const queued = (s.reevaluate ?? []).filter((h) => s.candidates[h]?.stale);
+  return [...new Set([...queued, ...active(s).filter((h) => s.candidates[h]?.stale).sort((a, b) => s.candidates[a].seq - s.candidates[b].seq)])];
 }
 
 /** Evidence of another evaluator, marked stale: not for elites, the archive or a comparison until measured again. */
 export function markStale(s: SearchState, evaluator: string): number {
   let n = 0;
   for (const h of s.order) { const c = s.candidates[h]; if (c.evaluation && c.evaluation.evaluator !== evaluator) { c.stale = true; n++; } }
-  elites(s);
+  /* The ones the search goes on from are queued to be measured again (elites first), apart from the selection: measuring
+     one recomputes the elites, and the others must not fall out of the queue for being stale meanwhile (an external
+     review, 25/10/2026). */
+  s.reevaluate = [...new Set([...s.elites, ...active(s)])].filter((h) => s.candidates[h]?.stale);
   return n;
 }
 

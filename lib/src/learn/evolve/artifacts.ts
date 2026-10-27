@@ -1,5 +1,6 @@
 import path from 'node:path';
-import type { Verdict } from '../../artifacts/task.ts';
+import { judge, type ArtifactTask, type RunOutcome, type Verdict } from '../../artifacts/task.ts';
+import type { CheckEvidence } from '../../artifacts/world.ts';
 import type { ArtifactWorld } from '../../artifacts/world.ts';
 import type { Evaluator } from './engine.ts';
 import type { Evaluation } from './policy.ts';
@@ -56,14 +57,27 @@ export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration):
   const blind = x.families.filter((f) => world.task.families.find((g) => g.id === f)?.role !== 'laboratory');
   if (blind.length || !x.families.length) throw new Error('an evolutionary branch selects on its laboratories only: ' + (blind.join(', ') || 'none given'));
   let identity: string | null = null;
+  /* The contract of its input and output (§7.2): how a version is run, the files it is given and leaves, and one exploration
+     workload's input with what the reference answers there - what a restart, without the parent's code, needs to write a
+     program from scratch. Taken once, when the evaluator first says who it is. */
+  let io: Record<string, unknown> | null = null;
+  const ioOf = async (): Promise<Record<string, unknown>> => {
+    const family = world.task.families.find((f) => f.id === x.families[0])!;
+    const w = family.workloads(x.seed, 1)[0];
+    const clip = (t: string) => (t.length > 1500 ? { first_characters: t.slice(0, 1500), of: t.length } : { text: t });
+    const [[ref]] = await world.runVersion(world.reference, [w], 1);
+    return { command: world.task.run.command(w, 0).join(' ').replace(/^\S*python\S*/i, 'python'), inputs: Object.fromEntries(Object.entries(world.task.run.inputs(w)).map(([k, v]) => [k, clip(v)])),
+      outputs: world.task.run.outputs, example: { workload: w.params, reference_answers: ref.output === null ? null : clip(ref.output) } };
+  };
   const ev: Evaluator = {
     async identity() {
       identity ??= 'artifacts:' + world.task.id + ':' + world.reference + ':' + x.families.join(',') + ':' + x.workloads + ':' + x.seed + ':' + (await world.environment()).fingerprint;
+      io ??= await ioOf();
       return identity;
     },
     contract: () => ({ about: world.task.about, metric: world.task.objective.metric, direction: world.task.objective.direction,
       ...(world.task.objective.growth ? { judged_on: 'how ' + world.task.objective.metric + ' grows with ' + world.task.objective.growth.param + ' against the reference: the slope, lower is better' } : {}),
-      files: [...world.store.get(world.reference)!.files.keys()], keep: 'what it answers: every answer must be the reference\'s on the same input' }),
+      files: [...world.store.get(world.reference)!.files.keys()], keep: 'what it answers: every answer must be the reference\'s on the same input', ...(io ? { io } : {}) }),
     start: () => (x.start ? { hash: x.start.hash, files: x.start.files } : { hash: world.reference, files: Object.fromEntries(world.store.get(world.reference)!.files) }),
     validate: (files) => validatePatch(files, x.maxFiles ?? 8),
     materialize(from, files) {
@@ -81,7 +95,7 @@ export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration):
       if ('error' in made) return made.error;
       return made.version === hash ? null : 'its content hashes to ' + made.version;
     },
-    async evaluate(hash): Promise<Evaluation> {
+    async evaluate(hash): Promise<Evaluation & { evidence?: unknown }> {
       const checks = await world.check(hash, x.families, x.workloads, x.seed);
       const incorrect = checks.flatMap((c) => c.verdict.incorrect);
       const runs = checks.reduce((a, c) => a + c.evidence.reduce((b, e) => b + e.candidate.length, 0), 0);
@@ -89,10 +103,22 @@ export function artifactEvaluator(world: ArtifactWorld, x: ArtifactExploration):
       const crashed = incorrect.filter((i) => /^(exited with|timed out)/.test(i.why)).length;
       return { executable: crashed < runs, correct: checks.every((c) => c.verdict.correct) ? 'yes' : 'no', quality: qualityOf(checks),
         descriptor: x.descriptor ? x.descriptor(checks) : null, feedback: feedbackOf(checks),
-        diagnostics: [...new Set(incorrect.map((i) => i.workload + ': ' + i.why))].slice(0, 3), evaluator: await ev.identity() };
+        diagnostics: [...new Set(incorrect.map((i) => i.workload + ': ' + i.why))].slice(0, 3), evaluator: await ev.identity(),
+        /* Every run and measure its verdict was computed from (§13): kept in the record, so it can be computed again. */
+        evidence: checks.map((c) => ({ family: c.family, requires: world.task.families.find((f) => f.id === c.family)?.requires ?? 'better', environment: c.environment.fingerprint, runs: c.evidence })) };
     }
   };
   /* A start of the requester's, made known by its content - refused if it does not hash to what it says. */
   if (x.start) { const why = ev.adopt(x.start.hash, x.start.files); if (why) throw new Error('the start ' + x.start.hash + ' cannot be taken: ' + why); }
   return ev;
+}
+
+/** A verdict computed again from its evidence (SPEC-MUNDO-ARTEFACTOS §8): each workload's runs as they were measured, the
+    output whole where it was kept so, by its digest otherwise (the oracles compare answers, and equal digests are equal
+    answers). */
+export function rejudge(task: ArtifactTask, evidence: readonly { readonly family: string; readonly requires: 'better' | 'not_worse'; readonly runs: readonly CheckEvidence[] }[]): Checks {
+  const outcome = (r: CheckEvidence['candidate'][number], workload: string): RunOutcome => ({ workload, exitCode: r.exitCode, timedOut: r.timedOut, metrics: r.metrics,
+    output: r.output === null ? null : 'text' in r.output ? r.output.text : 'sha256:' + r.output.sha256, stderr: r.stderr ?? '' });
+  return evidence.map((f) => ({ family: f.family, verdict: judge(task, f.runs.map((w) => ({ workload: { family: f.family, id: w.workload, seed: 0, params: w.params },
+    reference: w.reference.map((r) => outcome(r, w.workload)), candidate: w.candidate.map((r) => outcome(r, w.workload)) })), f.requires) }));
 }

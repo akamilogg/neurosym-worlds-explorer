@@ -11,7 +11,7 @@ O(n²) (SPEC-MUNDO-ARTEFACTOS §18.12). Son los mismos argumentos que `batch.art
 modo evolutivo, para poder compararlos con la delegación normal:
 - 16 rondas, un senior con 8 órdenes y 4 millones de tokens del junior;
 - un fondo de 1,2 millones para ramas, con 600k por rama;
-- una rama puede ser una investigación normal o una **búsqueda evolutiva** de hasta 30 evaluaciones, con 1 workload por
+- una rama puede ser una investigación normal o una **búsqueda evolutiva** de hasta 60 evaluaciones (54 de búsqueda y 6 protegidas para confirmar; con 30, la recuperación por estancamiento apenas tenía margen para actuar), con 1 workload por
   tamaño de la escalera en cada evaluación;
 - de los 600k de una rama evolutiva, el 75 % es para la búsqueda y el 25 % queda protegido para la consolidación;
 - la búsqueda se limita a la vez por evaluaciones, intentos (3 por evaluación) y tokens;

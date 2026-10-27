@@ -549,6 +549,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), onSelect: (record) => run.log('experience_select', record) }) } : null;
   if (experienceRuns || searchRun) run.log('experience', { mode: experience!.mode, scope: experience!.scope, runs: [...(experienceRuns?.given ?? []), ...(searchRun ? [searchRun.given] : [])] });
   Object.defineProperty(cfg, '__experience', { value: experience, enumerable: false });
+  /* The runs it reads as experience: its branches read them too (their files, resolved as they were read). */
+  Object.defineProperty(cfg, '__experienceFiles', { value: arg('experience') ? arg('experience').split(',').map((f) => f.trim()).filter(Boolean).map((f) => path.resolve(options.root, f)) : [], enumerable: false });
   /* The runs it reads as experience, as an evolutionary branch's seeds may come from them (SPEC-DELEGACION-EVOLUTIVA §8). */
   Object.defineProperty(cfg, '__experienceRuns', { value: experienceRuns?.runs ?? [], enumerable: false });
   /* A divergence ends the run where it is: whatever the loop was doing is left, and nothing more is written. */
@@ -1652,7 +1654,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
        or its loss, said so. */
     ...(delegationCfg.ledger ? { ledger: path.join(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous?.config?.delegation } : {}),
     history: (previous?.events ?? []) as Record<string, any>[],
-    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null
+    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
+    experience: (cfg as { __experienceFiles?: string[] }).__experienceFiles ?? []
   }) : null;
   /* The results of its branches, delivered as they end: messages of their own, never help (a resumed run delivers them at the
      same questions, as any message). */

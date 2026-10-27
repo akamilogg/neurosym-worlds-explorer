@@ -1,4 +1,6 @@
 import { verifySearch } from '../learn/evolve/verify.ts';
+import { artifactsLab } from '../worlds/artifacts/lab.ts';
+import type { ArtifactTask } from '../artifacts/task.ts';
 import type { SearchManifest } from '../learn/evolve/engine.ts';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -231,7 +233,13 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
   const manifests = new Map<string, SearchManifest>();
   for (const p of present.filter((x) => x.endsWith('.search.manifest.json'))) { try { const m = JSON.parse(fs.readFileSync(path.join(dir, p), 'utf8')); manifests.set(m.hash, m); } catch { /* not one */ } }
   const searches: { file: string; holds: boolean; why: string }[] = [];
-  for (const p of searchFiles) searches.push({ file: p, ...(await verifySearch(path.join(dir, p), path.join(dir, p.replace(/\.jsonl$/, '.manifest.json')), (h) => manifests.get(h) ?? null)) });
+  for (const p of searchFiles) {
+    /* Its task, from the branch's request beside it: its verdicts are computed again from their evidence. */
+    const request = path.join(dir, p.replace(/\.search\.jsonl$/, '.evolve.json'));
+    let task: ArtifactTask | undefined;
+    try { const r = JSON.parse(fs.readFileSync(request, 'utf8')); task = (artifactsLab.generate(r.seed, r.options) as { world: { task: ArtifactTask } }).world.task; } catch { /* no request: rebuilt only */ }
+    searches.push({ file: p, ...(await verifySearch(path.join(dir, p), path.join(dir, p.replace(/\.jsonl$/, '.manifest.json')), (h) => manifests.get(h) ?? null, task)) });
+  }
   const environments = [...new Set(JSON.stringify(original).match(/"fingerprint":\s*"[0-9a-f]{16}"/g) ?? [])].map((m) => m.replace(/.*"([0-9a-f]{16})"/, '$1'));
   return {
     format: 'research_verification@1', verified: new Date().toISOString(), manifest_sha256: sha(manifestFile), integrity, reconstruction, searches,

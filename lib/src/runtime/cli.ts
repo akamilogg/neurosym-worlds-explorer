@@ -410,8 +410,9 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const i = v.integrity, r = v.reconstruction;
         out('integrity: ' + (i.holds ? 'holds' : 'does NOT hold' + (i.changed.length ? '; changed ' + i.changed.join(', ') : '') + (i.missing.length ? '; missing ' + i.missing.join(', ') : '') + (i.unlisted.length ? '; not in its manifest ' + i.unlisted.join(', ') : '') + (i.missing_blobs.length ? '; ' + i.missing_blobs.length + ' blobs never packed' : '')));
         out('reconstruction from its record (offline): ' + (r.holds ? 'holds' : 'does NOT hold') + ' - ' + r.events_compared + ' events compared' + (r.first_difference !== undefined ? ', the first different at ' + r.first_difference : '') + ', stopped by ' + r.stopped_by + (r.requests_refused ? ', ' + r.requests_refused + ' requests it would have made refused' : ''));
+        for (const s of v.searches) out('evolutionary search ' + s.file + ': ' + (s.holds ? 'holds' : 'does NOT hold') + ' - ' + s.why);
         out('re-execution: not done; reproduction: not done (verification.json says what each needs)');
-        return i.holds && r.holds ? 0 : 1;
+        return i.holds && r.holds && v.searches.every((s) => s.holds) ? 0 : 1;
       }
       case 'audit': {
         /* Calibration against a person (MA4): a blind sample to label, and the agreement of the labels with the Judge. */
@@ -477,7 +478,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const { chatFromEnv } = await import('../orchestra/launch.ts');
         const { runAgentOperator } = await import('../orchestra/agent-operator.ts');
         out('agent:' + id + ' follows ' + path.basename(journal, '.json') + ' (the run must allow it: --agents ' + id + '=message)');
-        const r = await runAgentOperator({ id, journal, role, llm: chatFromEnv(env, 'SENIOR_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(patience ? { patience: Number(patience) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
+        const r = await runAgentOperator({ id, journal, role, root: ctx.root, llm: chatFromEnv(env, 'SENIOR_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(patience ? { patience: Number(patience) } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
         out('the run ended; the agent\'s decisions: ' + r.file);
         return 0;
       }

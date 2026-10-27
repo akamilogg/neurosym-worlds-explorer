@@ -140,6 +140,8 @@ function addUsage(u: Usage, raw: unknown): void {
 
 export interface AgentOperatorOptions {
   readonly id: string;
+  /** The repository its run was started from: where the paths of the run's configuration are resolved (its experience). */
+  readonly root?: string;
   /** How a branch of the senior's is started (SPEC-DELEGACION-INVESTIGACIONES): a run of its own by default; tests run it here. */
   readonly delegate?: Launcher;
   /** The run it follows (its journal). */
@@ -175,6 +177,14 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) 
 });
 
 const readJson = (file: string): any => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+
+/** The runs a junior reads as experience, from its configuration: their files (resolved against the repository its run was
+    started from, as the junior resolved them) and, by the labels it reads them under, their journals - what the senior's
+    branches read and its evolutionary branches may take seeds from. */
+export function juniorExperienceOf(cfg: Record<string, any>, root: string): { files: string[]; catalog: () => { label: string; journal: Record<string, any> }[] } {
+  const files: string[] = typeof cfg.experience === 'string' ? cfg.experience.split(',').map((f: string) => f.trim()).filter(Boolean).map((f: string) => path.resolve(root, f)) : [];
+  return { files, catalog: () => files.flatMap((f, i) => { const j = readJson(f); return j ? [{ label: 'exp' + (i + 1), journal: j }] : []; }) };
+}
 
 /** The agent's journal next to the run's. */
 export const agentFile = (journal: string, id: string): string => journal.replace(/\.json$/, '') + '.agent-' + id + '.json';
@@ -215,18 +225,22 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     const cfg = (journal?.config ?? {}) as Record<string, any>;
     const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
     if (role !== 'senior' || !cfg.delegation || typeof cfg.capabilities_from?.delegation !== 'number' || !lab) return (branchesOf = null);
+    /* The runs the junior reads as experience, by the labels it reads them under: the senior's branches read them too, and
+       its evolutionary branches may take seeds from them, as the junior's do. */
+    const { files: experienceFiles, catalog: experienceCatalog } = juniorExperienceOf(cfg, o.root ?? process.cwd());
     branchesOf = new Delegations({
       config: { fund: cfg.delegation.fund, tokens: cfg.delegation.tokens, rounds: cfg.delegation.rounds, maxRounds: cfg.delegation.max_rounds, ...(cfg.delegation.evolve ? { evolve: evolveConfigOf(cfg.delegation.evolve) } : {}) },
       journalFile: file, snapshot: () => JSON.parse(fs.readFileSync(o.journal, 'utf8')), lab: lab.id,
       /* An evolutionary branch of the senior's starts from the junior's versions, its world made again from its record. */
       ...(cfg.delegation.evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptionsIn(lab.options, cfg) as Record<string, string>,
-        () => worldFromJournal(JSON.parse(fs.readFileSync(o.journal, 'utf8')), cfg.seed, worldOptionsIn(lab.options, cfg) as Record<string, string>)) } : {}),
+        () => worldFromJournal(JSON.parse(fs.readFileSync(o.journal, 'utf8')), cfg.seed, worldOptionsIn(lab.options, cfg) as Record<string, string>), experienceCatalog) } : {}),
       worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptionsIn(lab.options, cfg)).flatMap(([k, v]) => ['--' + k, String(v)]),
         ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
       launcher: o.delegate ?? (async (l) => ({ pid: (l.evolve ? startEvolveAt(l.journal, l.evolve) : startRunAt(l.journal, labNameOf(l.lab), l.args)).pid })),
       log: (type, data) => { (record.delegation_log ??= []).push({ at: new Date().toISOString(), type, ...data }); save(); },
       history: (record.delegation_log ?? []) as Record<string, any>[],
       unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
+      experience: experienceFiles,
       ...(cfg.delegation.ledger ? { ledger: path.join(path.dirname(o.journal), cfg.delegation.ledger), requester: 'agent:' + o.id } : {})
     });
     return branchesOf;

@@ -352,7 +352,7 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
     const controller = new AbortController();
     /* An agent that fails is said and the run goes on without it: its failure never takes the batch down. */
     const agent = r.agent && options.agentLlm
-      ? runAgentOperator({ id: r.agent.id, journal: out, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, ...(r.agent.role ? { role: r.agent.role } : {}), ...(r.agent.patience ? { patience: r.agent.patience } : {}), signal: controller.signal, say })
+      ? runAgentOperator({ id: r.agent.id, journal: out, root: options.root, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, ...(r.agent.role ? { role: r.agent.role } : {}), ...(r.agent.patience ? { patience: r.agent.patience } : {}), signal: controller.signal, say })
         .catch((e) => { say('batch ' + def.id + ': ' + r.id + ': agent:' + r.agent!.id + ' failed and stopped following the run: ' + traceOf(e)); }) : null;
     try {
       const result = await runLaboratory(LABS[r.lab], { args, root: options.root, llm: options.llm, ...(options.judge ? { judge: options.judge } : {}),

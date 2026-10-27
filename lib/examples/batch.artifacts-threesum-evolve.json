@@ -9,7 +9,7 @@
     {
       "id": "threesum-evolve-free",
       "lab": "artifacts",
-      "condition": "3SUM below O(n^2), judged on growth (threesum-subquadratic@1), from its quadratic base, with a fund for branches in which a branch may also be an evolutionary search (SPEC-DELEGACION-EVOLUTIVA H3), at most 30 evaluations a branch; nothing said of it: does it use it, and does the search leave it something usable?",
+      "condition": "3SUM below O(n^2), judged on growth (threesum-subquadratic@1), from its quadratic base, with a fund for branches in which a branch may also be an evolutionary search (SPEC-DELEGACION-EVOLUTIVA H3), at most 60 evaluations a branch; nothing said of it: does it use it, and does the search leave it something usable?",
       "researcher": "assisted",
       "args": [
         "--artifact", "threesum-subquadratic",
@@ -23,7 +23,7 @@
         "--delegation-tokens", "600000",
         "--delegation-rounds", "3",
         "--delegation-max-rounds", "6",
-        "--delegation-evolve", "30",
+        "--delegation-evolve", "60",
         "--delegation-evolve-workloads", "1",
         "--task", "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
       ],
@@ -51,7 +51,7 @@
         "--delegation-tokens", "600000",
         "--delegation-rounds", "3",
         "--delegation-max-rounds", "6",
-        "--delegation-evolve", "30",
+        "--delegation-evolve", "60",
         "--delegation-evolve-workloads", "1",
         "--task", "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
       ],

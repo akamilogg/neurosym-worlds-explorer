@@ -215,10 +215,11 @@ test('H2.3 settled with both phases; a failed consolidation or a partial search 
   const evolve = { seed: 1, options: spec(dir).options, isolated: false, resolveStart: () => ({ hash: 'base', files: { 'main.py': 'q=1' } }) };
   const d = new Delegations({ config: { fund: 10000, tokens: 4000, rounds: 1, maxRounds: 2, evolve: { evaluations: 3, workloads: 1 } }, journalFile, snapshot: () => ({ events: [] }), lab: 'artifacts@1',
     worldArgs: [], launcher: (l) => { launched.push(l.evolve!); }, log: () => {}, history: [], unsupported: null, evolve });
-  const a = await d.run({ delegate: { mode: 'evolve', question: 'q', budget: { evaluations: 2 } } }, 1);
+  const a = await d.run({ delegate: { mode: 'evolve', question: 'q', budget: { evaluations: 3 } } }, 1);
   assert.equal(a.state, 'accepted', JSON.stringify(a));
   const s = JSON.parse(fs.readFileSync(launched[0], 'utf8')) as EvolveBranchSpec;
-  assert.equal(s.limits.evaluations, 2);
+  assert.equal(s.limits.evaluations + (s.confirmations ?? 0), 3, 'the search and its confirmations, never more than granted');
+  assert.equal(s.confirmations, 1, 'a part protected for confirming');
   assert.equal(s.limits.tokens + s.consolidation.tokens, 4000, 'the search\'s part and the consolidation\'s, protected');
   /* Its supervisor runs: the consolidation fails, the search stops at its evaluations. */
   const journal = path.join(dir, 'run.branches', 'delegation-r1.1.json');
