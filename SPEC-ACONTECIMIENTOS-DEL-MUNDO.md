@@ -1,6 +1,6 @@
 # SPEC · Mundo vivo: actores, acontecimientos e investigación reactiva
 
-Estado (23/10/2026): **diseño consolidado para implementación; arquitectura completa, sin implementar**.
+Estado (27/10/2026): **H1 implementado (§18); H2–H5 pendientes**. Diseño consolidado el 23/10/2026.
 Revisión conciliada: puente con el investigador asistido, autoridad de actuación, hitos e integración K1–K5.
 Sustituye la versión anterior limitada a acontecimientos dentro de episodios. Los contratos son normativos;
 los nombres de interfaces y operaciones designan capacidades que se deben implementar, no APIs ya existentes.
@@ -586,3 +586,43 @@ el mundo no es condición para acreditar la infraestructura.
 
 **El arnés proporciona un mundo que continúa, medios para percibirlo y actores que pueden hablar y actuar en él.
 Qué merece convertirse en investigación sigue siendo decisión del investigador.**
+
+## 18. Implementación
+
+### 18.1 H1 (27/10/2026)
+
+Código en `lib/src/living/`: `world.ts` (contrato `LivingWorldAdapter`, `LivingSession` como coordinador y `WorldJournal`),
+`bridge.ts` (puente con las rondas del asistido) y `manifest.ts` (`living-world@1`, `lab live <manifest>`). Mundo de
+referencia en `lib/src/worlds/plates/` (`plates@1`): pozos con nutriente y colonia, crecimiento, siembra por vecindad,
+contaminación no percibida, llegadas de contaminación al azar en el mundo compartido y marcas sin consecuencia.
+Pruebas en `lib/test/living-world.test.ts`.
+
+Decisiones tomadas al implementar:
+
+- **Integración.** `Lab.living` declara un mundo vivo. El runner abre una única sesión por run; `act.start` nunca se
+  llama. Un acto es una intención; lo que el investigador percibe de ella es un `Segment` (proyección por tick, sesión,
+  intervalo, revisiones), expuesto como episodio del laboratorio, de modo que `view`, `table`, `measure` e instrumentos
+  propios funcionan sin cambios.
+- **Ventana y paso.** Los actos de una respuesta forman un lote, sellado al terminar el paso (`LawSessionHost.endStep`) y
+  aplicado tras la barrera; su resultado vuelve en la siguiente respuesta. Una consulta del mundo posterior a un acto en
+  la misma respuesta no se responde. Un lote cuyos actos se rechazan todos no se sella: la respuesta cuenta como de
+  consultas.
+- **Llamadas por ventana.** Cuentan los pasos de investigación; las respuestas rechazadas por formato no cuentan. Al
+  alcanzar el límite se sella un lote vacío y la ventana avanza sin el investigador.
+- **Rondas.** Una propuesta, un cierre de ronda o una ronda sin propuesta ceden un lote vacío. La reflexión final no
+  avanza el mundo.
+- **`wait`.** Cuenta como un acto y va sola en su respuesta. Puede cruzar varias ventanas; lo observado se une en un
+  único segmento.
+- **Exploración.** Las ventanas del mundo previas a la primera ronda; sus segmentos son episodios del entorno.
+- **Evaluación.** Se hace en realizaciones reservadas del lugar, nunca en el estado compartido. Régimen declarado: sin
+  llegadas de contaminación, con dos pozos contaminados desde el inicio y 12 ticks por episodio.
+- **Diario.** Escritura anticipada bajo claves propias (`wN.prepare`, `wN.commit`, `d.<actor>.<clave>`, `close`). Un run
+  reanudado deriva cada entrada de nuevo y la compara con el diario del run que continúa: la igual se conserva, la
+  distinta se registra como divergencia (`world_diverged`) y nunca se escribe dos veces.
+- **Fuera de H1, con rechazo explícito.** Otros actores y más investigadores, y el reloj `realtime`, se rechazan en el
+  manifiesto. La delegación en un mundo vivo se rechaza (§12, H4) y `--own-tests` también, porque arranca episodios de
+  nuevo. El investigador puro no entra.
+
+Pendiente para hitos posteriores: varios actores, canales y autoridad exclusiva del junior (H2); vigilantes, reactividad
+y programas del operador (H3); ramas aisladas o compartidas y servicio externo (H4); paquete con el diario del mundo,
+consola e identidad §15.1 (H5); y la prueba real con un investigador LLM en `plates@1`.

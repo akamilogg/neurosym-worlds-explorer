@@ -349,10 +349,12 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
     /* Its own instruments - the sources once an origin is allowed (`list`, `open`, `find`) and its memory (`memory`) -
        answered here, never by the world. */
     ...(sources || memory || experience || board || tests || instruments || delegations ? {
-      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || registers(q) || measures(q) || delegates(q) || reads(q),
+      /* The host's own requests (a living world's `observe` and `wait`) after these. */
+      extraRequest: (q: Record<string, unknown>) => recalls(q) || remembers(q) || posts(q) || registers(q) || measures(q) || delegates(q) || reads(q) || (host.extraRequest?.(q) ?? false),
       runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session!.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra)
         : delegates(r.extra) ? delegations!.run(r.extra, round)
-        : posts(r.extra) ? board!.run(r.extra, round) : registers(r.extra) ? tests!.run(r.extra, round, budget) : measures(r.extra) ? instruments!.run(r.extra, round) : sources!.run(r.extra))
+        : posts(r.extra) ? board!.run(r.extra, round) : registers(r.extra) ? tests!.run(r.extra, round, budget) : measures(r.extra) ? instruments!.run(r.extra, round)
+        : reads(r.extra) ? sources!.run(r.extra) : host.runRequest(r, budget, round))
         : host.runRequest(r, budget, round))
     } : {}),
     /* Its episodes and models are kept by the host and the session, not in the notebook. */

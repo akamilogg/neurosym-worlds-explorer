@@ -40,6 +40,8 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
   };
   for (const [name, lab] of Object.entries(LABS)) {
     if (isGameLab(lab)) { assert.deepEqual([h(explorerSystem())], FROZEN[name], name); continue; }
+    /* A living world is the assisted researcher's only (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3): the frozen one is never in it. */
+    if (lab.living) continue;
     const all = new Set(lab.interface({}).tools);
     assert.deepEqual([h(system2Prompt(lab.interface({ regression: false }), all)), h(system2Prompt(lab.interface({ regression: true }), all)), h(lab.perceptDoc)], FROZEN[name], name);
   }

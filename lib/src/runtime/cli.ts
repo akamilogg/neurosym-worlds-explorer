@@ -4,6 +4,7 @@ import { findingText } from '../learn/finding.ts';
 import { LabError } from './lab-runner.ts';
 import { LABS } from '../worlds/labs.ts';
 import { VERDICTS, runAnomalies, writeVerdict, type Verdict } from '../learn/anomalies.ts';
+import { readManifest } from '../living/manifest.ts';
 import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, watch, type RunInfo, type RunOrder } from './control.ts';
 
 /* ============================================================================
@@ -12,6 +13,7 @@ import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, 
  * .json), a prefix that names only one, or `last` (the newest).
  *
  *   lab start <lab> [--researcher R] [--policy P] [the experiment's arguments...]
+ *   lab live <manifest.json>       a living world's session, as its manifest declares it (SPEC-ACONTECIMIENTOS-DEL-MUNDO §16)
  *   lab list
  *   lab status <run>
  *   lab watch <run>
@@ -43,6 +45,7 @@ export interface CliContext {
 
 export const CLI_USAGE = [
   'lab start <lab> [--researcher R] [--policy P] [args...]   start a run in a process of its own (labs: ' + Object.keys(LABS).join(', ') + ')',
+  'lab live <manifest.json>                                  a living world\'s session, as its manifest declares it (living-world@1)',
   'lab list                                                  the runs, newest first',
   'lab status <run>                                          a run\'s state and its latest events',
   'lab watch <run>                                           its events as they come, until it ends',
@@ -192,6 +195,19 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         const researcher = take(args, 'researcher'), policy = take(args, 'policy');
         const { journal, pid } = startRun(lab, { root: ctx.root, args, ...(researcher ? { researcher } : {}), ...(policy ? { policy } : {}), ...(ctx.env ? { env: ctx.env } : {}) });
         out('started ' + path.basename(journal, '.json') + ' (pid ' + pid + ')');
+        out('journal ' + journal);
+        out('follow it: lab watch ' + path.basename(journal, '.json'));
+        return 0;
+      }
+      case 'live': {
+        const file = args.shift();
+        if (!file) { out('lab live <manifest.json>'); return 2; }
+        let raw: unknown;
+        try { raw = JSON.parse(fs.readFileSync(path.resolve(ctx.root, file), 'utf8')); } catch (e) { out('cannot read the manifest ' + file + ': ' + String((e as Error).message ?? e)); return 2; }
+        const m = readManifest(raw, LABS);
+        if ('errors' in m) { out('the manifest is refused, nothing was started:'); for (const e of m.errors) out('  ' + e); return 2; }
+        const { journal, pid } = startRun(m.lab, { root: ctx.root, args: [...m.args, ...args], ...(ctx.env ? { env: ctx.env } : {}) });
+        out('started ' + path.basename(journal, '.json') + ' (pid ' + pid + '), a living world: ' + m.lab + ', its researcher ' + m.actor);
         out('journal ' + journal);
         out('follow it: lab watch ' + path.basename(journal, '.json'));
         return 0;

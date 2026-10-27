@@ -257,6 +257,16 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
         what this run does not have (SPEC-PRUEBAS-PROPIAS §4.2). */
     identity?(spec: S, act: A): string | null;
   };
+  /** A LIVING world (SPEC-ACONTECIMIENTOS-DEL-MUNDO): one world that goes on during the investigation - never an episode
+      started afresh. The runner opens its one session; an act is an intent sealed for a window, and what came of it - a
+      stretch of that world as the researcher perceived it (a `Segment`, the laboratory's episode) - comes after the window,
+      with the next answer. Only the assisted researcher investigates it (§5.3). Its checks run in realizations of their own
+      (`checkEpisodes`), never in the shared state (§5.4); `act.start` is never asked. */
+  readonly living?: {
+    open(spec: S, o: { readonly journal: import('../living/world.ts').WorldJournal; readonly actor: string; readonly options: LabOptions }): import('../living/world.ts').LivingSession<unknown, unknown>;
+    /** An act, read as an intent of the world. */
+    intent(act: A): { readonly kind: string; readonly params: Readonly<Record<string, unknown>> };
+  };
   readonly simulate?: {
     /** Why a simulation cannot start at this point, or null. */
     from?(state: P): string | null;

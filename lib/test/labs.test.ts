@@ -175,11 +175,13 @@ function notFinite(x: unknown, at = ''): string | null {
 /** An act as the learner reads it back and writes it again. */
 const echoed = (lab: LawLab, act: unknown): Record<string, unknown> => JSON.parse(JSON.stringify(lab.act!.asWritten ? lab.act!.asWritten(act) : act));
 
-const ACT_LABS = Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as LawLab).act && !OWN_CONTRACT.has(n)) as [string, LawLab][];
+/* A living world's acts are intents of its session, never episodes started afresh: its contract is test/living-world.test.ts. */
+const ACT_LABS = Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as LawLab).act && !(l as LawLab).living && !OWN_CONTRACT.has(n)) as [string, LawLab][];
 
 test('every laboratory that acts is in the contract (or has its own)', () => {
   assert.deepEqual(ACT_LABS.map(([n]) => n).sort(), ['c302closed', 'c302nav', 'cells', 'orbit', 'particles3d', 'tank']);
   assert.deepEqual(Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as LawLab).act && OWN_CONTRACT.has(n)).map(([n]) => n), ['artifacts']);
+  assert.deepEqual(Object.entries(LABS).filter(([, l]) => !isGameLab(l) && (l as LawLab).living).map(([n]) => n), ['plates']);
 });
 
 for (const [name, lab] of ACT_LABS) {

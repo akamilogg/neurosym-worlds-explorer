@@ -42,6 +42,11 @@ import { createHash } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
+import { WorldJournal } from '../living/world.ts';
+import { LivingBridge } from '../living/bridge.ts';
+
+/** The researcher's identity as an actor of a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §2). */
+const LIVING_ACTOR = 'researcher';
 
 /* ============================================================================
  * The runner of a LABORATORY (SPEC-OBJETIVO O9): the same for every world that declares
@@ -533,6 +538,12 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   for (const name of isGameLab(lab) ? lab.assistedOptions ?? [] : []) {
     const declared = lab.options.find((o) => o.name === name);
     if (declared && worldOptions[name] !== declared.default && researcher !== 'assisted') throw new LabError('--' + name + ': it changes what the researcher may do: only the assisted researcher takes it');
+  }
+  /* A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3): the assisted researcher's, keeping its loop; the unknown-world one is
+     frozen and left out. Its tests of its own start episodes afresh, which a world that goes on never does. */
+  if (!isGameLab(lab) && lab.living) {
+    if (researcher !== 'assisted') throw new LabError(lab.id + ' is a living world: only the assisted researcher investigates it (--researcher assisted)');
+    if (Number(arg('own-tests')) > 0) throw new LabError('--own-tests: ' + lab.id + ' is a living world, where an experiment is never started afresh');
   }
   const teamBoard = openTeam(lab, arg('team'), arg('member'), researcher, options.root);
   const experienceRuns = loadExperience(lab, cfg, arg('experience'), arg('experience-mode'), arg('experience-scope'), researcher, assistedAfter, previous, options.root);
@@ -1177,6 +1188,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const checkPoints = new Map<number, Case[]>();
 
   const explore = async (): Promise<void> => {
+    /* A living world: it goes on before the researcher's first round, and what it showed is the environment's episodes. */
+    if (bridge) {
+      for (let k = 0; k < cfg.explore; k++) {
+        const e = bridge.explore();
+        if (e) log('exploration_episode', { episode: e.name, ...lab.explored(e.segment, labs()[0]!.id) });
+      }
+      return;
+    }
     const rnd = mulberry32(lab.explorationSeed(cfg.seed, worldOptions));
     const drawn: { place: string; episode: unknown }[] = [];
     if (lab.explore) drawn.push(...await lab.explore(labs().map((p) => ({ id: p.id, spec: p.spec })), rnd, cfg.explore, ctx));
@@ -1304,6 +1323,14 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   };
 
   const runRequest = async (req: LawRequest<unknown>, budget: { acts: number }): Promise<unknown> => {
+    /* A living world: its acts and waits into the step's batch; a query of the world after one of them is not answered. */
+    if (bridge) {
+      const extra = 'extra' in req ? req.extra : null;
+      if (extra && 'wait' in extra) return bridge.wait(extra.wait, budget);
+      if ('act' in req) return tools.has('act') ? bridge.act(req.act, budget) : { act: req.act, error: '"act" is not available in this experiment' };
+      if (bridge.sealing) return { ...(extra ?? { [Object.keys(req)[0]]: Object.values(req)[0] }), error: LivingBridge.AFTER_ACT };
+      if (extra && 'observe' in extra) return bridge.observe();
+    }
     /* A researcher's own instrument is answered by that researcher (the assisted one's library), never by the world. */
     if ('extra' in req) return { error: 'no such instrument here' };
     const kind = (['view', 'inspect', 'act', 'measure', 'simulate', 'table'] as const).find((k) => k in req)!;
@@ -1419,6 +1446,21 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   let stepInterventions: { kind: string; place: string; key: string }[] = [];
   const stepKeys = new Map<string, string[]>();
   const keyOfEpisode = new Map<string, string>();
+  /* --- A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO): its one session, the researcher an actor in it. Its journal beside
+     the run's, written ahead; a resumed run derives it again against the one it continues. ----------------------------- */
+  const worldJournalOf = (f: string) => f.replace(/\.json$/, '') + '.world.jsonl';
+  const living = lab.living ? lab.living.open(spec, { actor: LIVING_ACTOR, options: worldOptions,
+    journal: new WorldJournal(worldJournalOf(outFile), { ...(previous && resumeFrom ? { from: worldJournalOf(resumeFrom) } : {}),
+      onDiverge: (d) => { log('world_diverged', { key: d.key }); say('  the world diverged from the record it continues, at ' + d.key); } }) }) : null;
+  const bridge = living && lab.living ? new LivingBridge<unknown>({ session: living, actor: LIVING_ACTOR,
+    intent: (a) => lab.living!.intent(a), asWritten: (a) => (lab.act?.asWritten ? lab.act.asWritten(a) : a), shown: (seg) => lab.act!.shown(seg),
+    store: (seg, round, by, answer) => {
+      const id = (by === 'you' ? 'act' : 'ep') + (++counter);
+      store(id, labs()[0]!, round, by, seg);
+      if (answer) actAnswers.set(id, answer(id));
+      return id;
+    }, log, say }) : null;
+  if (living) journal.world = { session: living.id, adapter: living.adapter.id, journal: path.basename(worldJournalOf(outFile)), clock: living.clock, limits: living.limits };
   /* Every investigation step, as it was asked and answered: what a publication may cite ("r<round>.<step>"). */
   const logged = (type: string, data: Record<string, unknown> = {}): void => {
     if (type === 'investigation' && typeof data.round === 'number') {
@@ -1507,6 +1549,9 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
     ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
     runRequest: (r, budget) => runRequest(r, budget),
+    /* A living world's requests of its own, and the end of each step: its batch applied (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3). */
+    ...(bridge ? { extraRequest: (q: Record<string, unknown>) => 'observe' in q || 'wait' in q,
+      endStep: async (round: number, results: readonly unknown[]) => bridge.endStep(round, results) } : {}),
     known: (ref) => episodes.has(ref.trim()) || resolve(ref) !== null,
     failures,
     episodes: episodeIndex,
@@ -1663,7 +1708,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     history: (previous?.events ?? []) as Record<string, any>[],
     /* Its history was written beside the run it resumes, wherever that is. */
     ...(previous && resumeFrom ? { historyDir: path.dirname(path.resolve(resumeFrom)) } : {}),
-    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
+    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own'
+      : lab.living ? 'it is a living world: a branch of it, isolated or shared, is not built yet (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12)' : null,
     experience: (cfg as { __experienceFiles?: string[] }).__experienceFiles ?? []
   }) : null;
   /* The results of its branches, delivered as they end: messages of their own, never help (a resumed run delivers them at the
@@ -1882,6 +1928,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     accepted = settleWaiting();
     if (accepted) break;
     const record = await session.consult('propose');
+    /* A living world: the round ended - a proposal, a closing, none - and its window goes on with an empty batch. */
+    if (bridge && session.roundEnd.kind !== 'stopped' && session.roundEnd.kind !== 'none') bridge.endRound(session.currentRound, session.roundEnd.kind);
     /* Beliefs it dropped since: what of its world rested on them, as a fact of the record (SPEC-MUNDO-ARTEFACTOS §9). */
     if (lab.dependents) {
       const fallen = [...session.notebook.beliefs.values()].filter((b) => b.status === 'dropped' && !fallenSeen.has(b.id)).map((b) => b.id);
@@ -1990,8 +2038,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* Of the final model, its tests: what it predicted (as registered with it) and what it holds on again (SPEC-PRUEBAS-PROPIAS §7). */
   const finalTests = ownTests && final && (ownTests.summary().registered as number) > 0 ? await ownTests.standing(final, session.currentRound) : null;
   if (cfg.grade && !session.fatal && (!session.halted || session.halted === budgetStop)) await gradeRecovery(final);
-  const result = run.finish({ stoppedBy: session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget', halted: session.halted }, {
+  const stoppedBy = session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget';
+  const result = run.finish({ stoppedBy, halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
+    /* A living world: its session closed, what was in course kept as pending (§13). */
+    ...(living ? { world: living.close(stoppedBy) } : {}),
     final: final ? ownLaw(final) : null,
     /* Its branches: each with its record, how it stands, what it spent; those still running asked to stop. */
     ...(delegations ? { delegation: delegations.close() } : {}),

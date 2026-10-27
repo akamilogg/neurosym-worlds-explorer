@@ -106,6 +106,10 @@ export interface LawSessionHost<A> {
   pins?(): { apply(round: number, ops: readonly PinOp[]): string[] } | null;
   /** Told when a round begins (a member of a team tells its board where it is). */
   onRound?(round: number): void;
+  /** A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3): told when the requests of an investigation step were all taken -
+      the acts among them one batch, applied only now, after the window's barrier - and answers each request's result then
+      (an act's: what came of it). None by default: every result is the one `runRequest` gave. */
+  endStep?(round: number, results: readonly unknown[]): Promise<unknown[]>;
 }
 
 /** Code without the whitespace that does not change it (SPEC-CALIBRACION-INSTRUMENTOS §11.1): outside string and template
@@ -348,8 +352,9 @@ export class LawSession<A> {
           }
           continue;
         }
-        const results: unknown[] = [];
+        let results: unknown[] = [];
         for (const r of requests) results.push(await h.runRequest(r, budget, round));
+        if (h.endStep) results = await h.endStep(round, results);
         /* Echoed in the prompt's words, and a draft as it wrote it, never as the host's objects. */
         const modelOf = (l: number | Law | null) => (l !== null && typeof l === 'object' ? ownLaw(l) : l);
         const asWritten = requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
