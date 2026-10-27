@@ -690,6 +690,16 @@ Pruebas en `lib/test/living-world-review.test.ts`.
   (`from-a--act3`).
 - **Delegación del senior.** En un mundo vivo también se rechaza la delegación del senior, igual que la del junior.
 
+Segunda revisión (27/10/2026):
+
+- **Ficheros por investigador.** El fichero de cada investigador usa el mismo nombre inyectivo (`actorSlug`), en
+  minúsculas y con escapes: `Alice` y `alice` son dos ficheros también donde el sistema de archivos no distingue
+  mayúsculas.
+- **Cierre de una continuación.** El cierre lleva también el tramo de ejecución que lo produjo, que es el nombre de su
+  propio diario (`close@w<n>.t<tick>.<tramo>`). Una continuación cierra como ella misma aunque el reloj no se haya movido.
+- **Mensajes en el horizonte.** Al alcanzarse el horizonte se rechaza todo mensaje nuevo, porque ninguna ventana lo
+  llevará; nunca se publica para perderse.
+
 ### 18.4 H3 (27/10/2026)
 
 Código en `lib/src/living/events.ts`: `Agenda` (programas y señales) y `Watchers`, integrados en `LivingSession`; efectos de

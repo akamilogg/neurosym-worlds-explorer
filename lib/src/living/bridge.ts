@@ -50,8 +50,12 @@ interface Pending { readonly pending: true; readonly n: number }
     name for each - never two authors under one ("Alice" and "alice", "a_b" and "a-b"). An author's id is written in the
     letters an episode's name allows, "-" escaping what they lack ("-c" a capital, "-u" an underscore, "-h" a hyphen), so it
     never holds "--": what follows the first "--" is the episode's own name. */
-export const sharedName = (from: string, name: string): string =>
-  'from-' + [...from].map((c) => (/[a-z0-9]/.test(c) ? c : /[A-Z]/.test(c) ? '-c' + c.toLowerCase() : c === '_' ? '-u' : c === '-' ? '-h' : '-x' + c.charCodeAt(0).toString(36) + '-')).join('') + '--' + name;
+export const sharedName = (from: string, name: string): string => 'from-' + actorSlug(from) + '--' + name;
+
+/** An actor's id in lowercase letters, digits and escapes only: one for each id, the same on a file system that does not
+    tell capitals apart ("Alice" and "alice" are two names, never one file). */
+export const actorSlug = (id: string): string =>
+  [...id].map((c) => (/[a-z0-9]/.test(c) ? c : /[A-Z]/.test(c) ? '-c' + c.toLowerCase() : c === '_' ? '-u' : c === '-' ? '-h' : '-x' + c.charCodeAt(0).toString(36) + '-')).join('');
 
 export class LivingBridge<A> {
   private readonly h: BridgeHost<A>;

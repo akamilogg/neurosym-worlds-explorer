@@ -7,7 +7,8 @@ import { runLaboratory } from '../src/runtime/lab-runner.ts';
 import { platesLab } from '../src/worlds/plates/lab.ts';
 import { platesAdapter, type PlatesFrame } from '../src/worlds/plates/world.ts';
 import { LivingSession, WorldJournal, type ActorDecl } from '../src/living/world.ts';
-import { LivingBridge, sharedName } from '../src/living/bridge.ts';
+import { LivingBridge, actorSlug, sharedName } from '../src/living/bridge.ts';
+import { runLivingSession } from '../src/living/run-session.ts';
 import { readManifest } from '../src/living/manifest.ts';
 import { LABS } from '../src/worlds/labs.ts';
 import type { FetchLike } from '../src/core/net.ts';
@@ -106,4 +107,43 @@ test('6: an author\'s shared material keeps its author: one name for each, never
   assert.equal(new Set(names).size, names.length, names.join(' '));
   for (const n of names) assert.match(n, /^[a-z][a-z0-9-]*$/);
   assert.ok(names.every((n) => n.endsWith('--act1')));
+});
+
+/* A second review of H2 (27/10/2026), reconciled: one file for each researcher wherever capitals are one; a closing told
+   apart by its stretch of execution, even where the clock did not move; no message accepted that no window will carry. */
+
+test('one journal for each researcher, even where the file system does not tell capitals apart', async () => {
+  assert.notEqual(actorSlug('Alice').toLowerCase(), actorSlug('alice').toLowerCase());
+  const dir = tmp('rev2-files');
+  const r = await runLivingSession(platesLab, { dir, name: 'pair', root: dir, args: ['--flat', '--no-grade', '--no-reflection', '--no-ablation'],
+    plan: { seed: 1, clock: { decision_interval: 3, horizon: 60 }, explore: 1, limits: { calls_per_window: 2, intents_per_window: 2, window_ms: 20000 },
+      actors: [{ id: 'Alice', kind: 'researcher', rounds: 1, steps: 2, acts: 1 }, { id: 'alice', kind: 'researcher', rounds: 1, steps: 2, acts: 1 }] },
+    connection: () => ({ llm: { url: 'http://x.test/c', model: 's' }, fetch: researcher({ 1: [MODEL] }) }) });
+  const files = [r.runs.Alice.journal!, r.runs.alice.journal!];
+  assert.notEqual(files[0].toLowerCase(), files[1].toLowerCase());
+  assert.deepEqual(files.map((f) => JSON.parse(fs.readFileSync(f, 'utf8')).world.actor).sort(), ['Alice', 'alice']);
+});
+
+test('a continuation where the clock did not move closes as itself: never the closing of the run it continues', async () => {
+  const dir = tmp('rev2-close');
+  const script = { 1: [{ investigate: [{ observe: true }] }, MODEL], 2: [{ investigate: [{ observe: true }] }, { investigate: [{ observe: true }] }, MODEL] };
+  const args = ['--seed', '1', '--researcher', 'assisted', '--flat', '--no-grade', '--no-reflection', '--no-ablation', '--explore', '1', '--steps', '4', '--horizon', '3'];
+  const first = await runLaboratory(platesLab, { args: [...args, '--attempts', '1', '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: researcher(script) });
+  const out = path.join(dir, 'more.json');
+  const more = await runLaboratory(platesLab, { args: ['--resume', first.journal, '--attempts', '2', '--out', out], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: researcher(script) });
+  const events = JSON.parse(fs.readFileSync(more.journal, 'utf8')).events as Record<string, any>[];
+  assert.ok(!events.some((e) => e.type === 'world_diverged'), JSON.stringify(events.filter((e) => e.type === 'world_diverged')));
+  const before = lines(first.journal.replace(/\.json$/, '.world.jsonl')).filter((e) => e.key.startsWith('close@'));
+  const after = lines(out.replace(/\.json$/, '.world.jsonl')).filter((e) => e.key.startsWith('close@'));
+  assert.equal(after.length, 1);
+  assert.equal(after[0].tick, before[0].tick, 'the clock did not move');
+  assert.notEqual(after[0].key, before[0].key);
+});
+
+test('at the horizon a message is refused: no window will carry it', () => {
+  const s = new LivingSession({ adapter: platesAdapter as never, id: 'h', config: { layout: 5 }, seed: 5, actors: ['a', 'b'], clock: { decision_interval: 2, horizon: 2 },
+    limits: { calls_per_window: 2, intents_per_window: 2, messages_per_window: 2, message_chars: 100 }, journal: new WorldJournal(null) });
+  s.seal('a', []); s.seal('b', []); s.settle();
+  assert.equal(s.ended, true);
+  assert.match((s.send('a', { actor: 'b' }, 'notice', { text: 'late' }) as { reason: string }).reason, /horizon/);
 });

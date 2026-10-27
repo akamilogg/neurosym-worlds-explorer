@@ -4,6 +4,7 @@ import { runLaboratory, type LabConnection, type LabResult } from '../runtime/la
 import type { FetchLike } from '../core/net.ts';
 import type { LawLab } from '../learn/lab.ts';
 import { WorldJournal, type ActorDecl, type SessionClock, type SessionLimits } from './world.ts';
+import { actorSlug } from './bridge.ts';
 import type { ProgramDecl, SignalDecl, WatchDecl } from './events.ts';
 import { nodeVmRunner } from '../runtime/node-vm.ts';
 
@@ -74,7 +75,8 @@ export async function runLivingSession(lab: LawLab, o: { plan: SessionPlan; dir:
   const researchers = plan.actors.filter((a): a is ResearcherDecl => a.kind === 'researcher');
   const runs: Record<string, { journal: string | null; stoppedBy?: string; error?: string }> = {};
   await Promise.all(researchers.map(async (r) => {
-    const out = path.join(o.dir, o.name + '.' + r.id.replace(/[^A-Za-z0-9_-]+/g, '-') + '.json');
+    /* One file for each researcher, even where the file system does not tell capitals apart. */
+    const out = path.join(o.dir, o.name + '.' + actorSlug(r.id) + '.json');
     const c = o.connection(r.id);
     const args = ['--seed', String(plan.seed), '--researcher', 'assisted', ...Object.entries(options).flatMap(([k, v]) => ['--' + k, v]),
       '--attempts', String(r.rounds), '--steps', String(r.steps), '--acts', String(r.acts),

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { hashString, stableStringify } from '../core/hash.ts';
 import { Agenda, Watchers, programIssue, signalIssue, type EffectDecl, type Firing, type ProgramDecl, type SignalDecl, type WatchDecl } from './events.ts';
 
@@ -149,6 +150,10 @@ export class WorldJournal {
 
   /** Whether the record continued holds an entry under this key (a transition it prepared, a delivery it made). */
   recorded(key: string): Record<string, unknown> | null { return this.written.get(key) ?? this.before.get(key) ?? null; }
+
+  /** The stretch of execution this journal records (its own file's name): what tells a closing apart from the one of the
+      record it continues. */
+  get stretch(): string { return this.file ? path.basename(this.file).replace(/\.world\.jsonl$|\.jsonl$/, '') : 'unwritten'; }
 
   /** The entries of the record continued whose key starts so (what a resumed run applies again where it was applied). */
   previous(prefix: string): Record<string, unknown>[] { return [...this.before.values()].filter((e) => String(e.key).startsWith(prefix)); }
@@ -782,6 +787,8 @@ export class LivingSession<St, F> {
     const no = (reason: string) => ({ accepted: false as const, reason });
     if (this.limits.messages_per_window === undefined) return no('nobody may publish in this session');
     if (this.status !== 'running') return no('the world is ' + this.status);
+    /* No window will carry it: refused, never published to be lost. */
+    if (this.ended) return no('the world has reached its horizon (tick ' + this.clock.horizon + '): no window will carry a message any more');
     if (s.state === 'stopped') return no('you left the session');
     if (s.sent >= this.limits.messages_per_window) return no('at most ' + this.limits.messages_per_window + ' messages of yours in one window');
     /* Its words count, not the material it shares (a copy of its own, kept whole). */
@@ -851,8 +858,9 @@ export class LivingSession<St, F> {
     if (this.status === 'completed') return this.summary();
     this.status = 'closing';
     const pending = this.adapter.pending(this.state);
-    /* Under where it closed: a continuation that goes further closes elsewhere, never as the run it continues closed. */
-    this.journal.write({ key: 'close@w' + this.window + '.t' + this.tick, reason, window: this.window, tick: this.tick, revision: this.revision, state: stateHash(this.adapter, this.state), pending,
+    /* Under where it closed and the stretch of execution that closed it (its own journal): a continuation closes as itself,
+       never as the run it continues closed - even where the clock did not move. */
+    this.journal.write({ key: 'close@w' + this.window + '.t' + this.tick + '.' + this.journal.stretch, reason, window: this.window, tick: this.tick, revision: this.revision, state: stateHash(this.adapter, this.state), pending,
       snapshot: this.adapter.snapshot(this.state), agenda: this.agenda.snapshot(), policies: Object.fromEntries([...this.actors.values()].filter((s) => s.policy).map((s) => [s.decl.id, s.policyState])), use: this.use });
     this.status = 'completed';
     this.release();
