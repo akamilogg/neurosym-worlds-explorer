@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { ruleGradingSystem, unknownFields, type Lab } from '../../learn/lab.ts';
 import { INVESTIGATION_TOOLS as INVESTIGATION, type WorldInterface } from '../../learn/prompt.ts';
 import { objectiveLines } from '../../learn/objective.ts';
+import { exactProgress } from '../../learn/progress.ts';
 import { hashString } from '../../core/hash.ts';
 import type { World } from '../../core/types.ts';
 import { LivingSession, type Segment } from '../../living/world.ts';
@@ -102,6 +103,7 @@ const platesWorld = (): World<PlatesPoint, never> => ({
 
 export const platesLab: Lab<PlatesSpec, PlatesPoint, Segment<PlatesFrame>, PlatesCase, PlatesAct> = {
   id: 'plates@1',
+  progress: exactProgress('capas de colonias acertadas exactamente en el check'),
   about: 'A living world: System 2 acts in one plate of wells that goes on, perceives its colonies, nutrients and marks, and must write a model that answers the next colony layer.',
   options: [
     { name: 'interval', default: '3', help: 'ticks per window: how often the researcher decides' },

@@ -8,6 +8,7 @@ import { processSandbox } from '../../artifacts/sandbox.ts';
 import { dedupTask } from '../../artifacts/tasks/dedup.ts';
 import { threesumSubquadraticTask, threesumTask } from '../../artifacts/tasks/threesum.ts';
 import type { ArtifactTask } from '../../artifacts/task.ts';
+import { HOLDING, holdingShare, type LabProgress } from '../../learn/progress.ts';
 
 /* ============================================================================
  * The world of ARTIFACTS as a laboratory (SPEC-MUNDO-ARTEFACTOS, plan step 3): the researcher changes
@@ -159,8 +160,33 @@ const pointWorld = (): World<ArtifactPoint, never> => ({
   key: (s) => s.version + '|' + JSON.stringify(s.workload), view: () => ({ entities: [], scalars: {} }), describeRules: () => '', actionKey: () => ''
 });
 
+/* Its mountains (SPEC-VISTA-ESCALADA §3.1): the model's check, and the artifact's own verdict - whether its versions are
+   correct and how they compare with the reference, by the growth of their cost with the size (a family judged on
+   growth) or by their cost at a size (one judged on speed). Each of a place's verdicts holds only where it holds in every
+   place, so a check's value is that of its worst place. A metric its task does not give simply has no samples. */
+const artifactPlaces = (event: Record<string, any>): Record<string, any>[] => Array.isArray(event.laboratories) ? event.laboratories : [];
+const worst = (xs: number[]): number | null => (xs.length ? Math.max(...xs) : null);
+export const ARTIFACTS_PROGRESS: LabProgress = {
+  metrics: [
+    HOLDING,
+    { id: 'correct', label: 'lugares donde la versión es correcta', unit: 'proporción', direction: 'higher', range: [0, 1], source: 'artifact_check' },
+    { id: 'growth_exponent', label: 'exponente de crecimiento frente a la referencia (peor lugar)', unit: 'Δ exponente', direction: 'lower', source: 'artifact_check' },
+    { id: 'cost_ratio', label: 'coste frente a la referencia (peor lugar)', unit: '× referencia', direction: 'lower', scale: 'log', source: 'artifact_check' }
+  ],
+  sample(metric, event) {
+    const ps = artifactPlaces(event);
+    if (metric === HOLDING.id) return event.type === 'artifact_check' ? null : holdingShare(event);
+    if (event.type !== 'artifact_check' || !ps.length) return null;
+    if (metric === 'correct') { const known = ps.filter((p) => typeof p.correct === 'boolean'); return known.length ? known.filter((p) => p.correct).length / known.length : null; }
+    if (metric === 'growth_exponent') return worst(ps.map((p) => p.growth?.slope).filter((x): x is number => Number.isFinite(x)));
+    if (metric === 'cost_ratio') return worst(ps.map((p) => p.ratio).filter((x): x is number => Number.isFinite(x) && x > 0));
+    return null;
+  }
+};
+
 export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, ArtifactCase, ArtifactAct> = {
   id: 'artifacts@1',
+  progress: ARTIFACTS_PROGRESS,
   /* Its product is the artifact, as good as the budget allows: an accepted model of it does not end the investigation. */
   goesOnAfterAcceptance: true,
   /* Its base, whole, in the journal: a resumed run is rebuilt from it, whatever its directory holds now, or if it is gone. */

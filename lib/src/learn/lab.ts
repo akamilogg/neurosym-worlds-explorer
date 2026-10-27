@@ -137,6 +137,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       goal. `--focus <id>` picks one at the start (it defines the task, like a level, for either researcher); the assisted
       researcher may be given another during the run. The interface says what counts, the objective checks only that. */
   readonly facets?: readonly { readonly id: string; readonly help: string }[];
+  /** The metrics of its progress (SPEC-VISTA-ESCALADA §3): read from the record, never run. Without them, the share of
+      the places of a check where the model holds. */
+  readonly progress?: import('./progress.ts').LabProgress;
 
   /* --- The world ------------------------------------------------------------------------ */
   /** `archived`: what a run archived of its world (`archive`), when it is rebuilt - the world is then made from it, never
@@ -451,6 +454,8 @@ export interface LabRunEnd {
 export interface GameLab {
   readonly kind: 'game';
   readonly id: string;
+  /** The metrics of its progress (SPEC-VISTA-ESCALADA §3). */
+  readonly progress?: import('./progress.ts').LabProgress;
   readonly about: string;
   readonly options: readonly LabOption[];
   readonly flags?: readonly LabFlag[];

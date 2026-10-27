@@ -2,6 +2,7 @@ import { ruleGradingSystem, unknownFields, type Lab } from '../../learn/lab.ts';
 import { CELLS_PERCEPT_DOC, cellsPointWorld, describeCellsTruth, generateCells, perceiveCells, placeOf, readRow, runEpisode, type CellsPoint, type CellsSpec } from './world.ts';
 import { CELLS_FACETS, cellsObjective, differences, type CellsCase } from './objective.ts';
 import { cellsInterface } from './interface.ts';
+import { exactProgress } from '../../learn/progress.ts';
 
 /* cells@1 as a LABORATORY (SPEC-OBJETIVO O9): a ring of symbols whose next row follows a hidden local rule. System 2
    perceives rows and must write a model that answers the next row. */
@@ -11,6 +12,7 @@ export interface CellsAct { readonly rows: readonly string[]; readonly place?: s
 
 export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct> = {
   id: 'cells@1',
+  progress: exactProgress('filas acertadas exactamente en el check'),
   about: 'System 2 perceives rows of symbols and must write a model that answers the next row.',
   options: [
     { name: 'level', default: '1', help: '1 the next symbol depends on a cell and its neighbours; 2 on a count within two cells; 3 also on the row before; 4 two layers in one row (even and odd cells), for a focus on one' },
