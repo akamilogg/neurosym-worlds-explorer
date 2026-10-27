@@ -98,7 +98,7 @@ test('requests that run together may reach the log in another order: one without
   assert.equal(resumed.stats().diverged, undefined);
 });
 
-test('the log never holds a request, its headers or a key; failed answers are not logged', async () => {
+test('the log never holds a request, its headers or a key; a failed answer is logged as what it was (27/10/2026)', async () => {
   const file = path.join(dir(), 'a.jsonl');
   const log = new ReplayLog(file);
   await log.wrap('llm', network().fetch)('u', init('{"prompt":"hello"}'));
@@ -106,7 +106,8 @@ test('the log never holds a request, its headers or a key; failed answers are no
   assert.equal((await log.wrap('llm', failing)('u', init('{"x":1}'))).ok, false);
   const text = fs.readFileSync(file, 'utf8');
   assert.doesNotMatch(text, /SECRET-KEY|Authorization|Bearer/);
-  assert.equal(text.trim().split('\n').length, 1);
+  assert.equal(text.trim().split('\n').length, 2, 'the failure is part of the record');
+  assert.equal(JSON.parse(text.trim().split('\n')[1]).status, 503);
 });
 
 test('a resumed run repeats the experiment\'s arguments and takes the budgets given now', () => {

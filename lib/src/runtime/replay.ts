@@ -45,6 +45,14 @@ import type { FetchLike } from '../core/net.ts';
  * the network again - costs and acts repeated - so a missing log is an error, never an
  * empty history.
  *
+ * A FAILURE is part of the record too (27/10/2026: a run whose Judge failed in every call could not be resumed - its
+ * failures were never logged, so the resumed run asked again and diverged): an answer that is an error of the service, a
+ * key or a limit (an HTTP error that is not a refusal), and a request that never got an answer (the network), each logged
+ * with what it was and served again as it was - the error, or the request failing - at the same place. A log written
+ * before failures were kept lacks them: where the run it resumes recorded every call of a channel as failed (`failed`),
+ * a request of that channel that finds no answer while answers wait is answered as failed - what its record says - and
+ * the run goes on; any other is a divergence.
+ *
  * Only the answers are logged: never a request's headers or its URL (where the keys travel),
  * never a key.
  * ========================================================================== */
@@ -64,7 +72,13 @@ export function requestIdentity(channel: string, url: string, init: { method?: s
   return createHash('sha256').update([channel, (init.method ?? 'POST').toUpperCase() + ' ' + where, init.body ?? ''].join('\n')).digest('base64url');
 }
 
-interface Entry { readonly channel: string; readonly key: string; readonly status: number; readonly text: string; readonly closing?: boolean }
+interface Entry { readonly channel: string; readonly key: string; readonly status: number; readonly text: string; readonly closing?: boolean;
+  /** A request that never got an answer (the network): what it failed with. */
+  readonly failed?: string }
+
+/** The answer a request gets where the run it resumes recorded every call of its channel as failed, and its log (written
+    before failures were kept) holds no answer: failed, as its record says - an error that is not retried. */
+const RECORDED_AS_FAILED = { status: 424, text: '{"error":"the run this one resumes recorded every call of this channel as failed; its log, written before failures were kept, does not hold this one"}' };
 
 /** Channels whose refusals are answers (logged, replayed): the environment's service, deterministic. */
 export const DETERMINISTIC: ReadonlySet<string> = new Set(['env']);
@@ -80,6 +94,8 @@ export interface ReplayStats {
   readonly unused: number;
   /** Refusals a log written before they were kept lacked, asked again of their deterministic service. */
   readonly refusals_asked_again?: Record<string, number>;
+  /** Requests of a channel its record says failed in every call, answered as failed (a log that never kept failures). */
+  readonly failures_as_recorded?: Record<string, number>;
   /** Set when a request found no answer while logged ones were waiting. */
   readonly diverged?: { readonly channel: string; readonly pending: number };
 }
@@ -117,6 +133,10 @@ export class ReplayLog {
   /** Refusals a log written before they were logged lacked, asked again of their deterministic service. */
   private readonly refilled: Record<string, number> = {};
   private readonly onDiverge?: (d: { channel: string; pending: number }) => void;
+  /** Channels the run it resumes recorded as failing in every call (a log written before failures were kept), and the
+      error its record shows for them, when it shows one. */
+  private readonly failedChannels: ReadonlyMap<string, { status?: number; statusText?: string }>;
+  private readonly reproduced: Record<string, number> = {};
   private readonly stallMs: number;
   private served = 0;
   private diverged: { channel: string; pending: number } | undefined;
@@ -126,9 +146,11 @@ export class ReplayLog {
   closing = false;
 
   /** `file`: the log this run writes (started empty). `from`: the log of the run it resumes, read and never written. */
-  constructor(file: string, options: { from?: string; onDiverge?: (d: { channel: string; pending: number }) => void; stallMs?: number } = {}) {
+  constructor(file: string, options: { from?: string; onDiverge?: (d: { channel: string; pending: number }) => void; stallMs?: number;
+    failed?: readonly (string | { readonly channel: string; readonly status?: number; readonly statusText?: string })[] } = {}) {
     this.file = file;
     this.onDiverge = options.onDiverge;
+    this.failedChannels = new Map((options.failed ?? []).map((f) => (typeof f === 'string' ? [f, {}] : [f.channel, { status: f.status, statusText: f.statusText }])));
     this.stallMs = options.stallMs ?? 3000;
     if (options.from && fs.existsSync(options.from) && fs.realpathSync(options.from) === (fs.existsSync(file) ? fs.realpathSync(file) : '')) {
       throw new Error('a resumed run writes a log of its own: ' + file + ' is the log it resumes');
@@ -154,6 +176,7 @@ export class ReplayLog {
 
   stats(): ReplayStats {
     return { replayed: { ...this.replayed }, live: { ...this.live }, unused: this.pending(), ...(Object.keys(this.refilled).length ? { refusals_asked_again: { ...this.refilled } } : {}),
+      ...(Object.keys(this.reproduced).length ? { failures_as_recorded: { ...this.reproduced } } : {}),
       ...(this.diverged ? { diverged: this.diverged } : {}) };
   }
 
@@ -185,6 +208,8 @@ export class ReplayLog {
         this.served++;
         this.replayed[channel] = (this.replayed[channel] ?? 0) + 1;
         this.record(e);
+        /* A request that failed then fails again, as it did. */
+        if (e.failed !== undefined) throw new TypeError(e.failed);
         return { ok: e.status < 400, status: e.status, text: async () => e.text, headers: { get: () => null } };
       };
       const logged = take();
@@ -202,6 +227,15 @@ export class ReplayLog {
             return { ok: false, status: again.status, statusText: again.statusText, text: async () => text, headers: { get: (name: string) => again.headers?.get(name) ?? null } };
           }
         }
+        /* A channel its record says failed in every call, in a log that never kept failures: failed, as recorded. */
+        const as = this.failedChannels.get(channel);
+        if (as && !this.divergence()) {
+          /* The error its record shows (what the researcher was told), else a failure that is not retried. */
+          const status = as.status ?? RECORDED_AS_FAILED.status, statusText = as.status ? (as.statusText ?? '') : 'Failed Dependency';
+          this.record({ channel, key, status, text: RECORDED_AS_FAILED.text });
+          this.reproduced[channel] = (this.reproduced[channel] ?? 0) + 1;
+          return { ok: false, status, statusText, text: async () => RECORDED_AS_FAILED.text, headers: { get: () => null } };
+        }
         this.diverged = { channel, pending: this.pending() };
         this.onDiverge?.(this.diverged);
         throw new ReplayDivergence(channel, this.diverged.pending);
@@ -209,10 +243,15 @@ export class ReplayLog {
       /* Another request may have found the divergence while this one waited: then this one is not asked either. */
       const stop = this.divergence();
       if (stop) throw new ReplayDivergence(stop.channel, stop.pending);
-      const response = await fetch(url, init);
+      let response: Awaited<ReturnType<FetchLike>>;
+      try { response = await fetch(url, init); }
+      catch (e) {
+        /* No answer at all (the network): logged as failed, unless it was stopped (an abort is not the service's). */
+        if (!init.signal?.aborted) this.record({ channel, key, status: 0, text: '', failed: String((e as Error)?.message ?? e).slice(0, 300) });
+        throw e;
+      }
       if (!response.ok) {
-        if (!DETERMINISTIC.has(channel) || !isRefusal(response.status)) return response;
-        /* A refusal of the environment: an answer, logged. */
+        /* An error of the service (or a refusal of the environment): an answer, logged, served again as it was. */
         const text = await response.text();
         this.record({ channel, key, status: response.status, text });
         this.live[channel] = (this.live[channel] ?? 0) + 1;

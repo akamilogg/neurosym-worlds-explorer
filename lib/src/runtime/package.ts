@@ -155,7 +155,7 @@ const endOf = (j: Record<string, any>) => [...(j.events ?? [])].reverse().find((
 /** System 2 as the run had it, but nowhere: its model, its endpoint's path and its tuning as recorded (they are in what makes
     each request that request), at a host that does not exist. A journal from before its path was recorded (16/10/2026) names
     none: the path given, or the usual one. */
-function offlineConnection(config: Record<string, any>, llmPath?: string) {
+export function offlineConnection(config: Record<string, any>, llmPath?: string) {
   const t = (config.llm_tuning ?? {}) as Record<string, any>;
   return { url: 'http://offline.invalid' + (config.llm_path ?? llmPath ?? '/v1/chat/completions'), model: String(config.llm_model ?? 'offline'), provider: config.llm_provider ?? null,
     ...(t.temperature !== undefined ? { temperature: t.temperature } : {}), ...(t.extra_body ? { extraBody: t.extra_body } : {}),

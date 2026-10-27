@@ -740,7 +740,12 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const logOf = (journalFile: string) => journalFile.replace(/\.json$/, '') + '.replay.jsonl';
   /* A request the log of the resumed run does not answer, while answers still wait there: the run diverged. It stops. */
   let onDiverge: (d: { channel: string; pending: number }) => void = () => {};
-  const replay = new ReplayLog(logOf(outFile), { ...(previous ? { from: logOf(resumeFrom!) } : {}), onDiverge: (d) => onDiverge(d) });
+  /* A run it resumes whose Judge failed in every call, with a log written before failures were kept: those failures are
+     its record, served as failed where its log holds nothing (replay.ts). */
+  const endBefore = previous ? [...((previous.events ?? []) as Record<string, any>[])].reverse().find((e) => e.type === 'end') : undefined;
+  const failedBefore = endBefore?.jev && Number(endBefore.jev.calls) > 0 && Number(endBefore.jev.calls) === Number(endBefore.jev.errors)
+    ? [{ channel: 'jev', ...(() => { const m = /"error":"HTTP (\d{3}) ([^"\\]*)"/.exec(JSON.stringify(previous!.events ?? [])); return m ? { status: Number(m[1]), statusText: m[2] } : {}; })() }] : [];
+  const replay = new ReplayLog(logOf(outFile), { ...(previous ? { from: logOf(resumeFrom!) } : {}), onDiverge: (d) => onDiverge(d), failed: failedBefore });
   const judge = new JevJudge(cfg.flat
     ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
     : { url: options.judge?.url || JEV_DEFAULT_URL, apiKey: options.judge?.key, model: options.judge?.model, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev', network) });
