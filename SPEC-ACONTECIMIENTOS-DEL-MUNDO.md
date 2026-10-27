@@ -1,6 +1,6 @@
 # SPEC · Mundo vivo: actores, acontecimientos e investigación reactiva
 
-Estado (27/10/2026): **H1 implementado (§18); H2–H5 pendientes**. Diseño consolidado el 23/10/2026.
+Estado (27/10/2026): **H1 y H2 implementados (§18); H3–H5 pendientes**. Diseño consolidado el 23/10/2026.
 Revisión conciliada: puente con el investigador asistido, autoridad de actuación, hitos e integración K1–K5.
 Sustituye la versión anterior limitada a acontecimientos dentro de episodios. Los contratos son normativos;
 los nombres de interfaces y operaciones designan capacidades que se deben implementar, no APIs ya existentes.
@@ -623,6 +623,69 @@ Decisiones tomadas al implementar:
   manifiesto. La delegación en un mundo vivo se rechaza (§12, H4) y `--own-tests` también, porque arranca episodios de
   nuevo. El investigador puro no entra.
 
-Pendiente para hitos posteriores: varios actores, canales y autoridad exclusiva del junior (H2); vigilantes, reactividad
+Pendiente tras H1: varios actores, canales y autoridad exclusiva del junior (H2, §18.2); vigilantes, reactividad
 y programas del operador (H3); ramas aisladas o compartidas y servicio externo (H4); paquete con el diario del mundo,
 consola e identidad §15.1 (H5); y la prueba real con un investigador LLM en `plates@1`.
+
+### 18.2 H2 (27/10/2026)
+
+Código: `LivingSession` ampliada en `lib/src/living/world.ts`; el puente asíncrono `bridge.ts`; `run-session.ts`
+(sesión compartida en un proceso) y `lib/scripts/run-session.ts`; políticas de `plates@1`. Pruebas en
+`lib/test/living-world-h2.test.ts`.
+
+Decisiones tomadas al implementar:
+
+- **Contrato.** `advance(state, intents)` se separa en `apply(state, intent)` y `advance(state)`. Cada intención se
+  revalida sobre el estado que dejaron las anteriores de la ventana, en el orden rotatorio fijado por la semilla. Si una
+  precondición ya no se cumple, es un conflicto sin efectos; las acciones compatibles se aplican juntas.
+- **Miembros.** Declarados con `ActorDecl`. Los investigadores reciben las acciones del mundo que no están marcadas como
+  `granted`; las demás solo se conceden explícitamente (`drain` en `plates`). Las políticas no investigadoras
+  (`policy`, `adversary`, `population`) deciden al abrirse cada ventana, sobre la misma revisión, con su vista, su bandeja y
+  su estado propio; su estado queda en el diario (hash en cada `prepare`, completo en `close`).
+- **Barrera.** `commit(actor)` espera a que se aplique la ventana; `settle()` la aplica cuando todos los que deciden han
+  sellado o duermen. Hace falta al menos un investigador activo: los actores no investigadores no hacen avanzar el reloj por
+  sí solos. Con `window_ms`, un investigador que no sella a tiempo recibe un no-op que queda registrado (`wN.timeout`), y
+  un lote decidido sobre una revisión ya pasada se rechaza como tardío.
+- **Mensajes.** `send` a un miembro o a `global`. El origen, el id, la ventana y el orden los pone la sesión. Se entregan
+  cuando se confirma la ventana en que se publicaron, entre decisiones, a través del canal del investigador (como
+  `actor:<id>`). Cada destinatario tiene su recibo (`r.<actor>.<id>`). Un mensaje global cuenta una vez y sus entregas,
+  una por receptor. Un miembro nuevo no recibe la historia; la lee si tiene permiso (`history`). Sin
+  `messages_per_window` nadie puede publicar. Un mensaje que excede su tamaño se rechaza, nunca se recorta.
+- **Compartir.** `share` envía una copia inmutable con `version_hash`, y el receptor la guarda como episodio
+  `from-<autor>-<nombre>`. Sólo se comparte material propio: episodios propios, del entorno o de sus checks, y documentos.
+  No se pueden compartir validaciones ni lo recibido de otro. Las referencias de un mensaje se dan en nombres del autor y
+  no dan acceso.
+- **Junior y senior.** Sólo el junior es miembro del mundo; el senior ve lo que se le entrega al junior a través del espejo
+  de su canal y no tiene ninguna vía para actuar.
+- **Retirada.** Al terminar su run, el investigador se retira: un lote ya sellado se aplica, lo comenzado sigue sus leyes y
+  lo publicado permanece. Nadie espera a un miembro retirado.
+- **Sesión compartida.** `runLivingSession` ejecuta a los investigadores a la vez, en un mismo proceso y un mismo mundo, cada
+  uno con su run, y cierra la sesión cuando se va el último. El manifiesto `living-world@1` admite varios miembros y exige
+  `window_ms` cuando hay más de un investigador. `lab live` lanza un run propio si hay un único investigador sin mensajes,
+  y una sesión compartida en cualquier otro caso.
+
+El orden en que llegan las respuestas, dentro del plazo, no cambia nada: dos ejecuciones con latencias invertidas
+producen el mismo diario del mundo. Queda pendiente la reanudación de una sesión compartida completa: hoy se reanuda el run
+de un investigador solo.
+
+### 18.3 Revisión externa de H2 conciliada (27/10/2026)
+
+Pruebas en `lib/test/living-world-review.test.ts`.
+
+- **Cierre.** El cierre queda registrado bajo la clave de dónde ocurrió (`close@w<n>.t<tick>`) y las pausas se numeran.
+  Así, una continuación que llega más lejos cierra con su propia entrada, nunca hereda la del run que continúa y no
+  produce una divergencia.
+- **Tiempo límite.** El temporizador de la ventana se arma en cuanto un investigador sella o se duerme: un `wait` cuenta,
+  también el de la exploración. Si otro miembro no responde, recibe un timeout y el mundo sigue.
+- **Orden de los mensajes.** El id de un mensaje es `message:w<ventana>.<autor>.<k>`. Su `seq` se asigna al confirmarse la
+  ventana, ordenando por autor y después por el orden propio de cada autor; el `commit` registra ese orden. Quién publica
+  antes deja de cambiar lo que leen las políticas y, por tanto, el mundo.
+- **Investigador solo.** Conserva el id y las acciones de su declaración: el manifiesto pasa `--actor` y `--actions`
+  (`none` si la lista está vacía), y el runner los usa al abrir la sesión.
+- **Base de la decisión.** La revisión sobre la que descansa una respuesta se fija al formular la pregunta
+  (`LivingBridge.decide`, desde el `halt` previo a cada consulta). Un `observe` dentro de la misma respuesta ya no la cambia,
+  así que un acto decidido sobre una revisión superada sigue siendo tardío.
+- **Nombres compartidos.** El nombre de un episodio compartido es inyectivo: el id del autor se escribe escapando lo que el
+  nombre de un episodio no admite (`-c` mayúscula, `-u` guion bajo, `-h` guion) y se separa con `--` del nombre propio
+  (`from-a--act3`).
+- **Delegación del senior.** En un mundo vivo también se rechaza la delegación del senior, igual que la del junior.

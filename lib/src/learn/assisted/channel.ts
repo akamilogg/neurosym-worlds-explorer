@@ -15,7 +15,8 @@
  * in which nobody publishes asks exactly what it asked before the channel.
  * ========================================================================== */
 
-export type ChannelAuthor = 'operator' | `agent:${string}` | 'harness' | 'world' | 'self';
+/** `actor:<id>`: another member of a living world's session (SPEC-ACONTECIMIENTOS-DEL-MUNDO §8). */
+export type ChannelAuthor = 'operator' | `agent:${string}` | `actor:${string}` | 'harness' | 'world' | 'self';
 
 export interface ChannelPublication {
   readonly kind: 'notice' | 'pinned';
@@ -28,7 +29,7 @@ export interface ChannelPublication {
 }
 
 /** The order of the authors within a delivery: fixed, so that a repetition is exact. */
-const AUTHORS = ['operator', 'agent', 'harness', 'world', 'self'];
+const AUTHORS = ['operator', 'agent', 'actor', 'harness', 'world', 'self'];
 const rank = (from: string): number => { const i = AUTHORS.indexOf(from.split(':')[0]); return i < 0 ? AUTHORS.length : i; };
 
 export class Channel {

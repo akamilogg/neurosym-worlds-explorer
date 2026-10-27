@@ -5,6 +5,7 @@ import { LabError } from './lab-runner.ts';
 import { LABS } from '../worlds/labs.ts';
 import { VERDICTS, runAnomalies, writeVerdict, type Verdict } from '../learn/anomalies.ts';
 import { readManifest } from '../living/manifest.ts';
+import { startSessionAt } from './control.ts';
 import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, watch, type RunInfo, type RunOrder } from './control.ts';
 
 /* ============================================================================
@@ -206,10 +207,19 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         try { raw = JSON.parse(fs.readFileSync(path.resolve(ctx.root, file), 'utf8')); } catch (e) { out('cannot read the manifest ' + file + ': ' + String((e as Error).message ?? e)); return 2; }
         const m = readManifest(raw, LABS);
         if ('errors' in m) { out('the manifest is refused, nothing was started:'); for (const e of m.errors) out('  ' + e); return 2; }
-        const { journal, pid } = startRun(m.lab, { root: ctx.root, args: [...m.args, ...args], ...(ctx.env ? { env: ctx.env } : {}) });
-        out('started ' + path.basename(journal, '.json') + ' (pid ' + pid + '), a living world: ' + m.lab + ', its researcher ' + m.actor);
-        out('journal ' + journal);
-        out('follow it: lab watch ' + path.basename(journal, '.json'));
+        if (m.args) {
+          const { journal, pid } = startRun(m.lab, { root: ctx.root, args: [...m.args, ...args], ...(ctx.env ? { env: ctx.env } : {}) });
+          out('started ' + path.basename(journal, '.json') + ' (pid ' + pid + '), a living world: ' + m.lab + ', its researcher ' + m.actor);
+          out('journal ' + journal);
+          out('follow it: lab watch ' + path.basename(journal, '.json'));
+          return 0;
+        }
+        /* Several members: a shared session, its researchers' runs and its journal in a folder of their own. */
+        const name = m.lab + '-s' + m.plan.seed + '-' + new Date().toISOString().replace(/[:.]/g, '-');
+        const dir = path.join(ctx.root, 'runs', name);
+        const { pid } = startSessionAt(dir, 'session', path.resolve(ctx.root, file), ctx.env);
+        out('started a shared session of ' + m.lab + ' (pid ' + pid + '): ' + m.plan.actors.map((a) => a.id + ' (' + a.kind + ')').join(', '));
+        out('folder ' + dir + ': the run of each researcher is session.<id>.json, the world session.world.jsonl');
         return 0;
       }
       case 'list': {

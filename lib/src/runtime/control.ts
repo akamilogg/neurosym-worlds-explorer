@@ -153,6 +153,12 @@ export function startEvolveAt(journal: string, spec: string, env?: NodeJS.Proces
   return launchScript('run-evolve.ts', journal, ['--spec', spec, '--out', journal], env);
 }
 
+/** Starts a shared living world's session (SPEC-ACONTECIMIENTOS-DEL-MUNDO §4) in a process of its own: its manifest, its
+    folder; its researchers' keys from the environment, as a run's. */
+export function startSessionAt(dir: string, name: string, manifest: string, env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
+  return launchScript('run-session.ts', path.join(dir, name + '.session.json'), ['--manifest', manifest, '--dir', dir, '--name', name], env);
+}
+
 /** Resumes a run in a process of its own, as a run derived from it (the journal resumed stays as it was). */
 export function resumeRun(journal: string, options: { args?: readonly string[]; policy?: string; env?: NodeJS.ProcessEnv } = {}): { journal: string; pid: number } {
   const lab = Object.entries(LAB_IDS).find(([, id]) => id === readJson(journal)?.experiment)?.[0];

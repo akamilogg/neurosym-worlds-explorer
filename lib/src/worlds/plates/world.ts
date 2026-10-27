@@ -1,4 +1,4 @@
-import { nextRandom, type Intent, type LivingAction, type LivingWorldAdapter, type Outcome } from '../../living/world.ts';
+import { nextRandom, type Intent, type LivingAction, type LivingWorldAdapter, type Message, type Outcome, type PolicyActor } from '../../living/world.ts';
 
 /* ============================================================================
  * plates@1: the REFERENCE LIVING WORLD (SPEC-ACONTECIMIENTOS-DEL-MUNDO §17.2). A plate of wells in rows A.. and columns
@@ -53,7 +53,9 @@ export interface PlatesFrame {
 export const PLATES_ACTIONS: readonly LivingAction[] = [
   { kind: 'feed', about: '{"feed": "<well>", "amount": <1..5>}: adds nutrient to a well (at most 9)', duration: 1 },
   { kind: 'inoculate', about: '{"inoculate": "<well>"}: starts a colony of 1 in an empty well', duration: 1 },
-  { kind: 'clean', about: '{"clean": "<well>"}: cleans a well; takes 2 ticks, and its colony is gone when it is done', duration: 2 }
+  { kind: 'clean', about: '{"clean": "<well>"}: cleans a well; takes 2 ticks, and its colony is gone when it is done', duration: 2 },
+  /* A competitor's: given only to the members the manifest grants it. */
+  { kind: 'drain', about: '{"drain": "<well>", "amount": <1..3>}: takes nutrient from a well', duration: 1, granted: true }
 ];
 
 const ROWS = 'ABCDEFGH';
@@ -95,22 +97,24 @@ const neighbours = (s: PlatesState, i: number): number[] => {
   return [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]].filter(([a, b]) => a >= 0 && a < s.rows && b >= 0 && b < s.cols).map(([a, b]) => a * s.cols + b);
 };
 
-/** One tick of the plate: the intents that start in it (in order), the cleanings that end, the chance of the tick, the laws. */
-export function platesTick(s: PlatesState, intents: readonly Intent[]): { state: PlatesState; outcomes: Outcome[]; occurred: Record<string, unknown>[] } {
+/** An intent applied at the start of its window (§3): its effect at once, or a cleaning begun. Pure. */
+export function platesApply(s: PlatesState, i: Intent): { state: PlatesState; outcome: Outcome } {
+  const w = wellIndex(s, i.params.well)!;
+  const at = (k: number, v: number, xs: readonly number[]) => xs.map((x, j) => (j === k ? v : x));
+  if (i.kind === 'feed') return { state: { ...s, nutrient: at(w, Math.min(9, s.nutrient[w] + Number(i.params.amount)), s.nutrient) }, outcome: { intent: i.id, outcome: 'applied', completes_at: s.tick + 1 } };
+  if (i.kind === 'drain') return { state: { ...s, nutrient: at(w, Math.max(0, s.nutrient[w] - Number(i.params.amount ?? 2)), s.nutrient) }, outcome: { intent: i.id, outcome: 'applied', completes_at: s.tick + 1 } };
+  if (i.kind === 'inoculate') return { state: { ...s, colony: at(w, Math.max(s.colony[w], 1), s.colony) }, outcome: { intent: i.id, outcome: 'applied', completes_at: s.tick + 1 } };
+  if (i.kind === 'clean') return { state: { ...s, ops: [...s.ops, { intent: i.id, actor: i.actor, kind: 'clean', well: w, completes_at: s.tick + 2 }] }, outcome: { intent: i.id, outcome: 'applied', completes_at: s.tick + 2 } };
+  return { state: s, outcome: { intent: i.id, outcome: 'rejected', reason: 'no such action' } };
+}
+
+/** One tick of the plate: the cleanings that end, the chance of the tick, the laws. Pure. */
+export function platesAdvance(s: PlatesState): { state: PlatesState; occurred: Record<string, unknown>[] } {
   const colony = [...s.colony], nutrient = [...s.nutrient], contaminated = [...s.contaminated], marks = [...s.marks];
-  let ops = [...s.ops];
-  const outcomes: Outcome[] = [];
   const occurred: Record<string, unknown>[] = [];
-  for (const i of intents) {
-    const w = wellIndex(s, i.params.well)!;
-    if (i.kind === 'feed') { nutrient[w] = Math.min(9, nutrient[w] + Number(i.params.amount)); outcomes.push({ intent: i.id, outcome: 'applied', completes_at: s.tick + 1 }); }
-    else if (i.kind === 'inoculate') { colony[w] = Math.max(colony[w], 1); outcomes.push({ intent: i.id, outcome: 'applied', completes_at: s.tick + 1 }); }
-    else if (i.kind === 'clean') { ops.push({ intent: i.id, actor: i.actor, kind: 'clean', well: w, completes_at: s.tick + 2 }); outcomes.push({ intent: i.id, outcome: 'applied', completes_at: s.tick + 2 }); }
-    else outcomes.push({ intent: i.id, outcome: 'rejected', reason: 'no such action' });
-  }
   /* Cleanings that end with this tick. */
-  for (const op of ops.filter((o) => o.completes_at === s.tick + 1)) { contaminated[op.well] = false; colony[op.well] = 0; occurred.push({ kind: 'cleaned', well: wellName(s, op.well), intent: op.intent }); }
-  ops = ops.filter((o) => o.completes_at > s.tick + 1);
+  for (const op of s.ops.filter((o) => o.completes_at === s.tick + 1)) { contaminated[op.well] = false; colony[op.well] = 0; occurred.push({ kind: 'cleaned', well: wellName(s, op.well), intent: op.intent }); }
+  const ops = s.ops.filter((o) => o.completes_at > s.tick + 1);
   /* The tick's chance: always four draws, whatever comes of them (the stream stays aligned). */
   let rng = s.rng;
   const draw = (): number => { const [x, n] = nextRandom(rng); rng = n; return x; };
@@ -126,7 +130,16 @@ export function platesTick(s: PlatesState, intents: readonly Intent[]): { state:
     return nutrient[i] > 0 && neighbours(before, i).some((j) => colony[j] >= s.laws.seed_at) ? 1 : 0;
   });
   const nextNutrient = nutrient.map((n, i) => (!contaminated[i] && colony[i] > 0 && n > 0 && grows && colony[i] < 9 ? n - 1 : n));
-  return { state: { ...s, tick: s.tick + 1, colony: nextColony, nutrient: nextNutrient, contaminated, marks, rng, ops }, outcomes, occurred };
+  return { state: { ...s, tick: s.tick + 1, colony: nextColony, nutrient: nextNutrient, contaminated, marks, rng, ops }, occurred };
+}
+
+/** The intents applied in order, then one tick (a test's and a reserved realization's shorthand). */
+export function platesTick(s: PlatesState, intents: readonly Intent[]): { state: PlatesState; outcomes: Outcome[]; occurred: Record<string, unknown>[] } {
+  const outcomes: Outcome[] = [];
+  let state = s;
+  for (const i of intents) { const r = platesApply(state, i); state = r.state; outcomes.push(r.outcome); }
+  const next = platesAdvance(state);
+  return { state: next.state, outcomes, occurred: next.occurred };
 }
 
 const layer = (s: PlatesState, cell: (i: number) => string): string =>
@@ -144,16 +157,23 @@ export const platesAdapter: LivingWorldAdapter<PlatesState, PlatesFrame> = {
   create: (config, seed) => platesState(platesLaws(seed), Number(config.layout ?? seed), {
     ...(config.rows !== undefined ? { rows: Number(config.rows) } : {}), ...(config.cols !== undefined ? { cols: Number(config.cols) } : {}),
     contaminated: Number(config.contaminated ?? 0), arrivals: config.arrivals !== false }),
+  policies: {
+    consumer: (p) => consumerPolicy(p),
+    adversary: (p) => adversaryPolicy(p),
+    population: (p) => populationPolicy(p)
+  },
   validateIntent: (s, _actor, i) => {
     if (!PLATES_ACTIONS.some((a) => a.kind === i.kind)) return 'no action "' + i.kind + '": the actions are ' + PLATES_ACTIONS.map((a) => a.kind).join(', ');
     const w = wellIndex(s, i.params.well);
     if (w === null) return 'no well ' + JSON.stringify(i.params.well) + ': the wells are A1..' + wellName(s, s.rows * s.cols - 1);
     if (i.kind === 'feed') { const a = Number(i.params.amount); if (!Number.isInteger(a) || a < 1 || a > 5) return 'feed asks for an amount from 1 to 5'; }
+    if (i.kind === 'drain') { const a = Number(i.params.amount ?? 2); if (!Number.isInteger(a) || a < 1 || a > 3) return 'drain asks for an amount from 1 to 3'; }
     if (i.kind === 'inoculate' && s.colony[w] > 0) return 'inoculate asks for an empty well (' + wellName(s, w) + ' holds a colony)';
     if (i.kind === 'clean' && s.ops.some((o) => o.well === w)) return wellName(s, w) + ' is being cleaned already';
     return null;
   },
-  advance: (s, intents) => platesTick(s, intents),
+  apply: (s, i) => platesApply(s, i),
+  advance: (s) => platesAdvance(s),
   observe: (s) => platesFrame(s),
   tickOf: (s) => s.tick,
   pending: (s) => s.ops.map((o) => ({ intent: o.intent, actor: o.actor, kind: o.kind, completes_at: o.completes_at })),
@@ -168,4 +188,79 @@ export function reservedRun(laws: PlatesLaws, layout: number, ticks: number): Pl
   const frames = [platesFrame(s)];
   for (let t = 0; t < ticks; t++) { s = platesTick(s, []).state; frames.push(platesFrame(s)); }
   return frames;
+}
+
+/* --- The actors that are not researchers (SPEC-ACONTECIMIENTOS-DEL-MUNDO §4): each decides from the plate as it perceives it
+   and its own inbox, never from another's record. They take nutrient (drain), a competitor's action. ------------------- */
+
+const wellsOf = (f: PlatesFrame): number[] => f.nutrient.replace(/\//g, '').split('').map(Number);
+const colsOf = (f: PlatesFrame): number => f.nutrient.split('/')[0].length;
+const nameAt = (f: PlatesFrame, i: number): string => wellName({ cols: colsOf(f) }, i);
+const drain = (f: PlatesFrame, i: number, amount: number) => ({ kind: 'drain', params: { well: nameAt(f, i), amount } });
+
+/** A fixed policy: every window it drains the well with the most nutrient (the first of them). */
+export function consumerPolicy(p: Readonly<Record<string, unknown>>): PolicyActor<PlatesFrame> {
+  const amount = Number(p.amount ?? 2);
+  return {
+    kind: 'policy',
+    initial: () => null,
+    decide: ({ view }) => {
+      const n = wellsOf(view);
+      const best = n.reduce((b, x, i) => (x > n[b] ? i : b), 0);
+      return { intents: n[best] > 0 ? [drain(view, best, amount)] : [], state: null };
+    }
+  };
+}
+
+/** A reactive adversary: it drains the wells it saw fed since it last looked - and, first, a well it was told of in a message
+    (what it is told voluntarily, it reads; nothing else of anyone). */
+export function adversaryPolicy(p: Readonly<Record<string, unknown>>): PolicyActor<PlatesFrame> {
+  const amount = Number(p.amount ?? 3);
+  return {
+    kind: 'adversary',
+    initial: () => ({ last: null }),
+    decide: ({ view, inbox, state }) => {
+      const before = (state as { last: string | null }).last;
+      const now = wellsOf(view);
+      const fed = before ? wellsOf({ ...view, nutrient: before }).map((x, i) => (now[i] > x ? i : -1)).filter((i) => i >= 0) : [];
+      const told = inbox.flatMap((m: Message) => String(m.body.text ?? '').toUpperCase().match(/\b[A-H][1-9]\b/g) ?? [])
+        .map((w) => wellIndex({ rows: view.nutrient.split('/').length, cols: colsOf(view) }, w)).filter((i): i is number => i !== null);
+      const targets = [...new Set([...told, ...fed])].filter((i) => now[i] > 0).slice(0, 2);
+      return { intents: targets.map((i) => drain(view, i, amount)), state: { last: view.nutrient } };
+    }
+  };
+}
+
+/** An adaptive population: members each draining the first well with at least its threshold of nutrient; every `every`
+    windows the member that took least is replaced by a copy of the one that took most, its threshold moved by one at random.
+    Its variation, selection and seed are its own; every decision is in its state. */
+export function populationPolicy(p: Readonly<Record<string, unknown>>): PolicyActor<PlatesFrame> {
+  const size = Math.max(1, Math.min(4, Number(p.size ?? 3))), every = Math.max(1, Number(p.every ?? 4));
+  type S = { members: { theta: number; took: number }[]; rng: number; generation: number };
+  return {
+    kind: 'population',
+    initial: (seed) => ({ members: Array.from({ length: size }, (_, k) => ({ theta: 3 + 2 * k, took: 0 })), rng: seed >>> 0, generation: 0 }),
+    decide: ({ view, window, state }) => {
+      const st = JSON.parse(JSON.stringify(state)) as S;
+      const n = wellsOf(view);
+      const used = new Set<number>();
+      const intents = [];
+      for (const m of st.members) {
+        const i = n.findIndex((x, j) => x >= m.theta && !used.has(j));
+        if (i < 0) continue;
+        used.add(i);
+        m.took += Math.min(2, n[i]);
+        intents.push(drain(view, i, 2));
+      }
+      if (window % every === 0) {
+        const order = [...st.members.keys()].sort((a, b) => st.members[a].took - st.members[b].took || a - b);
+        const [x, r] = nextRandom(st.rng);
+        st.rng = r;
+        st.members[order[0]] = { theta: Math.max(1, Math.min(9, st.members[order[order.length - 1]].theta + (x < 0.5 ? -1 : 1))), took: 0 };
+        for (const m of st.members) m.took = 0;
+        st.generation++;
+      }
+      return { intents, state: st };
+    }
+  };
 }

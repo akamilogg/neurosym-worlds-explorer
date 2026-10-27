@@ -42,7 +42,7 @@ import { createHash } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
-import { WorldJournal } from '../living/world.ts';
+import { WorldJournal, type LivingSession } from '../living/world.ts';
 import { LivingBridge } from '../living/bridge.ts';
 
 /** The researcher's identity as an actor of a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §2). */
@@ -258,6 +258,9 @@ export interface LabRunOptions {
   readonly reevaluate?: Reevaluation;
   /** How a branch is started (SPEC-DELEGACION-INVESTIGACIONES): by default a run in a process of its own; tests run it here. */
   readonly delegate?: Launcher;
+  /** A living world's session SHARED with other members (SPEC-ACONTECIMIENTOS-DEL-MUNDO §4), and which of them this run's
+      researcher is: the run acts in it, and leaves it when it ends; the session's journal and its closing are its runner's. */
+  readonly living?: { readonly session: LivingSession<unknown, unknown>; readonly actor: string };
   /** A reconstruction, not a continuation (lab verify): with --resume, once the record it resumes has no answer left waiting,
       the run stops as that record stopped - a budget (its closing then served from the record), a cancellation - where it
       would otherwise go on asking. Only from code: a run on the command line resumes to go on. */
@@ -545,6 +548,9 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     if (researcher !== 'assisted') throw new LabError(lab.id + ' is a living world: only the assisted researcher investigates it (--researcher assisted)');
     if (Number(arg('own-tests')) > 0) throw new LabError('--own-tests: ' + lab.id + ' is a living world, where an experiment is never started afresh');
   }
+  if (options.living && (isGameLab(lab) || !lab.living)) throw new LabError('a shared session is a living world\'s: ' + lab.id + ' is not one');
+  /* Who else is in the world it shares: what its interface says it may write to. */
+  if (options.living) Object.defineProperty(worldOptions, '__peers', { value: options.living.session.members().filter((m) => m.id !== options.living!.actor).map((m) => m.id), enumerable: false });
   const teamBoard = openTeam(lab, arg('team'), arg('member'), researcher, options.root);
   const experienceRuns = loadExperience(lab, cfg, arg('experience'), arg('experience-mode'), arg('experience-scope'), researcher, assistedAfter, previous, options.root);
   if (!options.llm.url || !options.llm.model) throw new LabError('System 2 is needed: its URL and model (LLM_URL and LLM_MODEL on the command line; LLM_KEY if the endpoint needs one).');
@@ -596,7 +602,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
       confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team, reevaluate: options.reevaluate ?? null,
-      ...(options.delegate ? { delegate: options.delegate } : {}) });
+      ...(options.delegate ? { delegate: options.delegate } : {}), living: options.living ?? null });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]).finally(() => { if (team) team.board.end(team.member); });
 }
@@ -1074,7 +1080,8 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
  * ========================================================================== */
 
 async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[]; assistedAfter: number | null;
-  team: { board: TeamBoard; member: string; channel: PeerChannel } | null; reevaluate?: Reevaluation | null; delegate?: Launcher }): Promise<LabResult> {
+  team: { board: TeamBoard; member: string; channel: PeerChannel } | null; reevaluate?: Reevaluation | null; delegate?: Launcher;
+  living?: { readonly session: LivingSession<unknown, unknown>; readonly actor: string } | null }): Promise<LabResult> {
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
@@ -1191,7 +1198,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* A living world: it goes on before the researcher's first round, and what it showed is the environment's episodes. */
     if (bridge) {
       for (let k = 0; k < cfg.explore; k++) {
-        const e = bridge.explore();
+        const e = await bridge.explore();
         if (e) log('exploration_episode', { episode: e.name, ...lab.explored(e.segment, labs()[0]!.id) });
       }
       return;
@@ -1330,6 +1337,10 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       if ('act' in req) return tools.has('act') ? bridge.act(req.act, budget) : { act: req.act, error: '"act" is not available in this experiment' };
       if (bridge.sealing) return { ...(extra ?? { [Object.keys(req)[0]]: Object.values(req)[0] }), error: LivingBridge.AFTER_ACT };
       if (extra && 'observe' in extra) return bridge.observe();
+      if (extra && 'members' in extra) return bridge.members();
+      if (extra && 'send' in extra) return bridge.send(extra);
+      if (extra && 'share' in extra) return bridge.share(extra);
+      if (extra && 'read' in extra) return bridge.read(extra, session.currentRound);
     }
     /* A researcher's own instrument is answered by that researcher (the assisted one's library), never by the world. */
     if ('extra' in req) return { error: 'no such instrument here' };
@@ -1449,18 +1460,49 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* --- A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO): its one session, the researcher an actor in it. Its journal beside
      the run's, written ahead; a resumed run derives it again against the one it continues. ----------------------------- */
   const worldJournalOf = (f: string) => f.replace(/\.json$/, '') + '.world.jsonl';
-  const living = lab.living ? lab.living.open(spec, { actor: LIVING_ACTOR, options: worldOptions,
+  /* A session shared with other members is its runner's (its journal, its closing); a session of its own, the run's. */
+  const shared = o.living ?? null;
+  /* Its identity and its actions as declared (a manifest's, a world option's), alone as in a shared session. */
+  const actor = shared?.actor ?? (worldOptions.actor || LIVING_ACTOR);
+  const declared = String(worldOptions.actions ?? '*');
+  const alone = { id: actor, kind: 'researcher' as const, ...(declared === '*' ? {} : { actions: declared === 'none' ? [] : declared.split(',').map((x) => x.trim()).filter(Boolean) }) };
+  if (shared && !channelOn) throw new LabError('a shared living world delivers its members\' messages through the researcher\'s channel: this run has none');
+  const opened = (): LivingSession<unknown, unknown> | null => {
+    if (shared || !lab.living) return null;
+    try { return lab.living.open(spec, { actors: [alone], options: worldOptions,
     journal: new WorldJournal(worldJournalOf(outFile), { ...(previous && resumeFrom ? { from: worldJournalOf(resumeFrom) } : {}),
-      onDiverge: (d) => { log('world_diverged', { key: d.key }); say('  the world diverged from the record it continues, at ' + d.key); } }) }) : null;
-  const bridge = living && lab.living ? new LivingBridge<unknown>({ session: living, actor: LIVING_ACTOR,
+      onDiverge: (d) => { log('world_diverged', { key: d.key }); say('  the world diverged from the record it continues, at ' + d.key); } }) }); }
+    catch (e) { throw new LabError(lab.id + ': ' + String((e as Error).message ?? e)); }
+  };
+  const living = shared ? shared.session : opened();
+  /* Its own material it may share: its episodes and the environment's, its checks' - never a validation's, never what another
+     member shared with it - and its documents in their latest version. */
+  const shareable = (id: string) => { const e = episodes.get(id); return e && (e.by === 'you' || e.by === 'the environment' || e.by.startsWith('the check')) ? e : null; };
+  const bridge = living && lab.living ? new LivingBridge<unknown>({ session: living, actor,
     intent: (a) => lab.living!.intent(a), asWritten: (a) => (lab.act?.asWritten ? lab.act.asWritten(a) : a), shown: (seg) => lab.act!.shown(seg),
-    store: (seg, round, by, answer) => {
-      const id = (by === 'you' ? 'act' : 'ep') + (++counter);
+    store: (seg, round, by, answer, name) => {
+      const id = name ?? (by === 'you' ? 'act' : 'ep') + (++counter);
       store(id, labs()[0]!, round, by, seg);
       if (answer) actAnswers.set(id, answer(id));
       return id;
+    },
+    material: (ref) => {
+      if (ref.document !== undefined) {
+        const d = session.notebook.documents.get(ref.document);
+        return d ? { kind: 'document' as const, id: d.id, version: d.versions, text: d.text } : 'no document "' + ref.document + '" of yours';
+      }
+      const e = episodes.get(String(ref.episode));
+      if (!e) return 'no episode "' + ref.episode + '" of yours';
+      return shareable(e.id) ? { kind: 'episode' as const, name: e.id, segment: e.data as never } : 'share what is yours: ' + e.id + ' is ' + (e.by.startsWith('actor:') ? 'what ' + e.by.slice(6) + ' shared with you' : 'not yours to share (' + e.by + ')');
+    },
+    own: (ref) => { const r = ref.trim(); return shareable(r.split('@')[0]) !== null || session.notebook.documents.has(r); },
+    deliver: (messages, waiting) => {
+      for (const m of messages) channelNow()?.publish(('actor:' + m.from) as never, { kind: 'notice', body: m });
+      if (waiting) channelNow()?.publish('harness', { kind: 'notice', body: { messages_waiting: waiting, read_them: '{"read": "inbox"}' } });
+      log('messages_delivered', { round: session.currentRound, messages: messages.map((m) => m.message), ...(waiting ? { waiting } : {}) });
     }, log, say }) : null;
-  if (living) journal.world = { session: living.id, adapter: living.adapter.id, journal: path.basename(worldJournalOf(outFile)), clock: living.clock, limits: living.limits };
+  if (living) journal.world = { session: living.id, adapter: living.adapter.id, actor, ...(shared ? { shared: true, journal: living.journal.file ? path.relative(path.dirname(outFile), living.journal.file).split(path.sep).join('/') : null }
+    : { journal: path.basename(worldJournalOf(outFile)) }), clock: living.clock, limits: living.limits };
   /* Every investigation step, as it was asked and answered: what a publication may cite ("r<round>.<step>"). */
   const logged = (type: string, data: Record<string, unknown> = {}): void => {
     if (type === 'investigation' && typeof data.round === 'number') {
@@ -1550,7 +1592,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
     runRequest: (r, budget) => runRequest(r, budget),
     /* A living world's requests of its own, and the end of each step: its batch applied (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3). */
-    ...(bridge ? { extraRequest: (q: Record<string, unknown>) => 'observe' in q || 'wait' in q,
+    ...(bridge ? { extraRequest: (q: Record<string, unknown>) => LivingBridge.accepts(q),
       endStep: async (round: number, results: readonly unknown[]) => bridge.endStep(round, results) } : {}),
     known: (ref) => episodes.has(ref.trim()) || resolve(ref) !== null,
     failures,
@@ -1558,7 +1600,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
     /* Its closing (the reflection that leaves what it could not answer) is asked even when a budget stopped the
        investigation: a budget ends the research, not its account (SPEC-INVESTIGADOR-ASISTIDO §14.9). */
-    log: logged, say, halt: () => { const h = halt(); return closing && (h === 'token_budget' || h === 'time_budget') ? null : h; },
+    /* Asked before every question: a living world's decision rests on the revision it has now (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.1). */
+    log: logged, say, halt: () => { bridge?.decide(); const h = halt(); return closing && (h === 'token_budget' || h === 'time_budget') ? null : h; },
     /* A member of a team tells the board where it is: the versions every member has passed are sealed. */
     ...(team ? { onRound: (round: number) => team.board.reach(team.member, round) } : {})
   };
@@ -1929,7 +1972,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     if (accepted) break;
     const record = await session.consult('propose');
     /* A living world: the round ended - a proposal, a closing, none - and its window goes on with an empty batch. */
-    if (bridge && session.roundEnd.kind !== 'stopped' && session.roundEnd.kind !== 'none') bridge.endRound(session.currentRound, session.roundEnd.kind);
+    if (bridge && session.roundEnd.kind !== 'stopped' && session.roundEnd.kind !== 'none') await bridge.endRound(session.currentRound, session.roundEnd.kind);
     /* Beliefs it dropped since: what of its world rested on them, as a fact of the record (SPEC-MUNDO-ARTEFACTOS §9). */
     if (lab.dependents) {
       const fallen = [...session.notebook.beliefs.values()].filter((b) => b.status === 'dropped' && !fallenSeen.has(b.id)).map((b) => b.id);
@@ -2042,7 +2085,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const result = run.finish({ stoppedBy, halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     /* A living world: its session closed, what was in course kept as pending (§13). */
-    ...(living ? { world: living.close(stoppedBy) } : {}),
+    /* A shared one: it leaves it, and the session goes on for the others. */
+    ...(living ? { world: shared ? (bridge!.retire(stoppedBy), { ...living.summary(), left: stoppedBy }) : living.close(stoppedBy) } : {}),
     final: final ? ownLaw(final) : null,
     /* Its branches: each with its record, how it stands, what it spent; those still running asked to stop. */
     ...(delegations ? { delegation: delegations.close() } : {}),

@@ -1,18 +1,24 @@
-import { joinSegments, type LivingSession, type Receipt, type Segment, type WindowRecord } from './world.ts';
+import { hashString, stableStringify } from '../core/hash.ts';
+import { joinSegments, type LivingSession, type Message, type Outcome, type Receipt, type Segment } from './world.ts';
 
 /* ============================================================================
- * THE BRIDGE between a living world and the assisted researcher's rounds (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3). The
+ * THE BRIDGE between a living world and the assisted researcher's rounds (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3, §8). The
  * researcher keeps its loop - investigation, proposal, checks, reflection - and its round counters; the session keeps the
- * world's clock. A window is not a round:
+ * world's clock and its members' messages. A window is not a round:
  *
  *   a query (view, table, measure, observe, its memory)   answered at once; advances nothing
  *   an act, a wait                                         taken into the step's batch; sealed when the step's requests are
- *                                                          all taken, applied after the window's barrier; what came of it is
- *                                                          that step's result, read with the next answer
+ *                                                          all taken, applied once every member sealed (the barrier); what
+ *                                                          came of it is that step's result, read with the next answer
  *   a request after an act in the same answer              not answered: its results did not exist yet
  *   an answer of queries only                              counted for the window: at its limit the batch is sealed empty
- *                                                          and the world goes on without it
+ *                                                          and it waits for the window, like the others
  *   a proposal, a round closed                             an empty batch: the window goes on
+ *   a message, a share                                     published at once for the window in course; its recipients get it
+ *                                                          once that window is committed, between their decisions
+ *
+ * Its batches carry the revision it decided on: one decided on a revision the world left without it (the window went on
+ * when its time ran out) is late, refused, and it is told to look again.
  * ========================================================================== */
 
 export interface BridgeHost<A> {
@@ -24,14 +30,28 @@ export interface BridgeHost<A> {
   asWritten(act: A): unknown;
   /** What the researcher is shown of a stretch it watched. */
   shown(segment: Segment<unknown>): Record<string, unknown>;
-  /** Keeps a stretch as an episode of the researcher's, and answers its name. */
-  store(segment: Segment<unknown>, round: number, by: 'you' | 'the environment', answer?: (name: string) => Record<string, unknown>): string;
+  /** Keeps a stretch as an episode of the researcher's, and answers its name: its own (`you`), the environment's, or one
+      another member shared with it (`name` given, `by` its author). */
+  store(segment: Segment<unknown>, round: number, by: string, answer?: (name: string) => Record<string, unknown>, name?: string): string;
+  /** Material of its own it may share (§8): an episode of its own or one of the environment's, a document; or why not. */
+  material(ref: { episode?: string; document?: string }): { readonly kind: 'episode'; readonly name: string; readonly segment: Segment<unknown> } | { readonly kind: 'document'; readonly id: string; readonly version: number; readonly text: string } | string;
+  /** Whether a reference names material of its own (an episode, a point, a document): what a message may cite. */
+  own(ref: string): boolean;
+  /** Hands it messages between its decisions (its channel), and how many more wait. */
+  deliver(messages: readonly Record<string, unknown>[], waiting: number): void;
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
 }
 
 /** What an act or a wait is answered until its window is applied: replaced then, never shown as it is. */
 interface Pending { readonly pending: true; readonly n: number }
+
+/** The name, in a researcher's record, of an episode another member shared with it: its author and its own name, one
+    name for each - never two authors under one ("Alice" and "alice", "a_b" and "a-b"). An author's id is written in the
+    letters an episode's name allows, "-" escaping what they lack ("-c" a capital, "-u" an underscore, "-h" a hyphen), so it
+    never holds "--": what follows the first "--" is the episode's own name. */
+export const sharedName = (from: string, name: string): string =>
+  'from-' + [...from].map((c) => (/[a-z0-9]/.test(c) ? c : /[A-Z]/.test(c) ? '-c' + c.toLowerCase() : c === '_' ? '-u' : c === '-' ? '-h' : '-x' + c.charCodeAt(0).toString(36) + '-')).join('') + '--' + name;
 
 export class LivingBridge<A> {
   private readonly h: BridgeHost<A>;
@@ -40,8 +60,16 @@ export class LivingBridge<A> {
   private readonly placeholders: Pending[] = [];
   /** The round's acts left, as the session counts them: each act taken, and a wait, spends one. */
   private budget: { acts: number } | null = null;
+  /** The revision its decision in course rests on: the one the world had when it was asked (`decide`), the whole answer long. */
+  private basis: number;
+  /** The last window it logged. */
+  private logged: number;
 
-  constructor(host: BridgeHost<A>) { this.h = host; }
+  constructor(host: BridgeHost<A>) { this.h = host; this.basis = host.session.revision; this.logged = host.session.window; }
+
+  /** A decision is asked of it now: whatever it answers rests on the world's revision now - a query within its answer
+      changes nothing of that (§5.1). */
+  decide(): void { this.basis = this.h.session.revision; }
 
   /** Whether an act or a wait was taken in the step in course: a world query after it is not answered. */
   get sealing(): boolean { return this.asked.length > 0; }
@@ -49,10 +77,64 @@ export class LivingBridge<A> {
   /** Requests a world query must not be after an act in the same answer: why. */
   static readonly AFTER_ACT = 'not answered: it comes after an act or a wait in the same answer, whose results do not exist yet - ask it in your next answer';
 
+  /** The requests of its own a living world answers: the world now, a wait, the members and their messages. */
+  static accepts(q: Record<string, unknown>): boolean { return 'observe' in q || 'wait' in q || 'send' in q || 'share' in q || 'read' in q || 'members' in q; }
+
   /** The world as it is now, for the researcher (a query). */
   observe(): Record<string, unknown> {
     const o = this.h.session.observe(this.h.actor);
     return { observe: true, tick: o.tick, revision: o.revision, plate: o.view, ...(this.h.session.ended ? { the_world_has_ended: true } : {}) };
+  }
+
+  /** The members of the session: who, of what kind, how they stand (§8: `channel.list`). */
+  members(): Record<string, unknown> {
+    return { members: this.h.session.members().filter((m) => m.id !== this.h.actor), you: this.h.actor };
+  }
+
+  /** A message to a member or to everyone (§8). Its references are of its own material, and never give access to it. */
+  send(q: Record<string, unknown>): Record<string, unknown> {
+    const o = q.send && typeof q.send === 'object' ? q.send as Record<string, unknown> : null;
+    const to = o ? this.recipient(o.to) : null;
+    if (!o || !to || typeof o.text !== 'string' || !o.text.trim()) return { send: q.send, error: 'a message is {"send": {"to": "<member>" | "global", "text": "...", "refs": [<your episodes or points>]}}' };
+    const refs = Array.isArray(o.refs) ? o.refs.map(String) : [];
+    const foreign = refs.filter((r) => !this.h.own(r));
+    if (foreign.length) return { send: 'refused', reason: 'a message cites your own material only: ' + foreign.join(', ') + ' is not yours' };
+    const r = this.h.session.send(this.h.actor, to, 'notice', { text: o.text, ...(refs.length ? { refs } : {}) });
+    this.h.log('message_sent', { to, ...(r.accepted ? { id: r.id } : { refused: r.reason }), text: o.text, refs });
+    return r.accepted ? { send: 'published', id: r.id, to: o.to, reaches_them: 'once the window in course is applied' } : { send: 'refused', reason: r.reason };
+  }
+
+  /** Shares material of its own (§8): an immutable copy, with its version and where it came from. */
+  share(q: Record<string, unknown>): Record<string, unknown> {
+    const o = q.share && typeof q.share === 'object' ? q.share as Record<string, unknown> : null;
+    const to = o ? this.recipient(o.to) : null;
+    if (!o || !to || (typeof o.episode !== 'string' && typeof o.document !== 'string'))
+      return { share: q.share, error: 'a share is {"share": {"episode": "<yours>" | "document": "<yours>", "to": "<member>" | "global", "text": "..."}}' };
+    const m = this.h.material({ ...(typeof o.episode === 'string' ? { episode: o.episode } : {}), ...(typeof o.document === 'string' ? { document: o.document } : {}) });
+    if (typeof m === 'string') return { share: 'refused', reason: m };
+    const content = m.kind === 'episode' ? { episode: m.name, segment: m.segment } : { document: m.id, version: m.version, text: m.text };
+    const shared = { ...content, version_hash: hashString(stableStringify(content)) };
+    const r = this.h.session.send(this.h.actor, to, 'share', { ...(typeof o.text === 'string' ? { text: o.text } : {}), shared });
+    this.h.log('material_shared', { to, ...(r.accepted ? { id: r.id } : { refused: r.reason }), ...(m.kind === 'episode' ? { episode: m.name } : { document: m.id, version: m.version }), version_hash: shared.version_hash });
+    return r.accepted ? { share: 'published', id: r.id, to: o.to, version_hash: shared.version_hash } : { share: 'refused', reason: r.reason };
+  }
+
+  /** Reads what waits in its inbox, or the global channel's history as far as it may (§8: `channel.read`). */
+  read(q: Record<string, unknown>, round: number): Record<string, unknown> {
+    const s = this.h.session, actor = this.h.actor;
+    const what = q.read && typeof q.read === 'object' ? (q.read as Record<string, unknown>).channel : q.read;
+    if (what === 'inbox') {
+      const { messages, waiting } = s.inbox(actor);
+      s.receive(actor, messages.map((m) => m.id), 'read');
+      return { read: 'inbox', messages: messages.map((m) => this.received(m, round)), ...(waiting ? { still_waiting: waiting } : {}) };
+    }
+    if (what === 'global') {
+      const after = q.read && typeof q.read === 'object' ? Number((q.read as Record<string, unknown>).after ?? 0) : 0;
+      const h = s.history(actor, { after });
+      return { read: 'global', messages: h.messages.map((m) => ({ id: m.id, seq: m.seq, from: m.from, window: m.window, ...(typeof m.body.text === 'string' ? { text: m.body.text } : {}), ...(m.kind === 'share' ? { shared: 'material (not given again: ask its author)' } : {}) })),
+        ...(h.more ? { more: 'read again with "after": <the last seq>' } : {}) };
+    }
+    return { read: q.read, error: 'read "inbox" (what waits for you) or {"channel": "global", "after": <seq>} (its history)' };
   }
 
   /** An act taken into the step's batch. */
@@ -72,42 +154,52 @@ export class LivingBridge<A> {
   }
 
   /** The step's requests were all taken: its batch sealed and applied, each act's result in place of what it was answered;
-      or, with queries only, the call counted - at its limit, the window goes on without it. */
-  endStep(round: number, results: readonly unknown[]): unknown[] {
+      or, with queries only, the call counted - at its limit, it waits for the window like everyone. Then what reached it. */
+  async endStep(round: number, results: readonly unknown[]): Promise<unknown[]> {
     const asked = this.asked;
     this.asked = [];
     const slots = new Map(this.placeholders.splice(0).map((p) => [p, p.n]));
+    let out: unknown[];
     if (!asked.length) {
-      if (this.h.session.call(this.h.actor)) this.applyEmpty(round, 'calls');
-      return [...results];
+      if (this.h.session.call(this.h.actor)) await this.cross(round, 'calls');
+      out = [...results];
+    } else {
+      const answers = await this.apply(round, asked);
+      out = results.map((r) => (slots.has(r as Pending) ? answers[slots.get(r as Pending)!] : r));
     }
-    const answers = this.apply(round, asked);
-    return results.map((r) => (slots.has(r as Pending) ? answers[slots.get(r as Pending)!] : r));
+    this.pull(round);
+    return out;
+  }
+
+  /** A round ended (a proposal, a closing, no proposal): an empty batch, and the window goes on. */
+  async endRound(round: number, how: string): Promise<void> {
+    const s = this.h.session;
+    if (s.status !== 'running' || s.ended) return;
+    if (s.actorState(this.h.actor) === 'ready') s.seal(this.h.actor, []);
+    await this.cross(round, how);
+    this.pull(round);
   }
 
   /** The world going on before the researcher's first round (§5.1): a window it does not decide in, its stretch an episode of
       the environment's. Null when the world does not advance. */
-  explore(): { name: string; segment: Segment<unknown> } | null {
+  async explore(): Promise<{ name: string; segment: Segment<unknown> } | null> {
     const s = this.h.session, actor = this.h.actor;
+    s.take(actor);
     if (!s.wait(actor, s.clock.decision_interval).accepted) return null;
-    const parts: Segment<unknown>[] = [];
-    do {
-      const w = s.runWindow();
-      if (!w) break;
-      this.logWindow(0, w, 'exploration');
-      const seg = w.segments.get(actor);
-      if (seg) parts.push(seg);
-    } while (s.actorState(actor) === 'waiting');
-    if (!parts.length) return null;
-    const segment = joinSegments(parts);
+    const segment = await this.watch(0, 'exploration');
+    this.pull(0);
+    if (!segment) return null;
     const name = this.h.store(segment, 0, 'the environment');
     s.delivered(actor, 'w' + segment.window + '-' + segment.to, { episode: name, from: segment.from, to: segment.to, intents: [] });
     return { name, segment };
   }
 
-  /** A round ended (a proposal, a closing, no proposal): an empty batch, and the window goes on. */
-  endRound(round: number, how: string): void {
-    this.applyEmpty(round, how);
+  /** The researcher's run ended: it leaves the session (a session of its own is closed by its run instead). */
+  retire(reason: string): void { this.h.session.retire(this.h.actor, reason); }
+
+  private recipient(to: unknown): Message['to'] | null {
+    if (to === 'global') return { channel: 'global' };
+    return typeof to === 'string' && to.trim() ? { actor: to.trim() } : null;
   }
 
   private placeholder(): Pending {
@@ -116,16 +208,63 @@ export class LivingBridge<A> {
     return p;
   }
 
-  private applyEmpty(round: number, by: string): void {
+  /** Waits for the window it sealed; logs every window since it last looked, and takes the revision it reached. */
+  private async cross(round: number, by: string): Promise<void> {
+    const before = this.h.session.window;
+    await this.h.session.commit(this.h.actor);
+    this.catchUp(round, by, before + 1);
+  }
+
+  /** Waits for the window it sealed and, asleep, for every one until it wakes: the stretch it watched, one. */
+  private async watch(round: number, by: string): Promise<Segment<unknown> | null> {
+    const s = this.h.session, actor = this.h.actor;
+    await this.cross(round, by);
+    if (s.actorState(actor) === 'waiting') {
+      await s.awake(actor);
+      this.catchUp(round, by, 0);
+    }
+    const parts = s.take(actor);
+    return parts.length ? joinSegments(parts) : null;
+  }
+
+  /** The windows applied since it last logged: `by` for the one it sealed (and those it slept through), the others as
+      windows that went on while it decided. Its own intents' outcomes only. */
+  private catchUp(round: number, by: string, sealed: number): void {
     const s = this.h.session;
-    if (s.status !== 'running' || s.ended) return;
-    if (s.actorState(this.h.actor) === 'ready') s.seal(this.h.actor, []);
-    const w = s.runWindow();
-    if (w) this.logWindow(round, w, by);
+    for (let n = this.logged + 1; n <= s.window; n++) {
+      const w = s.windowRecord(n);
+      const mine = (w?.outcomes ?? []).filter((o) => o.intent.startsWith(this.h.actor + ':'));
+      this.h.log('world_window', { round, window: n, ...(w ? { from: w.from, to: w.to, revision: w.revision } : {}),
+        by: n === sealed || by === 'wait' || by === 'exploration' ? by : 'went_on', outcomes: mine, ...(w?.timeouts.length ? { timeouts: w.timeouts } : {}) });
+    }
+    this.logged = s.window;
+  }
+
+  /** What reached it since it last looked: delivered between its decisions, each received once. */
+  private pull(round: number): void {
+    const s = this.h.session, actor = this.h.actor;
+    const { messages, waiting } = s.inbox(actor);
+    if (!messages.length) return;
+    s.receive(actor, messages.map((m) => m.id), 'delivered');
+    this.h.deliver(messages.map((m) => this.received(m, round)), waiting);
+  }
+
+  /** A message as its recipient is given it: its references in its author's names (they give no access), what was shared
+      kept as an episode of the recipient's own, with its version and its author. */
+  private received(m: Message, round: number): Record<string, unknown> {
+    const body = m.body as { text?: string; refs?: string[]; shared?: Record<string, unknown> };
+    const shared = body.shared;
+    let kept: Record<string, unknown> | null = null;
+    if (shared && typeof shared.episode === 'string') {
+      const name = this.h.store(shared.segment as Segment<unknown>, round, 'actor:' + m.from, undefined, sharedName(m.from, shared.episode));
+      kept = { episode: name, as_its_author_named_it: shared.episode, version_hash: shared.version_hash };
+    } else if (shared) kept = { document: shared.document, version: shared.version, text: shared.text, version_hash: shared.version_hash };
+    return { message: m.id, from: m.from, to: 'channel' in m.to ? 'global' : 'you', window: m.window, ...(body.text ? { text: body.text } : {}),
+      ...(body.refs?.length ? { refs: body.refs.map((r) => m.from + ':' + r) } : {}), ...(kept ? { shared: kept } : {}) };
   }
 
   /** The batch: its acts sealed together (a wait alone), the window applied - as many as a wait lasts - and each answered. */
-  private apply(round: number, asked: ({ act: A } | { wait: number })[]): unknown[] {
+  private async apply(round: number, asked: ({ act: A } | { wait: number })[]): Promise<unknown[]> {
     const s = this.h.session, actor = this.h.actor;
     const waits = asked.map((a, i) => ('wait' in a ? i : -1)).filter((i) => i >= 0);
     const acts = asked.map((a, i) => ('act' in a ? i : -1)).filter((i) => i >= 0);
@@ -137,38 +276,29 @@ export class LivingBridge<A> {
       if (acts.length || wait !== null) answers[i] = { wait: ticks, accepted: false, reason: 'a wait goes alone in an answer: with no act and no other wait' };
       else wait = i;
     }
+    s.take(actor);
     let receipts: Receipt[] = [];
     if (wait !== null) {
       const ticks = (asked[wait] as { wait: number }).wait;
-      const r = s.wait(actor, ticks);
+      const r = s.wait(actor, ticks, this.basis);
       if (!r.accepted) { answers[wait] = { wait: ticks, accepted: false, reason: r.reason }; return this.finishEmpty(round, answers); }
-    } else receipts = s.seal(actor, acts.map((i) => this.h.intent((asked[i] as { act: A }).act)));
+    } else receipts = s.seal(actor, acts.map((i) => this.h.intent((asked[i] as { act: A }).act)), this.basis);
     acts.forEach((i, k) => { if (!receipts[k]?.accepted) answers[i] = { act: this.h.asWritten((asked[i] as { act: A }).act), accepted: false, reason: receipts[k]?.reason ?? 'not sealed' }; });
     const taken = acts.filter((_, k) => receipts[k]?.accepted);
     if (wait === null && !taken.length) return this.finishEmpty(round, answers);
     if (this.budget) this.budget.acts -= taken.length + (wait !== null ? 1 : 0);
-    /* Applied: one window for acts; for a wait, every window until it wakes. */
-    const windows: WindowRecord<unknown>[] = [];
-    do {
-      const w = s.runWindow();
-      if (!w) break;
-      windows.push(w);
-      this.logWindow(round, w, wait !== null ? 'wait' : 'acts');
-    } while (wait !== null && s.actorState(actor) === 'waiting');
-    const parts = windows.map((w) => w.segments.get(actor)).filter((x): x is Segment<unknown> => x !== undefined);
-    if (!parts.length) {
-      /* Nothing applied (paused, ended meanwhile): said so, never an invented episode. */
+    const segment = await this.watch(round, wait !== null ? 'wait' : 'acts');
+    if (!segment) {
+      /* Nothing applied (closed, ended meanwhile): said so, never an invented episode. */
       for (const i of [...taken, ...(wait !== null ? [wait] : [])]) answers[i] = { ...('act' in asked[i] ? { act: this.h.asWritten((asked[i] as { act: A }).act) } : { wait: (asked[i] as { wait: number }).wait }),
         accepted: true, applied: false, reason: 'the world did not advance: it is ' + s.status + (s.ended ? ', at its horizon' : '') };
       return answers;
     }
-    const segment = joinSegments(parts);
-    const outcomes = new Map(windows.flatMap((w) => w.outcomes).map((o) => [o.intent, o]));
+    const outcomes = new Map(s.windowRecord(segment.window)?.outcomes.map((o) => [o.intent, o]) ?? []);
     const ids = new Map(taken.map((i) => [i, receipts[acts.indexOf(i)]?.intent ?? '']));
     const describe = (name: string): Record<string, unknown> => ({ name, ticks: [segment.from, segment.to], revisions: segment.revisions, ...this.h.shown(segment) });
-    let name = '';
     const first = wait !== null ? wait : taken[0];
-    name = this.h.store(segment, round, 'you', (n) => {
+    const name = this.h.store(segment, round, 'you', (n) => {
       const a = asked[first];
       return 'act' in a ? { act: this.h.asWritten(a.act), accepted: true, ...this.outcomeOf(outcomes.get(ids.get(first)!)), ...describe(n) } : { wait: a.wait, accepted: true, ...describe(n) };
     });
@@ -182,19 +312,13 @@ export class LivingBridge<A> {
     return answers;
   }
 
-  private outcomeOf(o: { outcome: string; reason?: string; completes_at?: number } | undefined): Record<string, unknown> {
+  private outcomeOf(o: Outcome | undefined): Record<string, unknown> {
     return o ? { outcome: o.outcome, ...(o.reason ? { reason: o.reason } : {}), ...(o.completes_at !== undefined ? { done_at_tick: o.completes_at } : {}) } : { outcome: 'pending' };
   }
 
   /** Nothing of the batch was taken: nothing sealed - the answer counts as one of queries. */
-  private finishEmpty(round: number, answers: unknown[]): unknown[] {
-    if (this.h.session.call(this.h.actor)) this.applyEmpty(round, 'calls');
+  private async finishEmpty(round: number, answers: unknown[]): Promise<unknown[]> {
+    if (this.h.session.call(this.h.actor)) await this.cross(round, 'calls');
     return answers;
-  }
-
-  private logWindow(round: number, w: WindowRecord<unknown>, by: string): void {
-    this.h.log('world_window', { round, window: w.window, from: w.from, to: w.to, revision: w.revision, by,
-      /* The researcher's own intents only: what else happened stays in the world's restricted record. */
-      outcomes: w.outcomes.filter((o) => o.intent.startsWith(this.h.actor + ':')) });
   }
 }

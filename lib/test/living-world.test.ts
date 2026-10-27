@@ -70,8 +70,10 @@ test('17 (no actor retired): a pause freezes the clock; closing keeps what was i
   s.pause();
   assert.equal(s.runWindow(), null, 'paused: no window');
   s.resume();
-  /* An interval of 3 ticks and a cleaning of 2: done within it. Then one more act, then the horizon. */
-  assert.equal(s.runWindow()!.outcomes[0].completes_at, 2);
+  /* Resumed, the window that waited is applied at once. An interval of 3 ticks and a cleaning of 2: done within it. Then one
+     more act, then the horizon. */
+  assert.equal(s.window, 1);
+  assert.equal(s.windowRecord(1)!.outcomes[0].completes_at, 2);
   s.seal('researcher', [{ kind: 'clean', params: { well: 'C3' } }]);
   s.runWindow();
   s.seal('researcher', [{ kind: 'clean', params: { well: 'D4' } }]);
@@ -84,8 +86,8 @@ test('17 (no actor retired): a pause freezes the clock; closing keeps what was i
   assert.equal(closed.status, 'completed');
   assert.deepEqual((closed.pending as { kind: string }[]).map((p) => p.kind), ['clean'], 'the cleaning begun at tick 6 is kept as pending');
   const entries = lines(path.join(dir, 'w.world.jsonl'));
-  assert.ok(entries.some((e) => e.key === 'pause@w0') && entries.some((e) => e.key === 'resume@w0'));
-  assert.equal(entries[entries.length - 1].key, 'close');
+  assert.ok(entries.some((e) => e.key === 'pause@w0.1') && entries.some((e) => e.key === 'resume@w0.1'));
+  assert.match(entries[entries.length - 1].key, /^close@w3\.t7$/, 'under where it closed');
 });
 
 test('12: a crash before or after a transition or a delivery - derived again, nothing twice, nothing lost; a divergence said so', () => {
@@ -120,35 +122,38 @@ test('12: a crash before or after a transition or a delivery - derived again, no
   assert.deepEqual(d.journal.diverged.map((x) => x.key), ['w1.prepare', 'w1.commit']);
 });
 
-test('the bridge: a step\'s acts one batch, applied after it; a query after an act not answered; queries counted for the window', () => {
+test('the bridge: the acts of a step one batch, applied after it; a query after an act not answered; queries counted for the window', async () => {
   const s = session(null, { calls: 2 });
   const logged: Record<string, any>[] = [];
   const stored: string[] = [];
   const bridge = new LivingBridge<{ kind: string; well: string }>({ session: s, actor: 'researcher', intent: (a) => ({ kind: a.kind, params: { well: a.well } }), asWritten: (a) => ({ [a.kind]: a.well }),
     shown: (seg) => ({ frames: seg.frames.length }), store: (_seg, _r, by, answer) => { const n = (by === 'you' ? 'act' : 'ep') + (stored.length + 1); stored.push(n); answer?.(n); return n; },
-    log: (type, data) => logged.push({ type, ...data }), say: () => {} });
+    material: () => 'none', own: () => false, deliver: () => {}, log: (type, data) => logged.push({ type, ...data }), say: () => {} });
   const budget = { acts: 4 };
   /* Queries only: counted; at the second the window goes on without anything of its. */
-  bridge.endStep(1, [bridge.observe()]);
+  await bridge.endStep(1, [bridge.observe()]);
   assert.equal(s.tick, 0);
-  bridge.endStep(1, [bridge.observe()]);
+  await bridge.endStep(1, [bridge.observe()]);
   assert.equal(s.tick, 3, 'its limit of calls: the window went on');
   assert.equal(logged.at(-1)?.by, 'calls');
-  /* Two acts, one batch: their results exist only when the step ends. */
+  /* Two acts, one batch: their results exist only when the step ends. Each answer is asked on the world as it is then. */
+  bridge.decide();
   const a = bridge.act({ kind: 'clean', well: 'B2' }, budget), b = bridge.act({ kind: 'inoculate', well: 'A1' }, budget);
   assert.ok(bridge.sealing);
-  const answers = bridge.endStep(1, [a, b]) as Record<string, any>[];
+  const answers = await bridge.endStep(1, [a, b]) as Record<string, any>[];
   assert.equal(answers[0].name, 'act1');
   assert.deepEqual(answers[0].ticks, [3, 6]);
   assert.ok(answers.every((x) => x.accepted ? x.name === 'act1' : typeof x.reason === 'string'), 'the same stretch for the same batch; a refusal says why');
   assert.equal(budget.acts, 4 - answers.filter((x) => x.accepted).length);
   /* A wait across windows: one stretch. */
+  bridge.decide();
   const w = bridge.wait(5, budget);
-  const [waited] = bridge.endStep(1, [w]) as Record<string, any>[];
+  const [waited] = await bridge.endStep(1, [w]) as Record<string, any>[];
   assert.deepEqual(waited.ticks, [6, 11]);
   assert.equal(waited.frames, 6);
+  assert.deepEqual(logged.filter((e) => e.by === 'wait').map((e) => [e.from, e.to]), [[6, 9], [9, 11]], 'every window it slept through, logged');
   /* A refused wait seals nothing: the next answer may still act. */
-  const [bad] = bridge.endStep(1, [bridge.wait(0, budget)]) as Record<string, any>[];
+  const [bad] = await bridge.endStep(1, [bridge.wait(0, budget)]) as Record<string, any>[];
   assert.equal(bad.accepted, false);
   assert.equal(s.tick, 11);
 });
@@ -231,7 +236,7 @@ test('the assisted researcher in a living world: a round across windows, queries
   assert.ok(keys.filter((k) => k.startsWith('d.researcher.')).length >= 5, 'its stretches delivered: two of the environment, three of its own');
   const end = events.find((e) => e.type === 'end')!;
   assert.equal(end.world.status, 'completed');
-  assert.equal(end.world.tick, entries.find((e) => e.key === 'close')!.tick);
+  assert.equal(end.world.tick, entries.find((e) => e.key.startsWith('close@'))!.tick);
   /* What happened in the world (its contaminations, its smudges) stays in its restricted record, never in the researcher's. */
   assert.ok(!JSON.stringify(asked).includes('contamination'));
 });
@@ -286,14 +291,21 @@ test('a living-world@1 manifest: checked whole before anything is spent; nothing
   const m = readManifest(ok, LABS);
   assert.ok(!('errors' in m));
   assert.equal(m.lab, 'plates');
-  assert.deepEqual(m.args.slice(0, 2), ['--researcher', 'assisted']);
-  assert.ok(m.args.join(' ').includes('--interval 3 --horizon 300 --window-calls 4 --window-intents 4 --attempts 6 --steps 5 --acts 3'));
+  assert.deepEqual(m.args!.slice(0, 2), ['--researcher', 'assisted']);
+  assert.ok(m.args!.join(' ').includes('--interval 3 --horizon 300 --window-calls 4 --window-intents 4 --attempts 6 --steps 5 --acts 3'));
   const refused = (x: Record<string, unknown>) => { const r = readManifest({ ...ok, ...x }, LABS); return 'errors' in r ? r.errors.join(' | ') : ''; };
   assert.match(refused({ limits: undefined }), /nothing is unlimited by default/);
   assert.match(refused({ clock: { mode: 'realtime', decision_interval: 3, horizon: 300 } }), /only "simulated"/);
   assert.match(refused({ adapter: 'cells@1' }), /not a living world/);
-  assert.match(refused({ actors: [ok.actors[0], { ...ok.actors[0], id: 'other' }] }), /one researcher/);
-  assert.match(refused({ actors: [{ ...ok.actors[0], kind: 'adversary' }] }), /other kinds are not built yet/);
+  /* Several members (H2): a shared session - a window that waits only so long, policies the world has, actions given explicitly. */
+  assert.match(refused({ actors: [ok.actors[0], { ...ok.actors[0], id: 'other' }] }), /window_ms/);
+  assert.match(refused({ actors: [ok.actors[0], { id: 'rival', kind: 'adversary', policy: 'nobody', actions: ['drain'] }] }), /"policy" is one of the world's: consumer, adversary, population/);
+  assert.match(refused({ actors: [ok.actors[0], { id: 'rival', kind: 'policy', policy: 'consumer' }] }), /given explicitly/);
+  assert.match(refused({ actors: [{ id: 'rival', kind: 'policy', policy: 'consumer', actions: ['drain'] }] }), /at least one researcher/);
+  assert.match(refused({ limits: { ...ok.limits, messages_per_window: 2 } }), /go together/);
+  const shared = readManifest({ ...ok, limits: { ...ok.limits, window_ms: 60000, messages_per_window: 2, message_chars: 400 },
+    actors: [ok.actors[0], { ...ok.actors[0], id: 'other' }, { id: 'rival', kind: 'adversary', policy: 'adversary', actions: ['drain'] }] }, LABS);
+  assert.ok(!('errors' in shared) && shared.args === null && shared.plan.actors.length === 3, 'a shared session: a plan, no run of its own');
   assert.match(refused({ budget: 3 }), /no field "budget"/);
 });
 
