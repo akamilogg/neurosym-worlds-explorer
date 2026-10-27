@@ -53,7 +53,9 @@ export type ArtifactAct =
   | { readonly run: { readonly version: string; readonly workloads: number; readonly repetitions: number }; readonly place?: string };
 
 const TASKS: Readonly<Record<string, (scale: number) => ArtifactTask>> = { dedup: (scale) => dedupTask({ scale }), threesum: (scale) => threesumTask({ scale }),
-  'threesum-subquadratic': (scale) => threesumSubquadraticTask({ scale }) };
+  'threesum-subquadratic': (scale) => threesumSubquadraticTask({ scale }),
+  /* @2: small edge inputs at the floor of every place, so a version wrong where it is small is caught (27/10/2026). */
+  'threesum-subquadratic-2': (scale) => threesumSubquadraticTask({ scale, version: 2 }) };
 /** The worlds of the specs generated in this process: the latest version made in each (what the checks run). */
 const latest = new WeakMap<ArtifactWorld, string>();
 /** The latest version made in a world (its base when none): where an evolutionary branch starts when none is named. */

@@ -88,3 +88,31 @@ test('a world of it, small: the base never holds against itself; the cubic is co
   const [f] = await world.check(fixed.version, ['ladder'], 1, 7);
   assert.equal(f.verdict.correct, false, 'a triple is planted in every other workload');
 });
+
+test('@2: a version wrong where it is small - zero with both signs taken for a triple - is caught at the floor; @1 as it was', async () => {
+  /* The shortcut two evolved programs took (27/10/2026): a zero and both signs present, taken for a triple. */
+  const WRONG = 'def main():\n    lines = open("input.txt", encoding="utf-8").read().split("\\n")\n    n = int(lines[0])\n    a = sorted(int(x) for x in lines[1].split()[:n])\n'
+    + '    answer = "no"\n    if 0 in a and a[0] < 0 < a[-1]:\n        answer = "yes"\n    else:\n        for i in range(n - 2):\n            lo, hi = i + 1, n - 1\n'
+    + '            while lo < hi:\n                t = a[i] + a[lo] + a[hi]\n                if t == 0:\n                    answer = "yes"\n                    break\n                if t < 0:\n                    lo += 1\n                else:\n                    hi -= 1\n            if answer == "yes":\n                break\n'
+    + '    open("out.txt", "w", encoding="utf-8").write(answer + "\\n")\n\n\nmain()\n';
+  const v2 = new ArtifactWorld(threesumSubquadraticTask({ scale: 0.02, version: 2 }), processSandbox());
+  assert.equal(v2.task.id, 'threesum-subquadratic@2');
+  const wrong2 = v2.change(v2.reference, { files: { 'main.py': WRONG } }) as { version: string };
+  const [c2] = await v2.check(wrong2.version, ['ladder-none'], 1, 3);
+  assert.equal(c2.verdict.correct, false, 'caught at the floor of @2');
+  const [ok2] = await v2.check(v2.reference, ['ladder-none'], 1, 3);
+  assert.equal(ok2.verdict.correct, true, 'the reference is right there');
+  /* @1, as it was: the same workloads (its floor n = 3 in the wide range), and the wrong version not caught. */
+  const v1 = threesumSubquadraticTask({ scale: 0.02 });
+  assert.equal(v1.id, 'threesum-subquadratic@1');
+  const ws = v1.families.find((f) => f.id === 'ladder-none')!.workloads(3, 1);
+  assert.deepEqual(ws.map((w) => [w.id, w.params.n, w.params.range]), [['ladder-none-3-3-0', 3, 1e12], ['ladder-none-3-40-0', 40, 1e12], ['ladder-none-3-80-0', 80, 1e12], ['ladder-none-3-160-0', 160, 1e12]]);
+  assert.equal(v1.objective.growth!.floor, 3);
+  const w1 = new ArtifactWorld(v1, processSandbox());
+  const wrong1 = w1.change(w1.reference, { files: { 'main.py': WRONG } }) as { version: string };
+  const [c1] = await w1.check(wrong1.version, ['ladder-none'], 1, 3);
+  assert.equal(c1.verdict.correct, true, 'the hole @2 closes');
+  /* @2's floor: small, narrow, with zeros and planted triples among them. */
+  const e = threesumSubquadraticTask({ version: 2 }).families[0].workloads(1, 1).filter((w) => Number(w.params.n) <= 5);
+  assert.ok(e.length >= 16 && e.every((w) => w.params.range === 3 && Number(w.params.n) <= 5) && e.some((w) => w.params.planted === 'random'));
+});

@@ -1,0 +1,27 @@
+{
+  "format": "batch@1",
+  "id": "artifacts-threesum-stall-B-continued",
+  "concurrency": 1,
+  "budget": {
+    "tokens_per_run": 4000000
+  },
+  "runs": [
+    {
+      "id": "threesum-stall-B-evolve-continued",
+      "lab": "artifacts",
+      "condition": "B of artifacts-threesum-stall, continued: its 16 rounds ended while its evolutionary branch was still searching (27 of its 54 evaluations), so the branch was stopped and sealed before its confirmations and consolidation. 24 more rounds, so that it can receive the search, continue it (continue_from, 30 evaluations), and adopt, test or discard what it finds. The same world (threesum-subquadratic@1), senior and fund",
+      "researcher": "assisted",
+      "fork": {
+        "journal": "D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-stall/threesum-stall-B-evolve.json",
+        "attempts": 40,
+        "message": "Your evolutionary branch delegation:r2.1 was stopped when your earlier rounds ended, before it could confirm and consolidate what it found; its result reaches you now, with its candidates and its sealed search 0c90b028a39f355c. You may continue that search, its earlier work carried over and nothing of it charged again: {\"delegate\": {\"mode\": \"evolve\", \"continue_from\": \"0c90b028a39f355c\", \"question\": \"...\", \"budget\": {\"evaluations\": 30}}} - sized so that its confirmations and its consolidation end within your rounds. What it returns are candidates to test, not results: adopt one with a change of yours and judge it with your own runs and checks, and adopt, change or discard it with evidence."
+      },
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    }
+  ]
+}

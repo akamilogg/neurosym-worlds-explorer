@@ -96,20 +96,38 @@ const BASE_SUBQUADRATIC = path.join(path.dirname(fileURLToPath(import.meta.url))
 export const SUBQUADRATIC_LADDER = [2000, 4000, 8000] as const;
 const FLOOR = 3;
 
+/** The floor of @2 (an external review, 27/10/2026: two evolved programs answered "yes" to 0 1 -2, and no workload of @1
+    could tell - its values span 1e12, where a zero or a repeated value almost never comes): small inputs in a narrow range,
+    zeros and repeated values among them, a triple planted in one of three. Still tiny, they measure each version's fixed
+    cost as the floor of @1 did; and every place's check runs them, so a version wrong where it is small is wrong there. */
+const EDGE_FLOOR = 5;
+const edges = (count: number) => Math.max(16, 8 * count);
+/* n from 3 to 5 in -3..3: where a zero, repeated values and both signs come often without a triple - the cases a wrong
+   shortcut answers wrongly (with more or wider values a triple comes by chance, and hides it). */
+const edgeParams = (i: number): Partial<Workload['params']> => ({ n: 3 + (i % 3), range: 3, planted: i % 4 === 3 ? 'random' : 'none' });
+
 /** A family whose workloads climb a ladder of sizes: `count` at each size, and `count` at the floor - what varies, varying
-    along the whole ladder (one workload per size still alternates). */
-const ladder = (id: string, about: string, role: Family['role'], params: Workload['params'], sizes: readonly number[], vary?: (i: number) => Partial<Workload['params']>): Family => ({
+    along the whole ladder (one workload per size still alternates). With `edge` (@2), its floor is the small inputs above. */
+const ladder = (id: string, about: string, role: Family['role'], params: Workload['params'], sizes: readonly number[], vary?: (i: number) => Partial<Workload['params']>, edge = false): Family => ({
   id, about, role, requires: 'better',
-  workloads: (seed, count) => [FLOOR, ...sizes].flatMap((n, k) => Array.from({ length: count }, (_, i) => ({ family: id, id: id + '-' + seed + '-' + n + '-' + i,
-    seed: seed * 7919 + k * 1009 + i * 131 + id.length, params: { ...params, ...(vary ? vary(k * count + i) : {}), n } as Workload['params'] })))
+  workloads: (seed, count) => (edge
+    ? [...Array.from({ length: edges(count) }, (_, i) => ({ family: id, id: id + '-' + seed + '-edge-' + i, seed: seed * 7919 + i * 131 + 17 + id.length,
+        params: { ...params, ...edgeParams(i) } as Workload['params'] })),
+      ...sizes.flatMap((n, k) => Array.from({ length: count }, (_, i) => ({ family: id, id: id + '-' + seed + '-' + n + '-' + i,
+        seed: seed * 7919 + (k + 1) * 1009 + i * 131 + id.length, params: { ...params, ...(vary ? vary(k * count + i) : {}), n } as Workload['params'] })))]
+    : [FLOOR, ...sizes].flatMap((n, k) => Array.from({ length: count }, (_, i) => ({ family: id, id: id + '-' + seed + '-' + n + '-' + i,
+      seed: seed * 7919 + k * 1009 + i * 131 + id.length, params: { ...params, ...(vary ? vary(k * count + i) : {}), n } as Workload['params'] }))))
 });
 
-export function threesumSubquadraticTask(options: { scale?: number; python?: string } = {}): ArtifactTask {
+export function threesumSubquadraticTask(options: { scale?: number; python?: string; version?: 1 | 2 } = {}): ArtifactTask {
   const s = options.scale ?? 1;
   const python = options.python ?? process.env.ARTIFACT_PYTHON ?? 'python';
-  const sizes = SUBQUADRATIC_LADDER.map((x) => Math.max(FLOOR + 1, Math.round(x * s)));
+  /* @2: its floor the small edge inputs, its ladder above them; @1 as it was, for the runs made with it. */
+  const v2 = options.version === 2;
+  const floor = v2 ? EDGE_FLOOR : FLOOR;
+  const sizes = SUBQUADRATIC_LADDER.map((x) => Math.max(floor + 1, Math.round(x * s)));
   return {
-    id: 'threesum-subquadratic@1',
+    id: 'threesum-subquadratic@' + (v2 ? 2 : 1),
     about: 'decide whether three of n integers sum to zero, in time that grows more slowly than n^2 - the base, the reference, is quadratic',
     base: BASE_SUBQUADRATIC,
     run: {
@@ -121,13 +139,13 @@ export function threesumSubquadraticTask(options: { scale?: number; python?: str
     },
     read: (files, measured) => ({ metrics: { wall_ms: measured.wallMs }, output: files['out.txt']?.trim() ?? null }),
     families: [
-      ladder('ladder', 'a ladder of sizes in a wide range of values, a triple planted in every other workload', 'laboratory', { range: 1e12, planted: 'none' }, sizes,
-        (i) => ({ planted: i % 2 === 1 ? 'random' : 'none' })),
-      ladder('ladder-none', 'a ladder of sizes in a wide range of values, no triple planted', 'family', { range: 1e12, planted: 'none' }, sizes),
-      ladder('ladder-late', 'a ladder of sizes in a wide range of values, a triple planted at the very end', 'blind', { range: 1e12, planted: 'end' }, sizes)
+      ladder('ladder', 'a ladder of sizes in a wide range of values, a triple planted in every other workload' + (v2 ? '; below it, small inputs in a narrow range' : ''), 'laboratory', { range: 1e12, planted: 'none' }, sizes,
+        (i) => ({ planted: i % 2 === 1 ? 'random' : 'none' }), v2),
+      ladder('ladder-none', 'a ladder of sizes in a wide range of values, no triple planted' + (v2 ? '; below it, small inputs in a narrow range' : ''), 'family', { range: 1e12, planted: 'none' }, sizes, undefined, v2),
+      ladder('ladder-late', 'a ladder of sizes in a wide range of values, a triple planted at the very end' + (v2 ? '; below it, small inputs in a narrow range' : ''), 'blind', { range: 1e12, planted: 'end' }, sizes, undefined, v2)
     ],
     oracle: (candidate, reference) => (candidate.output !== null && candidate.output === reference.output ? { ok: true }
       : { ok: false, why: candidate.output === null ? 'it left no out.txt' : 'its answer differs from the reference\'s' }),
-    objective: { metric: 'wall_ms', direction: 'min', margin: 0.05, confidence: 0.9, repetitions: 3, growth: { param: 'n', floor: FLOOR } }
+    objective: { metric: 'wall_ms', direction: 'min', margin: 0.05, confidence: 0.9, repetitions: 3, growth: { param: 'n', floor } }
   };
 }
