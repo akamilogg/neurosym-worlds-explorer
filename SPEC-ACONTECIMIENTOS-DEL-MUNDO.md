@@ -1,6 +1,6 @@
 # SPEC · Mundo vivo: actores, acontecimientos e investigación reactiva
 
-Estado (27/10/2026): **H1, H2 y H3 implementados (§18); H4–H5 pendientes**. Diseño consolidado el 23/10/2026.
+Estado (27/10/2026): **H1–H4 implementados (§18); H5 pendiente**. Diseño consolidado el 23/10/2026.
 Revisión conciliada: puente con el investigador asistido, autoridad de actuación, hitos e integración K1–K5.
 Sustituye la versión anterior limitada a acontecimientos dentro de episodios. Los contratos son normativos;
 los nombres de interfaces y operaciones designan capacidades que se deben implementar, no APIs ya existentes.
@@ -743,3 +743,42 @@ Decisiones tomadas al implementar:
   vuelve a aplicar en la misma ventana.
 
 Pendiente: activación reactiva propia del senior y señales producidas por jueces configurados.
+
+### 18.5 H4 (27/10/2026)
+
+Código: los modos de rama en `lib/src/learn/assisted/delegation.ts`, la copia (`fork`) de la sesión y de `plates`, el
+cableado del runner y el protocolo externo en `lib/src/living/external.ts`. Pruebas en `lib/test/living-world-h4.test.ts`.
+
+Decisiones tomadas al implementar:
+
+- **Modos.** En un mundo vivo, `delegate` admite `"world": "isolated"` (por defecto) o `"shared"`, según lo que permita el
+  run (`--branches`). Un modo no permitido se rechaza sin sustituirlo por otro, y una búsqueda evolutiva se rechaza
+  porque no hay dónde buscar.
+- **Rama aislada.** Corre en su propio proceso, sobre una realización propia: la instantánea del mundo del solicitante en
+  la revisión en que la pidió, con su azar declarado (`"randomness": "same"` repite la realización, `"fresh"` usa un
+  flujo propio).
+  - Su diario empieza con el linaje (sesión, revisión, tick, quién la pidió) y con el mismo estado.
+  - No se copian programas, mensajes ni realizaciones reservadas. Lo que hace no llega al mundo del solicitante.
+- **Rama compartida.** Es un miembro más del mismo mundo y corre en el mismo proceso: entra en la sesión dentro del límite
+  de miembros (por defecto, uno más cuando se permiten ramas compartidas), actúa en ese mundo y puede escribir a su
+  solicitante.
+  - Al terminar el solicitante, primero se retira del mundo, se pide a sus ramas que paren, se espera a que paren y sólo
+    entonces se cierra la sesión.
+  - Si el solicitante se reanuda, la rama se reanuda desde su propio registro en la misma petición; si ya había terminado,
+    se detiene donde se detuvo. Una reconstrucción produce así el mismo mundo.
+- **Retiradas.** Se registran con su posición y su tramo de ejecución, como el cierre.
+- **Protocolo externo.** `ExternalWorld` habla con un servicio que es autoridad de su reloj y sus efectos, mediante ids de
+  operación y un cursor sobre su secuencia de eventos, y sólo promete lo que el servicio declara (`x.manifest`).
+  - Una respuesta perdida se repite con el mismo id si el servicio es idempotente. Si admite consulta, se concilia
+    preguntando. Si no ofrece ninguna de las dos garantías, la operación queda incierta y nunca se reenvía.
+  - Un cursor por detrás de lo que el servicio conserva es una laguna, y queda registrada.
+  - Una pausa no soportada se registra: el mundo siguió y, al volver, se nombra lo perdido. La reproducción queda marcada
+    como `limited` y se dice por qué.
+  - `SimulatedService` reproduce esas condiciones: respuestas perdidas, retrasos, retención limitada y pausa opcional.
+
+Pendiente:
+- integrar un mundo externo en tiempo real con el bucle del investigador (el manifiesto sigue rechazando
+  `clock: realtime`);
+- delegación declarada en el manifiesto `living-world@1`;
+- que una continuación que va más allá del punto de parada del solicitante vuelva a derivar las ventanas que una rama
+  compartida pasó sola; hoy se registran como divergencia.

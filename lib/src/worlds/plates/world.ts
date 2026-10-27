@@ -1,3 +1,4 @@
+import { hashString } from '../../core/hash.ts';
 import { nextRandom, type Intent, type LivingAction, type LivingWorldAdapter, type Message, type Outcome, type PolicyActor } from '../../living/world.ts';
 
 /* ============================================================================
@@ -195,7 +196,12 @@ export const platesAdapter: LivingWorldAdapter<PlatesState, PlatesFrame> = {
   tickOf: (s) => s.tick,
   pending: (s) => s.ops.map((o) => ({ intent: o.intent, actor: o.actor, kind: o.kind, completes_at: o.completes_at })),
   snapshot: (s) => JSON.parse(JSON.stringify(s)),
-  restore: (snap) => JSON.parse(JSON.stringify(snap)) as PlatesState
+  restore: (snap) => JSON.parse(JSON.stringify(snap)) as PlatesState,
+  /* The same plate; its chance the same, or a stream of its own. */
+  fork: (snap, p) => {
+    const s = JSON.parse(JSON.stringify(snap)) as PlatesState;
+    return p.randomness === 'same' ? s : { ...s, rng: (s.rng ^ parseInt(hashString(p.salt), 36)) >>> 0 };
+  }
 };
 
 /** A reserved realization (§5.4, §15): a plate of its own from `layout`, the same laws, its regime - no arrivals, two wells

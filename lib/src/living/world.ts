@@ -103,6 +103,9 @@ export interface LivingWorldAdapter<St, F> {
   /** The state as plain JSON, and back: everything, its chance included. */
   snapshot(state: St): unknown;
   restore(snapshot: unknown): St;
+  /** A realization of its own from a snapshot (§3, §12): its chance the same (a known realization repeated) or a stream of
+      its own (`salt`). Absent: no fork - refused, never a restore passed off as one. */
+  fork?(snapshot: unknown, policy: { readonly randomness: 'same' | 'fresh'; readonly salt: string }): St;
 }
 
 /** The hash of a state, from its snapshot. */
@@ -318,6 +321,9 @@ export interface LivingSessionOptions<St, F> {
   readonly sensors?: readonly (WatchDecl & { readonly actor: string })[];
   /** The sandbox the session runs code in (watchers, state predicates): never the host. */
   readonly compile?: (source: string) => (input: unknown) => unknown;
+  /** An isolated realization (§12): the world a branch starts from - the snapshot of another session at a revision, its
+      future chance as declared - and where it comes from. */
+  readonly fork?: { readonly snapshot: unknown; readonly randomness: 'same' | 'fresh'; readonly from: { readonly session: string; readonly revision: number; readonly tick: number; readonly by: string } };
 }
 
 /** A change of the operator's to the programs during the run (§10): to add or replace one, disable one, fire one now. */
@@ -377,10 +383,13 @@ export class LivingSession<St, F> {
     const decls = o.actors.map((a): ActorDecl => (typeof a === 'string' ? { id: a, kind: 'researcher' } : a));
     if (new Set(decls.map((d) => d.id)).size !== decls.length) throw new Error('two members of the session with the same id');
     if (o.limits.actors !== undefined && decls.length > o.limits.actors) throw new Error('more members (' + decls.length + ') than the session allows (' + o.limits.actors + ')');
-    this.state = o.adapter.create(o.config, o.seed);
+    if (o.fork && !o.adapter.fork) throw new Error(o.adapter.id + ' cannot fork a realization of its own');
+    this.state = o.fork ? o.adapter.fork!(o.fork.snapshot, { randomness: o.fork.randomness, salt: o.id + '|' + o.fork.from.by }) : o.adapter.create(o.config, o.seed);
     for (const d of decls) this.actors.set(d.id, this.slotOf(d, 0));
     this.journal.write({ key: 'manifest', session: o.id, adapter: o.adapter.id, seed: o.seed, config: o.config, clock: o.clock, limits: o.limits,
-      actors: decls.map((d) => ({ ...d, actions: [...this.actors.get(d.id)!.actions] })), actions: o.adapter.actions, guarantees: o.adapter.guarantees, state: stateHash(o.adapter, this.state) });
+      actors: decls.map((d) => ({ ...d, actions: [...this.actors.get(d.id)!.actions] })), actions: o.adapter.actions, guarantees: o.adapter.guarantees, state: stateHash(o.adapter, this.state),
+      /* Its lineage: the realization it was forked from, at which revision, with which chance. */
+      ...(o.fork ? { lineage: { ...o.fork.from, randomness: o.fork.randomness } } : {}) });
     this.compile = o.compile ?? null;
     this.agenda = new Agenda<St>({ seed: o.seed, effects: o.adapter.effects ?? {}, ...(o.compile ? { predicate: o.compile } : {}) });
     const members = decls.map((d) => d.id);
@@ -426,6 +435,15 @@ export class LivingSession<St, F> {
   signalsFrom(actor: string, producer: 'checks' | 'self_reported'): string[] {
     return this.agenda.signalIds().filter((id) => { const d = this.agenda.signalOf(id)!; return d.actor === actor && d.producer === producer; });
   }
+
+  /** The world as it is now, for a realization of its own (§12): its snapshot and where it comes from - never its
+      programs, its messages, or the realizations reserved for checks. */
+  forkPoint(by: string): { snapshot: unknown; from: { session: string; revision: number; tick: number; by: string } } {
+    return { snapshot: this.adapter.snapshot(this.state), from: { session: this.id, revision: this.revision, tick: this.tick, by } };
+  }
+
+  /** A member's actions, as declared (null: the world's defaults). */
+  actionsOf(actor: string): string[] | null { const s = this.slot(actor); return s.decl.actions ? [...s.actions] : null; }
 
   /** A member's round, as its run reaches it: what a "round" trigger reads. */
   round(actor: string, n: number): void { this.slot(actor); this.rounds.set(actor, Math.max(n, this.rounds.get(actor) ?? 0)); }
@@ -769,7 +787,7 @@ export class LivingSession<St, F> {
     const s = this.slot(actor);
     if (s.state === 'stopped') return;
     s.state = 'stopped'; s.batch = s.batch ?? []; s.until = null;
-    this.journal.write({ key: 'retire.' + actor, reason, window: this.window, tick: this.tick, pending: this.adapter.pending(this.state).filter((p) => p.actor === actor) });
+    this.journal.write({ key: 'retire.' + actor + '@w' + this.window + '.t' + this.tick + '.' + this.journal.stretch, reason, window: this.window, tick: this.tick, pending: this.adapter.pending(this.state).filter((p) => p.actor === actor) });
     for (const r of this.wakers.get(actor) ?? []) r();
     this.wakers.delete(actor);
     this.settle();

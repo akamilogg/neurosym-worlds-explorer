@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import { ruleGradingSystem, unknownFields, type Lab } from '../../learn/lab.ts';
 import { INVESTIGATION_TOOLS as INVESTIGATION, type WorldInterface } from '../../learn/prompt.ts';
 import { objectiveLines } from '../../learn/objective.ts';
@@ -26,6 +27,12 @@ export interface PlatesSpec {
   readonly messageChars: number;
   readonly delivery: number;
   readonly windowMs: number;
+  /** Members at once (0: as declared, one more for a shared branch), and whether a shared branch is allowed. */
+  readonly members?: number;
+  readonly shared?: boolean;
+  /** A branch's realization of its own: the snapshot file it starts from, its chance. */
+  readonly fork?: string;
+  readonly forkRandomness?: 'same' | 'fresh';
 }
 
 /** An act: one of the world's actions on a well. */
@@ -105,9 +112,15 @@ export const platesLab: Lab<PlatesSpec, PlatesPoint, Segment<PlatesFrame>, Plate
     { name: 'messages', default: '0', help: 'messages a member may publish in one window, in a shared session (0: none)' },
     { name: 'message-chars', default: '600', help: 'the size of the words of a message, in characters' },
     { name: 'delivery', default: '8', help: 'messages delivered with one decision; the rest wait, read by cursor' },
+    { name: 'members', default: '0', help: 'members of the world at once (0: those declared, and one more where a shared branch is allowed)' },
+    { name: 'branches', default: 'isolated', help: 'the modes of a branch the run allows: isolated, shared, or both (comma-separated)' },
+    { name: 'fork', default: '', help: 'an isolated realization: the snapshot file of the world it starts from (a branch of a living world)' },
+    { name: 'fork-randomness', default: 'fresh', help: '"same": its chance as the world it was forked from; "fresh": a stream of its own' },
     { name: 'window-ms', default: '0', help: 'wall time a window waits for its researchers once one sealed (0: it waits for every one)' }
   ],
   generate: (seed, o) => ({ seed, laws: platesLaws(seed), layout: seed, interval: Number(o.interval), horizon: Number(o.horizon), calls: Number(o['window-calls']), intents: Number(o['window-intents']),
+    members: Number(o.members ?? 0), shared: String(o.branches ?? '').split(',').map((x) => x.trim()).includes('shared'),
+    fork: String(o.fork ?? ''), forkRandomness: o['fork-randomness'] === 'same' ? 'same' as const : 'fresh' as const,
     messages: Number(o.messages ?? 0), messageChars: Number(o['message-chars'] ?? 600), delivery: Number(o.delivery ?? 8), windowMs: Number(o['window-ms'] ?? 0) }),
   placeOf: (spec, index) => ({ ...spec, layout: spec.seed * 1000 + index }),
   runName: (seed) => 'plates-s' + seed,
@@ -163,9 +176,11 @@ export const platesLab: Lab<PlatesSpec, PlatesPoint, Segment<PlatesFrame>, Plate
     examples: () => [{ feed: 'A1', amount: 1 }, { inoculate: 'A1' }, { clean: 'A1' }]
   },
   living: {
-    open: (spec, o) => new LivingSession({ adapter: platesAdapter as never, id: 'world:plates-s' + spec.seed, config: { layout: spec.layout }, seed: spec.seed, actors: o.actors,
+    open: (spec, o) => new LivingSession({ adapter: platesAdapter as never, id: 'world:plates-s' + spec.seed + (spec.fork ? '/fork' : ''), config: { layout: spec.layout }, seed: spec.seed, actors: o.actors,
+      /* A branch's: the world as it was when it was asked for, never a plate made afresh. */
+      ...(spec.fork ? { fork: (() => { const f = JSON.parse(fs.readFileSync(spec.fork, 'utf8')); return { snapshot: f.snapshot, randomness: spec.forkRandomness ?? 'fresh', from: f.from }; })() } : {}),
       clock: { decision_interval: spec.interval, horizon: spec.horizon }, journal: o.journal,
-      limits: { calls_per_window: spec.calls, intents_per_window: spec.intents, ...(spec.messages > 0 ? { messages_per_window: spec.messages, message_chars: spec.messageChars, delivery_per_decision: spec.delivery } : {}),
+      limits: { calls_per_window: spec.calls, intents_per_window: spec.intents, actors: spec.members ? spec.members : o.actors.length + (spec.shared ? 1 : 0), ...(spec.messages > 0 ? { messages_per_window: spec.messages, message_chars: spec.messageChars, delivery_per_decision: spec.delivery } : {}),
         ...(spec.windowMs > 0 ? { window_ms: spec.windowMs } : {}), ...(o.limits ?? {}) }, ...(o.events ?? {}) }),
     intent: (a) => ({ kind: a.kind, params: { well: a.well, ...(a.amount !== undefined ? { amount: a.amount } : {}) } }),
     adapter: platesAdapter as never

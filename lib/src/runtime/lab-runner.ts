@@ -604,7 +604,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
       confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team, reevaluate: options.reevaluate ?? null,
-      ...(options.delegate ? { delegate: options.delegate } : {}), living: options.living ?? null });
+      ...(options.delegate ? { delegate: options.delegate } : {}), living: options.living ?? null,
+      connection: { root: options.root, llm: options.llm, ...(options.judge ? { judge: options.judge } : {}), ...(options.fetch ? { fetch: options.fetch } : {}), ...(options.print ? { print: options.print } : {}) } });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]).finally(() => { if (team) team.board.end(team.member); });
 }
@@ -1088,7 +1089,9 @@ const worldOptionsOf = (cfg: Record<string, unknown>): LabOptions => (cfg.__opti
 
 async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Record<string, any>; worldOptions: LabOptions; ctx: LabContext; previous: Record<string, any> | null; resumeFrom: string | null; endings: readonly number[]; assistedAfter: number | null;
   team: { board: TeamBoard; member: string; channel: PeerChannel } | null; reevaluate?: Reevaluation | null; delegate?: Launcher;
-  living?: { readonly session: LivingSession<unknown, unknown>; readonly actor: string } | null }): Promise<LabResult> {
+  living?: { readonly session: LivingSession<unknown, unknown>; readonly actor: string } | null;
+  /** How this run reached System 2 and the Judge: what a shared branch, run in this process, reaches them with. */
+  connection?: { readonly root: string; readonly llm: LabConnection; readonly judge?: LabConnection; readonly fetch?: FetchLike; readonly print?: (line: string) => void } }): Promise<LabResult> {
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
@@ -1528,6 +1531,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     const value = !laboratories ? null : pts > 0 ? laboratories.reduce((n, l) => n + (Number(l.exact) || 0), 0) / pts : laboratories.filter((l) => l.holds).length / Math.max(1, laboratories.length);
     for (const sg of living.signalsFrom(actor, 'checks')) living.sample(sg, 'r' + round, value, { harness: true });
   };
+  /* Its shared branches, run in this process: awaited before its world closes. */
+  const sharedRuns: Promise<unknown>[] = [];
   if (living) journal.world = { session: living.id, adapter: living.adapter.id, actor, ...(shared ? { shared: true, journal: living.journal.file ? path.relative(path.dirname(outFile), living.journal.file).split(path.sep).join('/') : null }
     : { journal: path.basename(worldJournalOf(outFile)) }), clock: living.clock, limits: living.limits };
   /* Every investigation step, as it was asked and answered: what a publication may cite ("r<round>.<step>"). */
@@ -1778,8 +1783,31 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     history: (previous?.events ?? []) as Record<string, any>[],
     /* Its history was written beside the run it resumes, wherever that is. */
     ...(previous && resumeFrom ? { historyDir: path.dirname(path.resolve(resumeFrom)) } : {}),
-    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own'
-      : lab.living ? 'it is a living world: a branch of it, isolated or shared, is not built yet (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12)' : null,
+    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
+    /* A living world's branches (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): a realization of its own, or a member of this one. */
+    ...(living ? { living: {
+      modes: String(worldOptions.branches ?? 'isolated').split(',').map((x) => x.trim()).filter((x): x is 'isolated' | 'shared' => x === 'isolated' || x === 'shared'),
+      fork: (file: string, randomness: 'same' | 'fresh', by: string) => {
+        const at = living.forkPoint(by);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(at));
+        return { args: ['--fork', file, '--fork-randomness', randomness], revision: at.from.revision, tick: at.from.tick };
+      },
+      join: (b: { id: string; actor: string; journal: string; args: readonly string[]; resume: string | null; stopAs?: string }) => {
+        const c = o.connection;
+        if (!c) return 'this run cannot start a run in its own process';
+        const joined = living.join({ id: b.actor, kind: 'researcher', ...(living.actionsOf(actor) ? { actions: living.actionsOf(actor)! } : {}) });
+        if (!joined.accepted) return joined.reason;
+        /* Resumed: a record of its own, derived from the one it continues - never the same file written twice. */
+        const out = b.resume ? b.resume.replace(/(\.resumed-\d+)?\.json$/, '') + '.resumed-' + (sharedRuns.length + 1) + '.json' : b.journal;
+        const args = b.resume ? ['--resume', b.resume, '--out', out] : [...b.args, '--out', out];
+        const done = runLaboratory(lab, { args, root: c.root, llm: c.llm, ...(c.judge ? { judge: c.judge } : {}), ...(c.fetch ? { fetch: c.fetch } : {}), living: { session: living, actor: b.actor },
+          ...(b.stopAs ? { stopAsRecorded: b.stopAs } : {}) })
+          .catch((e) => { living.retire(b.actor, 'failed'); log('delegation_branch_failed', { id: b.id, error: String((e as Error)?.message ?? e).slice(0, 300) }); });
+        sharedRuns.push(done);
+        return { journal: out, done };
+      }
+    } } : {}),
     experience: (cfg as { __experienceFiles?: string[] }).__experienceFiles ?? []
   }) : null;
   /* The results of its branches, delivered as they end: messages of their own, never help (a resumed run delivers them at the
@@ -2111,14 +2139,20 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const finalTests = ownTests && final && (ownTests.summary().registered as number) > 0 ? await ownTests.standing(final, session.currentRound) : null;
   if (cfg.grade && !session.fatal && (!session.halted || session.halted === budgetStop)) await gradeRecovery(final);
   const stoppedBy = session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget';
+  /* Its branches asked to stop; in a living world it leaves it first - a shared branch never waits for it - and the world is
+     closed only once they have stopped (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12, §13). */
+  const delegationEnd = delegations ? delegations.close() : null;
+  if (bridge) bridge.retire(stoppedBy);
+  await Promise.allSettled(sharedRuns);
+  const worldEnd = living ? (shared ? { ...living.summary(), left: stoppedBy } : living.close(stoppedBy)) : null;
   const result = run.finish({ stoppedBy, halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     /* A living world: its session closed, what was in course kept as pending (§13). */
     /* A shared one: it leaves it, and the session goes on for the others. */
-    ...(living ? { world: shared ? (bridge!.retire(stoppedBy), { ...living.summary(), left: stoppedBy }) : living.close(stoppedBy) } : {}),
+    ...(worldEnd ? { world: worldEnd } : {}),
     final: final ? ownLaw(final) : null,
     /* Its branches: each with its record, how it stands, what it spent; those still running asked to stop. */
-    ...(delegations ? { delegation: delegations.close() } : {}),
+    ...(delegationEnd ? { delegation: delegationEnd } : {}),
     ...(acceptedBefore ? { previously_accepted: { round: acceptedBefore.round, model: ownLaw(acceptedBefore.law) } } : {}),
     /* A world of artifacts: the artifact's own state, apart from the model's (SPEC-MUNDO-ARTEFACTOS §8). */
     ...(artifactProtocol ? { artifact: { accepted: artifactAccepted[artifactAccepted.length - 1] ?? null, chain: artifactAccepted, protocol: artifactProtocol.summary(),

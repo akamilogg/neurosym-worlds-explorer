@@ -71,9 +71,12 @@ interface Branch {
   readonly id: string;
   readonly round: number;
   readonly question: string;
-  readonly journal: string;
+  /** Its record: a shared branch resumed writes a record of its own, derived from it. */
+  journal: string;
   readonly granted: { readonly rounds: number; readonly tokens: number };
   state: 'accepted' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /** In a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): a realization of its own, or a member of the requester's. */
+  world?: { readonly mode: 'isolated' | 'shared'; readonly actor?: string };
   spent: number | null;
   delivered: boolean;
   /** Why it failed, when it did not end by itself (its process stopped, it never started). */
@@ -140,6 +143,15 @@ export class Delegations {
     readonly historyDir?: string;
     /** Why a branch cannot be opened in this world at all (an environment outside the harness), or null. */
     readonly unsupported: string | null;
+    /** A living world's (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): the modes the run allows; an isolated branch's realization - the
+        world now, written for it, and the arguments that start it there; a shared branch, a member of this world started in
+        this process (or resumed from its record), or why not. */
+    readonly living?: {
+      readonly modes: readonly ('isolated' | 'shared')[];
+      fork(file: string, randomness: 'same' | 'fresh', by: string): { readonly args: readonly string[]; readonly revision: number; readonly tick: number };
+      join(o: { readonly id: string; readonly actor: string; readonly journal: string; readonly args: readonly string[]; readonly resume: string | null; readonly stopAs?: string }):
+        { readonly journal: string; readonly done: Promise<unknown> } | string;
+    };
     /** The runs the requester reads as experience (their files, in its order): a branch reads them too, under the same
         labels - access to the same resources, never a summary of them. */
     readonly experience?: readonly string[];
@@ -180,11 +192,11 @@ export class Delegations {
     for (const e of o.history) {
       if (e.type === 'delegation_requested') {
         this.branches.push({ id: e.id, round: e.round, question: e.question, journal: path.resolve(o.historyDir ?? path.dirname(o.journalFile), e.journal), granted: e.granted, state: 'running', spent: null, delivered: false,
-          ...(e.mode === 'evolve' ? { mode: 'evolve' as const } : {}) });
+          ...(e.mode === 'evolve' ? { mode: 'evolve' as const } : {}), ...(e.world ? { world: e.world } : {}) });
         this.reserved += Number(e.granted?.tokens) || 0;
         this.perRound.set(e.round, Math.max(this.perRound.get(e.round) ?? 0, Number(String(e.id).split('.').pop()) || 0));
       }
-      if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.pid === 'number') b.pid = e.pid; this.restore(b, e.spent, e.uncertain); } }
+      if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.pid === 'number') b.pid = e.pid; if (typeof e.journal === 'string') b.journal = path.resolve(o.historyDir ?? path.dirname(o.journalFile), e.journal); this.restore(b, e.spent, e.uncertain); } }
       if (e.type === 'delegation_requested' || e.type === 'delegation_state' || e.type === 'delegation_cancel_asked') pending.push(e);
       if (e.type === 'delegation_answered') { this.answered.push({ round: e.round, request: e.request, answer: e.answer, events: pending }); pending = []; }
       if (e.type === 'delegation_answered') for (const p of this.answered[this.answered.length - 1].events) if (p.type === 'delegation_requested') this.unconfirmed.delete(p.id);
@@ -344,6 +356,9 @@ export class Delegations {
       /* Logged again as they were - their paths made relative to this run's folder, wherever its history was written. */
       for (const { t: _t, type, ...e } of head.events) this.o.log(type, rebaseDelegationEvent(e, this.o.historyDir ?? path.dirname(this.o.journalFile), path.dirname(this.o.journalFile)));
       this.o.log('delegation_answered', { round, request, answer: head.answer });
+      /* A shared branch acts in this very world: a run that derives the world again resumes it here, from its own record, at
+         the same request - never left out, or the world would not be the one recorded. */
+      for (const e of head.events) if (e.type === 'delegation_requested' && e.world?.mode === 'shared') this.rejoin(e.id);
       return head.answer;
     }
     this.reconcile();
@@ -384,9 +399,33 @@ export class Delegations {
     return { delegation: b.id, state: b.state, granted: b.granted, ...(b.spent !== null ? spendingOf(b) : {}), fund_left: this.fundLeft() };
   }
 
+  /** A shared branch resumed from its record, in this process, as its requester derives the world again. */
+  private rejoin(id: string): void {
+    const b = this.branches.find((x) => x.id === id);
+    if (!b || !b.world || b.world.mode !== 'shared' || !this.o.living || !fs.existsSync(b.journal)) return;
+    /* Ended in its record: replayed to where it stopped, and stopped as it stopped - its acts in this world, the same. */
+    const ended = endOf(readJson(b.journal));
+    const j = this.o.living.join({ id, actor: b.world.actor!, journal: b.journal, args: [], resume: b.journal, ...(ended ? { stopAs: String(ended.stoppedBy) } : {}) });
+    if (typeof j === 'string') { this.fail(b, { state: 'never', why: 'it could not be resumed: ' + j, spent: 0 }); this.o.log('delegation_state', { id, state: 'failed', why: b.why, spent: 0 }); return; }
+    b.journal = j.journal;
+    b.state = 'running';
+    this.o.log('delegation_state', { id, state: 'running', resumed: true, journal: path.relative(path.dirname(this.o.journalFile), j.journal).split(path.sep).join('/') });
+  }
+
   private async decide(r: J | null, question: string, round: number): Promise<Record<string, unknown>> {
     if (!question) return { delegate: null, error: '"question": what to investigate - the branch knows nothing else of your intent' };
     if (this.o.unsupported) return { delegate: { question }, error: 'not here: ' + this.o.unsupported };
+    /* In a living world: a realization of its own (the default) or a member of this one - as the run allows, never another. */
+    const living = this.o.living;
+    if (r!.world !== undefined && !living) return { delegate: { question }, error: '"world": only a living world has realizations to choose between' };
+    const worldMode = (r!.world ?? 'isolated') as string;
+    const randomness = (r!.randomness ?? 'fresh') as string;
+    if (living) {
+      if (!['isolated', 'shared'].includes(worldMode)) return { delegate: { question }, error: '"world": "isolated" (a realization of its own) or "shared" (a member of this world)' };
+      if (!living.modes.includes(worldMode as 'isolated')) return { delegate: { question, world: worldMode }, error: 'the mode "' + worldMode + '" is not available in this run (it allows: ' + living.modes.join(', ') + '): refused, nothing replaced' };
+      if (r!.randomness !== undefined && (worldMode !== 'isolated' || !['same', 'fresh'].includes(randomness))) return { delegate: { question }, error: '"randomness": "same" or "fresh", for an isolated branch' };
+      if (r!.mode === 'evolve') return { delegate: { question }, error: 'an evolutionary search has no living world to search in' };
+    }
     const mode = r!.mode ?? 'investigate';
     if (mode !== 'investigate' && mode !== 'evolve') return { delegate: { question }, error: '"mode": "investigate" (the default) or "evolve" - not ' + JSON.stringify(mode) };
     if (mode === 'investigate' && (r!.start !== undefined || r!.continue_from !== undefined || r!.seeds !== undefined)) return { delegate: { question }, error: '"start", "continue_from" and "seeds" are of "mode": "evolve"' };
@@ -451,10 +490,25 @@ export class Delegations {
     const task = ['A DELEGATED INVESTIGATION. Another researcher, investigating this same environment, asks you:', question,
       ...(expected ? ['What it wants back: ' + expected] : []),
       ...(refs.length ? ['Where it suggests you start, in its record: ' + refs.join(', ')] : []),
-      'Its record, as it stood when it asked, is readable as experience (run "' + cutLabel(this.o.experience) + '"): its beliefs, notes, models and experiments - its word, not evidence; test what you take from it here, in your own laboratory.',
+      'Its record, as it stood when it asked, is readable as experience (run "' + cutLabel(this.o.experience) + '"): its beliefs, notes, models and experiments - its word, not evidence; test what you take from it here' + (worldMode === 'shared' && living ? '.' : ', in your own laboratory.'),
       ...((this.o.experience ?? []).length ? ['The records it reads as experience are readable to you too, under the same labels it uses: ' + this.o.experience!.map((_f, i) => 'exp' + (i + 1)).join(', ') + '.'] : []),
+      ...(worldMode === 'shared' && living ? ['You are a member of ITS very world: what you do there is done in its world too, and you may write to it ("researcher") or read what it writes to you.'] : []),
       'Investigate with your own instruments. What you find goes back to it: write it down as you go - what you investigated, what you found, the directions you propose and what tells them apart, your evidence apart from your interpretation, the alternatives you ruled out, your uncertainties. Strengthening its view, refuting an alternative, or finding no direction you can defend are results too. You need not end with a model: close your rounds when a model would add nothing.'].join('\n');
-    const args = [...this.o.worldArgs, '--researcher', 'assisted', '--attempts', String(rounds), '--max-tokens', String(tokens), '--task', task,
+    /* A living world's branch: its world given by its mode - a snapshot of this one, or a member's place in it. */
+    const actor = living && worldMode === 'shared' ? 'branch-' + name.replace(/^delegation-/, '').replace(/[^a-z0-9]+/gi, '-') : null;
+    let worldOf: Record<string, unknown> | null = null;
+    let worldArgs = [...this.o.worldArgs];
+    const without = (xs: string[], keys: readonly string[]) => { const out: string[] = []; for (let i = 0; i < xs.length; i++) { if (keys.includes(xs[i])) { i++; continue; } out.push(xs[i]); } return out; };
+    if (living && worldMode === 'isolated') {
+      const forkFile = path.join(base + '.branches', name + '.fork.json');
+      const f = living.fork(forkFile, randomness as 'same', id);
+      worldArgs = [...without(worldArgs, ['--fork', '--fork-randomness']), ...f.args];
+      worldOf = { mode: 'isolated', randomness, revision: f.revision, tick: f.tick, fork: path.relative(path.dirname(this.o.journalFile), forkFile).split(path.sep).join('/') };
+    } else if (living) {
+      worldArgs = [...without(worldArgs, ['--actor', '--explore']), '--actor', actor!, '--explore', '0'];
+      worldOf = { mode: 'shared', actor };
+    }
+    const args = [...worldArgs, '--researcher', 'assisted', '--attempts', String(rounds), '--max-tokens', String(tokens), '--task', task,
       '--experience', [...(this.o.experience ?? []), cutFile].join(','), '--experience-mode', 'meta', '--experience-scope', 'all', '--no-grade', '--no-ablation'];
     const granted = { rounds, tokens, ...(evolve ? { evaluations: evolve.evaluations } : {}) };
     /* Its supervisor's request: the search's part of the grant and the consolidation's, protected (§12). */
@@ -476,8 +530,10 @@ export class Delegations {
         ...(evolve.seeds.length ? { seeds: evolve.seeds.map((x) => ({ id: x.id, source: x.source, hash: x.hash, knows_task: x.knows_task })) } : {}) } : {}),
       journal: path.relative(path.dirname(this.o.journalFile), journal).split(path.sep).join('/'),
       cut: { file: path.relative(path.dirname(this.o.journalFile), cutFile).split(path.sep).join('/'), sha256: createHash('sha256').update(cutText).digest('hex'), events: (snap.events ?? []).length },
-      laboratory: 'the same world (its seed and options), in an instance of its own: what it does there is not done in yours', args });
-    const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false, ...(evolve ? { mode: 'evolve' as const } : {}) };
+      laboratory: worldOf?.mode === 'shared' ? 'this very world, as a member of it: what it does there is done in yours' : worldOf ? 'a realization of its own of this world, as it is now: what it does there is not done in yours'
+        : 'the same world (its seed and options), in an instance of its own: what it does there is not done in yours', args, ...(worldOf ? { world: worldOf } : {}) });
+    const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false, ...(evolve ? { mode: 'evolve' as const } : {}),
+      ...(worldOf ? { world: { mode: worldOf.mode as 'isolated', ...(actor ? { actor } : {}) } } : {}) };
     this.branches.push(b);
     this.reserved += tokens;
     /* The fund is one for the run: reserved in its ledger, and checked again - another requester may have reserved meanwhile. */
@@ -490,6 +546,20 @@ export class Delegations {
       return { delegation: id, state: 'failed', error: 'the fund for branches is spent', fund_left: this.fundLeft() };
     }
     let launched: void | { readonly pid?: number };
+    /* A shared branch: a member of this world, in this process. */
+    if (living && worldMode === 'shared') {
+      const j = living.join({ id, actor: actor!, journal, args, resume: null });
+      if (typeof j === 'string') {
+        b.state = 'failed';
+        this.o.log('delegation_state', { id, state: 'failed', why: 'it could not join the world: ' + j, spent: 0 });
+        this.settle(b, 0, true);
+        return { delegation: id, state: 'failed', error: 'it could not join the world: ' + j, fund_left: this.fundLeft() };
+      }
+      b.state = 'running';
+      this.o.log('delegation_state', { id, state: 'running', world: 'shared', actor });
+      return { delegation: id, state: 'accepted', world: 'shared', member: actor, granted, fund_left: this.fundLeft(),
+        note: 'it acts in this world as a member, and may write to you; its result comes to you as a message when it ends' };
+    }
     try { launched = await this.o.launcher({ journal, lab: this.o.lab, args, ...(evolve ? { evolve: specFile } : {}) }); }
     catch (e) {
       b.state = 'failed';
@@ -500,7 +570,7 @@ export class Delegations {
     b.state = 'running';
     if (launched && typeof launched.pid === 'number') b.pid = launched.pid;
     this.o.log('delegation_state', { id, state: 'running', ...(b.pid !== undefined ? { pid: b.pid } : {}) });
-    return { delegation: id, state: 'accepted', ...(evolve ? { mode: 'evolve', ...(evolve.start ? { start: evolve.start.hash } : { continue_from: readJson(evolve.continueFrom!)?.hash }) } : {}), granted, fund_left: this.fundLeft(),
+    return { delegation: id, state: 'accepted', ...(worldOf ? { world: worldOf.mode, ...(worldOf.mode === 'isolated' ? { randomness, from_tick: worldOf.tick } : {}) } : {}), ...(evolve ? { mode: 'evolve', ...(evolve.start ? { start: evolve.start.hash } : { continue_from: readJson(evolve.continueFrom!)?.hash }) } : {}), granted, fund_left: this.fundLeft(),
       note: 'its result comes to you as a message when it ends; go on meanwhile' };
   }
 
