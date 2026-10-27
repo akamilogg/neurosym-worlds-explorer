@@ -846,3 +846,46 @@ Pruebas de aceptación cubiertas: la 13 (reproducción completa sin red de un ru
 recibos; el orden de llegada ya estaba cubierto en H2), la 16 (las evaluaciones reservadas son las mismas con mensajes,
 efectos del operador y vigilantes o sin ellos) y la 18 (el auditor distingue lo ocurrido de lo percibido; un paquete
 alterado deja de sostenerse).
+
+### 18.7 Huecos cerrados tras los cinco hitos (27/10/2026)
+
+Pruebas en `lib/test/living-world-gaps.test.ts`.
+
+- **Senior en sesiones compartidas.** Un investigador puede declarar `senior` en el manifiesto (`patience`,
+  `max_orders`). La sesión lanza su agente operador en el mismo proceso, con el modelo de `SENIOR_LLM_*`; nunca es
+  miembro del mundo.
+- **Activación reactiva propia del senior (§9).** Se declara aparte (`activation`): una lectura de un vigilante o un
+  mensaje de otro miembro que llega a su junior lo despierta, hasta `max` veces, y se le dice qué lo despertó
+  (`woken_by`). Nunca lo despierta cualquier anomalía.
+- **Controles del operador (§16).** `lab world <run|sesión> ...` permite, además de cambiar los programas:
+  - pausar, reanudar y cerrar la sesión; al cerrarla, los investigadores se detienen con `world_closed`;
+  - incorporar un actor no investigador y retirar miembros, siempre al abrirse una ventana;
+  - dirigir la palabra a un miembro o a todos (`say`), que cuenta como ayuda donde se recibe (`world_help`), y fijar algo
+    ante un miembro (`pin`);
+  - promover una rama compartida a miembro independiente (`promote`), que ya no se detiene cuando termina quien la pidió;
+  - consultar el estado (`status`): dónde está el mundo, sus miembros, las acciones en curso, los lotes sellados, los
+    disparos programados y las órdenes en espera, que la sesión escribe junto a su diario.
+
+  Toda orden queda registrada con quién y por qué, y marca la sesión como `adapted`. Las sesiones compartidas leen las
+  órdenes de su propio buzón y escriben qué fue de cada una.
+- **Continuar una sesión compartida.** El registro de la sesión se escribe desde el principio. `lab live --resume
+  <x.session.json> [--more-rounds N]` continúa la sesión en una carpeta propia: vuelve a derivar su mundo, reanuda a cada
+  investigador desde su registro y le da más rondas donde se le acabaron.
+- **Lotes con sesiones (K3, K5).** Una ejecución de un lote puede ser una sesión (`session: <manifiesto>`), que se
+  comprueba entera antes de gastar nada. Cuenta como una sola observación de su condición, con sus miembros por separado;
+  si se cortó, se continúa. Las comparaciones de condiciones de sesiones se rechazan, diciéndolo, hasta definir qué
+  resultado de una sesión se compara.
+- **Delegación declarada en el manifiesto (§12).** Cada investigador declara su fondo, sus límites y los modos de rama
+  permitidos. Si se permiten ramas compartidas, el límite de miembros deja sitio para ellas.
+- **Señales producidas por un juez configurado (§10).** `producer: "judge"`: se pregunta cada ronda al Judge del run,
+  con su pregunta, sus niveles y sus entradas (el último check, las creencias). Cada muestra conserva sus entradas, su
+  regla, su respuesta y su coste. Un fallo da una muestra faltante, nunca una lectura.
+- **Tiempo real para mundos del arnés (§5.2).** Con `clock.mode: "realtime"` y `tick_ms`, el mundo avanza por el reloj de
+  pared: quien no ha sellado cuando toca la ventana queda ausente (registrado) y un lote decidido sobre una revisión
+  superada es tardío. La sesión se verifica pero nunca se reconstruye ni se continúa, y se dice por qué.
+- **Consola.** Comprobada en el navegador. El panel distingue lo que percibió el investigador de lo que ve el auditor, y
+  los eventos del mundo vivo tienen descripción legible.
+
+Pendiente:
+- conectar un servicio externo concreto al bucle del investigador (el protocolo `ExternalWorld` ya existe);
+- definir qué resultado de una sesión se compara entre condiciones.

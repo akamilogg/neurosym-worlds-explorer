@@ -293,6 +293,9 @@ export class LivingBridge<A> {
     /* An instrument's reading, the operator's announcement: each with its own provenance, never another member's word. */
     if (m.kind === 'reading') return { message: m.id, from: m.from, window: m.window, reading: m.body };
     if (m.kind === 'announcement') return { message: m.id, from: 'operator', window: m.window, ...m.body };
+    /* The operator's word: help, counted where it is received; its pin, kept before it under its key. */
+    if (m.from === 'operator' && m.kind === 'pin') return { message: m.id, from: 'operator', pin: m.body.key, text: m.body.text };
+    if (m.from === 'operator') return { message: m.id, from: 'operator', window: m.window, text: m.body.text, help: true };
     const body = m.body as { text?: string; refs?: string[]; shared?: Record<string, unknown> };
     const shared = body.shared;
     let kept: Record<string, unknown> | null = null;

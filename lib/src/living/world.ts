@@ -54,7 +54,8 @@ export interface Message {
   readonly from: string;
   readonly to: { readonly actor: string } | { readonly channel: 'global' };
   /** `reading`: an instrument's (§7), `announcement`: the operator's (§10.1) - each with its own provenance. */
-  readonly kind: 'notice' | 'share' | 'reading' | 'announcement';
+  /** `pin`: the operator's, kept before its recipient (§8: never imposed on a member's channel without the operator's authority). */
+  readonly kind: 'notice' | 'share' | 'reading' | 'announcement' | 'pin';
   readonly body: Readonly<Record<string, unknown>>;
   /** The window it was published in: delivered once that window is committed, never in the middle of a decision. */
   readonly window: number;
@@ -209,6 +210,11 @@ export interface SessionClock {
   readonly decision_interval: number;
   /** The tick the session ends at: no transition beyond it. */
   readonly horizon: number;
+  /** `realtime` (§5.2): the world goes on by the wall clock, `tick_ms` a tick, whatever its members are doing - who has not
+      sealed when a window is due is absent from it (recorded); latency is part of the condition. Never reproduced: what a
+      member was answered depends on when it answered. Default `simulated`: a window waits for every member (§5.1). */
+  readonly mode?: 'simulated' | 'realtime';
+  readonly tick_ms?: number;
 }
 
 export interface SessionLimits {
@@ -340,9 +346,16 @@ export interface LivingSessionOptions<St, F> {
 /** A change of the operator's to the programs during the run (§10): to add or replace one, disable one, fire one now. */
 export interface ProgramOrder {
   readonly id: string;
-  readonly op: 'add' | 'replace' | 'disable' | 'fire';
+  /** The programs: add, replace, disable, fire one now. The session: pause, resume, close. Its members: join (an actor that is
+      not a researcher: a researcher joins as a shared branch), retire. Its channels: say (the operator's word to a member or
+      to all, counted as help where it is received), pin (kept before a member, under a key). */
+  readonly op: 'add' | 'replace' | 'disable' | 'fire' | 'pause' | 'resume' | 'close' | 'join' | 'retire' | 'say' | 'pin';
   readonly program?: ProgramDecl;
   readonly target?: string;
+  readonly actor?: ActorDecl;
+  readonly to?: string;
+  readonly text?: string;
+  readonly key?: string;
   readonly by: string;
   readonly why?: string;
 }
@@ -419,6 +432,10 @@ export class LivingSession<St, F> {
     if (o.programs?.length || o.signals?.length || o.sensors?.length) this.journal.write({ key: 'events', programs: o.programs ?? [], signals: o.signals ?? [], sensors: o.sensors ?? [] });
     this.status = 'running';
     this.sealPolicies();
+    if (this.realtime) {
+      if (!(Number(o.clock.tick_ms) >= 1)) throw new Error('a world in real time needs "tick_ms": how long a tick lasts');
+      this.wall = setInterval(() => this.due(), Number(o.clock.tick_ms) * o.clock.decision_interval);
+    }
   }
 
   /* --- What happens that nobody in the world asked for (§7, §9, §10) ---------------------------------------------------- */
@@ -442,7 +459,10 @@ export class LivingSession<St, F> {
   }
 
   /** The signals of a member's a producer gives samples of. */
-  signalsFrom(actor: string, producer: 'checks' | 'self_reported'): string[] {
+  /** A signal's declaration (its judge's, where it has one). */
+  signalOf(id: string): SignalDecl | null { return this.agenda.signalOf(id); }
+
+  signalsFrom(actor: string, producer: 'checks' | 'self_reported' | 'judge'): string[] {
     return this.agenda.signalIds().filter((id) => { const d = this.agenda.signalOf(id)!; return d.actor === actor && d.producer === producer; });
   }
 
@@ -459,11 +479,12 @@ export class LivingSession<St, F> {
   round(actor: string, n: number): void { this.slot(actor); this.rounds.set(actor, Math.max(n, this.rounds.get(actor) ?? 0)); }
 
   /** A sample of a signal (§10): the harness's for a signal of checks, the member's own for one it reports itself. */
-  sample(signal: string, key: string, value: number | null, by: { harness: true } | { actor: string }): string | null {
+  sample(signal: string, key: string, value: number | null, by: { harness: true } | { actor: string }, record?: Record<string, unknown>): string | null {
     const d = this.agenda.signalOf(signal);
     if (!d) return 'no signal "' + signal + '"';
-    if ('actor' in by ? d.producer !== 'self_reported' || d.actor !== by.actor : d.producer !== 'checks') return 'signal "' + signal + '" is not yours to report';
-    if (this.agenda.sample(signal, key, value)) this.journal.write({ key: 's.' + signal + '.' + key, signal, value, window: this.window, by: 'actor' in by ? by.actor : 'harness' });
+    if ('actor' in by ? d.producer !== 'self_reported' || d.actor !== by.actor : d.producer === 'self_reported') return 'signal "' + signal + '" is not yours to report';
+    /* A judge's sample keeps what it was given, its rule, its answer and what it cost. */
+    if (this.agenda.sample(signal, key, value)) this.journal.write({ key: 's.' + signal + '.' + key, signal, value, window: this.window, by: 'actor' in by ? by.actor : 'harness', ...(record ? { judged: record } : {}) });
     return null;
   }
 
@@ -478,7 +499,28 @@ export class LivingSession<St, F> {
 
   /** The operator's change to the programs (§10): applied when the next window opens, recorded with who, when and why. */
   control(order: ProgramOrder): string | null {
-    if (order.op === 'add' || order.op === 'replace') {
+    /* The session's course: at once, recorded with who and why. */
+    if (order.op === 'pause' || order.op === 'resume' || order.op === 'close') {
+      if (order.op === 'pause' && this.status !== 'running') return 'the world is ' + this.status + ': it cannot be paused';
+      if (order.op === 'resume' && this.status !== 'paused') return 'the world is ' + this.status + ': it is not paused';
+      if (order.op === 'close' && this.status === 'completed') return 'the world is closed already';
+      this.journal.write({ key: 'prog.' + order.id, window: this.window, tick: this.tick, order });
+      if (order.op === 'pause') this.pause(); else if (order.op === 'resume') this.resume(); else this.close('closed by ' + order.by + (order.why ? ': ' + order.why : ''));
+      this.status_();
+      return null;
+    }
+    if (order.op === 'join') {
+      if (!order.actor || typeof order.actor.id !== 'string') return 'join names an actor: {"id", "kind", "policy", "params", "actions"}';
+      if (order.actor.kind === 'researcher') return 'a researcher joins a world as a shared branch of another, never by an order';
+      if (this.actors.has(order.actor.id)) return 'a member "' + order.actor.id + '" is in the session already';
+      try { this.slotOf(order.actor, this.window); } catch (e) { return String((e as Error).message ?? e); }
+    } else if (order.op === 'retire') {
+      if (!order.target || !this.actors.has(order.target)) return 'no member "' + order.target + '"';
+    } else if (order.op === 'say' || order.op === 'pin') {
+      if (typeof order.text !== 'string' || !order.text.trim()) return order.op + ' has a "text"';
+      if (order.to !== 'global' && (!order.to || !this.actors.has(order.to))) return order.op + ' goes to a member or "global"';
+      if (order.op === 'pin' && (order.to === 'global' || typeof order.key !== 'string' || !/^[a-z][a-z0-9_]*$/.test(order.key))) return 'pin goes to a member, under a "key" in lowercase_snake_case';
+    } else if (order.op === 'add' || order.op === 'replace') {
       if (!order.program) return 'a program to ' + order.op;
       const issue = programIssue(order.program, { effects: Object.keys(this.adapter.effects ?? {}), signals: this.agenda.signalIds(), actors: [...this.actors.keys()], predicates: Boolean(this.compile) });
       const exists = this.agenda.has(order.program.id);
@@ -530,6 +572,14 @@ export class LivingSession<St, F> {
       this.applied.add(key);
       if (o.op === 'add' || o.op === 'replace') this.agenda.add(o.program!, true);
       else if (o.op === 'disable') this.agenda.disable(o.target!);
+      /* Its members and channels: as the window opens, never in the middle of one. */
+      else if (o.op === 'join') { const r = this.admit(o.actor!); if (!r.accepted) this.journal.write({ key: key + '.refused', reason: r.reason }); }
+      else if (o.op === 'retire') this.leave(o.target!, 'retired by ' + o.by + (o.why ? ': ' + o.why : ''));
+      else if (o.op === 'say' || o.op === 'pin') {
+        const to = o.to === 'global' ? [...this.actors.values()].filter((s) => s.decl.kind === 'researcher' && s.state !== 'stopped').map((s) => s.decl.id) : [o.to!];
+        this.post('operator', to, o.to === 'global' ? { channel: 'global' } : { actor: o.to! }, o.op === 'pin' ? 'pin' : 'notice', { text: o.text!, ...(o.key ? { key: o.key } : {}) }, window);
+      }
+      else if (o.op === 'pause' || o.op === 'resume' || o.op === 'close') continue;
       else { const before = this.agenda.fired.length; const why = this.agenda.ask(o.target!, this.tick, { operator: o.by }); this.recordFirings(before); if (why) this.journal.write({ key: key + '.refused', reason: why }); }
       this.journal.write({ key, window, tick: this.tick, order: o, versions: this.agenda.versions() });
     }
@@ -647,8 +697,23 @@ export class LivingSession<St, F> {
 
   /** Applies every window that can be applied now, one after the other; arms the wait for those that did not seal. */
   settle(): void {
+    /* In real time, only the clock applies a window. */
+    if (this.realtime) return;
     while (this.ready()) this.runWindow();
     this.arm();
+  }
+
+  /** Whether the world goes on by the wall clock (§5.2). */
+  get realtime(): boolean { return this.clock.mode === 'realtime'; }
+  private wall: ReturnType<typeof setInterval> | null = null;
+
+  /** A window due by the wall clock: who has not sealed is absent from it - recorded, never waited for. */
+  private due(): void {
+    if (this.status !== 'running' || this.ended) return;
+    const deciding = [...this.actors.values()].filter((s) => DECIDING.includes(s.state));
+    if (!deciding.some((s) => s.decl.kind === 'researcher')) return;
+    for (const s of deciding) if (s.batch === null && !(s.until !== null && s.until > this.tick)) { s.batch = []; s.timedOut = true; s.use.timeouts++; this.use.timeouts++; }
+    this.runWindow();
   }
 
   /** Applies the window in course (§5.1): written ahead, the batches in the order of the window - each intent checked again
@@ -761,6 +826,7 @@ export class LivingSession<St, F> {
     const record: WindowRecord<F> = { window, from, to, revision: this.revision, outcomes, segments, timeouts };
     this.records.set(window, record);
     this.records.delete(window - 256);
+    this.status_();
     this.sealPolicies();
     const waiters = this.waiters;
     this.waiters = [];
@@ -775,6 +841,13 @@ export class LivingSession<St, F> {
   /** A member joins after the window in course, within the limit of members. It is given nothing of the global channel's
       history: what it may read of it, it reads (§8). */
   join(decl: ActorDecl): { accepted: true } | { accepted: false; reason: string } {
+    const r = this.admit(decl);
+    if (r.accepted) this.settle();
+    return r;
+  }
+
+  /** A member admitted, the world not advanced (what an order applied as a window opens does). */
+  private admit(decl: ActorDecl): { accepted: true } | { accepted: false; reason: string } {
     if (this.actors.has(decl.id)) return { accepted: false, reason: 'a member "' + decl.id + '" is in the session already' };
     if (this.status !== 'running') return { accepted: false, reason: 'the world is ' + this.status };
     const active = [...this.actors.values()].filter((s) => s.state !== 'stopped').length;
@@ -785,20 +858,24 @@ export class LivingSession<St, F> {
     this.actors.set(decl.id, slot);
     this.journal.write({ key: 'join.' + decl.id, ...decl, actions: [...slot.actions], window: this.window, tick: this.tick });
     this.sealPolicies();
-    this.settle();
     return { accepted: true };
   }
 
   /** A member leaves (§4): it decides no more; what it began goes on as the world's laws say - a batch it already sealed is
       applied with its window: it was decided -, and nothing of its history or of what it published is taken away. */
   retire(actor: string, reason: string): void {
+    if (this.leave(actor, reason)) this.settle();
+  }
+
+  /** A member leaves, the world not advanced. Answers whether it was still in. */
+  private leave(actor: string, reason: string): boolean {
     const s = this.slot(actor);
-    if (s.state === 'stopped') return;
+    if (s.state === 'stopped') return false;
     s.state = 'stopped'; s.batch = s.batch ?? []; s.until = null;
     this.journal.write({ key: 'retire.' + actor + '@w' + this.window + '.t' + this.tick + '.' + this.journal.stretch, reason, window: this.window, tick: this.tick, pending: this.adapter.pending(this.state).filter((p) => p.actor === actor) });
     for (const r of this.wakers.get(actor) ?? []) r();
     this.wakers.delete(actor);
-    this.settle();
+    return true;
   }
 
   /** An actor that can decide no more (its budget spent): it stops deciding; what it began goes on as the world's laws say. */
@@ -904,8 +981,22 @@ export class LivingSession<St, F> {
   /** The state, for the operator (the restricted record): never an actor's. */
   auditState(): St { return this.state; }
 
+  /** What the operator reviews (§16): where the world is, its members, what is in course (actions begun, batches sealed,
+      firings scheduled, orders waiting) - written beside its journal as it goes. */
+  statusNow(): Record<string, unknown> {
+    return { ...this.summary(), pending: this.adapter.pending(this.state), scheduled: this.agenda.pending().map((f) => ({ id: f.id, at: f.at, program: f.program })),
+      sealed: [...this.actors.values()].filter((s) => s.batch !== null && s.state !== 'stopped').map((s) => s.decl.id),
+      waiting_orders: this.orders.map((o) => ({ id: o.id, op: o.op })), programs: this.agenda.versions(), at: new Date().toISOString() };
+  }
+
+  private status_(): void {
+    if (!this.journal.file) return;
+    try { fs.writeFileSync(this.journal.file.replace(/\.jsonl$/, '') + '.status.json', JSON.stringify(this.statusNow(), null, 2)); } catch { /* a convenience: never a stop */ }
+  }
+
   private release(): void {
     if (this.timer) { clearTimeout(this.timer.handle); this.timer = null; }
+    if (this.wall) { clearInterval(this.wall); this.wall = null; }
     const waiters = this.waiters;
     this.waiters = [];
     for (const w of waiters) w(null);
@@ -916,6 +1007,7 @@ export class LivingSession<St, F> {
   /** The window waits for its researchers only so long (`window_ms`) once one of them sealed: then the missing ones are
       sealed empty, a no-op recorded as their timeout, and the window is applied without them (§5.1). */
   private arm(): void {
+    if (this.realtime) return;
     const ms = this.limits.window_ms;
     if (!ms || this.status !== 'running' || this.ended || this.timer?.window === this.window) return;
     const researchers = [...this.actors.values()].filter((s) => s.decl.kind === 'researcher' && DECIDING.includes(s.state));

@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { batchTimes, criteriaProblems, groupResults, type Criteria, type GroupResults } from './results.ts';
+import { batchTimes, criteriaProblems, groupResults, sessionResults, type Criteria, type GroupResults } from './results.ts';
+import { readManifest } from '../living/manifest.ts';
+import { rebuildLivingSession, runLivingSession } from '../living/run-session.ts';
+import type { LawLab } from '../learn/lab.ts';
 import { compareConditions, compareWithReference, comparisonProblems, conditionComparisonProblems, type ComparisonDeclared, type ConditionsDeclared } from './references.ts';
 import { coverage, designProblems, expandDesign, type BatchTemplate, type Variation } from './design.ts';
 import path from 'node:path';
@@ -49,6 +52,9 @@ export interface BatchRun {
       then delivered with its first question - a nudge given at a round chosen beforehand, the same for every run that
       declares it. Help like any other message: in the finding, and in the help budget. */
   readonly messages?: readonly { readonly round: number; readonly text: string; readonly pin?: string }[];
+  /** A SHARED SESSION of a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §15.1 K3, K5): its `living-world@1` manifest, the
+      session the unit of the comparison - never its members as replicas. Its laboratory is the manifest's. */
+  readonly session?: string;
 }
 
 export interface BatchDefinition {
@@ -136,7 +142,9 @@ export interface BatchReport {
   /** Its results apart and their cost, by group of comparable runs, with their uncertainty (SPEC-CONTROL-ARNES K1); the
       operator's view too (mechanistic recovery is in it). */
   results?: { readonly groups: GroupResults[]; readonly times: Record<string, unknown>; readonly comparisons?: readonly Record<string, unknown>[];
-    readonly condition_comparisons?: readonly Record<string, unknown>[]; readonly reading: string };
+    readonly condition_comparisons?: readonly Record<string, unknown>[];
+    /** Its shared sessions, by condition: each session one observation, its members apart (§15.1 K5). */
+    readonly sessions?: Readonly<Record<string, readonly Record<string, unknown>[]>>; readonly reading: string };
   /** What was declared when it began - its criteria and its comparisons, preregistered - and every definition it had since:
       a batch resumed never presents results of runs made under another design, and what is declared later is marked so. */
   preregistered?: { readonly at: string; readonly criteria: Criteria; readonly compare: readonly ComparisonDeclared[]; readonly compare_conditions: readonly ConditionsDeclared[]; readonly note?: string };
@@ -178,17 +186,25 @@ function agentRow(def: BatchRun, journal: string | null): { agent?: BatchRunRow[
 
 /** A batch's results apart and their cost, by group of comparable runs (SPEC-CONTROL-ARNES K1, §6.1-§6.2), and its times. */
 export function batchResults(report: BatchReport, root: string): NonNullable<BatchReport['results']> {
-  const rows = report.runs.filter((r) => r.journal && fs.existsSync(r.journal)).map((r) => ({ condition: r.condition, journal: r.journal! }));
+  /* Its shared sessions apart: their unit is the session, never one of its runs. */
+  const sessionRows = report.runs.filter((r) => r.journal && /\.session\.json$/.test(r.journal) && fs.existsSync(r.journal));
+  const rows = report.runs.filter((r) => r.journal && !/\.session\.json$/.test(r.journal) && fs.existsSync(r.journal)).map((r) => ({ condition: r.condition, journal: r.journal! }));
+  const sessions: Record<string, Record<string, unknown>[]> = {};
+  for (const r of sessionRows) (sessions[r.condition] ??= []).push({ id: r.id, ...sessionResults(r.journal!, report.definition.criteria) });
   /* What was declared after the batch began is not preregistered, and is said so beside each result. */
   const pre = report.preregistered;
   const when = (declared: boolean) => (pre ? (declared ? 'before the batch began' : 'after it began: not preregistered') : 'not recorded');
   const same = (x: unknown, y: unknown) => JSON.stringify(x) === JSON.stringify(y);
   const comparisons = (report.definition.compare ?? []).map((c) => ({ ...compareWithReference(root, report as unknown as Record<string, any>, c), declared: when(!!pre?.compare.some((p) => same(p, c))) }));
-  const conditionComparisons = (report.definition.compare_conditions ?? []).map((c) => ({ ...compareConditions(report as unknown as Record<string, any>, c), declared: when(!!pre?.compare_conditions.some((p) => same(p, c))) }));
+  /* A comparison of conditions of sessions is of sessions, not of runs: refused, said so, until it is built. */
+  const sessionConditions = new Set(sessionRows.map((r) => r.condition));
+  const conditionComparisons = (report.definition.compare_conditions ?? []).map((c) => (sessionConditions.has((c as { a?: string }).a ?? '') || sessionConditions.has((c as { b?: string }).b ?? '')
+    ? { ...c, refused: 'a condition of shared sessions: its unit is the session; a comparison of sessions is not built yet' }
+    : { ...compareConditions({ ...report, runs: report.runs.filter((r) => !sessionRows.includes(r)) } as unknown as Record<string, any>, c), declared: when(!!pre?.compare_conditions.some((p) => same(p, c))) }));
   const groups = groupResults(rows, report.definition.criteria).map((g) => (typeof g.o3_adequacy === 'string' ? g
     : { ...g, o3_adequacy: Object.fromEntries(Object.entries(g.o3_adequacy).map(([id, x]) => [id, { ...x, declared: when(!!pre && same(pre.criteria[id], report.definition.criteria?.[id])) }])) }));
   return { groups, times: batchTimes(report.started, report.ended, rows, report.definition.criteria),
-    ...(comparisons.length ? { comparisons } : {}), ...(conditionComparisons.length ? { condition_comparisons: conditionComparisons } : {}),
+    ...(comparisons.length ? { comparisons } : {}), ...(conditionComparisons.length ? { condition_comparisons: conditionComparisons } : {}), ...(sessionRows.length ? { sessions } : {}),
     reading: 'each result apart, none called correct; groups only of comparable runs; proportions with their denominator and Wilson\'s interval, the rest with a bootstrap interval or "insufficient evidence"; no label of control' };
 }
 
@@ -232,7 +248,21 @@ export function batchTable(rows: readonly BatchRunRow[]): ConditionRow[] {
 }
 
 /** Whether a run is done: it ended, and not because the batch was stopped (a cancelled run is resumed). */
-const ended = (journal: string): boolean => { if (!fs.existsSync(journal)) return false; const s = runStatus(journal); return s.state === 'ended' && s.stoppedBy !== 'cancelled'; };
+const ended = (journal: string): boolean => {
+  if (!fs.existsSync(journal)) return false;
+  if (/\.session\.json$/.test(journal)) return readJson(journal)?.state === 'ended';
+  const s = runStatus(journal); return s.state === 'ended' && s.stoppedBy !== 'cancelled';
+};
+
+/** A shared session's row: its unit the session - how each researcher ended, what it cost in all, its condition. */
+function rowOfSession(def: BatchRun, file: string | null, error?: string): BatchRunRow {
+  const rec = file ? readJson(file) : null;
+  const res = file && rec?.state === 'ended' ? sessionResults(file) as Record<string, any> : null;
+  return { id: def.id, condition: def.condition, lab: def.lab, researcher: 'assisted', journal: file,
+    status: error ? 'error' : !rec ? 'not run' : rec.state === 'ended' ? 'session: ' + Object.entries((rec.runs ?? {}) as Record<string, { stoppedBy?: string }>).map(([id, x]) => id + ' ' + (x.stoppedBy ?? 'failed')).join(', ') : 'session cut short',
+    accepted: Boolean(res?.members?.some((m: Record<string, any>) => m.o1_predictive_acceptance?.model)), round: null,
+    tokens_total: res ? Number(res.cost?.tokens_total_at_least) : null, tokens_to_acceptance: null, help: 0, ...(error ? { error } : {}) };
+}
 
 /** A batch in a few lines, for a person. */
 export function batchText(report: BatchReport): string {
@@ -263,6 +293,15 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
     ids.add(r.id);
     if (!LABS[r.lab]) throw new LabError('batch ' + def.id + ', run ' + r.id + ': no laboratory ' + r.lab + ' (' + Object.keys(LABS).join(', ') + ')');
     if (!r.condition) throw new LabError('batch ' + def.id + ', run ' + r.id + ': which condition does it stand for?');
+    /* A shared session's manifest, checked whole before anything is spent. */
+    if (r.session !== undefined) {
+      const file = fs.existsSync(path.resolve(options.root, r.session)) ? path.resolve(options.root, r.session) : path.resolve(r.session);
+      if (!fs.existsSync(file)) throw new LabError('batch ' + def.id + ', run ' + r.id + ': no manifest ' + r.session);
+      const m = readManifest(readJson(file), LABS);
+      if ('errors' in m) throw new LabError('batch ' + def.id + ', run ' + r.id + ': its manifest is refused: ' + m.errors.join('; '));
+      if (m.lab !== r.lab) throw new LabError('batch ' + def.id + ', run ' + r.id + ': its manifest is of ' + m.lab + ', not ' + r.lab);
+      if (r.args?.length || r.fork || r.agent || r.messages) throw new LabError('batch ' + def.id + ', run ' + r.id + ': a session is declared by its manifest alone');
+    }
   }
   const wrong = [...criteriaProblems(def.criteria), ...comparisonProblems(options.root, def.compare),
     ...conditionComparisonProblems([...new Set(def.runs.map((r) => r.condition))], def.compare_conditions)];
@@ -319,7 +358,39 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
     return j;
   };
 
+  /* A shared session (SPEC-ACONTECIMIENTOS-DEL-MUNDO §15.1): run whole, in this process; one cut short continued from its
+     record in a folder of its own; one that ended is not run again. */
+  const oneSession = async (r: BatchRun): Promise<void> => {
+    const known = ((j) => (j && fs.existsSync(j) ? j : undefined))(latest.get(r.id));
+    if (known && ended(known)) { rows.set(r.id, rowOfSession(r, known)); return; }
+    const k = known ? (Number(/\.r(\d+)$/.exec(path.dirname(known))?.[1] ?? 0) + 1) : 0;
+    const folder = path.join(dir, r.id + (k ? '.r' + k : ''));
+    const lab = LABS[r.lab] as LawLab | undefined;
+    const file = fs.existsSync(path.resolve(options.root, r.session!)) ? path.resolve(options.root, r.session!) : path.resolve(r.session!);
+    try {
+      if (!lab || !lab.living) throw new Error(r.lab + ' is not a living world');
+      latest.set(r.id, path.join(folder, 'session.session.json'));
+      save();
+      say('batch ' + def.id + ': ' + r.id + ' [' + r.condition + '] session ' + (known ? 'continued' : 'started'));
+      const connection = () => ({ llm: options.llm, ...(options.judge ? { judge: options.judge } : {}), ...(options.fetch ? { fetch: options.fetch } : {}) });
+      if (known) await rebuildLivingSession(lab, { sessionFile: known, dir: folder, name: 'session', root: options.root, mode: 'continue', connection, ...(options.signal ? { signal: options.signal } : {}) });
+      else {
+        const m = readManifest(JSON.parse(fs.readFileSync(file, 'utf8')), LABS);
+        if ('errors' in m) throw new Error('its manifest is refused: ' + m.errors.join('; '));
+        if (m.lab !== r.lab) throw new Error('its manifest is of ' + m.lab + ', not ' + r.lab);
+        await runLivingSession(lab, { plan: m.plan, dir: folder, name: 'session', root: options.root, args: m.flat ? ['--flat'] : [], connection,
+          ...(options.agentLlm ? { seniorLlm: () => options.agentLlm!('senior') } : {}), ...(options.signal ? { signal: options.signal } : {}) });
+      }
+      rows.set(r.id, rowOfSession(r, path.join(folder, 'session.session.json')));
+      say('batch ' + def.id + ': ' + r.id + ' ' + rows.get(r.id)!.status);
+    } catch (e) {
+      rows.set(r.id, rowOfSession(r, fs.existsSync(path.join(folder, 'session.session.json')) ? path.join(folder, 'session.session.json') : null, String((e as Error)?.message ?? e)));
+      say('batch ' + def.id + ': ' + r.id + ' failed: ' + traceOf(e));
+    } finally { save(); }
+  };
+
   const one = async (r: BatchRun): Promise<void> => {
+    if (r.session) return oneSession(r);
     /* A run that failed before it wrote a journal (a bad argument) is started afresh, never resumed. */
     const known = ((j) => (j && fs.existsSync(j) ? j : undefined))(latest.get(r.id));
     if (known && ended(known)) { rows.set(r.id, rowOf(r, known, findingOfRun(known, 'researcher'))); return; }

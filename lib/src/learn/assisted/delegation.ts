@@ -77,6 +77,8 @@ interface Branch {
   state: 'accepted' | 'running' | 'completed' | 'failed' | 'cancelled';
   /** In a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): a realization of its own, or a member of the requester's. */
   world?: { readonly mode: 'isolated' | 'shared'; readonly actor?: string };
+  /** Promoted by the operator to a member of its own: its requester's end does not stop it. */
+  promoted?: boolean;
   spent: number | null;
   delivered: boolean;
   /** Why it failed, when it did not end by itself (its process stopped, it never started). */
@@ -197,6 +199,7 @@ export class Delegations {
         this.perRound.set(e.round, Math.max(this.perRound.get(e.round) ?? 0, Number(String(e.id).split('.').pop()) || 0));
       }
       if (e.type === 'delegation_state') { const b = this.branches.find((x) => x.id === e.id); if (b) { b.state = e.state; if (typeof e.pid === 'number') b.pid = e.pid; if (typeof e.journal === 'string') b.journal = path.resolve(o.historyDir ?? path.dirname(o.journalFile), e.journal); this.restore(b, e.spent, e.uncertain); } }
+      if (e.type === 'delegation_promoted') { const b = this.branches.find((x) => x.id === e.id); if (b) b.promoted = true; }
       if (e.type === 'delegation_requested' || e.type === 'delegation_state' || e.type === 'delegation_cancel_asked') pending.push(e);
       if (e.type === 'delegation_answered') { this.answered.push({ round: e.round, request: e.request, answer: e.answer, events: pending }); pending = []; }
       if (e.type === 'delegation_answered') for (const p of this.answered[this.answered.length - 1].events) if (p.type === 'delegation_requested') this.unconfirmed.delete(p.id);
@@ -615,8 +618,21 @@ export class Delegations {
   }
 
   /** At the requester's end: its branches still running asked to stop (their partial results kept in their records). */
+  /** A shared branch promoted by the operator to a member of its own (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): no longer stopped
+      when its requester ends - it goes on in the world on its own - its budget as the operator gives it (recorded). Answers why
+      not, or null. */
+  promote(actor: string, by: string, budget?: number): string | null {
+    const b = this.branches.find((x) => x.world?.mode === 'shared' && x.world.actor === actor);
+    if (!b) return 'no shared branch "' + actor + '" of this run';
+    if (b.state !== 'running' && b.state !== 'accepted') return actor + ' has ended';
+    if (b.promoted) return actor + ' is a member of its own already';
+    b.promoted = true;
+    this.o.log('delegation_promoted', { id: b.id, actor, by, ...(budget !== undefined ? { budget } : {}) });
+    return null;
+  }
+
   close(): Record<string, unknown> {
-    for (const b of this.branches) if (b.state === 'running' || b.state === 'accepted') {
+    for (const b of this.branches) if ((b.state === 'running' || b.state === 'accepted') && !b.promoted) {
       fs.appendFileSync(b.journal.replace(/\.json$/, '') + '.inbox.jsonl', JSON.stringify({ id: 'close-' + b.id, kind: 'stop', by: 'requester' }) + '\n');
       this.o.log('delegation_cancel_asked', { id: b.id, why: 'its requester ended' });
     }

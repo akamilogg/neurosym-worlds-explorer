@@ -416,8 +416,7 @@ async function worldView(view) {
   try {
     const w = await api('/api/runs/' + encodeURIComponent(selected) + '/world?view=' + view);
     $('living-head').textContent = (view === 'auditor' ? 'Auditor: todo lo ocurrido, también lo no percibido' : 'Lo que percibió ' + w.actor) + ' - tick ' + w.tick + ', ventana ' + w.window + ', miembros: ' + w.members.map((m) => m.id + ' (' + m.kind + ')').join(', ');
-    $('living-lines').textContent = w.timeline.map((l) => (l.window ? '[w' + l.window + '] ' : '') + l.line).join('
-');
+    $('living-lines').textContent = w.timeline.map((l) => (l.window ? '[w' + l.window + '] ' : '') + l.line).join(String.fromCharCode(10));
   } catch (e) { $('living-head').textContent = e.message; }
 }
 

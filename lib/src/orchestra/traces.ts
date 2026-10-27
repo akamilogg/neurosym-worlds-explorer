@@ -73,7 +73,8 @@ export function processTraces(journalFile: string): ProcessTraces {
     directives: { given: directives.length, reported_carried_out: reported.filter((r) => r && !r.not_done).length,
       reported_not_carried_out: reported.filter((r) => r?.not_done).length, not_reported: reported.filter((r) => !r).length },
     told_its_senior: events.filter((e) => e.type === 'junior_report').length,
-    other_help: messages.filter((m) => !m.directive).length,
+    /* The operator's word in a living world, received through its channel, is help too. */
+    other_help: messages.filter((m) => !m.directive).length + events.filter((e) => e.type === 'world_help').length,
     branches: { opened: events.filter((e) => e.type === 'delegation_requested').length, results_delivered: all.filter((m) => m.research_result).length,
       evolutionary: events.filter((e) => e.type === 'delegation_requested' && e.mode === 'evolve').length, candidates_adopted: adoptedOf(journalFile, events).length },
     ...(journal.world ? { world: livingTraces(events, readWorld(worldFileOf(journalFile, journal) ?? ''), String(journal.world.actor ?? 'researcher')) } : {}),

@@ -25,9 +25,9 @@ import { programIssue, signalIssue, watchIssue, type ProgramDecl, type SignalDec
  * ========================================================================== */
 
 const FIELDS = ['format', 'adapter', 'seed', 'clock', 'limits', 'actors', 'explore', 'check_episodes', 'flat', 'programs', 'signals', 'sensors'];
-const CLOCK = ['mode', 'decision_interval', 'horizon'];
+const CLOCK = ['mode', 'decision_interval', 'horizon', 'tick_ms'];
 const LIMITS = ['calls_per_window', 'intents_per_window', 'actors', 'messages_per_window', 'message_chars', 'delivery_per_decision', 'window_ms', 'watchers'];
-const RESEARCHER = ['id', 'kind', 'rounds', 'steps', 'acts', 'max_tokens', 'max_minutes', 'actions', 'history', 'activation'];
+const RESEARCHER = ['id', 'kind', 'rounds', 'steps', 'acts', 'max_tokens', 'max_minutes', 'actions', 'history', 'activation', 'senior', 'delegation'];
 const OTHER = ['id', 'kind', 'policy', 'params', 'actions', 'history'];
 const KINDS = ['researcher', 'policy', 'adversary', 'population'];
 
@@ -53,7 +53,9 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
   if (!clock) errors.push('"clock" is { "mode", "decision_interval", "horizon" }');
   else {
     errors.push(...extra(clock, CLOCK, '"clock"'));
-    if (clock.mode !== 'simulated') errors.push('"clock.mode": only "simulated" is built (a clock in real time, §5.2, is not)');
+    if (clock.mode !== 'simulated' && clock.mode !== 'realtime') errors.push('"clock.mode" is "simulated" (a window waits for its members) or "realtime" (it goes on by the wall clock)');
+    if (clock.mode === 'realtime' && !whole(clock.tick_ms)) errors.push('"clock.tick_ms": in real time, how long a tick lasts, in milliseconds');
+    if (clock.mode !== 'realtime' && clock.tick_ms !== undefined) errors.push('"clock.tick_ms" is of a clock in real time');
     if (!whole(clock.decision_interval)) errors.push('"clock.decision_interval" is a whole number of ticks, at least 1');
     if (!whole(clock.horizon)) errors.push('"clock.horizon" is a whole number of ticks, at least 1: a world never ends only when someone said so');
   }
@@ -84,6 +86,16 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
       if (act !== undefined && (!act || typeof act !== 'object' || !whole(act.max) || (act.cooldown_windows !== undefined && !whole(act.cooldown_windows, 0))
         || Object.keys(act).some((k) => !['on_observation', 'on_message', 'cooldown_windows', 'max'].includes(k))))
         errors.push(at + ': "activation" is {"on_observation": bool, "on_message": bool, "cooldown_windows": n, "max": n}: what may wake it, how often, how many times in all');
+      const sn = a.senior as Record<string, any> | undefined;
+      if (sn !== undefined && (!sn || typeof sn !== 'object' || Object.keys(sn).some((k) => !['patience', 'max_orders', 'activation'].includes(k))
+        || (sn.patience !== undefined && !whole(sn.patience)) || (sn.max_orders !== undefined && !whole(sn.max_orders))
+        || (sn.activation !== undefined && (!sn.activation || !whole(sn.activation.max) || Object.keys(sn.activation).some((k) => !['on_observation', 'on_message', 'max'].includes(k))))))
+        errors.push(at + ': "senior" is {"patience": n, "max_orders": n, "activation": {"on_observation": bool, "on_message": bool, "max": n}}');
+      const dl = a.delegation as Record<string, any> | undefined;
+      if (dl !== undefined && (!dl || typeof dl !== 'object' || !whole(dl.fund) || Object.keys(dl).some((k) => !['fund', 'tokens', 'rounds', 'max_rounds', 'branches'].includes(k))
+        || ['tokens', 'rounds', 'max_rounds'].some((k) => dl[k] !== undefined && !whole(dl[k]))
+        || (dl.branches !== undefined && (!Array.isArray(dl.branches) || !dl.branches.length || dl.branches.some((x: unknown) => x !== 'isolated' && x !== 'shared')))))
+        errors.push(at + ': "delegation" is {"fund": n, "tokens": n, "rounds": n, "max_rounds": n, "branches": ["isolated", "shared"]}');
     } else {
       if (!kinds.has(String(a.policy))) errors.push(at + ': "policy" is one of the world\'s: ' + [...kinds].join(', '));
       if (a.params !== undefined && (typeof a.params !== 'object' || Array.isArray(a.params))) errors.push(at + ': "params" is an object');
@@ -117,7 +129,8 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
   if (errors.length) return { errors };
   const c = clock!, l = limits!;
   const plan: SessionPlan = {
-    seed: m.seed as number, clock: { decision_interval: c.decision_interval as number, horizon: c.horizon as number }, limits: l as unknown as SessionLimits,
+    seed: m.seed as number, clock: { decision_interval: c.decision_interval as number, horizon: c.horizon as number, ...(c.mode === 'realtime' ? { mode: 'realtime' as const, tick_ms: c.tick_ms as number } : {}) },
+    limits: l as unknown as SessionLimits,
     actors: actors!.map((a) => a as unknown as ResearcherDecl | ActorDecl),
     ...(m.explore !== undefined ? { explore: m.explore as number } : {}), ...(m.check_episodes !== undefined ? { check_episodes: m.check_episodes as number } : {}),
     ...(programs!.length ? { programs: programs as ProgramDecl[] } : {}), ...(signals!.length ? { signals: signals as SignalDecl[] } : {}),
@@ -125,11 +138,12 @@ export function readManifest(raw: unknown, labs: Readonly<Record<string, AnyLab>
   };
   /* A run of its own only when nothing but its own world is in it: no other member, no messages, no programs or instruments. */
   const alone = researchers.length === 1 && actors!.length === 1 && l.messages_per_window === undefined && l.watchers === undefined && !programs!.length && !signals!.length && !sensors!.length
-    && researchers[0]!.activation === undefined ? researchers[0]! : null;
+    && researchers[0]!.activation === undefined && researchers[0]!.senior === undefined && researchers[0]!.delegation === undefined ? researchers[0]! : null;
   return {
     lab: entry![0], plan, flat: m.flat === true, actor: String(researchers[0]!.id),
     args: alone ? ['--researcher', 'assisted', '--seed', String(m.seed), '--interval', String(c.decision_interval), '--horizon', String(c.horizon),
       '--window-calls', String(l.calls_per_window), '--window-intents', String(l.intents_per_window),
+      ...(c.mode === 'realtime' ? ['--tick-ms', String(c.tick_ms)] : []),
       '--attempts', String(alone.rounds), '--steps', String(alone.steps), '--acts', String(alone.acts),
       /* Its identity and its permissions, as declared: never the world's defaults in their place. */
       '--actor', String(alone.id), ...(Array.isArray(alone.actions) ? ['--actions', alone.actions.length ? alone.actions.map(String).join(',') : 'none'] : []),

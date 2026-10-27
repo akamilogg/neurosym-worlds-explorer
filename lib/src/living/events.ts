@@ -56,8 +56,11 @@ export interface ProgramDecl {
 
 export interface SignalDecl {
   readonly id: string;
-  /** Who produces its samples: the checks of a researcher's models (an operational indicator), or the researcher itself. */
-  readonly producer: 'checks' | 'self_reported';
+  /** Who produces its samples: the checks of a researcher's models (an operational indicator), a judge the operator
+      configured (§10: its inputs, its rule, its answer and what it cost kept with each sample), or the researcher itself. */
+  readonly producer: 'checks' | 'self_reported' | 'judge';
+  /** A judge's: its question to the Judge, its ordered levels (the lowest first), and what it is given of each round. */
+  readonly judge?: { readonly instructions: string; readonly criteria: readonly string[]; readonly inputs?: readonly ('check' | 'beliefs')[] };
   readonly actor: string;
   readonly unit: string;
   readonly direction: 'higher' | 'lower';
@@ -125,7 +128,10 @@ export function signalIssue(s: unknown, actors: readonly string[]): string | nul
   const d = s && typeof s === 'object' ? s as Record<string, any> : null;
   if (!d || typeof d.id !== 'string' || !/^[a-z][a-z0-9_.-]*$/.test(d.id)) return 'a signal has an "id" in lowercase';
   const at = 'signal "' + d.id + '": ';
-  if (d.producer !== 'checks' && d.producer !== 'self_reported') return at + '"producer" is "checks" (the checks of its models) or "self_reported"';
+  if (d.producer !== 'checks' && d.producer !== 'self_reported' && d.producer !== 'judge') return at + '"producer" is "checks" (the checks of its models), "judge" (a judge configured) or "self_reported"';
+  if (d.producer === 'judge' && (!d.judge || typeof d.judge.instructions !== 'string' || !d.judge.instructions.trim() || !Array.isArray(d.judge.criteria) || d.judge.criteria.length < 2
+    || (d.judge.inputs !== undefined && (!Array.isArray(d.judge.inputs) || d.judge.inputs.some((x: unknown) => x !== 'check' && x !== 'beliefs')))))
+    return at + 'a judge\'s signal has "judge": {"instructions", "criteria": [at least two levels, the lowest first], "inputs": ["check", "beliefs"]}';
   if (!actors.includes(d.actor)) return at + '"actor" is a member of the world: ' + actors.join(', ');
   if (typeof d.unit !== 'string' || (d.direction !== 'higher' && d.direction !== 'lower') || !(typeof d.tolerance === 'number' && d.tolerance >= 0))
     return at + 'it declares its "unit", its "direction" ("higher" or "lower" is better) and its "tolerance"';

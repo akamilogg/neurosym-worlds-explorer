@@ -281,7 +281,8 @@ export function packSession(sessionFile: string, outDir?: string): { dir: string
   if (s.format !== 'living-session@1') throw new Error(sessionFile + ' is not a shared session\'s record');
   const folder = path.dirname(path.resolve(sessionFile));
   const name = path.basename(sessionFile).replace(/\.session\.json$/, '');
-  const dir = path.resolve(outDir ?? path.join(folder, '..', name + '.session-package'));
+  /* Beside its folder, named after it: a session's record is named "session" in a folder of its own. */
+  const dir = path.resolve(outDir ?? path.join(folder, '..', path.basename(folder) + '-' + name + '.session-package'));
   const inside = (a: string, b: string) => { const r = path.relative(b, a); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); };
   if (inside(folder, dir) || inside(dir, folder)) throw new Error('a package is never written where its session is');
   if (fs.existsSync(dir)) {
@@ -322,7 +323,10 @@ export async function verifySessionPackage(dir: string, options: { readonly time
   const record = verifyWorld(worldEntries);
   const lab = Object.values(LABS).find((l) => l.id === manifest.adapter) as LawLab | undefined;
   let rebuilt: Record<string, unknown> = { holds: false, why: 'no laboratory "' + manifest.adapter + '" in this code' };
-  if (lab) {
+  /* In real time nothing is reproduced (§5.2): its record is checked, and that is said - never a reconstruction claimed. */
+  const realtime = recorded.plan?.clock?.mode === 'realtime';
+  if (realtime) rebuilt = { holds: false, not_reproducible: 'a session in real time: what each member was answered depended on when it answered (§5.2); its record is checked, not derived again' };
+  if (lab && !realtime) {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-session-'));
     fs.cpSync(dir, scratch, { recursive: true });
     let refused = 0;

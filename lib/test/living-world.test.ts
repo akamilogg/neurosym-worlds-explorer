@@ -295,7 +295,7 @@ test('a living-world@1 manifest: checked whole before anything is spent; nothing
   assert.ok(m.args!.join(' ').includes('--interval 3 --horizon 300 --window-calls 4 --window-intents 4 --attempts 6 --steps 5 --acts 3'));
   const refused = (x: Record<string, unknown>) => { const r = readManifest({ ...ok, ...x }, LABS); return 'errors' in r ? r.errors.join(' | ') : ''; };
   assert.match(refused({ limits: undefined }), /nothing is unlimited by default/);
-  assert.match(refused({ clock: { mode: 'realtime', decision_interval: 3, horizon: 300 } }), /only "simulated"/);
+  assert.match(refused({ clock: { mode: 'realtime', decision_interval: 3, horizon: 300 } }), /how long a tick lasts/);
   assert.match(refused({ adapter: 'cells@1' }), /not a living world/);
   /* Several members (H2): a shared session - a window that waits only so long, policies the world has, actions given explicitly. */
   assert.match(refused({ actors: [ok.actors[0], { ...ok.actors[0], id: 'other' }] }), /window_ms/);

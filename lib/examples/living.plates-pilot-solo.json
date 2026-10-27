@@ -1,0 +1,105 @@
+{
+  "format": "living-world@1",
+  "adapter": "plates@1",
+  "seed": 11,
+  "clock": {
+    "mode": "simulated",
+    "decision_interval": 3,
+    "horizon": 240
+  },
+  "explore": 2,
+  "check_episodes": 2,
+  "limits": {
+    "calls_per_window": 4,
+    "intents_per_window": 3,
+    "watchers": 2
+  },
+  "actors": [
+    {
+      "id": "a",
+      "kind": "researcher",
+      "rounds": 10,
+      "steps": 6,
+      "acts": 3,
+      "max_tokens": 2000000,
+      "activation": {
+        "on_observation": true,
+        "on_message": true,
+        "cooldown_windows": 1,
+        "max": 4
+      }
+    },
+    {
+      "id": "rival",
+      "kind": "adversary",
+      "policy": "adversary",
+      "params": {
+        "amount": 2
+      },
+      "actions": [
+        "drain"
+      ]
+    }
+  ],
+  "programs": [
+    {
+      "id": "blight-early",
+      "trigger": {
+        "kind": "at",
+        "tick": 24
+      },
+      "effect": {
+        "type": "contaminate"
+      },
+      "schedule": {
+        "max_firings": 1
+      },
+      "exposure": "sensors_only"
+    },
+    {
+      "id": "blight-late",
+      "trigger": {
+        "kind": "at",
+        "tick": 72
+      },
+      "effect": {
+        "type": "contaminate"
+      },
+      "schedule": {
+        "max_firings": 1
+      },
+      "exposure": "sensors_only"
+    },
+    {
+      "id": "pulse-on-stall",
+      "trigger": {
+        "kind": "stagnation",
+        "signal": "checks-a",
+        "window": 3,
+        "predicate": "no_improvement"
+      },
+      "effect": {
+        "type": "nutrient_pulse",
+        "params": {
+          "amount": 2
+        }
+      },
+      "schedule": {
+        "delay_ticks": 3,
+        "max_firings": 1
+      },
+      "exposure": "announce_action",
+      "announcement": "the operator added nutrient to every well"
+    }
+  ],
+  "signals": [
+    {
+      "id": "checks-a",
+      "producer": "checks",
+      "actor": "a",
+      "unit": "share of exact points in its checks",
+      "direction": "higher",
+      "tolerance": 0
+    }
+  ]
+}

@@ -169,6 +169,10 @@ export interface AgentOperatorOptions {
   readonly openLimit?: number;
   /** The senior: how large (in tokens, estimated) its conversation may grow before it is asked to consolidate (150000). */
   readonly maxContextTokens?: number;
+  /** The senior's own reactive activation, declared apart from its junior's (SPEC-ACONTECIMIENTOS-DEL-MUNDO §9): what reaching
+      its junior may call it - an instrument's reading, another member's message -, at most `max` times. Absent: never woken by
+      them; only by its signs, as always. */
+  readonly activation?: { readonly on_observation?: boolean; readonly on_message?: boolean; readonly max: number };
 }
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
@@ -201,7 +205,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   if (o.llm.configuration) record.llm_config = o.llm.configuration;
   /* The settings of its role, as given: they make it the agent it is (a characterization tells one from another). */
   record.settings = Object.fromEntries(Object.entries({ maxOrders: o.maxOrders, patience: o.patience, looking: o.looking, readSteps: o.readSteps, cooldown: o.cooldown,
-    digestRounds: o.digestRounds, openLimit: o.openLimit }).filter(([, v]) => v !== undefined));
+    digestRounds: o.digestRounds, openLimit: o.openLimit, activation: o.activation }).filter(([, v]) => v !== undefined));
   /* Its provider, as an identity (never its address): whether a validator shares it (SPEC-RIESGO-MODELOS §7.2). */
   if (providerOf(o.llm.endpoint)) record.llm_provider = providerOf(o.llm.endpoint)!;
   const save = () => fs.writeFileSync(file, JSON.stringify(record, null, 2));
@@ -210,6 +214,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   save();
   const say = o.say ?? (() => {});
   let seenRounds = -1, orders = 0, loaded = false, opened = false;
+  /* Its reactive activation: the deliveries to its junior it has looked at, and how often they woke it. */
+  let deliveriesSeen = 0, woken = 0;
   /* The senior is also called during a round, once per round, when a sign is about the round in course. */
   const calledInRound = new Set<number>();
   /* Each of its messages is followed up once: when the junior, having got it, runs an experiment. */
@@ -240,7 +246,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       log: (type, data) => { (record.delegation_log ??= []).push({ at: new Date().toISOString(), type, ...data }); save(); },
       history: (record.delegation_log ?? []) as Record<string, any>[],
       unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own'
-        : (lab as { living?: unknown }).living ? 'it is a living world: a branch of it, isolated or shared, is not built yet (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12)' : null,
+        : (lab as { living?: unknown }).living ? 'it is a living world: the senior\'s branches of it are not built (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): its junior delegates' : null,
       experience: experienceFiles,
       ...(cfg.delegation.ledger ? { ledger: path.resolve(path.dirname(o.journal), cfg.delegation.ledger), requester: 'agent:' + o.id } : {})
     });
@@ -297,7 +303,18 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     /* A round completed since it last decided, or (the senior) a sign within the round (and the run still going): decide. */
     /* A branch of its own that ended: its result calls it, whatever the signs (SPEC-DELEGACION-INVESTIGACIONES §5). */
     const branchDue = role === 'senior' && journal && !opening ? Boolean(seniorBranches(journal)?.hasResults()) : false;
-    if (digest && ((rounds > seenRounds && rounds > 0) || duringRound || followUp || opening || branchDue) && !over && orders < maxOrders) {
+    /* Woken by what reached its junior (§9), as declared: a reading of an instrument, a message of another member - never by
+       any anomaly of its own accord. */
+    let wake: string[] | null = null;
+    if (role === 'senior' && journal && o.activation && woken < o.activation.max) {
+      const delivered = ((journal.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'channel_delivered');
+      const fresh = delivered.slice(deliveriesSeen).flatMap((e) => (e.delivered?.notices ?? []) as Record<string, any>[]);
+      deliveriesSeen = delivered.length;
+      const by = fresh.filter((n) => (o.activation!.on_observation && n.from === 'world' && n.body?.reading) || (o.activation!.on_message && String(n.from).startsWith('actor:')))
+        .map((n) => String(n.body?.message ?? n.from));
+      if (by.length) { wake = by; woken++; }
+    }
+    if (digest && ((rounds > seenRounds && rounds > 0) || duringRound || followUp || opening || branchDue || wake) && !over && orders < maxOrders) {
       if (followUp) followedUp.add(followUp.message);
       else if (duringRound) calledInRound.add(now!.current_round);
       /* A round completed (not the run's start, before any round): otherwise it is called during the round in course. */
@@ -306,7 +323,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       let d: AgentDecision | null;
       if (role === 'senior') {
         d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel,
-          seniorBranches(journal), branchDue);
+          seniorBranches(journal), branchDue, wake);
         record.senior!.followed_up = [...followedUp];
         record.senior!.called_in_round = [...calledInRound];
       }
@@ -363,11 +380,11 @@ function noteOf(state: SeniorState, id: string): { text: string; versions: numbe
 
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
   duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel(),
-  branches: Delegations | null = null, branchDue = false): Promise<AgentDecision | null> {
+  branches: Delegations | null = null, branchDue = false, woken: string[] | null = null): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
-  /* A follow-up is called for by the junior's experiment, not by a sign; anything else waits for a sign and for the junior
-     to have had time with its last message. */
-  if (!isOpening && !followUp && !branchDue && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
+  /* A follow-up is called for by the junior's experiment, not by a sign; a wake by what reached the junior, as declared;
+     anything else waits for a sign and for the junior to have had time with its last message. */
+  if (!isOpening && !followUp && !branchDue && !woken && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;
   const nb = seniorNotebook(state);
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
   const delegation = (journal.config?.delegation ?? null) as { fund: number; tokens: number; rounds: number; max_rounds: number } | null;
@@ -400,6 +417,8 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   state.reports_seen = reports.length;
   const callPart = (): Record<string, unknown> => ({ call: { n: call, signals: signals.signs, ...(duringRound !== null ? { during_round: duringRound } : {}),
     ...(freshReports.length ? { junior_reports: freshReports } : {}),
+    /* Woken by what reached its junior, as its activation declares: what it was, never what it means. */
+    ...(woken ? { woken_by: { what: 'what reached your junior in its channel since you last looked (in your channel too)', items: woken } } : {}),
     ...(isOpening ? { opening: 'the junior has its task and the environment\'s first episodes, and has not asked anything yet: it waits for the first hypothesis it will develop' } : {}),
     ...(followUp ? { follow_up: { your_message: followUp.text, experiment: followUp.experiment, in_round: followUp.round, ...(experiment ? { its_record: experiment } : {}) } } : {}),
     orders_left: ordersLeft, memory: memory.counts(), steps_left: limit,

@@ -47,7 +47,9 @@ export type RunOrder =
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string }
   /** The operator's change to a living world's programs (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10): never help. */
-  | { readonly kind: 'world'; readonly op: 'add' | 'replace' | 'disable' | 'fire'; readonly program?: Readonly<Record<string, unknown>>; readonly target?: string; readonly why?: string; readonly by?: string }
+  | { readonly kind: 'world'; readonly op: 'add' | 'replace' | 'disable' | 'fire' | 'pause' | 'resume' | 'close' | 'join' | 'retire' | 'say' | 'pin' | 'promote'; readonly budget?: number;
+      readonly program?: Readonly<Record<string, unknown>>; readonly target?: string; readonly actor?: Readonly<Record<string, unknown>>; readonly to?: string; readonly text?: string; readonly key?: string;
+      readonly why?: string; readonly by?: string }
   /** A senior's suspicion of the instrument (SPEC-CALIBRACION-INSTRUMENTOS §4.3): logged by the run, never delivered. */
   | { readonly kind: 'instrument_report'; readonly what: string; readonly evidence: readonly string[]; readonly report_kind: string; readonly by?: string };
 
@@ -159,6 +161,12 @@ export function startEvolveAt(journal: string, spec: string, env?: NodeJS.Proces
     folder; its researchers' keys from the environment, as a run's. */
 export function startSessionAt(dir: string, name: string, manifest: string, env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
   return launchScript('run-session.ts', path.join(dir, name + '.session.json'), ['--manifest', manifest, '--dir', dir, '--name', name], env);
+}
+
+/** Continues a shared session from its record (SPEC-ACONTECIMIENTOS-DEL-MUNDO §14), in a process of its own: a session of its
+    own in `dir`, given more rounds where its researchers' ran out. */
+export function continueSessionAt(dir: string, name: string, sessionFile: string, moreRounds: number, env?: NodeJS.ProcessEnv): { journal: string; pid: number } {
+  return launchScript('run-session.ts', path.join(dir, name + '.session.json'), ['--resume', sessionFile, '--dir', dir, '--name', name, ...(moreRounds > 0 ? ['--more-rounds', String(moreRounds)] : [])], env);
 }
 
 /** Resumes a run in a process of its own, as a run derived from it (the journal resumed stays as it was). */

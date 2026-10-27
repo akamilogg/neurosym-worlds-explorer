@@ -5,7 +5,7 @@ import { LabError } from './lab-runner.ts';
 import { LABS } from '../worlds/labs.ts';
 import { VERDICTS, runAnomalies, writeVerdict, type Verdict } from '../learn/anomalies.ts';
 import { readManifest } from '../living/manifest.ts';
-import { startSessionAt } from './control.ts';
+import { continueSessionAt, startSessionAt } from './control.ts';
 import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, watch, type RunInfo, type RunOrder } from './control.ts';
 
 /* ============================================================================
@@ -47,7 +47,7 @@ export interface CliContext {
 export const CLI_USAGE = [
   'lab start <lab> [--researcher R] [--policy P] [args...]   start a run in a process of its own (labs: ' + Object.keys(LABS).join(', ') + ')',
   'lab live <manifest.json>                                  a living world\'s session, as its manifest declares it (living-world@1)',
-  'lab world <run> add|replace <program.json> | disable|fire <program>   change the programs of a living world (the operator, never help)',
+  'lab world <run|session> <op> ...                         control of a living world by the operator: programs, pause/resume/close, join/retire, say/pin, status',
   'lab list                                                  the runs, newest first',
   'lab status <run>                                          a run\'s state and its latest events',
   'lab watch <run>                                           its events as they come, until it ends',
@@ -147,6 +147,16 @@ export function describeEvent(e: Record<string, any>): string {
     case 'focus_changed': return at + 'from question ' + e.question + ', what counts is the facet ' + e.facet + (e.task ? ' (to understand: ' + e.task + ')' : '');
     case 'operator_command_refused': return at + 'the operator\'s ' + (e.kind ?? 'order') + ': refused - ' + e.reason;
     case 'diverged': return at + 'DIVERGED from the run it resumes (' + e.channel + ')';
+    /* A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO). */
+    case 'world_window': return at + r + 'window ' + e.window + ' (ticks ' + e.from + '-' + e.to + ', ' + e.by + ')' + ((e.outcomes ?? []).length ? ': ' + e.outcomes.map((o: { intent: string; outcome: string }) => o.intent + ' ' + o.outcome).join(', ') : '') + (e.timeouts?.length ? '; timed out: ' + e.timeouts.join(', ') : '');
+    case 'message_sent': return at + r + (e.refused ? 'a message refused: ' + e.refused : 'wrote to ' + ('actor' in (e.to ?? {}) ? e.to.actor : 'everyone') + ': ' + short(e.text));
+    case 'material_shared': return at + r + (e.refused ? 'a share refused: ' + e.refused : 'shared ' + (e.episode ?? e.document));
+    case 'messages_delivered': return at + r + 'received ' + (e.messages ?? []).length + ' message(s)' + (e.waiting ? ', ' + e.waiting + ' waiting' : '');
+    case 'world_help': return at + r + 'the operator\'s word reached it: ' + short(e.text);
+    case 'watcher': return at + r + (e.refused ? 'a watcher refused: ' + e.refused : 'watches ' + e.id + ' (version ' + e.version + ')');
+    case 'perturbation_asked': return at + r + 'asked for ' + e.program + (e.refused ? ' (refused: ' + e.refused + ')' : '');
+    case 'world_closed': return at + r + 'the world was closed';
+    case 'world_diverged': return at + 'DIVERGED from the world it continues, at ' + e.key;
     case 'end': return at + 'ended: ' + e.stoppedBy + (e.resume ? ' (resumable)' : '');
     default: return at + r + e.type;
   }
@@ -202,10 +212,23 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         return 0;
       }
       case 'live': {
+        /* A shared session continued from its record: a session of its own beside it, more rounds where they ran out. */
+        const resumeGiven = take(args, 'resume');
+        if (resumeGiven) {
+          const sessionFile = fs.existsSync(path.resolve(resumeGiven)) ? path.resolve(resumeGiven) : path.resolve(ctx.root, resumeGiven);
+          if (!/\.session\.json$/.test(sessionFile) || !fs.existsSync(sessionFile)) { out('lab live --resume <x.session.json> [--more-rounds N]'); return 2; }
+          const more = Number(take(args, 'more-rounds') ?? 0);
+          const dir = path.dirname(sessionFile) + '.continued-' + new Date().toISOString().replace(/[:.]/g, '-');
+          const { pid } = continueSessionAt(dir, 'session', sessionFile, more, ctx.env);
+          out('the session goes on (pid ' + pid + ') in ' + dir + (more > 0 ? ', ' + more + ' more rounds where they ran out' : ''));
+          return 0;
+        }
         const file = args.shift();
         if (!file) { out('lab live <manifest.json>'); return 2; }
         let raw: unknown;
-        try { raw = JSON.parse(fs.readFileSync(path.resolve(ctx.root, file), 'utf8')); } catch (e) { out('cannot read the manifest ' + file + ': ' + String((e as Error).message ?? e)); return 2; }
+        /* Where it is said to be: from here, or from the repository. */
+        const where = fs.existsSync(path.resolve(file)) ? path.resolve(file) : path.resolve(ctx.root, file);
+        try { raw = JSON.parse(fs.readFileSync(where, 'utf8')); } catch (e) { out('cannot read the manifest ' + file + ': ' + String((e as Error).message ?? e)); return 2; }
         const m = readManifest(raw, LABS);
         if ('errors' in m) { out('the manifest is refused, nothing was started:'); for (const e of m.errors) out('  ' + e); return 2; }
         if (m.args) {
@@ -218,7 +241,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         /* Several members: a shared session, its researchers' runs and its journal in a folder of their own. */
         const name = m.lab + '-s' + m.plan.seed + '-' + new Date().toISOString().replace(/[:.]/g, '-');
         const dir = path.join(ctx.root, 'runs', name);
-        const { pid } = startSessionAt(dir, 'session', path.resolve(ctx.root, file), ctx.env);
+        const { pid } = startSessionAt(dir, 'session', where, ctx.env);
         out('started a shared session of ' + m.lab + ' (pid ' + pid + '): ' + m.plan.actors.map((a) => a.id + ' (' + a.kind + ')').join(', '));
         out('folder ' + dir + ': the run of each researcher is session.<id>.json, the world session.world.jsonl');
         return 0;
@@ -274,20 +297,40 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         return outcome.startsWith('refused') ? 1 : 0;
       }
       case 'world': {
-        /* The operator's change to a living world's programs (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10): applied as the next window
-           opens, recorded with who and why; never help. */
-        const journal = resolveRun(ctx.root, args[0]);
-        const op = String(args[1] ?? '');
-        if (!['add', 'replace', 'disable', 'fire'].includes(op) || !args[2]) { out('lab world <run> add|replace <program.json> [why] | disable|fire <program> [why]'); return 2; }
-        let order: RunOrder;
-        if (op === 'add' || op === 'replace') {
-          let program: Record<string, unknown>;
-          try { program = JSON.parse(fs.readFileSync(path.resolve(ctx.root, args[2]), 'utf8')); } catch (e) { out('cannot read the program ' + args[2] + ': ' + String((e as Error).message ?? e)); return 2; }
-          order = { kind: 'world', op, program, ...(args[3] ? { why: args.slice(3).join(' ') } : {}), by: 'operator' };
-        } else order = { kind: 'world', op: op as 'disable' | 'fire', target: args[2], ...(args[3] ? { why: args.slice(3).join(' ') } : {}), by: 'operator' };
+        /* The operator's control of a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10, §16): its programs; pausing, resuming,
+           closing it; its members joining and leaving; the operator's word to a member or to all (help, where it is
+           received) and what it pins before one; its status. A run's, or a shared session's (`<folder>` or `<x>.session.json`). */
+        const OPS = ['add', 'replace', 'disable', 'fire', 'pause', 'resume', 'close', 'join', 'retire', 'say', 'pin', 'promote', 'status'];
+        const usage = 'lab world <run|session> add|replace <program.json> | disable|fire <program> | pause | resume | close | join <actor.json> | retire <member> | say <member|global> <text> | pin <member> <key> <text> | promote <branch member> [budget] | status';
+        const target = String(args[0] ?? ''), op = String(args[1] ?? '');
+        if (!target || !OPS.includes(op)) { out(usage); return 2; }
+        const given = fs.existsSync(path.resolve(target)) ? path.resolve(target) : path.resolve(ctx.root, target);
+        const sessionFile = /\.session\.json$/.test(given) ? given : fs.existsSync(given) && fs.statSync(given).isDirectory()
+          ? fs.readdirSync(given).filter((f) => f.endsWith('.session.json')).map((f) => path.join(given, f))[0] ?? null : null;
+        const sessionLive = !sessionFile && fs.existsSync(given) && fs.statSync(given).isDirectory() ? given : null;
+        const readFile = (f: string) => { try { return JSON.parse(fs.readFileSync(path.resolve(f), 'utf8')); } catch (e) { throw new LabError('cannot read ' + f + ': ' + String((e as Error).message ?? e)); } };
+        const rest = args.slice(2);
+        const order: Record<string, unknown> = { kind: 'world', op, by: 'operator',
+          ...(op === 'add' || op === 'replace' ? { program: readFile(rest[0] ?? '') } : {}), ...(op === 'disable' || op === 'fire' || op === 'retire' || op === 'promote' ? { target: rest[0] } : {}),
+          ...(op === 'promote' && rest[1] ? { budget: Number(rest[1]) } : {}),
+          ...(op === 'join' ? { actor: readFile(rest[0] ?? '') } : {}), ...(op === 'say' ? { to: rest[0], text: rest.slice(1).join(' ') } : {}),
+          ...(op === 'pin' ? { to: rest[0], key: rest[1], text: rest.slice(2).join(' ') } : {}) };
+        /* A shared session: its folder holds its inbox, its status beside its world's journal. */
+        const folder = sessionFile ? path.dirname(sessionFile) : sessionLive;
+        if (folder) {
+          const name = sessionFile ? path.basename(sessionFile).replace(/\.session\.json$/, '') : 'session';
+          if (op === 'status') { const st = path.join(folder, name + '.world.status.json'); out(fs.existsSync(st) ? fs.readFileSync(st, 'utf8') : 'no status yet: ' + st); return 0; }
+          if (sessionFile && readFile(sessionFile).state !== 'running') { out('the session has ended: it reads no orders'); return 1; }
+          const id = 'order-' + Date.now().toString(36);
+          fs.appendFileSync(path.join(folder, name + '.inbox.jsonl'), JSON.stringify({ id, ...order, kind: undefined }) + '\n');
+          out('world ' + op + ' sent to the session (' + id + '); what came of it: ' + path.join(folder, name + '.orders.jsonl'));
+          return 0;
+        }
+        const journal = resolveRun(ctx.root, target);
+        if (op === 'status') { const st = journal.replace(/\.json$/, '') + '.world.status.json'; out(fs.existsSync(st) ? fs.readFileSync(st, 'utf8') : 'no living world, or no status yet'); return 0; }
         const state = runStatus(journal).state;
         if (state === 'ended' || state === 'interrupted') { out('the run is ' + state + ': it reads no orders'); return 1; }
-        const { id } = send(journal, order);
+        const { id } = send(journal, order as RunOrder);
         const outcome = await acknowledged(journal, id, ctx);
         out('world ' + op + ' ' + outcome);
         return outcome.startsWith('refused') ? 1 : 0;
@@ -441,7 +484,8 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         if (/\.session\.json$/.test(String(args[0] ?? ''))) {
           const { packSession } = await import('./package.ts');
           const outDir = take(args.slice(1), 'out') ?? take(args, 'out');
-          const { dir, manifest } = packSession(path.resolve(ctx.root, String(args[0])), outDir ? path.resolve(outDir) : undefined);
+          const given = String(args[0]);
+          const { dir, manifest } = packSession(fs.existsSync(path.resolve(given)) ? path.resolve(given) : path.resolve(ctx.root, given), outDir ? path.resolve(outDir) : undefined);
           out('packed the session ' + manifest.session + ': ' + manifest.files.length + ' files into ' + dir);
           return 0;
         }
