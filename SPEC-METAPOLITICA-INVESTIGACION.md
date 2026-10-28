@@ -583,6 +583,26 @@ La mejora investigadora sólo se aceptará cuando los runs la muestren. Hasta la
 - **La condición política más senior.**
 - **El catálogo y el selector** de CATALOGO-METAPOLITICAS-INVESTIGACION.
 
+#### 13.3.1 El primer ensayo real, leído (28/10/2026)
+
+El primer ensayo de `situated.json` en `cells-l3-s1` (junior `recursive/flint-v1.0:free`) no midió la política.
+
+- **El Judge contestó HTTP 402 Payment Required** en todos los puntos de sus dos checks: el modelo «no se sostenía»
+  porque no había respuestas, no por lo que predecía. El junior lo comunicó tres veces como fallo del instrumento.
+- **System 2 contestó HTTP 429 Too Many Requests** en ocho propuestas, y la ronda 1 se perdió entera.
+- **La política respondió a sus señales:** aconsejó una vez («discriminate», tras dos checks sin sostenerse). En este
+  caso, la causa era el proveedor del Judge.
+
+**Corregido por su principio:**
+- **Un ensayo que sus proveedores hicieron fallar no mide nada (`trialResult`).** Cuenta como `infra` si alguna llamada
+  al Judge falló tras sus reintentos (un check sin sus respuestas no es un veredicto), si alguna propuesta quedó sin
+  respuesta de System 2 (una ronda perdida por el proveedor, no por el método) o si la run paró por `llm_error`. Antes,
+  un final normal se leía como `ended, not solved`.
+- **El estado inicial de `situated.json` es `round: -1`.** Con `0` coincidía con la ronda 0, y en la primera pregunta
+  se abstenía diciendo que ya había aconsejado en esa ronda. El cambio da otro hash, así que es otro ensayo.
+
+**Para relanzar:** saldo en la cuenta del Judge y, para System 2, un modelo sin un límite de peticiones tan estricto.
+
 ## 14. Resultado esperado
 
 Se entrega una política ejecutable y legible, su procedencia, los casos donde ayudó o falló, las decisiones que tomó,

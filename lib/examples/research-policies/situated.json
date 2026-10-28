@@ -70,7 +70,7 @@
     "source": "(p, m) => { const o = m.observations, round = o.round; const checks = p.events.filter((e) => e.type === 'check').map((e) => e.id).slice(-3); const investigations = p.events.filter((e) => e.type === 'investigation' && e.round === round).map((e) => e.id).slice(-3); const given = p.state.given || {}; const silent = (reason) => ({ guidance: { kind: 'abstain', reason }, state: p.state }); if (p.state.round === round) return silent('it advised already in this round'); const fresh = (t) => !(t in given) || round - given[t] > 2; const advise = (focus, template, args, evidence) => fresh(template) ? { guidance: { kind: 'advise', focus, template, arguments: args, evidence, judgments: [] }, state: { round, given: { ...given, [template]: round } } } : null; const pick = (o.regressions > 0 && checks.length >= 2 && advise('contrast', 'regression', { episodes: o.regressions }, checks)) || (o.nowhere >= 2 && o.models <= 1 && checks.length && advise('reframe', 'one_idea', { checks: o.nowhere }, checks)) || (o.nowhere >= 2 && checks.length && advise('contrast', 'discriminate', { checks: o.nowhere }, checks)) || (o.looking >= 3 && investigations.length && advise('develop', 'predict', { answers: o.looking }, investigations)); return pick || silent('no sign in its course that calls for advice it has not given in the last two rounds'); }"
   },
   "state": {
-    "round": 0,
+    "round": -1,
     "given": {}
   },
   "templates": {

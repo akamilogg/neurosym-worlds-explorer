@@ -434,3 +434,24 @@ test('M2 review 2: --max-judge-calls bounds a run - it stops before asking Syste
   const end = j.events.filter((e: any) => e.type === 'end').at(-1);
   assert.equal(end.stoppedBy, 'judge_budget');
 });
+
+test('M2 pilot: a trial its providers failed measures nothing - the Judge unanswered, System 2 unanswered, or its run stopped by them', () => {
+  const dir = tmp('meta-providers-');
+  const at = (name: string, events: unknown[]) => { const f = path.join(dir, name + '.json'); write(f, { experiment: 'cells@1', config: {}, events }); return f; };
+  const check = { type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false }] };
+  assert.equal(trialResult(at('fine', [check, { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 0 } }]), 'model_accepted').state, 'ended');
+  const judge = trialResult(at('judge', [check, { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 3 } }]), 'model_accepted');
+  assert.deepEqual([judge.state, judge.solved], ['infra', null], 'a check without the Judge\'s answers is no verdict');
+  assert.match(String(judge.why), /3 call\(s\) of the Judge failed/);
+  const llm = trialResult(at('llm', [{ type: 'proposal_failed', round: 1, error: 'HTTP 429 Too Many Requests' }, check, { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 0 } }]), 'model_accepted');
+  assert.match(String(llm.why), /1 proposal\(s\) System 2 never answered/);
+  assert.equal(trialResult(at('fatal', [{ type: 'end', stoppedBy: 'llm_error' }]), 'model_accepted').state, 'infra');
+});
+
+test('M2 pilot: the situated policy does not take its first question for one in a round it advised', async () => {
+  const p = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'examples', 'research-policies', 'situated.json'), 'utf8'));
+  const never: Judge = { id: 'none', judge: async () => { throw new Error('no Judge'); } };
+  const r = await inspectHistory({ policy: p }, { experiment: 'cells@1', started: 'x', events: [{ type: 'exploration_episode', episode: 'ep1' }, { type: 'investigation', round: 0, requests: [{ view: 'ep1' }] }] }, never, runner);
+  assert.ok(r.decisions.length > 0);
+  assert.ok(r.decisions.every((d) => !/advised already/.test(JSON.stringify(d.guidance ?? ''))), JSON.stringify(r.decisions.map((d) => d.guidance)));
+});

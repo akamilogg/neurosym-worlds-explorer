@@ -123,7 +123,14 @@ export function trialResult(journalFile: string, criterion: Criterion): TrialRes
   if (!end) return { state: 'cancelled', solved: null, stopped_by: null, policy_errors: policyErrors, advice, tokens, why: 'it did not end' };
   const stoppedBy = String(end.stoppedBy ?? '');
   if (stoppedBy === 'cancelled') return { state: 'cancelled', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens };
-  if (stoppedBy === 'diverged' || stoppedBy.startsWith('error')) return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens };
+  if (stoppedBy === 'diverged' || stoppedBy === 'llm_error' || stoppedBy.startsWith('error')) return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens };
+  /* A trial measures the policy under the configuration it is named by: where a provider failed it, it measures nothing - a
+     check computed without the Judge's answers is no verdict, and a proposal System 2 never answered is a round the junior
+     lost to the provider, not to its method. */
+  const judgeErrors = Number(end.jev?.errors) || 0;
+  const lost = events.filter((e) => e.type === 'proposal_failed').length;
+  if (judgeErrors || lost) return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens,
+    why: [judgeErrors ? judgeErrors + ' call(s) of the Judge failed' : '', lost ? lost + ' proposal(s) System 2 never answered' : ''].filter(Boolean).join('; ') + ': a failure of the providers, no measure' };
   const o1 = runResults(journalFile).o1_predictive_acceptance;
   const solved = criterion === 'model_accepted' ? o1.model : o1.artifact ?? false;
   return { state: 'ended', solved, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens };
