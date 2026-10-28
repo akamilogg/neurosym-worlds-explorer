@@ -548,7 +548,6 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   }
   if (researchPolicy) {
     if (researcher !== 'assisted') throw new LabError('--research-policy: its advice is help: only the assisted researcher takes it');
-    if (isGameLab(lab)) throw new LabError('--research-policy: not built yet for ' + lab.id + ', a laboratory with a loop of its own');
     if (asksPolicyJudge(researchPolicy.policy) && cfg.flat) throw new LabError('--research-policy: this policy asks the Judge, and --flat gives one that knows nothing: run a policy of code only, or without --flat');
     (cfg as Record<string, unknown>).research_policy = policySummary(researchPolicy);
     Object.defineProperty(cfg, '__research_policy', { value: researchPolicy, enumerable: false });
@@ -613,7 +612,9 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ? { ...run.services, operatorLlm: run.services.llm, ...(gridChannel ? { channel: gridChannel } : {}),
       /* The round in course, for a message held until its round: the one after the latest proposal. */
       llm: operatorClient(run.services.llm, { take: () => (run.replay.pending() > 0 ? [] : run.operator.take(1 + Math.max(0, ...(run.journal.events as Record<string, any>[]).filter((e) => e.type === 'proposal').map((e) => Number(e.round) || 0)))), scheduled: deliveredMessages(previous), fixedSystem: () => capabilitiesFrom.fixed_system === 0,
-        ...(gridChannel ? { messages: () => gridChannel } : {}) }, run.log),
+        ...(gridChannel ? { messages: () => gridChannel } : {}),
+        /* Its research policy's advice (SPEC-METAPOLITICA-INVESTIGACION), as in a world of laws; never while its history replays. */
+        ...(run.policy ? { advise: (question: number, recorded?: OperatorMessage) => run.policy!.advise(question, run.replay.pending() === 0, recorded) } : {}) }, run.log),
       assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) },
       awaitOpening: () => run.awaitOpening() }
     : run.services), ...(endings.length ? { endings } : {}), ...(team ? { team } : {}) };

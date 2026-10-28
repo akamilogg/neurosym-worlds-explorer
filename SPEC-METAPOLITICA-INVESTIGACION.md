@@ -1,6 +1,6 @@
 # SPEC · Aprender una metapolítica de investigación
 
-Estado (28/10/2026): **M1 y M2 implementados (§13.1, §13.2); M3 pendiente: piloto sin ejecutar**.
+Estado (28/10/2026): **M1 y M2 implementados (§13.1, §13.2); M3 preparado y sin lanzar (§13.3)**.
 
 Se apoya en el [investigador asistido](SPEC-INVESTIGADOR-ASISTIDO.md), el [senior](SPEC-ORQUESTADOR.md),
 el [canal de mensajes](SPEC-CANAL-MENSAJES.md), el [mundo de artefactos](SPEC-MUNDO-ARTEFACTOS.md) y la
@@ -485,9 +485,37 @@ Judge, sin ejecutar nada.
 **La lectura histórica** (`lab meta inspect`, `policy-inspection@1`) da lo que la política habría decidido antes de cada
 respuesta de un run ya hecho. Va marcada `counterfactual: false` y nunca se registra como ensayo ni como mejora.
 
+### 13.3 M3 preparado, sin lanzar (28/10/2026)
+
+El piloto real gasta inferencia y lo lanza el operador. Queda listo en `lib/examples/meta.pilot.md`, con las órdenes,
+lo que pregunta cada condición y cómo leerlo.
+
+**La política también en la rejilla:** antes se rechazaba en ese laboratorio. Ahora su cliente tiene el mismo punto
+`advise`, y lo prueba un run de la rejilla con consejo entregado y reconstruido.
+
+**Dos políticas iniciales,** en `lib/examples/research-policies/` y sólo de código:
+- **`reminder.json`:** el recordatorio fijo del §10. Su texto y su calendario (la primera pregunta de cada ronda par
+  desde la 2) se fijaron antes de probar candidatas.
+- **`situated.json`:** la candidata situada, escrita desde las semillas del catálogo (localizar una regresión,
+  replantear, discriminar alternativas, desarrollar una predicción) y los hechos de atasco del orquestador. Da como
+  mucho un consejo por ronda y no repite el mismo en dos rondas. Esto último se añadió tras inspeccionarla contra el run
+  de c302 con senior, donde habría repetido «discriminate» en todas las rondas.
+
+**El manifiesto** `lib/examples/meta.pilot.json`:
+- un junior fijo: 8 rondas, 8 ayudas, memoria selectiva, 800 000 tokens y 240 minutos; el modelo, el del lanzador,
+  queda registrado;
+- cinco casos de desarrollo, en cells nivel 3, orbit nivel 2 y la rejilla;
+- cuatro de confirmación, uno de ellos en artefactos (`dedup`) para ver si se transfiere a la optimización.
+
+**El lote** `lib/examples/batch.meta-pilot.json`: las condiciones A a D del §10 (junior solo, recordatorio, candidata y
+senior) sobre tres casos de desarrollo de distinta naturaleza. Las doce configuraciones se comprobaron hasta su primera
+pregunta, sin gastar.
+
+La mejora investigadora sólo se aceptará cuando los runs la muestren. Hasta lanzarlos, M3 no tiene resultado.
+
 **Pendiente:**
-- **M3:** el piloto con investigadores reales y las condiciones del §10.
-- **La política en la rejilla.**
+- **El piloto en sí:** el lote y los ensayos, que lanza el operador.
+- **La condición política más senior.**
 - **El catálogo y el selector** de CATALOGO-METAPOLITICAS-INVESTIGACION.
 
 ## 14. Resultado esperado

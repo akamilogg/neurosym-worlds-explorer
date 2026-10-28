@@ -1,0 +1,20 @@
+{
+  "format": "meta-lab@1",
+  "id": "meta-pilot",
+  "junior": {
+    "args": ["--attempts", "8", "--help-budget", "8", "--memory", "selective", "--max-tokens", "800000", "--max-minutes", "240"]
+  },
+  "cases": [
+    { "id": "cells-l3-s1", "lab": "cells", "args": ["--seed", "1", "--level", "3"], "kind": "cells", "partition": "development", "criterion": "model_accepted" },
+    { "id": "cells-l3-s2", "lab": "cells", "args": ["--seed", "2", "--level", "3"], "kind": "cells", "partition": "development", "criterion": "model_accepted" },
+    { "id": "orbit-l2-s3", "lab": "orbit", "args": ["--seed", "3", "--level", "2"], "kind": "orbit", "partition": "development", "criterion": "model_accepted" },
+    { "id": "orbit-l2-s4", "lab": "orbit", "args": ["--seed", "4", "--level", "2"], "kind": "orbit", "partition": "development", "criterion": "model_accepted" },
+    { "id": "grid-s22", "lab": "grid", "args": ["--seed", "22", "--family", "3"], "kind": "grid", "partition": "development", "criterion": "model_accepted" },
+    { "id": "cells-l3-s7", "lab": "cells", "args": ["--seed", "7", "--level", "3"], "kind": "cells", "partition": "confirmation", "criterion": "model_accepted" },
+    { "id": "orbit-l2-s8", "lab": "orbit", "args": ["--seed", "8", "--level", "2"], "kind": "orbit", "partition": "confirmation", "criterion": "model_accepted" },
+    { "id": "grid-s26", "lab": "grid", "args": ["--seed", "26", "--family", "3"], "kind": "grid", "partition": "confirmation", "criterion": "model_accepted" },
+    { "id": "artifacts-dedup-s1", "lab": "artifacts", "args": ["--seed", "1", "--artifact", "dedup"], "kind": "artifacts", "partition": "confirmation", "criterion": "artifact_accepted" }
+  ],
+  "repetitions": 1,
+  "policy": { "limits": { "advice": 8 } }
+}

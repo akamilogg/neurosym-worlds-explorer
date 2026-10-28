@@ -1,0 +1,304 @@
+{
+  "format": "batch@1",
+  "id": "meta-pilot-conditions",
+  "concurrency": 2,
+  "budget": {
+    "tokens_per_run": 800000
+  },
+  "runs": [
+    {
+      "id": "cells-l3-s1-A",
+      "lab": "cells",
+      "condition": "A - the junior alone: no policy, no senior (the reference)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "1",
+        "--level",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240"
+      ]
+    },
+    {
+      "id": "cells-l3-s1-B",
+      "lab": "cells",
+      "condition": "B - the fixed reminder: the same words at the first question of every even round, fixed before any candidate (research-policies/reminder.json)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "1",
+        "--level",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240",
+        "--research-policy",
+        "lib/examples/research-policies/reminder.json"
+      ]
+    },
+    {
+      "id": "cells-l3-s1-C",
+      "lab": "cells",
+      "condition": "C - the situated candidate: advice from facts of its course, at most once a round (research-policies/situated.json)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "1",
+        "--level",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240",
+        "--research-policy",
+        "lib/examples/research-policies/situated.json"
+      ]
+    },
+    {
+      "id": "cells-l3-s1-D",
+      "lab": "cells",
+      "condition": "D - the current senior: directives from a stronger model reading its record (the condition the policy would replace)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "1",
+        "--level",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240"
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    },
+    {
+      "id": "orbit-l2-s3-A",
+      "lab": "orbit",
+      "condition": "A - the junior alone: no policy, no senior (the reference)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "3",
+        "--level",
+        "2",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240"
+      ]
+    },
+    {
+      "id": "orbit-l2-s3-B",
+      "lab": "orbit",
+      "condition": "B - the fixed reminder: the same words at the first question of every even round, fixed before any candidate (research-policies/reminder.json)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "3",
+        "--level",
+        "2",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240",
+        "--research-policy",
+        "lib/examples/research-policies/reminder.json"
+      ]
+    },
+    {
+      "id": "orbit-l2-s3-C",
+      "lab": "orbit",
+      "condition": "C - the situated candidate: advice from facts of its course, at most once a round (research-policies/situated.json)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "3",
+        "--level",
+        "2",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240",
+        "--research-policy",
+        "lib/examples/research-policies/situated.json"
+      ]
+    },
+    {
+      "id": "orbit-l2-s3-D",
+      "lab": "orbit",
+      "condition": "D - the current senior: directives from a stronger model reading its record (the condition the policy would replace)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "3",
+        "--level",
+        "2",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240"
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    },
+    {
+      "id": "grid-s22-A",
+      "lab": "grid",
+      "condition": "A - the junior alone: no policy, no senior (the reference)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "22",
+        "--family",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240"
+      ]
+    },
+    {
+      "id": "grid-s22-B",
+      "lab": "grid",
+      "condition": "B - the fixed reminder: the same words at the first question of every even round, fixed before any candidate (research-policies/reminder.json)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "22",
+        "--family",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240",
+        "--research-policy",
+        "lib/examples/research-policies/reminder.json"
+      ]
+    },
+    {
+      "id": "grid-s22-C",
+      "lab": "grid",
+      "condition": "C - the situated candidate: advice from facts of its course, at most once a round (research-policies/situated.json)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "22",
+        "--family",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240",
+        "--research-policy",
+        "lib/examples/research-policies/situated.json"
+      ]
+    },
+    {
+      "id": "grid-s22-D",
+      "lab": "grid",
+      "condition": "D - the current senior: directives from a stronger model reading its record (the condition the policy would replace)",
+      "researcher": "assisted",
+      "args": [
+        "--seed",
+        "22",
+        "--family",
+        "3",
+        "--attempts",
+        "8",
+        "--help-budget",
+        "8",
+        "--memory",
+        "selective",
+        "--max-tokens",
+        "800000",
+        "--max-minutes",
+        "240"
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2
+      }
+    }
+  ]
+}

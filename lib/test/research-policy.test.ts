@@ -265,3 +265,34 @@ test('M1: in a run, with no senior - its advice delivered, recorded, rebuilt, pa
   fs.writeFileSync(path.join(dir, 'judged.json'), JSON.stringify(REFRAME));
   await assert.rejects(runLaboratory(cellsLab, { args: [...ARGS, '--research-policy', 'judged.json', '--attempts', '1', '--out', path.join(dir, 'flat.json')], root: dir, llm, fetch: junior([]) }), /knows nothing/);
 });
+
+test('M3: in the grid too, a laboratory with a loop of its own - advice delivered, rebuilt, and refused only where it cannot run', async () => {
+  const { gridLab } = await import('../src/worlds/grid/lab.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'research-policy-grid-'));
+  const policy: ResearchPolicy = { ...CONTRAST,
+    composition: code(`(p) => p.events.some((e) => e.type === 'check') && !p.state.advised
+      ? { guidance: { kind: 'advise', focus: 'contrast', template: 'distinguish', arguments: { checks: 1 }, evidence: [], judgments: [] }, state: { advised: true } }
+      : { guidance: { kind: 'abstain', reason: 'not yet' }, state: p.state }`) };
+  fs.writeFileSync(path.join(dir, 'policy.json'), JSON.stringify(policy));
+  const asked: Message[][] = [];
+  const grid: FetchLike = async (_url, init) => {
+    const messages = JSON.parse(String(init.body)).messages as Message[];
+    const grading = messages[0].content.startsWith('You grade');
+    if (!grading) asked.push(messages);
+    const first = parts(messages)[0] ?? {};
+    const content = grading ? { grades: [], false_beliefs: [], form: 'compact', form_evidence: 'e' }
+      : 'task' in first ? { rationale: 'r', beliefs: [{ id: 'b', stance: 'keep', why: 'w' }], lessons: ['l'], next_experiment: 'n' }
+      : { rationale: 'r', observations: {}, rules: {}, weights: {}, output: '(p, m) => 0.5', validate: false, beliefs: [{ id: 'b', stance: first.round === 1 ? 'new' : 'keep', statement: 's' }], lessons: ['l'] };
+    const text = JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }], usage: { total_tokens: 100 } });
+    return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+  };
+  const r = await runLaboratory(gridLab, { args: ['--seed', '22', '--explore', '1', '--variants', '1', '--family', '1', '--family-variants', '1', '--confirm-places', '1', '--levels', '2', '--depth', '1',
+    '--steps', '0', '--flat', '--no-ablation', '--no-grade', '--attempts', '3', '--researcher', 'assisted', '--research-policy', 'policy.json', '--out', path.join(dir, 'grid.json')], root: dir, llm, fetch: grid });
+  const j = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  assert.equal(j.events.filter((e: any) => e.type === 'research_policy_delivered' && e.message).length, 1);
+  assert.ok(asked.some((m) => JSON.stringify(m).includes('agent:research-policy')), 'it reached the researcher');
+  for (const d of j.events.filter((e: any) => e.type === 'research_policy_decided' && e.guidance)) {
+    const req = j.events.find((e: any) => e.type === 'research_policy_requested' && e.id === d.id);
+    assert.deepEqual(rebuildDecision(policy, req.capture, d.rules, runner), { guidance: d.guidance, state: d.state });
+  }
+});

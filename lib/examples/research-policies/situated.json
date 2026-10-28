@@ -1,0 +1,107 @@
+{
+  "format": "research-policy@1",
+  "contract": "research-view@1",
+  "about": "The course of an investigation as its researcher lived it, up to now: its requests and what they were answered, its models, the verdicts of its checks and the help it was given. The measurements are facts of that course.",
+  "observations": {
+    "nowhere": {
+      "definition": "its latest checks in a row where its model held in no place",
+      "spec": {
+        "kind": "code",
+        "lang": "js",
+        "source": "(p) => (p.facts && p.facts.holding_nowhere_in_a_row) || 0"
+      },
+      "range": [
+        0,
+        100
+      ]
+    },
+    "models": {
+      "definition": "distinct models among its latest proposals",
+      "spec": {
+        "kind": "code",
+        "lang": "js",
+        "source": "(p) => (p.facts && p.facts.distinct_models_lately) || 0"
+      },
+      "range": [
+        0,
+        100
+      ]
+    },
+    "regressions": {
+      "definition": "episodes of earlier checks that scored lower with its newer models",
+      "spec": {
+        "kind": "code",
+        "lang": "js",
+        "source": "(p) => (p.facts && p.facts.regressions) || 0"
+      },
+      "range": [
+        0,
+        1000
+      ]
+    },
+    "looking": {
+      "definition": "answers of its latest round that only looked, in a round with no experiment",
+      "spec": {
+        "kind": "code",
+        "lang": "js",
+        "source": "(p) => (p.facts && p.facts.only_looking) || 0"
+      },
+      "range": [
+        0,
+        1000
+      ]
+    },
+    "round": {
+      "definition": "the round under way",
+      "spec": {
+        "kind": "code",
+        "lang": "js",
+        "source": "(p) => Math.max(0, ...p.events.map((e) => typeof e.round === 'number' ? e.round : 0))"
+      },
+      "range": [
+        0,
+        1000
+      ]
+    }
+  },
+  "composition": {
+    "kind": "code",
+    "lang": "js",
+    "source": "(p, m) => { const o = m.observations, round = o.round; const checks = p.events.filter((e) => e.type === 'check').map((e) => e.id).slice(-3); const investigations = p.events.filter((e) => e.type === 'investigation' && e.round === round).map((e) => e.id).slice(-3); const given = p.state.given || {}; const silent = (reason) => ({ guidance: { kind: 'abstain', reason }, state: p.state }); if (p.state.round === round) return silent('it advised already in this round'); const fresh = (t) => !(t in given) || round - given[t] > 2; const advise = (focus, template, args, evidence) => fresh(template) ? { guidance: { kind: 'advise', focus, template, arguments: args, evidence, judgments: [] }, state: { round, given: { ...given, [template]: round } } } : null; const pick = (o.regressions > 0 && checks.length >= 2 && advise('contrast', 'regression', { episodes: o.regressions }, checks)) || (o.nowhere >= 2 && o.models <= 1 && checks.length && advise('reframe', 'one_idea', { checks: o.nowhere }, checks)) || (o.nowhere >= 2 && checks.length && advise('contrast', 'discriminate', { checks: o.nowhere }, checks)) || (o.looking >= 3 && investigations.length && advise('develop', 'predict', { answers: o.looking }, investigations)); return pick || silent('no sign in its course that calls for advice it has not given in the last two rounds'); }"
+  },
+  "state": {
+    "round": 0,
+    "given": {}
+  },
+  "templates": {
+    "regression": {
+      "text": "Your newer models score lower on {{episodes}} episode(s) of earlier checks than your older ones did: find which change lost them before you change anything else, and keep a version that holds both.",
+      "arguments": [
+        "episodes"
+      ]
+    },
+    "one_idea": {
+      "text": "Your model has held nowhere in your last {{checks}} checks, and your recent models are variants of one: write down an alternative mechanism, and an observation where the two would differ.",
+      "arguments": [
+        "checks"
+      ]
+    },
+    "discriminate": {
+      "text": "Your model has held nowhere in your last {{checks}} checks: before the next change, name the explanations still open and run the observation that tells them apart, with what you expect under each.",
+      "arguments": [
+        "checks"
+      ]
+    },
+    "predict": {
+      "text": "This round you have looked {{answers}} times without an experiment: write what your current model predicts somewhere you have not looked, and run the experiment that checks it.",
+      "arguments": [
+        "answers"
+      ]
+    }
+  },
+  "provenance": {
+    "parents": [],
+    "reason": "A first situated candidate (SPEC-METAPOLITICA-INVESTIGACION M3), written from the seeds of CATALOGO-METAPOLITICAS-INVESTIGACION (localize-regression, reframe-representation, discriminate-alternatives, develop-prediction) and the stuck signals of the orchestrator. Code only: facts of the course, no judgments; at most one piece of advice a round. A hypothesis about method, to be contrasted in trials. The same advice is not repeated within two rounds: read against the record of a junior that held nowhere for many rounds, it would otherwise have said the same thing every round.",
+    "domain_knowledge": "none: no world is named, no solution of the experience worlds is in its words"
+  }
+}

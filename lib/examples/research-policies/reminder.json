@@ -1,0 +1,20 @@
+{
+  "format": "research-policy@1",
+  "contract": "research-view@1",
+  "about": "The course of an investigation as its researcher lived it. This policy reads only which round is under way.",
+  "observations": {},
+  "composition": {
+    "kind": "code",
+    "lang": "js",
+    "source": "(p) => { const round = Math.max(0, ...p.events.map((e) => typeof e.round === 'number' ? e.round : 0)); if (round >= 2 && round % 2 === 0 && p.state.last !== round) return { guidance: { kind: 'advise', focus: 'contrast', template: 'reminder', arguments: {}, evidence: [], judgments: [] }, state: { last: round } }; return { guidance: { kind: 'abstain', reason: round < 2 ? 'before its second round' : 'not a reminder round, or reminded already' }, state: p.state }; }"
+  },
+  "state": { "last": 0 },
+  "templates": {
+    "reminder": { "text": "A standing reminder, the same for every researcher: before your next change, write down which explanations are still open and an observation that would tell them apart; then decide whether to make it." }
+  },
+  "provenance": {
+    "parents": [],
+    "reason": "The fixed reminder of SPEC-METAPOLITICA-INVESTIGACION §10: its text and its calendar (the first question of every even round from round 2) fixed before any candidate is tried, never adapted after. It reads nothing of the course but the round: whether a generic reminder to contrast is enough.",
+    "domain_knowledge": "none"
+  }
+}
