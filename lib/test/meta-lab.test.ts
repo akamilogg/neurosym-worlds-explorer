@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { indexCorpus, independent, partition } from '../src/meta/corpus.ts';
-import { Trials, inProcessLauncher, manifestProblems, policyEvaluator, qualityOf, trialResult, verifyTrials, type MetaManifest, type TrialLauncher } from '../src/meta/lab.ts';
+import { Trials, inProcessLauncher, manifestProblems, measureOf, policyEvaluator, qualityOf, trialResult, verifyTrials, type MetaManifest, type TrialLauncher } from '../src/meta/lab.ts';
 import { inspectHistory } from '../src/meta/inspect.ts';
 import { deliveredGuidance, Experience } from '../src/learn/assisted/experience.ts';
 import { policyHash, type ResearchPolicy } from '../src/learn/assisted/research-policy.ts';
@@ -70,17 +70,18 @@ test('M2: the help a researcher was delivered, read as experience - author, cut,
   assert.equal(((await new Experience(runs, { guidance: true }).run({ experience: 'guidance', run: 'exp1' })) as any).delivered.length, 2);
 });
 
-const manifest = (over: Partial<MetaManifest> = {}): MetaManifest => ({ format: 'meta-lab@1', id: 'm1', junior: { args: ['--attempts', '2', '--max-tokens', '100'] },
+const manifest = (over: Partial<MetaManifest> = {}): MetaManifest => ({ format: 'meta-lab@1', id: 'm1', junior: { args: ['--attempts', '2', '--max-tokens', '100', '--max-judge-calls', '50'] },
   cases: [{ id: 'cells-a', lab: 'cells', args: ['--seed', '1'], partition: 'development', criterion: 'model_accepted' },
     { id: 'orbit-a', lab: 'orbit', args: ['--seed', '1'], partition: 'development', criterion: 'model_accepted' },
     { id: 'cells-hold', lab: 'cells', args: ['--seed', '9'], partition: 'confirmation', criterion: 'model_accepted' }], ...over });
 
 /** Trials standing in: a child "solves" its case when its policy's words say "contrast" (read from the policy file it was
     given, or from the record it resumes), writes its record and finding; `ran` - the model it really ran with. */
-function fakeLauncher(dir: string, calls: any[], o: { partialOn?: (t: any) => boolean; policyError?: boolean; identity?: Record<string, unknown>; ran?: string } = {}): TrialLauncher {
+function fakeLauncher(dir: string, calls: any[], o: { partialOn?: (t: any) => boolean; failBeforeRecord?: (t: any) => boolean; policyError?: boolean; identity?: Record<string, unknown>; ran?: string } = {}): TrialLauncher {
   const identity = o.identity ?? { llm_model: 'stand-in' };
   return { identity, async run(t) {
     calls.push(t);
+    if (o.failBeforeRecord?.(t)) throw new Error('it failed before it made its record');
     const ledger = fs.readFileSync(path.join(dir, 'trials.jsonl'), 'utf8');
     assert.ok(ledger.includes('"research_trial_requested"') && ledger.includes('"research_trial_reserved"'), 'recorded and reserved before it is dispatched');
     const policyFile = t.resume ? null : t.args[t.args.indexOf('--research-policy') + 1];
@@ -89,7 +90,7 @@ function fakeLauncher(dir: string, calls: any[], o: { partialOn?: (t: any) => bo
     const partial = o.partialOn?.(t) ?? false;
     const events = [{ type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: solved }] },
       ...(o.policyError ? [{ type: 'research_policy_decided', failure: 'invalid_output' }] : []),
-      { type: 'research_policy_delivered', message: 'm1' }, ...(partial ? [] : [{ type: 'end', stoppedBy: 'budget', console_usage: { llm_tokens_live: 100 } }])];
+      { type: 'research_policy_delivered', message: 'm1' }, ...(partial ? [] : [{ type: 'end', stoppedBy: 'budget', replay: { live: { jev: 7 } }, console_usage: { llm_tokens_live: 100 } }])];
     write(t.out, { experiment: 'cells@1', started: 'x', config: { llm_model: o.ran ?? identity.llm_model }, events, policy_words: words });
     if (solved && !partial) write(t.out.replace(/\.json$/, '.finding.json'), { outcome: { status: 'accepted' } });
     if (t.signal?.aborted) return { journal: t.out };
@@ -218,7 +219,7 @@ const junior: FetchLike = async (_url, init) => {
 
 test('M2: with the harness\'s own runs, a candidate does not change the checks - only what the junior is advised', async () => {
   const dir = tmp('meta-real-');
-  const m = manifest({ junior: { args: ['--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '2', '--max-tokens', '100000'] },
+  const m = manifest({ junior: { args: ['--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '2', '--max-tokens', '100000', '--max-judge-calls', '100000'] },
     cases: [{ id: 'cells-1', lab: 'cells', args: ['--seed', '1'], partition: 'development', criterion: 'model_accepted' }] });
   const trials = new Trials(dir, m, inProcessLauncher({ root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior }));
   const silent: ResearchPolicy = { ...policy('x'), composition: code(`(p) => ({ guidance: { kind: 'abstain', reason: 'never' }, state: p.state })`) };
@@ -284,7 +285,7 @@ test('M2 review: the fund for trials - reserved before each launch, settled afte
   const ev = policyEvaluator(new Trials(tmp('meta-fund2-'), manifest(), fakeLauncher(dir, []), { fund: 50 }), policy('plain'), { onUnfunded: () => { told = true; } });
   const e = await ev.evaluate(policyHash(policy('plain')));
   assert.ok(told, 'the search is told to stop');
-  assert.ok(e.diagnostics.some((d) => /not measured/.test(d)));
+  assert.ok(e.diagnostics.some((d) => /not a measure/.test(d)));
 });
 
 test('M2 review: a trial resumed runs under its controls again - its limits of tokens and time are not lost', async () => {
@@ -320,4 +321,116 @@ test('M2 review: a search is never overwritten, needs a fund for its trials, and
   const tampered = fs.readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).map((e) => (e.type === 'evaluation' ? { ...e, result: { ...e.result, quality: [0, 0] } } : e));
   fs.writeFileSync(out, tampered.map((e) => JSON.stringify(e)).join('\n') + '\n');
   assert.equal((await verifyTrials(dir, manifest(), runner)).holds, false);
+});
+
+/* --- A second external review of M2 (28/10/2026), reconciled ------------------------------------------------------------ */
+
+test('M2 review 2: an incomplete evaluation is kept as it is - unchecked, no quality, never an elite', async () => {
+  const r = (state: 'ended' | 'unfunded', solved: boolean | null) => ({ kind: 'cells', result: { state, solved, stopped_by: null, policy_errors: 0, advice: 0, tokens: null } });
+  assert.deepEqual([measureOf([r('ended', true), r('unfunded', null)], 2).correct, measureOf([r('ended', true), r('unfunded', null)], 2).quality], ['unchecked', null]);
+  assert.equal(measureOf([r('ended', true)], 2).complete, false, 'trials never reached: incomplete too');
+  assert.deepEqual(measureOf([r('ended', true), r('ended', false)], 2).quality, [0.5]);
+  /* A search whose first evaluation the fund cuts short: kept, and no elite. */
+  const dir = tmp('meta-incomplete-'), calls: any[] = [];
+  const controller = new AbortController();
+  const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls), { fund: 150 });
+  const mutator = { propose: async () => ({ text: JSON.stringify({ files: { 'policy.json': JSON.stringify(policy('contrast')) }, why: 'w' }), tokens: 10 }) };
+  const { manifest: sealed, events } = await runSearch({ evaluator: policyEvaluator(trials, policy('contrast'), { signal: controller.signal, onUnfunded: () => controller.abort() }), mutator,
+    profile: balanced(0), signal: controller.signal, question: 'q', limits: { evaluations: 3, attempts: 3, tokens: 1000 }, out: path.join(dir, 's.jsonl') });
+  const ev = events.filter((e) => e.type === 'evaluation');
+  assert.equal(ev.length, 1);
+  assert.deepEqual([ev[0].result.correct, ev[0].result.quality], ['unchecked', null]);
+  assert.deepEqual(sealed.state.elites, [], 'an incomplete evaluation never competes');
+  assert.equal(sealed.stoppedBy, 'cancelled');
+});
+
+test('M2 review 2: a search is never resumed under another configuration - its measures are not this one\'s', async () => {
+  const dir = tmp('meta-resume-identity-');
+  const small = new Trials(dir, manifest(), fakeLauncher(dir, [], { identity: { llm_model: 'small' } }));
+  const large = new Trials(dir, manifest(), fakeLauncher(dir, [], { identity: { llm_model: 'large' } }));
+  assert.notEqual(small.identity(), large.identity(), 'the evaluator\'s identity is the trials\' configuration');
+  const mutator = { propose: async () => ({ text: JSON.stringify({ files: { 'policy.json': JSON.stringify(policy('contrast')) }, why: 'w' }), tokens: 10 }) };
+  const out = path.join(dir, 's.jsonl');
+  await runSearch({ evaluator: policyEvaluator(small, policy('plain')), mutator, profile: balanced(0), question: 'q', limits: { evaluations: 1, attempts: 1, tokens: 1000 }, out });
+  const recorded = fs.readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  await assert.rejects(runSearch({ evaluator: policyEvaluator(large, policy('plain')), mutator, profile: balanced(0), question: 'q', limits: { evaluations: 3, attempts: 3, tokens: 1000 },
+    out: path.join(dir, 's2.jsonl'), recorded, live: true }), /measured by evaluator/);
+});
+
+test('M2 review 2: a continuation that never made its record - the last record that exists resumed, never written over', async () => {
+  const dir = tmp('meta-failed-continuation-'), calls: any[] = [];
+  let n = 0;
+  const trials = new Trials(dir, manifest({ cases: [manifest().cases[0]] }), fakeLauncher(dir, calls, { partialOn: () => n++ === 0, failBeforeRecord: (t) => t.out.endsWith('.r1.json') }));
+  const [first] = await trials.run(policy('contrast'), 'development');
+  assert.equal(first.result.state, 'infra', 'cut short');
+  const original = fs.readFileSync(path.join(dir, 'trials', first.trial + '.json'), 'utf8');
+  const [second] = await trials.run(policy('contrast'), 'development');
+  assert.equal(second.result.state, 'infra', 'its continuation failed before it made its record');
+  assert.ok(!fs.existsSync(path.join(dir, 'trials', first.trial + '.r1.json')));
+  const [third] = await trials.run(policy('contrast'), 'development');
+  assert.equal(fs.readFileSync(path.join(dir, 'trials', first.trial + '.json'), 'utf8'), original, 'the first record never written over');
+  assert.match(calls[2].resume, new RegExp(first.trial + '\\.json$'), 'resumed from the last record that exists');
+  assert.match(calls[2].out, /\.r2\.json$/, 'into a name of its own');
+  assert.deepEqual([third.result.state, third.result.solved], ['ended', true]);
+  assert.ok(trials.ledger().some((e) => e.type === 'research_trial_resumed' && /\.r1\.json$/.test(e.out)), 'the failed intention kept in the ledger');
+});
+
+test('M2 review 2: the fund reserves every work of a trial - the Judge\'s calls too; work it cannot bound is never launched', async () => {
+  for (const k of ['--delegation-fund', '--agents', '--opening'])
+    assert.ok(manifestProblems(manifest({ junior: { args: ['--max-tokens', '100', '--max-judge-calls', '50', k, '900'] } })).some((p) => p.includes(k)), k + ' refused');
+  assert.ok(manifestProblems(manifest({ junior: { args: ['--max-tokens', '100'] } })).some((p) => /max-judge-calls/.test(p)));
+  const dir = tmp('meta-judge-fund-'), calls: any[] = [];
+  const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls), { fund: 1000, judgeFund: 55 });
+  const ran = await trials.run(policy('contrast'), 'development');
+  assert.deepEqual(ran.map((t) => t.result.state), ['ended', 'unfunded'], 'the second\'s calls of the Judge would not fit');
+  assert.match(String(ran[1].result.why), /calls of the Judge/);
+  assert.equal(trials.spent(undefined, 'judge_calls'), 7, 'settled at what its Judge was called live');
+  assert.equal(trials.spent(), 100);
+});
+
+test('M2 review 2: a record under another model is never taken on a retry - it stays a failure of the infrastructure', async () => {
+  const dir = tmp('meta-mismatch-retry-'), calls: any[] = [];
+  const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls, { identity: { llm_model: 'small' }, ran: 'other' }));
+  const [a] = await trials.run(policy('contrast'), 'development');
+  assert.equal(a.result.state, 'infra');
+  const [b] = await trials.run(policy('contrast'), 'development');
+  assert.deepEqual([b.result.state, b.result.solved], ['infra', null], 'not read as ended and solved');
+  assert.equal(calls.filter((c) => c.out.includes(a.trial)).length, 1, 'nor resumed into this trial');
+});
+
+test('M2 review 2: verify refuses a search whose trials are not in the ledger', async () => {
+  const dir = tmp('meta-verify-ledger-'), calls: any[] = [];
+  const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls));
+  fs.mkdirSync(path.join(dir, 'searches'));
+  const out = path.join(dir, 'searches', 's1.jsonl');
+  const mutator = { propose: async () => ({ text: JSON.stringify({ files: { 'policy.json': JSON.stringify(policy('contrast')) }, why: 'w' }), tokens: 10 }) };
+  const { manifest: sealed } = await runSearch({ evaluator: policyEvaluator(trials, policy('plain')), mutator, profile: balanced(0), question: 'q', limits: { evaluations: 1, attempts: 1, tokens: 1000 }, out });
+  fs.writeFileSync(out.replace(/\.jsonl$/, '.manifest.json'), JSON.stringify(sealed));
+  assert.equal((await verifyTrials(dir, manifest(), runner)).holds, true);
+  fs.writeFileSync(path.join(dir, 'trials.jsonl'), '');
+  const v = await verifyTrials(dir, manifest(), runner);
+  assert.equal(v.holds, false);
+  assert.ok(v.problems.some((p) => /not in the ledger of trials/.test(p)));
+});
+
+/* The stand-in junior, its models asking the Judge a rule. */
+const judged: FetchLike = async (url, init) => {
+  const r = await junior(url, init);
+  const body = JSON.parse(await r.text());
+  const content = JSON.parse(body.choices[0].message.content);
+  if ('output' in content) { content.observations = { n: { definition: 'the rows', source: '(p) => p.rows.length', range: [0, 100] } }; content.rules = { alive: { type: 'noul', used_as: 'value', instructions: 'Are {{n}} rows many?', criteria: { yes: 'y', no: 'n' } } }; content.weights = { alive: 1 }; }
+  const text = JSON.stringify({ ...body, choices: [{ message: { content: JSON.stringify(content) } }] });
+  return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
+};
+
+test('M2 review 2: --max-judge-calls bounds a run - it stops before asking System 2 again once its Judge was called that often', async () => {
+  const { runLaboratory } = await import('../src/runtime/lab-runner.ts');
+  const { cellsLab } = await import('../src/worlds/cells/lab.ts');
+  const dir = tmp('meta-judge-limit-');
+  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '3', '--researcher', 'assisted', '--max-judge-calls', '1', '--out', path.join(dir, 'a.json')],
+    root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: judged, print: () => {} });
+  const j = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  assert.equal(j.limits.max_judge_calls, 1);
+  const end = j.events.filter((e: any) => e.type === 'end').at(-1);
+  assert.equal(end.stoppedBy, 'judge_budget');
 });

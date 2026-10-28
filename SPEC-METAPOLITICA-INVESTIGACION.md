@@ -516,6 +516,40 @@ con una prueba que reproduce el caso (`lib/test/meta-lab.test.ts`, «M2 review»
      un evaluador de políticas por contenido). Cada evaluación se recalcula desde sus ensayos y se contrasta con el
      registro de ensayos.
 
+#### 13.2.2 Una segunda revisión externa de M2, conciliada (28/10/2026)
+
+Seis fallos reproducibles antes del piloto pagado. Cada uno se corrige por su principio, con una prueba que reproduce el
+caso (`lib/test/meta-lab.test.ts`, «M2 review 2»).
+
+1. **Una medida es una evaluación completa.** Una evaluación a la que le falta algún ensayo (uno que el fondo no pudo
+   sostener, una cancelación, ensayos que no se alcanzaron) se guarda como es: incompleta, con su corrección sin
+   comprobar y sin calidad (`measureOf`). Nunca compite con las completas ni entra en las élites. `verify` la recalcula
+   igual.
+2. **Un registro sólo sirve sus medidas al evaluador que las tomó.** La identidad del evaluador incluye la configuración
+   efectiva del lanzador (`Trials.identity`). El motor evolutivo rechaza reanudar un registro bajo otra identidad, en
+   cualquier búsqueda, no sólo en la metapolítica. Con otro modelo se continúa desde el sello, y su evidencia se mide
+   otra vez.
+3. **Un registro nunca se sobrescribe.** El registro de un ensayo es el último archivo de su cadena que existe. Una
+   continuación que falló antes de crear su diario queda como intención fallida en el registro de ensayos, nunca como
+   registro. La siguiente reanuda el último que existe, con un nombre libre.
+4. **El fondo reserva todo el trabajo de un ensayo, también las llamadas al Judge.**
+   - **Nuevo límite:** el runner admite `--max-judge-calls`, un control como `--max-tokens` que se comprueba entre
+     preguntas (`judge_budget`).
+   - **Manifiesto:** lo exige.
+   - **Fondo y liquidación:** `lab meta` tiene un segundo fondo, `--trial-judge-calls`, obligatorio en `search`. Cada
+     lanzamiento reserva ambos máximos y liquida lo hecho en vivo: los tokens y las llamadas al Judge
+     (`replay.live.jev`).
+   - **Trabajo sin cota:** el manifiesto rechaza lo que ningún límite suyo acota (`--delegation-fund`, cuyas ramas
+     llaman a su propio Judge; `--agents`; `--opening`). La condición con senior es de un lote, no de un ensayo.
+5. **Un registro hecho con otra configuración nunca es el resultado de este ensayo.** Tampoco al reconciliar: se
+   comprueba la configuración antes de leer el final y antes de reanudar. Queda como fallo de infraestructura, y no se
+   reanuda en este ensayo.
+6. **Una evidencia sin su ensayo no es evidencia.** `verify` falla si alguna evaluación de una búsqueda cita un ensayo
+   que no está pedido y terminado en el registro de ensayos.
+
+**Lo que queda:** el límite de llamadas, como el de tokens, se comprueba entre preguntas a System 2. Una tanda de
+juicios puede pasarse del máximo, y la liquidación registra lo que de verdad se hizo.
+
 ### 13.3 M3 preparado, sin lanzar (28/10/2026)
 
 El piloto real gasta inferencia y lo lanza el operador. Queda listo en `lib/examples/meta.pilot.md`, con las órdenes,

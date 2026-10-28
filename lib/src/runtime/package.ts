@@ -156,7 +156,7 @@ export interface PackageVerification {
 }
 
 /** The stops that leave a record short: a reconstruction stops where they did. */
-const STOPS_SHORT = new Set(['token_budget', 'time_budget', 'cancelled']);
+const STOPS_SHORT = new Set(['token_budget', 'judge_budget', 'time_budget', 'cancelled']);
 
 /** What of a run's end belongs to the process that wrote it, not to its research: its time, how its answers came (live or
     replayed), what it resumed and carried, where to resume it. Everything else of its end must come out the same. */

@@ -142,6 +142,11 @@ export function parseAnswer(text: string): { files: Record<string, string | null
 
 export async function runSearch(o: SearchOptions): Promise<{ manifest: SearchManifest; events: SearchEvent[] }> {
   const identity = await o.evaluator.identity();
+  /* A record serves its measures only to the evaluator that took them: resumed under another identity (another model, task
+     or environment), none of them would be this one's. Such a search is continued from its seal, its evidence stale. */
+  const recordedBy = o.recorded?.find((e) => e.type === 'search_started')?.evaluator;
+  if (recordedBy !== undefined && recordedBy !== identity)
+    throw new Error('the record was measured by evaluator ' + recordedBy + ', not ' + identity + ': it is not resumed under another - continue its sealed search, its evidence measured again');
   const events: SearchEvent[] = [];
   /* Resumed onto its own record (the file the record was read from): what it holds is never written again nor cut - only
      what comes after it is appended. Anywhere else (a verification, a copy), the whole record is written. */

@@ -1335,7 +1335,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   /* A budget stopped the investigation: its closing still comes (§14.9). A cancellation does not. */
   const stopped = halted as string | null;
-  const budgetStop = stopped === 'token_budget' || stopped === 'time_budget' ? stopped : null;
+  const budgetStop = stopped === 'token_budget' || stopped === 'judge_budget' || stopped === 'time_budget' ? stopped : null;
   if (budgetStop) {
     s.closing?.();
     halted = null;

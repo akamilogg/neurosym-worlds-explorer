@@ -116,6 +116,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
 const CONTROLS: readonly { name: string; value: string; help: string }[] = [
   { name: 'max-minutes', value: 'N', help: 'stop before asking System 2 again once N minutes have passed (this process)' },
   { name: 'max-tokens', value: 'N', help: 'stop before asking System 2 again once its answers have used N tokens (the whole run)' },
+  { name: 'max-judge-calls', value: 'N', help: 'stop before asking System 2 again once the Judge has been called N times (the whole run): what bounds its work for a fund that reserves it' },
   { name: 'resume', value: 'FILE', help: 'resume the run of that journal in a new one (<journal>.resumed-<time>.json, or --out): its answers are replayed, then it goes on live; the journal resumed is left as it is' },
   { name: 'policy', value: 'P', help: 'the operator\'s policy on researchers: force=<researcher>, or allow=<researcher>,<researcher>' },
   { name: 'agents', value: 'LIST', help: 'the agents that may order this run, and what (SPEC-ORQUESTADOR R1): <id>=<kind>,<kind>;<id>=... (kinds: message, focus, source, stop); without it, no agent may' },
@@ -184,7 +185,7 @@ const ownTestsIn = (argv: readonly string[]): number => { const i = argv.indexOf
 /** The run's budgets given now (a resumed run takes these, and the journal it resumes as --out). */
 export function budgetArgs(argv: readonly string[]): string[] {
   const out: string[] = [];
-  for (let i = 0; i < argv.length; i++) if (['--max-minutes', '--max-tokens', '--agents', '--help-budget'].includes(argv[i])) out.push(argv[i], argv[++i] ?? '');
+  for (let i = 0; i < argv.length; i++) if (['--max-minutes', '--max-tokens', '--max-judge-calls', '--agents', '--help-budget'].includes(argv[i])) out.push(argv[i], argv[++i] ?? '');
   return out;
 }
 
@@ -321,7 +322,7 @@ export function chooseResearcher(asked: Researcher, policy: ResearcherPolicy | n
 }
 
 export interface LabResult {
-  /** accepted, quick_stop, budget, cancelled, time_budget, token_budget, diverged, llm_error... */
+  /** accepted, quick_stop, budget, cancelled, time_budget, token_budget, judge_budget, diverged, llm_error... */
   readonly stoppedBy: string;
   readonly journal: string;
   /** The operator's finding (with all its measures, for audit). */
@@ -779,6 +780,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const network: FetchLike = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
   const maxMinutes = Number(arg('max-minutes', '0')) || null;
   const maxTokens = Number(arg('max-tokens', '0')) || null;
+  const maxJudgeCalls = Number(arg('max-judge-calls', '0')) || null;
   const flatFetch = async (_u: string, init: { body?: string }) => {
     const body = JSON.parse(String(init.body));
     const answers: Record<string, unknown> = {};
@@ -834,7 +836,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     argv: experimentArgs(argv),
     /* The limits it ran under, as they were in effect (its controls are not in argv: a resumed run takes them anew) - what a
        comparison needs to know whether two runs had the same budget (SPEC-CONTROL-ARNES §6.2.1). */
-    limits: { max_tokens: maxTokens, max_minutes: maxMinutes },
+    limits: { max_tokens: maxTokens, max_minutes: maxMinutes, ...(maxJudgeCalls !== null ? { max_judge_calls: maxJudgeCalls } : {}) },
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
     config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), llm_provider: options.llm.provider ?? providerOf(options.llm.url), ...llmTuningRecord(options.llm),
       jev_model: cfg.flat ? null : options.judge?.model ?? null, ...(cfg.flat ? {} : { jev_provider: options.judge?.provider ?? providerOf(options.judge?.url), ...jevPathRecord(options.judge?.url || JEV_DEFAULT_URL) }) },
@@ -1019,7 +1021,8 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const halt = (): string | null => (pollInbox(), pollVerdicts(), options.signal?.aborted || stopRequested) ? 'cancelled'
     : options.stopAsRecorded && previous && replay.pending() === 0 ? options.stopAsRecorded
     : maxMinutes !== null && Date.now() - started.getTime() >= maxMinutes * 60000 ? 'time_budget'
-    : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget' : null;
+    : maxTokens !== null && llmUse.tokens >= maxTokens ? 'token_budget'
+    : maxJudgeCalls !== null && judge.stats.calls >= maxJudgeCalls ? 'judge_budget' : null;
 
   /* An environment outside (SPEC-OBJETIVO O12): each request done once, by a key that is the same when the run is resumed
      (the run's lineage and the request's place in it), and what it answered logged like System 2's answers. */
@@ -1058,7 +1061,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.budget === 0;
   const services = { cfg, options: worldOptionsOf(cfg), llm, llmUse, judge, codeRunner: () => nodeVmRunner({ timeoutMs: 2000 }), journal, log, say,
     ...(budgetShown ? { budget: budgetAt } : {}),
-    halt: () => { const h = halt(); return closingAll && (h === 'token_budget' || h === 'time_budget') ? null : h; },
+    halt: () => { const h = halt(); return closingAll && (h === 'token_budget' || h === 'judge_budget' || h === 'time_budget') ? null : h; },
     closing: () => { closingAll = true; replay.closing = true; } };
   writeStatus();
   function finish(stop: { stoppedBy: string; halted: string | null }, end: Record<string, unknown>): LabResult {
@@ -1717,7 +1720,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       /* A world the operator closed: its researcher stops, as a cancellation does (its closing kept). */
       if (living && living.status === 'completed' && !worldClosedSaid) { worldClosedSaid = true; log('world_closed', { round: session.currentRound }); }
       if (living && living.status === 'completed') return 'world_closed';
-      const h = halt(); return closing && (h === 'token_budget' || h === 'time_budget') ? null : h; },
+      const h = halt(); return closing && (h === 'token_budget' || h === 'judge_budget' || h === 'time_budget') ? null : h; },
     /* A member of a team tells the board where it is: the versions every member has passed are sealed. */
     ...(team ? { onRound: (round: number) => team.board.reach(team.member, round) } : bridge ? { onRound: (round: number) => bridge.round(round) } : {})
   };
@@ -2216,7 +2219,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const held = protocol.waiting;
   if (held) say('not accepted: the model of round ' + held.round + ' was confirmed, but the operator never answered ' + held.reports.join(', '));
   /* A budget stopped the investigation: its closing still comes (§14.9). A cancellation does not. */
-  const budgetStop = session.halted === 'token_budget' || session.halted === 'time_budget' ? session.halted : null;
+  const budgetStop = session.halted === 'token_budget' || session.halted === 'judge_budget' || session.halted === 'time_budget' ? session.halted : null;
   if (budgetStop) {
     closing = true;
     replay.closing = true;

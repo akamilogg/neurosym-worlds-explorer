@@ -266,15 +266,20 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           const fund = fundGiven !== undefined ? Number(fundGiven) : undefined;
           if (fund !== undefined && !(fund > 0)) { out('--trial-tokens: the tokens its trials may spend in all, a number above 0'); return 2; }
           if (sub === 'search' && fund === undefined) { out('lab meta search needs --trial-tokens N: the tokens its trials may spend in all (its --tokens limit only its mutator)'); return 2; }
+          /* And the calls of the Judge its trials may make in all, reserved the same way. */
+          const judgeGiven = take(args, 'trial-judge-calls');
+          const judgeFund = judgeGiven !== undefined ? Number(judgeGiven) : undefined;
+          if (judgeFund !== undefined && !(judgeFund > 0)) { out('--trial-judge-calls: the calls of the Judge its trials may make in all, a number above 0'); return 2; }
+          if (sub === 'search' && judgeFund === undefined) { out('lab meta search needs --trial-judge-calls N: the calls of the Judge its trials may make in all'); return 2; }
           const { labEndpointsFromEnv, chatFromEnv } = await import('../orchestra/launch.ts');
           const ends = labEndpointsFromEnv(env);
-          const trials = new Trials(dir, manifest, inProcessLauncher({ root: dir, llm: ends.llm, ...(ends.judge ? { judge: ends.judge } : {}) }), fund !== undefined ? { fund } : {});
+          const trials = new Trials(dir, manifest, inProcessLauncher({ root: dir, llm: ends.llm, ...(ends.judge ? { judge: ends.judge } : {}) }), { ...(fund !== undefined ? { fund } : {}), ...(judgeFund !== undefined ? { judgeFund } : {}) });
           const config = policyAt(policyFile);
           if (sub === 'trials') {
             const partition = (take(args, 'partition') ?? 'development') as 'development' | 'confirmation';
             const ran = await trials.run(config.policy, partition);
             for (const t of ran) out(t.case + '#' + t.rep + ' ' + t.result.state + (t.result.solved !== null ? (t.result.solved ? ' solved' : ' not solved') : '') + ', ' + t.result.advice + ' advice' + (t.result.policy_errors ? ', ' + t.result.policy_errors + ' policy errors' : '') + (t.result.why ? ' (' + t.result.why + ')' : ''));
-            out('trials have spent or hold ' + trials.spent() + ' tokens' + (fund !== undefined ? ' of ' + fund : ''));
+            out('trials have spent or hold ' + trials.spent() + ' tokens' + (fund !== undefined ? ' of ' + fund : '') + ' and ' + trials.spent(undefined, 'judge_calls') + ' calls of the Judge' + (judgeFund !== undefined ? ' of ' + judgeFund : ''));
             return 0;
           }
           const { runSearch } = await import('../learn/evolve/engine.ts');
@@ -293,11 +298,12 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           if (fs.existsSync(outFile)) { out('a search is already recorded as ' + outFile + ': nothing is overwritten'); return 2; }
           const recorded = resumeFile ? fs.readFileSync(resumeFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : undefined;
           /* Its evaluations bounded by what the fund can hold: one is every development trial, each reserving its junior's limit. */
-          const { trialsPerEvaluation, juniorMaxTokens } = await import('../meta/lab.ts');
+          const { trialsPerEvaluation, juniorMaxTokens, juniorMaxJudgeCalls } = await import('../meta/lab.ts');
           const perEvaluation = trialsPerEvaluation(manifest) * juniorMaxTokens(manifest);
-          const affordable = Math.max(0, Math.floor((fund! - trials.spent()) / perEvaluation));
+          const perEvaluationJudge = trialsPerEvaluation(manifest) * juniorMaxJudgeCalls(manifest);
+          const affordable = Math.max(0, Math.min(Math.floor((fund! - trials.spent()) / perEvaluation), Math.floor((judgeFund! - trials.spent(undefined, 'judge_calls')) / perEvaluationJudge)));
           const evaluations = Math.min(n('evaluations', 6), affordable + (recorded ? recorded.filter((e) => e.type === 'evaluation').length : 0));
-          if (evaluations < 1) { out('the fund for trials (' + fund + ', ' + trials.spent() + ' spent or held) cannot hold one evaluation (' + perEvaluation + ' tokens reserved): nothing was run'); return 2; }
+          if (evaluations < 1) { out('the fund for trials (' + fund + ' tokens, ' + trials.spent() + ' spent or held; ' + judgeFund + ' calls of the Judge, ' + trials.spent(undefined, 'judge_calls') + ' made or held) cannot hold one evaluation (' + perEvaluation + ' tokens and ' + perEvaluationJudge + ' calls reserved): nothing was run'); return 2; }
           const controller = new AbortController();
           const { manifest: sealed } = await runSearch({ evaluator: policyEvaluator(trials, config.policy, { signal: controller.signal, onUnfunded: () => controller.abort() }),
             mutator: chatMutator(chatFromEnv(env, 'AGENT_LLM')), profile: balanced(0), signal: controller.signal,
@@ -305,10 +311,10 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
             out: outFile, ...(recorded ? { recorded, live: true } : {}) });
           const sealedFile = outFile.replace(/\.jsonl$/, '.manifest.json');
           fs.writeFileSync(sealedFile, JSON.stringify(sealed, null, 2));
-          out('search ' + sealed.stoppedBy + ': ' + sealed.cost.evaluations + ' evaluations; its mutator ' + sealed.cost.tokens + ' tokens; its trials ' + trials.spent() + ' tokens of the fund ' + fund + '; ' + sealedFile);
+          out('search ' + sealed.stoppedBy + ': ' + sealed.cost.evaluations + ' evaluations; its mutator ' + sealed.cost.tokens + ' tokens; its trials ' + trials.spent() + ' tokens of the fund ' + fund + ' and ' + trials.spent(undefined, 'judge_calls') + ' calls of the Judge of ' + judgeFund + '; ' + sealedFile);
           return 0;
         }
-        out('lab meta index | inspect <policy> <journal> | trials <meta-lab.json> <policy> | search <meta-lab.json> <policy> | verify <meta-lab.json>');
+        out('lab meta index | inspect <policy> <journal> | trials <meta-lab.json> <policy> [--trial-tokens N] [--trial-judge-calls N] | search <meta-lab.json> <policy> --trial-tokens N --trial-judge-calls N [--resume FILE] | verify <meta-lab.json>');
         return 2;
       }
       case 'live': {

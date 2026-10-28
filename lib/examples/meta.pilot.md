@@ -9,7 +9,12 @@ cada run. El resto lo fija `meta.pilot.json` antes de lanzar nada:
 - 8 ayudas de presupuesto;
 - memoria selectiva;
 - 800 000 tokens;
+- 20 000 llamadas al Judge;
 - 240 minutos.
+
+Cada ensayo sólo lanza trabajo que el fondo puede reservar: los tokens del junior y las llamadas a su Judge. El
+manifiesto no admite delegación, agentes ni apertura, porque nada en él acota su gasto. La condición con senior es la
+del lote (§1), no la de un ensayo.
 
 Ningún modelo ni presupuesto histórico se toma por defecto. Conviene un junior pequeño, con el que haya progreso
 posible pero no trivial: los runs de septiembre con un modelo fuerte resolvían cells nivel 3 en tres checks.
@@ -68,17 +73,21 @@ necesario.
 ## 3. Desarrollar la política, si los ensayos lo justifican
 
 ```powershell
-.\lab_two_tier_reasoning.ps1 meta search examples\meta.pilot.json examples\research-policies\situated.json --trial-tokens 16000000 --evaluations 4 --attempts 8
+.\lab_two_tier_reasoning.ps1 meta search examples\meta.pilot.json examples\research-policies\situated.json --trial-tokens 16000000 --trial-judge-calls 400000 --evaluations 4 --attempts 8
 ```
 
 - **Mutador:** el motor evolutivo propone variantes de la política con el modelo `AGENT_LLM` del lanzador.
 - **Medida:** cada variante se mide con ensayos completos en los casos de desarrollo. Cada evaluación son cinco runs
   del junior: conviene empezar con muy pocas.
-- **Fondo de los ensayos:** `--trial-tokens` es lo que pueden gastar en total. Cada ensayo reserva su máximo
-  (`--max-tokens` del junior) antes de lanzarse. Una evaluación son cinco ensayos, 4 000 000 tokens reservados, así que
-  16 000 000 alcanzan para cuatro. `--tokens` sólo limita al mutador.
+- **Fondo de los ensayos:** `--trial-tokens` y `--trial-judge-calls` son lo que pueden gastar en total. Cada ensayo
+  reserva su máximo (`--max-tokens` y `--max-judge-calls` del junior) antes de lanzarse. Una evaluación son cinco
+  ensayos, 4 000 000 tokens y 100 000 llamadas reservados, así que estos fondos alcanzan para cuatro. `--tokens` sólo
+  limita al mutador.
+- **Evaluación incompleta:** si el fondo no alcanza para todos sus ensayos, la evaluación queda incompleta, sin
+  calidad, y no compite con las completas. La búsqueda se detiene ahí.
 - **Vuelta atrás:** cada búsqueda tiene su propio registro en `runs/meta/meta-pilot/searches/`, que nunca se
-  sobrescribe. Se continúa con `--resume <registro>`, que escribe uno nuevo.
+  sobrescribe. Se continúa con `--resume <registro>`, que escribe uno nuevo, y sólo con la misma configuración del
+  lanzador: con otro modelo, sus medidas no valen y se rechaza.
 
 ## 4. Lectura sin gasto
 

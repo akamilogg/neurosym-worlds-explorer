@@ -53,7 +53,7 @@ export function generatorOf(journal: J, folder: string, base: string): { id: str
 const FAILURES: Record<string, (end: J) => boolean> = {
   llm_error: (e) => e.stoppedBy === 'llm_error',
   diverged: (e) => e.stoppedBy === 'diverged',
-  budget_spent: (e) => ['budget', 'token_budget', 'time_budget'].includes(e.stoppedBy),
+  budget_spent: (e) => ['budget', 'token_budget', 'judge_budget', 'time_budget'].includes(e.stoppedBy),
   cancelled: (e) => e.stoppedBy === 'cancelled'
 };
 

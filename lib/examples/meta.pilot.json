@@ -2,7 +2,7 @@
   "format": "meta-lab@1",
   "id": "meta-pilot",
   "junior": {
-    "args": ["--attempts", "8", "--help-budget", "8", "--memory", "selective", "--max-tokens", "800000", "--max-minutes", "240"]
+    "args": ["--attempts", "8", "--help-budget", "8", "--memory", "selective", "--max-tokens", "800000", "--max-judge-calls", "20000", "--max-minutes", "240"]
   },
   "cases": [
     { "id": "cells-l3-s1", "lab": "cells", "args": ["--seed", "1", "--level", "3"], "kind": "cells", "partition": "development", "criterion": "model_accepted" },

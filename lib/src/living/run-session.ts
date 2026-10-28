@@ -79,7 +79,7 @@ function openShared(lab: LawLab, plan: SessionPlan, journal: WorldJournal) {
 }
 
 /** The stops that leave a record short: a reconstruction stops where they did. */
-const SHORT = new Set(['token_budget', 'time_budget', 'cancelled']);
+const SHORT = new Set(['token_budget', 'judge_budget', 'time_budget', 'cancelled']);
 
 /** A shared session REBUILT from its record (§14: the whole of it, not only one researcher): its world derived again against
     the journal it continues, every researcher resumed from its own log at once, in this process - each stopped where its record

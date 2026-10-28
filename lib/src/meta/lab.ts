@@ -59,7 +59,14 @@ export function manifestProblems(m: unknown): string[] {
   if (typeof o.id !== 'string' || !/^[\w.-]+$/.test(o.id)) errors.push('"id": letters, digits, dots and dashes');
   if (!Array.isArray(o.junior?.args)) errors.push('"junior": {"args": [...]}');
   else if (o.junior.args.some((a: unknown) => typeof a === 'string' && /^--(research-policy|out|resume)$/.test(a))) errors.push('"junior.args": its policy, output and resumption are the trial\'s, not the manifest\'s');
-  else if (!o.junior.args.includes('--max-tokens') || !(Number(o.junior.args[o.junior.args.indexOf('--max-tokens') + 1]) > 0)) errors.push('"junior.args": its --max-tokens, what each trial may spend at most - what is reserved for it before it is launched');
+  else {
+    /* A trial launches only work the fund can reserve before it is dispatched (§11): its junior's tokens and its Judge's
+       calls, each bounded here. Work no limit of the manifest bounds - branches, agents - is not launched from a trial. */
+    const bounded = (k: string) => o.junior.args.includes(k) && Number(o.junior.args[o.junior.args.indexOf(k) + 1]) > 0;
+    if (!bounded('--max-tokens')) errors.push('"junior.args": its --max-tokens, what each trial may spend at most - what is reserved for it before it is launched');
+    if (!bounded('--max-judge-calls')) errors.push('"junior.args": its --max-judge-calls, the calls of the Judge each trial may make at most - what is reserved for it before it is launched');
+    for (const k of ['--delegation-fund', '--agents', '--opening']) if (o.junior.args.includes(k)) errors.push('"junior.args": ' + k + ' - work the fund for trials cannot reserve (the Judge of its branches, its agents: no limit of the manifest bounds them); a condition with it is a batch\'s, not a trial\'s');
+  }
   if (!Array.isArray(o.cases) || !o.cases.length) errors.push('"cases": at least one');
   const ids = new Set<string>();
   for (const [i, c] of (Array.isArray(o.cases) ? o.cases : []).entries()) {
@@ -128,23 +135,31 @@ export function juniorMaxTokens(m: MetaManifest): number {
   return i >= 0 ? Number(m.junior.args[i + 1]) : NaN;
 }
 
+/** The calls of the Judge a trial may make at most: its --max-judge-calls, which the manifest must fix - what is reserved. */
+export function juniorMaxJudgeCalls(m: MetaManifest): number {
+  const i = m.junior.args.indexOf('--max-judge-calls');
+  return i >= 0 ? Number(m.junior.args[i + 1]) : NaN;
+}
+
 const rel = (dir: string, f: string) => path.relative(dir, f).split(path.sep).join('/');
 
 /** The trials of a meta-laboratory: their ledger (requested before dispatch, each launch reserved from the fund and
-    settled, finished once) and their children. `fund`: the tokens its trials may spend in all - reserved before each launch,
-    a launch it cannot hold never made. */
+    settled, finished once) and their children. `fund`: the tokens its trials may spend in all, `judgeFund` the calls of the
+    Judge they may make in all - each reserved before a launch, a launch they cannot hold never made. */
 export class Trials {
   readonly dir: string;
   readonly manifest: MetaManifest;
   private readonly launcher: TrialLauncher;
   private readonly ledgerFile: string;
   private readonly fund: number | null;
+  private readonly judgeFund: number | null;
 
-  constructor(dir: string, manifest: MetaManifest, launcher: TrialLauncher, o: { fund?: number } = {}) {
+  constructor(dir: string, manifest: MetaManifest, launcher: TrialLauncher, o: { fund?: number; judgeFund?: number } = {}) {
     const problems = manifestProblems(manifest);
     if (problems.length) throw new Error('the manifest: ' + problems.join('; '));
     this.dir = dir; this.manifest = manifest; this.launcher = launcher;
     this.fund = o.fund ?? null;
+    this.judgeFund = o.judgeFund ?? null;
     this.ledgerFile = path.join(dir, 'trials.jsonl');
     fs.mkdirSync(path.join(dir, 'trials'), { recursive: true });
     fs.mkdirSync(path.join(dir, 'policies'), { recursive: true });
@@ -153,13 +168,19 @@ export class Trials {
   ledger(): J[] { return fs.existsSync(this.ledgerFile) ? fs.readFileSync(this.ledgerFile, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : []; }
   private write(e: J): void { fs.appendFileSync(this.ledgerFile, JSON.stringify({ at: new Date().toISOString(), ...e }) + '\n'); }
 
-  /** What its trials spent of the fund: what each launch settled, and what launches not settled yet hold reserved. */
-  spent(ledger = this.ledger()): number {
+  /** What its trials spent of the fund: what each launch settled, and what launches not settled yet hold reserved - the
+      tokens, or the calls of the Judge. */
+  spent(ledger = this.ledger(), what: 'tokens' | 'judge_calls' = 'tokens'): number {
     const settled = new Set<string>();
     let n = 0;
-    for (const e of ledger) if (e.type === 'research_trial_settled') { settled.add(e.launch); n += Number(e.tokens) || 0; }
-    for (const e of ledger) if (e.type === 'research_trial_reserved' && !settled.has(e.launch)) n += Number(e.tokens) || 0;
+    for (const e of ledger) if (e.type === 'research_trial_settled') { settled.add(e.launch); n += Number(e[what]) || 0; }
+    for (const e of ledger) if (e.type === 'research_trial_reserved' && !settled.has(e.launch)) n += Number(e[what]) || 0;
     return n;
+  }
+
+  /** What its trials' results depend on beyond the policy: this manifest and the configuration its children run with. */
+  identity(): string {
+    return 'meta:' + this.manifest.id + ':' + manifestHash(this.manifest) + ':' + hashString(stableStringify(this.launcher.identity));
   }
 
   /** A policy with how its capture is made and its limits, as the manifest fixes them: named by the hash of all of it. */
@@ -177,10 +198,11 @@ export class Trials {
     return 't-' + hashString(stableStringify([manifestHash(this.manifest), c.id, rep, config, this.launcher.identity]));
   }
 
-  /** Where a trial's record is now: its latest continuation, or its first run. */
-  recordOf(id: string, ledger = this.ledger()): string {
-    const resumed = ledger.filter((e) => e.type === 'research_trial_resumed' && e.trial === id).at(-1);
-    return path.join(this.dir, resumed ? resumed.out : path.join('trials', id + '.json'));
+  /** Where a trial's record is now: the latest of its first run and its continuations that exists (a continuation that never
+      made its record is an intention that failed, kept in the ledger - never a record), or null. */
+  recordOf(id: string, ledger = this.ledger()): string | null {
+    const chain = [path.join('trials', id + '.json'), ...ledger.filter((e) => e.type === 'research_trial_resumed' && e.trial === id).map((e) => String(e.out))];
+    return chain.map((f) => path.join(this.dir, f)).filter((f) => fs.existsSync(f)).at(-1) ?? null;
   }
 
   /** Runs (or reconciles) every trial of a policy on the cases of a partition, in order; answers each result. It stops at
@@ -209,25 +231,44 @@ export class Trials {
     /* A child with a record: its end read as it is (never run again), or resumed from it where it was cut. */
     const record = this.recordOf(id, ledger);
     let resume: string | undefined;
-    if (fs.existsSync(record)) {
+    if (record) {
+      /* A record under another configuration is another trial's: never taken as this one's result, never resumed into it. */
+      const mismatch = configurationMismatch(record, this.launcher.identity);
       const r = trialResult(record, c.criterion);
+      if (mismatch) {
+        const infra: TrialResult = { ...r, state: 'infra', solved: null, why: mismatch };
+        this.write({ type: 'research_trial_finished', trial: id, record: rel(this.dir, record), result: infra, reconciled: true });
+        return infra;
+      }
       if (r.state === 'ended') { this.write({ type: 'research_trial_finished', trial: id, record: rel(this.dir, record), result: r, reconciled: true }); return r; }
       resume = record;
     }
     if (!ledger.some((e) => e.type === 'research_trial_requested' && e.trial === id))
       this.write({ type: 'research_trial_requested', trial: id, case: c.id, rep, policy, config, manifest: manifestHash(this.manifest), identity: this.launcher.identity,
         lab: c.lab, args, out: rel(this.dir, path.join(this.dir, 'trials', id + '.json')) });
-    /* Its launch reserved from the fund before it is dispatched: what its junior may spend at most. */
+    /* Its launch reserved from the fund before it is dispatched: what its junior may spend at most, and its Judge's calls. */
     ledger = this.ledger();
-    const reserve = juniorMaxTokens(this.manifest);
-    if (this.fund !== null && this.spent(ledger) + reserve > this.fund) {
-      const r: TrialResult = { state: 'unfunded', solved: null, stopped_by: null, policy_errors: 0, advice: 0, tokens: null, why: 'the fund for trials (' + this.fund + ') cannot hold its reserve (' + reserve + '): ' + this.spent(ledger) + ' spent or held' };
+    const reserve = juniorMaxTokens(this.manifest), reserveJudge = juniorMaxJudgeCalls(this.manifest);
+    const short = this.fund !== null && this.spent(ledger) + reserve > this.fund
+      ? 'the fund for trials (' + this.fund + ' tokens) cannot hold its reserve (' + reserve + '): ' + this.spent(ledger) + ' spent or held'
+      : this.judgeFund !== null && this.spent(ledger, 'judge_calls') + reserveJudge > this.judgeFund
+        ? 'the fund for trials (' + this.judgeFund + ' calls of the Judge) cannot hold its reserve (' + reserveJudge + '): ' + this.spent(ledger, 'judge_calls') + ' made or held' : null;
+    if (short) {
+      const r: TrialResult = { state: 'unfunded', solved: null, stopped_by: null, policy_errors: 0, advice: 0, tokens: null, why: short };
       this.write({ type: 'research_trial_refused', trial: id, reason: r.why });
       return r;
     }
+    /* A continuation never written over a record: the next name free - one whose launch failed before it made its record
+       keeps its intention in the ledger, and its name. */
+    const resumedOuts = new Set(ledger.filter((e) => e.type === 'research_trial_resumed' && e.trial === id).map((e) => String(e.out)));
+    let target = path.join(this.dir, 'trials', id + '.json');
+    for (let k = resumedOuts.size + 1; resume; k++) {
+      target = path.join(this.dir, 'trials', id + '.r' + k + '.json');
+      if (!fs.existsSync(target) && !resumedOuts.has(rel(this.dir, target))) break;
+    }
+    if (fs.existsSync(target)) throw new Error('trial ' + id + ': ' + target + ' exists and is not what is resumed - nothing is written over a record');
     const launch = id + '#' + ledger.filter((e) => e.type === 'research_trial_reserved' && e.trial === id).length;
-    this.write({ type: 'research_trial_reserved', trial: id, launch, tokens: reserve });
-    const target = resume ? path.join(this.dir, 'trials', id + '.r' + (ledger.filter((e) => e.type === 'research_trial_resumed' && e.trial === id).length + 1) + '.json') : path.join(this.dir, 'trials', id + '.json');
+    this.write({ type: 'research_trial_reserved', trial: id, launch, tokens: reserve, judge_calls: reserveJudge });
     if (resume) this.write({ type: 'research_trial_resumed', trial: id, from: rel(this.dir, resume), out: rel(this.dir, target) });
     let result: TrialResult;
     let journal = target;
@@ -239,8 +280,10 @@ export class Trials {
       if (mismatch) result = { ...result, state: 'infra', solved: null, why: mismatch };
     } catch (e) { result = { state: 'infra', solved: null, stopped_by: null, policy_errors: 0, advice: 0, tokens: null, why: String((e as Error).message ?? e).slice(0, 300) }; }
     if (signal?.aborted && result.state !== 'ended') result = { ...result, state: 'cancelled' };
-    /* What this launch spent: the live tokens of its process; unknown, what it held. */
-    this.write({ type: 'research_trial_settled', trial: id, launch, tokens: liveTokens(journal) ?? reserve, ...(liveTokens(journal) === null ? { unknown: true } : {}) });
+    /* What this launch spent: the live tokens of its process and its Judge's live calls; unknown, what it held. */
+    const live = liveTokens(journal), judged = liveJudgeCalls(journal);
+    this.write({ type: 'research_trial_settled', trial: id, launch, tokens: live ?? reserve, judge_calls: judged ?? reserveJudge,
+      ...(live === null || judged === null ? { unknown: [...(live === null ? ['tokens'] : []), ...(judged === null ? ['judge_calls'] : [])] } : {}) });
     this.write({ type: 'research_trial_finished', trial: id, record: rel(this.dir, journal), result });
     return result;
   }
@@ -253,6 +296,16 @@ function liveTokens(journalFile: string): number | null {
     const end = [...(j.events ?? [])].reverse().find((e: J) => e.type === 'end');
     if (end?.console_usage?.usage_unknown) return null;
     return typeof end?.console_usage?.llm_tokens_live === 'number' ? end.console_usage.llm_tokens_live : null;
+  } catch { return null; }
+}
+
+/** The calls of the Judge a run made live in its process (its replayed history aside), or null where unknown. */
+function liveJudgeCalls(journalFile: string): number | null {
+  try {
+    const j = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
+    const end = [...(j.events ?? [])].reverse().find((e: J) => e.type === 'end');
+    if (!end) return null;
+    return j.config?.flat ? 0 : Number(end.replay?.live?.jev ?? 0);
   } catch { return null; }
 }
 
@@ -296,6 +349,15 @@ export function qualityOf(trials: readonly { kind: string; result: TrialResult }
   return { kinds, quality, correct: trials.every((t) => t.result.policy_errors === 0), infra: trials.filter((t) => t.result.state === 'infra').length, trials: trials.length };
 }
 
+/** An evaluation of a candidate from its trials: a measure only when every trial it needs was run - one cut short (a trial
+    the fund could not hold, a cancellation, trials never reached) is kept as it is, incomplete: its correctness unchecked,
+    no quality, never competing with complete ones. */
+export function measureOf(trials: readonly { kind: string; result: TrialResult }[], needed: number): { complete: boolean; correct: 'yes' | 'no' | 'unchecked'; quality: (number | null)[] | null; q: ReturnType<typeof qualityOf> } {
+  const q = qualityOf(trials);
+  const complete = trials.length >= needed && trials.every((t) => t.result.state !== 'unfunded' && t.result.state !== 'cancelled');
+  return complete ? { complete, correct: q.correct ? 'yes' : 'no', quality: q.quality, q } : { complete, correct: 'unchecked', quality: null, q };
+}
+
 /* A candidate is one file, policy.json: what holds to the contract, by its content's hash. */
 function policyOfFiles(files: Readonly<Record<string, string | null>>): ResearchPolicy | string {
   const keys = Object.keys(files).filter((k) => files[k] !== null);
@@ -318,7 +380,7 @@ export function policyEvaluator(trials: Trials, start: ResearchPolicy, o: { sign
   const known = new Map<string, ResearchPolicy>();
   const register = (p: ResearchPolicy) => { known.set(policyHash(p), p); return candidateOf(p); };
   const first = register(start);
-  const identity = 'meta:' + trials.manifest.id + ':' + manifestHash(trials.manifest);
+  const identity = trials.identity();
   return {
     identity: async () => identity,
     contract: () => ({ about: 'a research policy (research-policy@1): observations in code over a capture of a junior\'s course, rules the Judge answers, a composition (p, m) => ({ guidance, state }) that advises develop, contrast or reframe, or abstains; its templates are the only words it gives',
@@ -337,11 +399,12 @@ export function policyEvaluator(trials: Trials, start: ResearchPolicy, o: { sign
       if (!p) return { executable: false, correct: 'no', quality: null, descriptor: null, feedback: null, diagnostics: ['unknown policy ' + hash], evaluator: identity };
       const ran = await trials.run(p, 'development', o.signal);
       if (ran.some((t) => t.result.state === 'unfunded')) o.onUnfunded?.();
-      const q = qualityOf(ran);
-      return { executable: true, correct: q.correct ? 'yes' : 'no', quality: q.quality, descriptor: null,
-        feedback: { kinds: q.kinds, quality: q.quality, trials: ran.map((t) => ({ case: t.case, rep: t.rep, state: t.result.state, solved: t.result.solved, advice: t.result.advice, policy_errors: t.result.policy_errors })) },
-        diagnostics: [...(q.correct ? [] : ['an output of the policy broke its contract']), ...(q.infra ? [q.infra + ' trial(s) failed in the infrastructure: they measure nothing'] : []),
-          ...(ran.some((t) => t.result.state === 'unfunded') ? ['the fund for trials could not hold them all: not measured'] : [])],
+      const needed = trialsPerEvaluation(trials.manifest);
+      const m = measureOf(ran, needed), q = m.q;
+      return { executable: true, correct: m.correct, quality: m.quality, descriptor: null,
+        feedback: { kinds: q.kinds, quality: m.quality, ...(m.complete ? {} : { incomplete: true }), trials: ran.map((t) => ({ case: t.case, rep: t.rep, state: t.result.state, solved: t.result.solved, advice: t.result.advice, policy_errors: t.result.policy_errors })) },
+        diagnostics: [...(m.complete ? [] : ['incomplete: ' + ran.filter((t) => t.result.state !== 'unfunded' && t.result.state !== 'cancelled').length + ' of its ' + needed + ' trials run to their end (the fund could not hold the rest, or a cancellation) - not a measure']),
+          ...(q.correct ? [] : ['an output of the policy broke its contract']), ...(q.infra ? [q.infra + ' trial(s) failed in the infrastructure: they measure nothing'] : [])],
         evaluator: identity,
         evidence: ran.map((t) => ({ trial: t.trial, case: t.case, rep: t.rep, kind: t.kind, result: t.result })) };
     }
@@ -377,6 +440,7 @@ export async function verifyTrials(dir: string, manifest: MetaManifest, runner: 
   let decisions = 0, count = 0;
   const finished = new Map<string, J>();
   for (const e of ledger) if (e.type === 'research_trial_finished') finished.set(e.trial, e);
+  const requested = new Set(ledger.filter((e) => e.type === 'research_trial_requested').map((e) => String(e.trial)));
   for (const e of ledger.filter((x) => x.type === 'research_trial_requested')) {
     count++;
     if (e.manifest !== hash) { problems.push(e.trial + ': recorded under another manifest (' + e.manifest + '), not this one (' + hash + ')'); continue; }
@@ -407,9 +471,14 @@ export async function verifyTrials(dir: string, manifest: MetaManifest, runner: 
     const v = await verifySearch(events, path.join(searchesDir, m), (h) => sealed.get(h) ?? null, undefined, recordedPolicyEvaluator);
     if (!v.holds) problems.push('search ' + m + ': ' + v.why);
     for (const e of fs.readFileSync(events, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x: J) => x.type === 'evaluation' && Array.isArray(x.evidence))) {
-      const q = qualityOf(e.evidence);
-      if (stableStringify(q.quality) !== stableStringify(e.result.quality) || (q.correct ? 'yes' : 'no') !== e.result.correct) problems.push('search ' + m + ', ' + e.evaluation + ': computed again from its trials, not the quality recorded');
-      for (const t of e.evidence as J[]) if (finished.get(t.trial) && stableStringify(finished.get(t.trial)!.result) !== stableStringify(t.result)) problems.push('search ' + m + ', ' + e.evaluation + ': trial ' + t.trial + ' is not as the ledger finished it');
+      const again = measureOf(e.evidence, trialsPerEvaluation(manifest));
+      if (stableStringify(again.quality) !== stableStringify(e.result.quality) || again.correct !== e.result.correct) problems.push('search ' + m + ', ' + e.evaluation + ': computed again from its trials, not the quality recorded');
+      /* Every trial it rests on must be in this ledger, requested and finished as it says: evidence with no trial is none. */
+      for (const t of e.evidence as J[]) {
+        const f = finished.get(t.trial);
+        if (!requested.has(String(t.trial)) || !f) problems.push('search ' + m + ', ' + e.evaluation + ': trial ' + t.trial + ' is not in the ledger of trials');
+        else if (stableStringify(f.result) !== stableStringify(t.result)) problems.push('search ' + m + ', ' + e.evaluation + ': trial ' + t.trial + ' is not as the ledger finished it');
+      }
     }
   }
   return { holds: !problems.length, trials: count, decisions, searches: manifests.length, problems };
