@@ -485,6 +485,37 @@ Judge, sin ejecutar nada.
 **La lectura histórica** (`lab meta inspect`, `policy-inspection@1`) da lo que la política habría decidido antes de cada
 respuesta de un run ya hecho. Va marcada `counterfactual: false` y nunca se registra como ensayo ni como mejora.
 
+#### 13.2.1 Una revisión externa de M2, conciliada (28/10/2026)
+
+Siete garantías que podían alterar las comparaciones, el gasto o la reproducción. Cada una se corrige por su principio,
+con una prueba que reproduce el caso (`lib/test/meta-lab.test.ts`, «M2 review»).
+
+1. **Un ensayo es su configuración efectiva.** El lanzador declara la identidad con la que ejecuta sus hijos: el modelo
+   de System 2, la ruta y el ajuste de su endpoint y el modelo del Judge, nunca una clave. Esa identidad entra en el id
+   del ensayo y queda registrada. Con otro modelo, el ensayo es otro y nada del primero se reutiliza. Un hijo cuyo
+   registro dice que corrió con otro modelo es un fallo de infraestructura, no un resultado.
+2. **El registro de un ensayo es el conjunto de archivos de su run.** Al reanudar, no se copia el diario: el ensayo
+   apunta a su continuación (`record` en `research_trial_finished`), y su hallazgo, que está al lado, cuenta. Un éxito
+   tras reanudar sigue siendo un éxito, y `verify` lo lee del mismo sitio.
+3. **Los controles de un ensayo viajan con él.** Un run reanudado toma sus controles de nuevo, así que al reanudar se le
+   vuelven a dar los límites de tokens y tiempo (`controlArgs` del runner).
+4. **El trabajo interior se reserva del presupuesto exterior y se liquida (§11).**
+   - **Manifiesto:** fija el `--max-tokens` del junior, que es lo que se reserva.
+   - **Cada lanzamiento** reserva ese máximo antes de despacharse y liquida lo gastado en vivo después (lo desconocido,
+     a lo reservado). Uno que el fondo no puede sostener no se lanza (`unfunded`), y la búsqueda se detiene ahí sin
+     llamarlo medida.
+   - **`meta search`** exige `--trial-tokens`, porque su `--tokens` sólo limita al mutador. Sus evaluaciones se acotan
+     a lo que el fondo puede sostener, e informa por separado del gasto del mutador y del de los ensayos.
+5. **Una búsqueda nunca pisa a otra.** Cada una escribe un registro propio en `searches/`. Una se continúa sólo con
+   `--resume`, que lee su registro y escribe uno nuevo.
+6. **Una política se nombra por toda su configuración** (política, contexto y límites): con otros límites, otro archivo
+   y otro ensayo.
+7. **`verify` comprueba el manifiesto que se le da y reconstruye la selección evolutiva.**
+   - **Por ensayo:** cada uno debe estar registrado con el hash del manifiesto y con los argumentos de su caso.
+   - **Por búsqueda:** cada búsqueda sellada se reconstruye desde su registro sin modelo ni medida (`verifySearch`, con
+     un evaluador de políticas por contenido). Cada evaluación se recalcula desde sus ensayos y se contrasta con el
+     registro de ensayos.
+
 ### 13.3 M3 preparado, sin lanzar (28/10/2026)
 
 El piloto real gasta inferencia y lo lanza el operador. Queda listo en `lib/examples/meta.pilot.md`, con las órdenes,

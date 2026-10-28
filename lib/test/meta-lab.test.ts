@@ -70,18 +70,19 @@ test('M2: the help a researcher was delivered, read as experience - author, cut,
   assert.equal(((await new Experience(runs, { guidance: true }).run({ experience: 'guidance', run: 'exp1' })) as any).delivered.length, 2);
 });
 
-const manifest = (over: Partial<MetaManifest> = {}): MetaManifest => ({ format: 'meta-lab@1', id: 'm1', junior: { args: ['--attempts', '2'] },
+const manifest = (over: Partial<MetaManifest> = {}): MetaManifest => ({ format: 'meta-lab@1', id: 'm1', junior: { args: ['--attempts', '2', '--max-tokens', '100'] },
   cases: [{ id: 'cells-a', lab: 'cells', args: ['--seed', '1'], partition: 'development', criterion: 'model_accepted' },
     { id: 'orbit-a', lab: 'orbit', args: ['--seed', '1'], partition: 'development', criterion: 'model_accepted' },
     { id: 'cells-hold', lab: 'cells', args: ['--seed', '9'], partition: 'confirmation', criterion: 'model_accepted' }], ...over });
 
 /** Trials standing in: a child "solves" its case when its policy's words say "contrast" (read from the policy file it was
-    given), writes its record and finding; `hook` sees each call. */
-function fakeLauncher(dir: string, calls: any[], o: { partialOn?: (t: any) => boolean; policyError?: boolean } = {}): TrialLauncher {
-  return async (t) => {
+    given, or from the record it resumes), writes its record and finding; `ran` - the model it really ran with. */
+function fakeLauncher(dir: string, calls: any[], o: { partialOn?: (t: any) => boolean; policyError?: boolean; identity?: Record<string, unknown>; ran?: string } = {}): TrialLauncher {
+  const identity = o.identity ?? { llm_model: 'stand-in' };
+  return { identity, async run(t) {
     calls.push(t);
     const ledger = fs.readFileSync(path.join(dir, 'trials.jsonl'), 'utf8');
-    assert.ok(ledger.includes('"research_trial_requested"'), 'recorded before it is dispatched');
+    assert.ok(ledger.includes('"research_trial_requested"') && ledger.includes('"research_trial_reserved"'), 'recorded and reserved before it is dispatched');
     const policyFile = t.resume ? null : t.args[t.args.indexOf('--research-policy') + 1];
     const words = policyFile ? fs.readFileSync(path.join(dir, policyFile), 'utf8') : fs.readFileSync(t.resume!, 'utf8');
     const solved = /contrast:/.test(words);
@@ -89,12 +90,12 @@ function fakeLauncher(dir: string, calls: any[], o: { partialOn?: (t: any) => bo
     const events = [{ type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: solved }] },
       ...(o.policyError ? [{ type: 'research_policy_decided', failure: 'invalid_output' }] : []),
       { type: 'research_policy_delivered', message: 'm1' }, ...(partial ? [] : [{ type: 'end', stoppedBy: 'budget', console_usage: { llm_tokens_live: 100 } }])];
-    write(t.out, { experiment: 'cells@1', started: 'x', config: {}, events, ...(policyFile ? { policy_words: words } : {}) });
+    write(t.out, { experiment: 'cells@1', started: 'x', config: { llm_model: o.ran ?? identity.llm_model }, events, policy_words: words });
     if (solved && !partial) write(t.out.replace(/\.json$/, '.finding.json'), { outcome: { status: 'accepted' } });
     if (t.signal?.aborted) return { journal: t.out };
     if (partial) throw new Error('the child died');
     return { journal: t.out };
-  };
+  } };
 }
 
 test('M2: trials recorded before dispatch, finished once, never run twice; a crash reconciled from the child\'s record; a cancellation kept', async () => {
@@ -119,12 +120,17 @@ test('M2: trials recorded before dispatch, finished once, never run twice; a cra
   const cut = tmp('trials-cut-'), cutCalls: any[] = [];
   let first = true;
   const t2 = new Trials(cut, manifest(), fakeLauncher(cut, cutCalls, { partialOn: () => { const p = first; first = false; return p; } }));
-  const once = await t2.run(policy('plain'), 'development');
+  const once = await t2.run(policy('contrast'), 'development');
   assert.equal(once[0].result.state, 'infra', 'a child that died before its end: a failure of the infrastructure, no measure invented');
   assert.equal(once[0].result.solved, null);
-  await t2.run(policy('plain'), 'development');
+  const again = await t2.run(policy('contrast'), 'development');
   assert.ok(cutCalls.some((c) => c.resume), 'resumed from its record, not started again');
-  assert.equal(trialResult(path.join(cut, 'trials', once[0].trial + '.json'), 'model_accepted').state, 'ended');
+  /* Its record is its continuation's, whole - its finding beside it: a success stays a success (an external review). */
+  assert.deepEqual([again[0].result.state, again[0].result.solved], ['ended', true]);
+  const record = t2.ledger().filter((e) => e.type === 'research_trial_finished' && e.trial === once[0].trial).at(-1)!.record;
+  assert.match(record, /\.r1\.json$/);
+  assert.equal(trialResult(path.join(cut, record), 'model_accepted').solved, true);
+  assert.equal((await verifyTrials(cut, manifest(), runner)).holds, true);
   /* Cancelled: the signal reaches the child, what it did is kept. */
   const cancelled = tmp('trials-cancel-'), cc: any[] = [];
   const controller = new AbortController(); controller.abort();
@@ -167,15 +173,20 @@ test('M2: verified from its record alone - every trial read again, every decisio
   const dir = tmp('meta-verify-'), calls: any[] = [];
   const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls));
   await trials.run(policy('contrast'), 'development');
-  const v = verifyTrials(dir, manifest(), runner);
+  const v = await verifyTrials(dir, manifest(), runner);
   assert.equal(v.holds, true, v.problems.join('; '));
   assert.equal(v.trials, 2);
+  /* Against another manifest - a case's seed changed - it does not hold (an external review). */
+  const other = manifest({ cases: manifest().cases.map((c) => (c.id === 'cells-a' ? { ...c, args: ['--seed', '999'] } : c)) });
+  const w = await verifyTrials(dir, other, runner);
+  assert.equal(w.holds, false);
+  assert.ok(w.problems.some((p) => /another manifest/.test(p)));
   const out = trials.ledger().find((e) => e.type === 'research_trial_requested')!.out;
   const f = path.join(dir, out);
   const j = JSON.parse(fs.readFileSync(f, 'utf8'));
   j.events = j.events.filter((e: any) => e.type !== 'end');
   fs.writeFileSync(f, JSON.stringify(j));
-  assert.equal(verifyTrials(dir, manifest(), runner).holds, false, 'a record changed after its finishing is found');
+  assert.equal((await verifyTrials(dir, manifest(), runner)).holds, false, 'a record changed after its finishing is found');
 });
 
 test('M2: a policy read against a run already made inspects its decisions - never a trial, never an improvement', async () => {
@@ -207,7 +218,7 @@ const junior: FetchLike = async (_url, init) => {
 
 test('M2: with the harness\'s own runs, a candidate does not change the checks - only what the junior is advised', async () => {
   const dir = tmp('meta-real-');
-  const m = manifest({ junior: { args: ['--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '2'] },
+  const m = manifest({ junior: { args: ['--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '2', '--max-tokens', '100000'] },
     cases: [{ id: 'cells-1', lab: 'cells', args: ['--seed', '1'], partition: 'development', criterion: 'model_accepted' }] });
   const trials = new Trials(dir, m, inProcessLauncher({ root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior }));
   const silent: ResearchPolicy = { ...policy('x'), composition: code(`(p) => ({ guidance: { kind: 'abstain', reason: 'never' }, state: p.state })`) };
@@ -217,7 +228,7 @@ test('M2: with the harness\'s own runs, a candidate does not change the checks -
   assert.equal(a.result.advice, 0); assert.ok(b.result.advice >= 1);
   const checks = (t: string) => JSON.parse(fs.readFileSync(path.join(dir, 'trials', t + '.json'), 'utf8')).events.filter((e: any) => e.type === 'check').map(({ t: _t, ...e }: any) => e);
   assert.deepEqual(checks(b.trial), checks(a.trial), 'the same checks, the same verdicts: the policy never touches the protocol');
-  const v = verifyTrials(dir, m, runner);
+  const v = await verifyTrials(dir, m, runner);
   assert.equal(v.holds, true, v.problems.join('; '));
   assert.ok(v.decisions > 0);
 });
@@ -235,4 +246,78 @@ test('M2: lab meta - the corpus indexed, a manifest refused before anything runs
   assert.ok(lines.some((l) => /refused, nothing was run/.test(l)));
   write(path.join(root, 'm.json'), manifest());
   assert.equal(await labCli(['meta', 'verify', 'm.json'], ctx), 0, 'a meta-laboratory with no trials yet holds');
+});
+
+/* --- An external review of M2 (28/10/2026), reconciled ------------------------------------------------------------------ */
+
+test('M2 review: a trial is its effective configuration - another model is another trial; a child that ran with another is no result', async () => {
+  const dir = tmp('meta-identity-'), calls: any[] = [];
+  const a = await new Trials(dir, manifest(), fakeLauncher(dir, calls, { identity: { llm_model: 'small' } })).run(policy('contrast'), 'development');
+  const b = await new Trials(dir, manifest(), fakeLauncher(dir, calls, { identity: { llm_model: 'large' } })).run(policy('contrast'), 'development');
+  assert.equal(calls.length, 4, 'under another model, nothing of the first is taken: run again');
+  assert.notEqual(a[0].trial, b[0].trial);
+  const lying = tmp('meta-mismatch-'), lc: any[] = [];
+  const [r] = await new Trials(lying, manifest(), fakeLauncher(lying, lc, { identity: { llm_model: 'small' }, ran: 'other' })).run(policy('contrast'), 'development');
+  assert.equal(r.result.state, 'infra');
+  assert.match(String(r.result.why), /ran with llm_model other/);
+});
+
+test('M2 review: a policy is named by its whole configuration - other limits, another file and another trial', async () => {
+  const dir = tmp('meta-config-'), calls: any[] = [];
+  await new Trials(dir, manifest({ policy: { limits: { advice: 1 } } }), fakeLauncher(dir, calls)).run(policy('contrast'), 'development');
+  await new Trials(dir, manifest({ policy: { limits: { advice: 8 } } }), fakeLauncher(dir, calls)).run(policy('contrast'), 'development');
+  const files = calls.map((c) => c.args[c.args.indexOf('--research-policy') + 1]);
+  assert.equal(new Set(files).size, 2);
+  const limits = [...new Set(files)].map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')).limits.advice).sort((x, y) => x - y);
+  assert.deepEqual(limits, [1, 8], 'each ran with its own limits');
+});
+
+test('M2 review: the fund for trials - reserved before each launch, settled after; a launch it cannot hold is never made', async () => {
+  const dir = tmp('meta-fund-'), calls: any[] = [];
+  const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls), { fund: 150 });
+  const ran = await trials.run(policy('contrast'), 'development');
+  assert.deepEqual(ran.map((t) => t.result.state), ['ended', 'unfunded'], 'the second would not fit: never launched, and it stops there');
+  assert.equal(calls.length, 1);
+  assert.equal(trials.spent(), 100, 'what the first spent, settled');
+  assert.ok(manifestProblems(manifest({ junior: { args: ['--attempts', '2'] } })).some((p) => /max-tokens/.test(p)), 'a trial\'s limit is what is reserved: the manifest fixes it');
+  let told = false;
+  const ev = policyEvaluator(new Trials(tmp('meta-fund2-'), manifest(), fakeLauncher(dir, []), { fund: 50 }), policy('plain'), { onUnfunded: () => { told = true; } });
+  const e = await ev.evaluate(policyHash(policy('plain')));
+  assert.ok(told, 'the search is told to stop');
+  assert.ok(e.diagnostics.some((d) => /not measured/.test(d)));
+});
+
+test('M2 review: a trial resumed runs under its controls again - its limits of tokens and time are not lost', async () => {
+  const { controlArgs, runLaboratory } = await import('../src/runtime/lab-runner.ts');
+  const { cellsLab } = await import('../src/worlds/cells/lab.ts');
+  assert.deepEqual(controlArgs(['--seed', '1', '--max-tokens', '100', '--max-minutes', '1', '--out', 'x', '--resume', 'y', '--level', '2']), ['--max-tokens', '100', '--max-minutes', '1']);
+  const dir = tmp('meta-controls-');
+  const args = ['--seed', '1', '--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '3', '--researcher', 'assisted', '--max-tokens', '100', '--max-minutes', '1'];
+  const first = await runLaboratory(cellsLab, { args: [...args, '--out', path.join(dir, 'a.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior, print: () => {} });
+  const launcher = inProcessLauncher({ root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: junior });
+  const { journal } = await launcher.run({ lab: 'cells', args, out: path.join(dir, 'b.json'), resume: first.journal });
+  assert.deepEqual(JSON.parse(fs.readFileSync(journal, 'utf8')).limits, { max_tokens: 100, max_minutes: 1 });
+});
+
+test('M2 review: a search is never overwritten, needs a fund for its trials, and is rebuilt by verify', async () => {
+  const { labCli } = await import('../src/runtime/cli.ts');
+  const root = tmp('meta-search-cli-'), lines: string[] = [];
+  write(path.join(root, 'm.json'), manifest());
+  write(path.join(root, 'p.json'), policy('plain'));
+  assert.equal(await labCli(['meta', 'search', 'm.json', 'p.json'], { root, out: (l: string) => lines.push(l), env: {} } as never), 2);
+  assert.ok(lines.some((l) => /needs --trial-tokens/.test(l)));
+  /* A search sealed in the meta-laboratory's searches: rebuilt with no model nor measure, its evaluations from its trials. */
+  const dir = tmp('meta-search-verify-'), calls: any[] = [];
+  const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls));
+  const mutator = { propose: async () => ({ text: JSON.stringify({ files: { 'policy.json': JSON.stringify(policy('contrast')) }, why: 'w' }), tokens: 10 }) };
+  fs.mkdirSync(path.join(dir, 'searches'));
+  const out = path.join(dir, 'searches', 's1.jsonl');
+  const { manifest: sealed } = await runSearch({ evaluator: policyEvaluator(trials, policy('plain')), mutator, profile: balanced(0), question: 'q', limits: { evaluations: 2, attempts: 3, tokens: 1000 }, out });
+  fs.writeFileSync(out.replace(/\.jsonl$/, '.manifest.json'), JSON.stringify(sealed));
+  const v = await verifyTrials(dir, manifest(), runner);
+  assert.equal(v.searches, 1);
+  assert.equal(v.holds, true, v.problems.join('; '));
+  const tampered = fs.readFileSync(out, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).map((e) => (e.type === 'evaluation' ? { ...e, result: { ...e.result, quality: [0, 0] } } : e));
+  fs.writeFileSync(out, tampered.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  assert.equal((await verifyTrials(dir, manifest(), runner)).holds, false);
 });

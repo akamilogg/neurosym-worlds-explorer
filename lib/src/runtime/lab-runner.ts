@@ -125,6 +125,17 @@ const CONTROLS: readonly { name: string; value: string; help: string }[] = [
 ];
 const CONTROL_NAMES = new Set(['out', ...CONTROLS.map((c) => c.name)]);
 
+/** The run's controls among its arguments (its limits of tokens and time, its help...), without where it writes nor what it
+    resumes: what a resumed run must be given again to run under the same limits (a resumed run takes its controls anew). */
+export function controlArgs(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const name = argv[i].startsWith('--') ? argv[i].slice(2) : '';
+    if (CONTROL_NAMES.has(name) && name !== 'out' && name !== 'resume' && i + 1 < argv.length) { out.push(argv[i], argv[i + 1]); i++; }
+  }
+  return out;
+}
+
 /** The experiment's arguments, without the run's controls (what a resumed run repeats). */
 export function experimentArgs(argv: readonly string[]): string[] {
   const out: string[] = [];

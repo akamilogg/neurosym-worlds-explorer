@@ -48,7 +48,9 @@ function recordedEvaluator(events: readonly SearchEvent[], startFiles: Readonly<
 /** The search of `eventsFile` rebuilt and compared with its sealed manifest, whole - its seal checked first; a search it
     continued found by its hash. With its task, each verdict is computed again from the evidence the record kept, and must
     give the quality and correctness the policy read. */
-export async function verifySearch(eventsFile: string, manifestFile: string, manifestByHash: (hash: string) => SearchManifest | null, task?: ArtifactTask): Promise<{ holds: boolean; why: string }> {
+export async function verifySearch(eventsFile: string, manifestFile: string, manifestByHash: (hash: string) => SearchManifest | null, task?: ArtifactTask,
+  /** How its candidates are made again where they are not artifacts' programs (a search over research policies). */
+  rebuild: (events: readonly SearchEvent[], startFiles: Readonly<Record<string, string>>, start: string) => Evaluator = recordedEvaluator): Promise<{ holds: boolean; why: string }> {
   const events = lines(eventsFile);
   const sealed = JSON.parse(fs.readFileSync(manifestFile, 'utf8')) as SearchManifest;
   const { hash: _h, ...body } = sealed;
@@ -72,7 +74,7 @@ export async function verifySearch(eventsFile: string, manifestFile: string, man
   if (!startFiles || !start) return { holds: false, why: 'its start is not in its record' };
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-search-')), 'rebuilt.jsonl');
   try {
-    const { manifest } = await runSearch({ evaluator: recordedEvaluator(events, startFiles, start), mutator: { propose: async () => { throw new Error('verification is offline: an answer the record does not hold is not asked'); } },
+    const { manifest } = await runSearch({ evaluator: rebuild(events, startFiles, start), mutator: { propose: async () => { throw new Error('verification is offline: an answer the record does not hold is not asked'); } },
       profile: started.profile, question: started.question, limits: started.limits, out, recorded: events, live: false, ...(continueFrom ? { continueFrom } : {}),
       ...(started.seeds ? { seeds: started.seeds } : {}) });
     const differs = (Object.keys({ ...manifest, ...sealed }) as (keyof SearchManifest)[]).filter((k) => stableStringify(manifest[k]) !== stableStringify(sealed[k]));

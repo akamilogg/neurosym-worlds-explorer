@@ -68,13 +68,17 @@ necesario.
 ## 3. Desarrollar la política, si los ensayos lo justifican
 
 ```powershell
-.\lab_two_tier_reasoning.ps1 meta search examples\meta.pilot.json examples\research-policies\situated.json --evaluations 4 --attempts 8
+.\lab_two_tier_reasoning.ps1 meta search examples\meta.pilot.json examples\research-policies\situated.json --trial-tokens 16000000 --evaluations 4 --attempts 8
 ```
 
 - **Mutador:** el motor evolutivo propone variantes de la política con el modelo `AGENT_LLM` del lanzador.
 - **Medida:** cada variante se mide con ensayos completos en los casos de desarrollo. Cada evaluación son cinco runs
   del junior: conviene empezar con muy pocas.
-- **Vuelta atrás:** el linaje y la procedencia de cada variante quedan en `runs/meta/meta-pilot/search.jsonl`.
+- **Fondo de los ensayos:** `--trial-tokens` es lo que pueden gastar en total. Cada ensayo reserva su máximo
+  (`--max-tokens` del junior) antes de lanzarse. Una evaluación son cinco ensayos, 4 000 000 tokens reservados, así que
+  16 000 000 alcanzan para cuatro. `--tokens` sólo limita al mutador.
+- **Vuelta atrás:** cada búsqueda tiene su propio registro en `runs/meta/meta-pilot/searches/`, que nunca se
+  sobrescribe. Se continúa con `--resume <registro>`, que escribe uno nuevo.
 
 ## 4. Lectura sin gasto
 

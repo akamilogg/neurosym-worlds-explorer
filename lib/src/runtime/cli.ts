@@ -255,30 +255,57 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           if (problems.length) { out('the manifest is refused, nothing was run:'); for (const e of problems) out('  ' + e); return 2; }
           const dir = path.join(metaDir, manifest.id);
           if (sub === 'verify') {
-            const v = verifyTrials(dir, manifest, nodeVmRunner({ timeoutMs: 2000 }));
-            out((v.holds ? 'holds' : 'DOES NOT HOLD') + ': ' + v.trials + ' trials, ' + v.decisions + ' decisions of their policies rebuilt with no Judge');
+            const v = await verifyTrials(dir, manifest, nodeVmRunner({ timeoutMs: 2000 }));
+            out((v.holds ? 'holds' : 'DOES NOT HOLD') + ': ' + v.trials + ' trials, ' + v.decisions + ' decisions of their policies rebuilt with no Judge, ' + v.searches + ' searches rebuilt with no model nor measure');
             for (const p of v.problems) out('  ' + p);
             return v.holds ? 0 : 1;
           }
+          /* The fund for trials (§11): every launch reserved from it before it is dispatched and settled after - in all, for the
+             trials of this meta-laboratory. A search must be given one: its tokens limit only its mutator. */
+          const fundGiven = take(args, 'trial-tokens');
+          const fund = fundGiven !== undefined ? Number(fundGiven) : undefined;
+          if (fund !== undefined && !(fund > 0)) { out('--trial-tokens: the tokens its trials may spend in all, a number above 0'); return 2; }
+          if (sub === 'search' && fund === undefined) { out('lab meta search needs --trial-tokens N: the tokens its trials may spend in all (its --tokens limit only its mutator)'); return 2; }
           const { labEndpointsFromEnv, chatFromEnv } = await import('../orchestra/launch.ts');
           const ends = labEndpointsFromEnv(env);
-          const trials = new Trials(dir, manifest, inProcessLauncher({ root: dir, llm: ends.llm, ...(ends.judge ? { judge: ends.judge } : {}) }));
+          const trials = new Trials(dir, manifest, inProcessLauncher({ root: dir, llm: ends.llm, ...(ends.judge ? { judge: ends.judge } : {}) }), fund !== undefined ? { fund } : {});
           const config = policyAt(policyFile);
           if (sub === 'trials') {
             const partition = (take(args, 'partition') ?? 'development') as 'development' | 'confirmation';
             const ran = await trials.run(config.policy, partition);
-            for (const t of ran) out(t.case + '#' + t.rep + ' ' + t.result.state + (t.result.solved !== null ? (t.result.solved ? ' solved' : ' not solved') : '') + ', ' + t.result.advice + ' advice' + (t.result.policy_errors ? ', ' + t.result.policy_errors + ' policy errors' : ''));
+            for (const t of ran) out(t.case + '#' + t.rep + ' ' + t.result.state + (t.result.solved !== null ? (t.result.solved ? ' solved' : ' not solved') : '') + ', ' + t.result.advice + ' advice' + (t.result.policy_errors ? ', ' + t.result.policy_errors + ' policy errors' : '') + (t.result.why ? ' (' + t.result.why + ')' : ''));
+            out('trials have spent or hold ' + trials.spent() + ' tokens' + (fund !== undefined ? ' of ' + fund : ''));
             return 0;
           }
           const { runSearch } = await import('../learn/evolve/engine.ts');
           const { balanced } = await import('../learn/evolve/policy.ts');
           const { chatMutator } = await import('../learn/evolve/mutator.ts');
           const n = (k: string, d: number) => Math.max(1, Math.floor(Number(take(args, k) ?? d)) || d);
-          const { manifest: sealed } = await runSearch({ evaluator: policyEvaluator(trials, config.policy), mutator: chatMutator(chatFromEnv(env, 'AGENT_LLM')), profile: balanced(0),
-            question: 'a research policy that helps this junior solve more of its tasks', limits: { evaluations: n('evaluations', 6), attempts: n('attempts', 12), tokens: n('tokens', 400000) },
-            out: path.join(dir, 'search.jsonl') });
-          fs.writeFileSync(path.join(dir, 'search.manifest.json'), JSON.stringify(sealed, null, 2));
-          out('search ' + sealed.stoppedBy + ': ' + sealed.cost.evaluations + ' evaluations, ' + sealed.cost.tokens + ' tokens; ' + path.join(dir, 'search.manifest.json'));
+          /* A search never overwrites another: a record of its own each time, or the one it resumes read and continued into a
+             new one. */
+          const resumeGiven = take(args, 'resume');
+          const searches = path.join(dir, 'searches');
+          fs.mkdirSync(searches, { recursive: true });
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const resumeFile = resumeGiven ? (fs.existsSync(path.resolve(resumeGiven)) ? path.resolve(resumeGiven) : path.join(searches, resumeGiven)) : null;
+          if (resumeFile && !fs.existsSync(resumeFile)) { out('--resume: no search record ' + resumeGiven); return 2; }
+          const outFile = path.join(searches, (resumeFile ? path.basename(resumeFile, '.jsonl') + '.resumed-' : 'search-') + stamp + '.jsonl');
+          if (fs.existsSync(outFile)) { out('a search is already recorded as ' + outFile + ': nothing is overwritten'); return 2; }
+          const recorded = resumeFile ? fs.readFileSync(resumeFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : undefined;
+          /* Its evaluations bounded by what the fund can hold: one is every development trial, each reserving its junior's limit. */
+          const { trialsPerEvaluation, juniorMaxTokens } = await import('../meta/lab.ts');
+          const perEvaluation = trialsPerEvaluation(manifest) * juniorMaxTokens(manifest);
+          const affordable = Math.max(0, Math.floor((fund! - trials.spent()) / perEvaluation));
+          const evaluations = Math.min(n('evaluations', 6), affordable + (recorded ? recorded.filter((e) => e.type === 'evaluation').length : 0));
+          if (evaluations < 1) { out('the fund for trials (' + fund + ', ' + trials.spent() + ' spent or held) cannot hold one evaluation (' + perEvaluation + ' tokens reserved): nothing was run'); return 2; }
+          const controller = new AbortController();
+          const { manifest: sealed } = await runSearch({ evaluator: policyEvaluator(trials, config.policy, { signal: controller.signal, onUnfunded: () => controller.abort() }),
+            mutator: chatMutator(chatFromEnv(env, 'AGENT_LLM')), profile: balanced(0), signal: controller.signal,
+            question: 'a research policy that helps this junior solve more of its tasks', limits: { evaluations, attempts: n('attempts', 12), tokens: n('tokens', 400000) },
+            out: outFile, ...(recorded ? { recorded, live: true } : {}) });
+          const sealedFile = outFile.replace(/\.jsonl$/, '.manifest.json');
+          fs.writeFileSync(sealedFile, JSON.stringify(sealed, null, 2));
+          out('search ' + sealed.stoppedBy + ': ' + sealed.cost.evaluations + ' evaluations; its mutator ' + sealed.cost.tokens + ' tokens; its trials ' + trials.spent() + ' tokens of the fund ' + fund + '; ' + sealedFile);
           return 0;
         }
         out('lab meta index | inspect <policy> <journal> | trials <meta-lab.json> <policy> | search <meta-lab.json> <policy> | verify <meta-lab.json>');
