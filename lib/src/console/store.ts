@@ -40,6 +40,20 @@ export function researcherEvent(e: Json): Json | null {
       ...(e.validation ? { validation: { family: places(e.validation.family), refused: e.validation.refused,
         became_laboratories: e.validation.became_laboratories, blind: (e.validation.blind_confirmation?.sets ?? []).map((s: Json) => ({ ok: Boolean(s.ok) })) } } : {}) };
     case 'end': return { ...base, ...pick(e, ['stoppedBy']) };
+    /* What it did and what reached it in a team or a living world (SPEC-VISTA-ESCALADA §9): its own words and acts, what
+       was delivered to it, its own outcomes - never what happened there unperceived, nor others' timeouts. */
+    case 'message_sent': case 'material_shared': return { ...base, ...pick(e, ['to', 'id', 'refused', 'text', 'refs', 'episode', 'document', 'version']) };
+    case 'messages_delivered': return { ...base, ...pick(e, ['messages', 'waiting']) };
+    case 'world_help': return { ...base, ...pick(e, ['message', 'text']) };
+    case 'world_window': return { ...base, ...pick(e, ['window', 'by', 'outcomes']) };
+    case 'world_closed': return base;
+    case 'peer_publish': return { ...base, ...pick(e, ['id', 'kind', 'claim', 'evidence', 'window']) };
+    case 'peer_read': return { ...base, ...pick(e, ['peers', 'shown', 'items', 'version']) };
+    case 'delegation_requested': return { ...base, ...pick(e, ['id', 'question', 'expected', 'mode', 'granted']) };
+    case 'round_closed': case 'budget_extended': case 'focus_changed': return { ...base, ...pick(e, ['why', 'to_attempts', 'facet', 'task']) };
+    /* An artifact's verdict as it was told it: whether its version holds in each place, is correct, is better. */
+    case 'artifact_check': return e.told && typeof e.told === 'object' ? { ...base, version: e.told.version, laboratories: Array.isArray(e.told.laboratories)
+      ? e.told.laboratories.map((p: Json) => pick(p, ['place', 'your_artifact_holds_here', 'requires', 'correct', 'better', 'not_worse'])) : [], ...(e.told.accepted ? { accepted: true } : {}) } : null;
     default: return null;
   }
 }

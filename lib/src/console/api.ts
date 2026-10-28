@@ -7,6 +7,7 @@ import { Analysts } from './analyst.ts';
 import { Actions } from './actions.ts';
 import { RESEARCH_PAGE } from './page.ts';
 import { climb } from './climb.ts';
+import { exportClimb } from './climb-page.ts';
 
 export function researchConsole(root: string, env?: NodeJS.ProcessEnv) {
   const store = new ResearchStore(root);
@@ -45,14 +46,23 @@ export function researchConsole(root: string, env?: NodeJS.ProcessEnv) {
         const profile = (url.searchParams.get('profile') ?? 'operator') as Profile;
         const s = store.capture(ids, profile, {}, false);
         send(200, { ...s, events: s.events.slice(-1000), total: s.events.length, costs: store.costs(ids) });
-      } else if (method === 'GET' && route === 'climb') {
+      } else if (method === 'GET' && (route === 'climb' || route === 'climb-export')) {
         /* The climb (SPEC-VISTA-ESCALADA §10): live, or at the cut of a snapshot; unchanged since a cursor, said so. */
         const profile = (url.searchParams.get('profile') ?? 'operator') as Profile;
         const snap = url.searchParams.get('snapshot') ? store.snapshot(String(url.searchParams.get('snapshot'))) : null;
         if (snap && snap.profile !== profile) throw new Error('A snapshot is read with the profile it was taken with');
         const ids = snap ? snap.entities.map((e) => e.id) : JSON.parse(url.searchParams.get('entities') ?? '[]');
         const v = climb(store, ids, profile, snap ? snap.positions : undefined);
-        send(200, url.searchParams.get('since') === v.cursor ? { format: v.format, cursor: v.cursor, unchanged: true } : v);
+        if (route === 'climb') send(200, url.searchParams.get('since') === v.cursor ? { format: v.format, cursor: v.cursor, unchanged: true } : v);
+        else {
+          /* Exported whole (VE6): with the events it cites, as this profile received them, and nothing else. */
+          const refs = new Set(v.groups.flatMap((g) => [...g.climbers.flatMap((c) => c.samples.map((x) => x.ref)), ...g.ropes.map((r) => r.ref), ...g.events.map((e) => e.ref)]));
+          const climbers = v.groups.flatMap((g) => g.climbers.map((c) => c.id));
+          const events = climbers.length ? store.capture(climbers, profile, snap ? snap.positions : {}, false).events.filter((e) => refs.has(e.id)) : [];
+          const css = RESEARCH_PAGE.split('<style>')[1]?.split('</style>')[0] ?? '';
+          res.setHeader('content-disposition', 'inline; filename="escalada.html"');
+          send(200, exportClimb(v, events, css), 'text/html');
+        }
       } else if (method === 'GET' && route === 'climb-event') {
         /* One verdict of the climb, opened as the profile reading it received it. */
         const profile = (url.searchParams.get('profile') ?? 'operator') as Profile;

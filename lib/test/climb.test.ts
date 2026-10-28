@@ -152,10 +152,11 @@ test('VE2: climbers from records only - groups by comparability, branches hangin
 test('VE2: the researchers\' profile gives only what they received; a cut, only what it holds; a cursor says unchanged', () => {
   const { dir, store } = workspace();
   write(path.join(dir, 'runs', 'art.json'), { experiment: 'artifacts@1', started: '2026-10-27T10:00:00.000Z', config: { seed: 1 }, events: [
-    { t: 3, type: 'artifact_check', round: 1, laboratories: [{ place: 'p', correct: true, growth: { slope: 0.3 } }], told: { laboratories: [] } }] });
+    { t: 3, type: 'artifact_check', round: 1, laboratories: [{ place: 'p', correct: true, growth: { slope: 0.3 } }], told: { version: 'v1', laboratories: [{ place: 'p', your_artifact_holds_here: false, correct: true, better: false }] } }] });
   const op = climb(store, ['art'], 'operator'), re = climb(store, ['art'], 'researcher');
   assert.equal(op.groups[0].metrics.find((m) => m.id === 'growth_exponent')!.samples, 1);
   assert.equal(re.groups[0].metrics.find((m) => m.id === 'growth_exponent')!.samples, 0, 'what was kept for the operator gives no sample (acceptance 7)');
+  assert.equal(re.groups[0].metrics.find((m) => m.id === 'correct')!.samples, 1, 'what it was told of its artifact does');
   const cut = climb(store, ['batches/b/A'], 'operator', { 'batches/b/A': 2 });
   assert.equal(cut.historical, true);
   assert.equal(cut.groups[0].climbers.length, 1, 'a cut adds no branch whose record runs past it');
@@ -237,5 +238,28 @@ test('VE5: in a living world, ropes between members where a delivery is recorded
   assert.equal(g.events.find((e) => e.kind === 'world_occurred')!.t, 2, 'a window placed on the clock by the first member that logged it');
   assert.ok(g.climbers.find((c) => c.id === 'live/alice')!.states.some((x) => x.state === 'espera'));
   const re = climb(store, ['live/alice', 'live/bob'], 'researcher');
-  assert.ok(!re.groups[0].events.some((e) => e.kind === 'world_occurred' || e.kind === 'operator_fire'), 'what happened unperceived is the operator\'s (§9)');
+  assert.ok(!re.groups[0].events.some((e) => e.kind === 'world_occurred' || e.kind === 'operator_fire' || e.kind === 'window_timeout'), 'what happened unperceived, and others\' timeouts, are the operator\'s (§9)');
+  assert.deepEqual(re.groups[0].ropes.map((r) => r.kind), ['message', 'announcement'], 'what reached the researchers they perceived');
+  assert.ok(re.groups[0].climbers.find((c) => c.id === 'live/alice')!.states.some((x) => x.state === 'espera'));
+});
+
+test('VE6: a climb exported whole replays with no server and nothing from outside (acceptance 9)', async () => {
+  const { dir } = workspace();
+  const c = await serveConsole({ root: dir, port: 0, env: {} });
+  try {
+    const q = 'climb-export?entities=' + encodeURIComponent(JSON.stringify(['batches/b/A'])) + '&profile=researcher';
+    const r = await fetch(c.url + '/api/research/' + q);
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    assert.ok(!/<(link|img|iframe)\b/i.test(html) && !/\b(src|href)\s*=\s*["']?(https?:)?\/\//i.test(html), 'no resource from outside');
+    const js = html.split('<script>')[1].split('</script>')[0];
+    assert.doesNotThrow(() => new Function(js));
+    const data = JSON.parse(js.split('const DATA=')[1].split(';const EVENTS=')[0]);
+    assert.equal(data.format, 'climb@1'); assert.equal(data.profile, 'researcher');
+    const events = JSON.parse(js.split(';const EVENTS=')[1].split(';\nconst $=')[0]);
+    const refs = data.groups.flatMap((g: any) => g.climbers.flatMap((x: any) => x.samples.map((s: any) => s.ref)));
+    assert.ok(refs.length && refs.every((ref: string) => events.some((e: any) => e.id === ref)), 'every sample opens its event offline');
+    assert.ok(!events.some((e: any) => e.type === 'operator_command'), 'only what this profile received');
+    assert.ok(js.includes('window.CLIMB_STATIC=true'));
+  } finally { await c.close(); }
 });
