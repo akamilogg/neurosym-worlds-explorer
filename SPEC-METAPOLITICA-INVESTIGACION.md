@@ -1,6 +1,6 @@
 # SPEC · Aprender una metapolítica de investigación
 
-Estado (28/10/2026): **M1 implementado (§13.1); M2 y M3 pendientes; piloto sin ejecutar**.
+Estado (28/10/2026): **M1 y M2 implementados (§13.1, §13.2); M3 pendiente: piloto sin ejecutar**.
 
 Se apoya en el [investigador asistido](SPEC-INVESTIGADOR-ASISTIDO.md), el [senior](SPEC-ORQUESTADOR.md),
 el [canal de mensajes](SPEC-CANAL-MENSAJES.md), el [mundo de artefactos](SPEC-MUNDO-ARTEFACTOS.md) y la
@@ -427,8 +427,68 @@ registradas del Judge, sin Judge (`verifyPolicyDecisions`). Además, el run comp
 **La vista de escalada** dibuja el consejo como una cuerda propia, «consejo de la política», separada de las
 directivas del senior.
 
-**Pendiente para M2:** el índice del corpus y la proyección de lo entregado al junior en la experiencia, los ensayos
-interiores, el evaluador fijo, el adaptador para el motor evolutivo y la política en la rejilla.
+### 13.2 Hecho: M2 (28/10/2026)
+
+**Dónde está:** el código, en `lib/src/meta/` (`corpus.ts`, `lab.ts`, `inspect.ts`), y los comandos, en `lab meta`
+(`index`, `inspect`, `trials`, `search`, `verify`). Las pruebas, en `lib/test/meta-lab.test.ts`: una de ellas con runs
+reales del arnés y un junior simulado.
+
+**El índice del corpus** (`research-corpus@1`, `lab meta index`) recoge de cada run, sin tocarlo:
+- su hash, su mundo y su realización;
+- el modelo, el razonamiento y las herramientas;
+- la ayuda, por autor, y si tuvo senior o política;
+- su presupuesto y su procedencia;
+- qué continúa o de quién es rama;
+- su resultado;
+- si su registro basta para leerlo, reconstruirlo o volver a ejecutarlo.
+
+Los linajes agrupan el original con sus continuaciones y ramas. `partition` asigna linajes enteros y rechaza partirlos;
+`independent` cuenta linajes, no archivos. Sobre el corpus local salen 115 runs en 100 linajes, 82 reconstruibles y 49
+con ayuda entregada.
+
+**Lo entregado al junior** se lee como experiencia: `{"experience": "guidance", "run": ...}`, con
+`--experience-guidance` y sólo en modo `meta`. De cada mensaje da el autor, la pregunta, la ronda, el corte y sus
+palabras, y como respuesta:
+- el informe de la directiva;
+- lo que dijo al senior;
+- lo siguiente que escribió, o «desconocido».
+
+Los resultados de ramas no son ayuda, y nunca se expone el diario privado de quien la dio. Sin esa opción, el prompt no
+cambia.
+
+**Los ensayos interiores** (`Trials`, manifiesto `meta-lab@1` fijado por el operador):
+- **Cada ensayo** es un run completo de un junior fijo con la política congelada, en un caso y una realización del
+  manifiesto. Se identifica por manifiesto, caso, repetición y política, y nunca se ejecuta dos veces.
+- **Registro:** se anota en `trials.jsonl` antes de despacharse (`research_trial_requested`) y una sola vez al terminar
+  (`research_trial_finished`).
+- **Caídas:** se reconcilian con el registro del hijo. Uno que terminó se lee sin volver a ejecutarse; uno cortado se
+  reanuda desde su registro y su continuación pasa a ser el registro del ensayo.
+- **Cancelación:** llega al hijo y conserva lo parcial.
+- **Resultado:** se lee sólo del registro del hijo, con la aceptación propia del mundo según el criterio del caso. Un
+  hijo que muere es un fallo de la infraestructura, sin medida inventada.
+
+**El evaluador fijo** (`policyEvaluator`) es el contrato del motor evolutivo:
+- **El candidato** es un único `policy.json`.
+- **La calidad** es, por tipo de mundo, `q = 1 − fracción resuelta` entre los ensayos que pudieron decirlo; menor es
+  mejor, comparada primero en el peor tipo y con el vector nombrado.
+- **Corrección:** un error propio de la política la vuelve incorrecta; un fallo de infraestructura no mide.
+- **Sólo desarrollo:** únicamente se miden los casos de desarrollo; la confirmación es del operador.
+- **Búsqueda:** `runSearch` desarrolla políticas con él, sin otra autoridad sobre la población ni sobre los recursos
+  (`lab meta search`).
+
+**Que un candidato no cambia los checks** se prueba con runs reales: el mismo caso, con una política que calla y otra
+que aconseja, da los mismos checks y veredictos.
+
+**La verificación** (`lab meta verify`) relee cada ensayo de su registro y reconstruye cada decisión de su política sin
+Judge, sin ejecutar nada.
+
+**La lectura histórica** (`lab meta inspect`, `policy-inspection@1`) da lo que la política habría decidido antes de cada
+respuesta de un run ya hecho. Va marcada `counterfactual: false` y nunca se registra como ensayo ni como mejora.
+
+**Pendiente:**
+- **M3:** el piloto con investigadores reales y las condiciones del §10.
+- **La política en la rejilla.**
+- **El catálogo y el selector** de CATALOGO-METAPOLITICAS-INVESTIGACION.
 
 ## 14. Resultado esperado
 
@@ -445,3 +505,23 @@ Referencias de diseño consultadas el 27/10/2026: [composición de juicios](http
 [descubrimiento de preguntas mediante un bucle de evaluación](https://docs.typesafe.ai/cookbooks/autoresearch_feature_discovery)
 y [significado de la confianza](https://docs.typesafe.ai/confidence). Orientan la separación entre observación, juicio
 y composición; no prueban que esta metapolítica vaya a mejorar a nuestros investigadores.
+
+## 15. Catálogo, selección dinámica y evolución del método
+
+Ampliación acordada el 28/10/2026, definida en
+[CATALOGO-METAPOLITICAS-INVESTIGACION](CATALOGO-METAPOLITICAS-INVESTIGACION.md): conservar procedimientos como skills
+reutilizables, seleccionar cuál aplicar durante un run y evolucionar tanto sus políticas como su selector y composición.
+Incluye siete semillas documentales; ninguna se presenta como procedimiento aprendido o validado.
+
+M1 conserva su contrato de política individual. Sobre M1 y M2 se materializa un catálogo versionado; la selección
+dinámica cambia la entrada activa dentro del mismo artefacto congelado, sin editarlo durante el ensayo. Se distingue
+la elección explícita del investigador de la elección automática mediante un selector investigable.
+
+La búsqueda evolutiva conserva su población y su contabilidad actuales. Su nuevo evaluador prueba el repertorio completo
+con el junior, permitiendo conservar especialistas complementarios. Una política menos útil en solitario puede ser
+útil en un catálogo; su contribución se contrasta, no se deduce de que estuviera activa antes de un éxito.
+
+El bucle puede usar el repertorio de una generación para investigar el de la siguiente, con evaluador fijo y recursos
+declarados. Esa utilización efectiva del método mejorado en la siguiente metainvestigación es lo que permite estudiar
+automejora recursiva del procedimiento. El catálogo detalla las transiciones, condiciones y pruebas de esta extensión;
+su implementación no se presume por disponer de M1.

@@ -39,8 +39,9 @@ export interface ExperienceRun {
   readonly reader?: { counts(): Record<string, number>; run(q: Record<string, unknown>): Promise<unknown> };
 }
 
-/** What it is told once it has experience (appended to its system prompt). */
-export const experienceSection = (mode: ExperienceMode, scope: ExperienceScope = 'all'): string => [
+/** What it is told once it has experience (appended to its system prompt). `guidance`: it may read the help each run's
+    researcher was delivered (SPEC-METAPOLITICA-INVESTIGACION §7) - said only then, so a run without it asks as before. */
+export const experienceSection = (mode: ExperienceMode, scope: ExperienceScope = 'all', guidance = false): string => [
   (scope === 'all'
     ? 'EXPERIENCE. You may read the records of earlier investigations by other researchers: what each wrote (beliefs, notes, methods, models, reflections), each request it made with what its environment answered, and the verdicts of its checks. '
     : 'EXPERIENCE. You may read the METHODS other researchers wrote in their notebooks during earlier investigations: the ways of investigating they kept, and nothing else of their records. ') +
@@ -51,16 +52,45 @@ export const experienceSection = (mode: ExperienceMode, scope: ExperienceScope =
   (scope === 'all'
     ? '{"experience": "list", "run": "<label>", "of": "beliefs" | "notes" | "methods" | "episodes" | "models" | "reflections" | "investigations" | "checks"} answers the index of that kind;'
     : '{"experience": "list", "run": "<label>"} answers the index of its methods (ids "method:<id>");') + ' {"experience": "open", "run": "<label>", "items": ["<id>", ...]} answers items (at most 8; a large one clipped unless you add "whole": true); {"experience": "find", "words": "...", "run": "<label>" (optional: every run)' + (scope === 'all' ? ', "of": "<kind>" (optional)' : '') + '} answers the items that hold all the words, and with "select": "what you need" the Judge picks those that speak to it.',
-  'What you take from a record is someone\'s word about their environment, not evidence about yours: test it here. When a belief or a method of yours comes from a record, cite it in its evidence as "exp:<label>#<item id>", next to the points of your episodes that support it.'
+  'What you take from a record is someone\'s word about their environment, not evidence about yours: test it here. When a belief or a method of yours comes from a record, cite it in its evidence as "exp:<label>#<item id>", next to the points of your episodes that support it.',
+  ...(guidance ? ['{"experience": "guidance", "run": "<label>"} answers the help its researcher was delivered - who gave it (the operator, its senior, a research policy...), at which question and round, its words, and what the researcher reported or did next; that a step followed some help does not say the help caused it.'] : [])
 ].join('\n');
+
+/** The help a researcher was delivered, as its journal shows it (SPEC-METAPOLITICA-INVESTIGACION §7): for each message, who
+    gave it, when (its question, its round, the cut - how many events came before), its words, and its response - the
+    report of a directive, what the researcher told its senior, and the first thing it wrote after (a proposal's rationale,
+    a round closed, a reflection), or unknown. The results of its branches are their own, not help. Never the private record
+    of whoever gave it. */
+export function deliveredGuidance(journal: Record<string, any>, clip = 600): Record<string, unknown> {
+  const events = (Array.isArray(journal?.events) ? journal.events : []) as Record<string, any>[];
+  const cut = (s: unknown): string => { const t = typeof s === 'string' ? s : JSON.stringify(s ?? ''); return t.length > clip ? t.slice(0, clip) + '…' : t; };
+  const out: Record<string, unknown>[] = [];
+  let round = 0;
+  events.forEach((e, i) => {
+    if (typeof e.round === 'number') round = e.round;
+    if (e.type !== 'operator_message') return;
+    for (const m of (e.messages ?? []) as Record<string, any>[]) {
+      if (m.research_result) continue;
+      const after = events.slice(i + 1);
+      const report = after.find((x) => x.type === 'directive_report' && x.id === m.id);
+      const told = after.filter((x) => x.type === 'junior_report').slice(0, 1)[0];
+      const next = after.find((x) => (x.type === 'proposal' || x.type === 'reflection' || x.type === 'round_closed'));
+      out.push({ id: m.id, author: m.by ?? 'operator', kind: m.directive ? 'directive' : m.by === 'agent:research-policy' ? 'advice' : 'message', question: e.question ?? null, round, cut: i,
+        text: cut(m.text), ...(m.advice ? { advice: { focus: m.advice.focus, evidence: m.advice.evidence } } : {}),
+        response: report || told || next ? { ...(report ? { report: report.not_done ? { not_done: cut(report.not_done) } : { done: cut(report.done) } } : {}),
+          ...(told ? { to_senior: cut(told.text) } : {}), ...(next ? { next: { type: next.type, round: next.round ?? null, ...(next.rationale || next.why ? { words: cut(next.rationale ?? next.why) } : {}) } } : {}) } : 'unknown' });
+    }
+  });
+  return out.length ? { delivered: out } : { delivered: [], none: 'this record holds no help delivered to its researcher' };
+}
 
 export class Experience {
   private readonly runs: readonly ExperienceRun[];
   private readonly readers = new Map<string, Pick<JournalMemory, 'counts' | 'run'>>();
-  private readonly options: { readonly selector?: LineSelector; readonly onSelect?: (record: SelectionRecord & Record<string, unknown>) => void; readonly openLimit?: number; readonly scope?: ExperienceScope };
+  private readonly options: { readonly selector?: LineSelector; readonly onSelect?: (record: SelectionRecord & Record<string, unknown>) => void; readonly openLimit?: number; readonly scope?: ExperienceScope; readonly guidance?: boolean };
   private readonly scope: ExperienceScope;
 
-  constructor(runs: readonly ExperienceRun[], options: { selector?: LineSelector; onSelect?: (record: SelectionRecord & Record<string, unknown>) => void; openLimit?: number; scope?: ExperienceScope } = {}) {
+  constructor(runs: readonly ExperienceRun[], options: { selector?: LineSelector; onSelect?: (record: SelectionRecord & Record<string, unknown>) => void; openLimit?: number; scope?: ExperienceScope; guidance?: boolean } = {}) {
     this.runs = runs;
     this.options = options;
     this.scope = options.scope ?? 'all';
@@ -95,7 +125,14 @@ export class Experience {
       return { experience: 'runs', runs: this.runs.map((r) => ({ run: r.label, environment: r.sameWorld ? 'this same one' : 'another',
         researcher: r.reader ? r.journal.researcher : r.journal.researcher === 'assisted' ? 'assisted' : 'unaided', items: this.counts(r.label) })) };
     }
-    if (!['list', 'open', 'find'].includes(what)) return { experience: what, error: 'experience is "runs", "list", "open" or "find"' };
+    if (what === 'guidance') {
+      if (!this.options.guidance) return { experience: what, error: 'the help delivered in these runs is not given to you' };
+      const r = this.runs.find((x) => x.label === q.run);
+      if (!r) return { experience: what, error: '"run": which run (' + labels.join(', ') + ')' };
+      if (r.reader) return { experience: what, run: r.label, delivered: [], none: 'this record is not a researcher\'s: no help was delivered in it' };
+      return { experience: what, run: r.label, ...deliveredGuidance(r.journal) };
+    }
+    if (!['list', 'open', 'find'].includes(what)) return { experience: what, error: 'experience is "runs", "list", "open" or "find"' + (this.options.guidance ? ' or "guidance"' : '') };
     /* Only the fields of these requests pass to the reader, and the operation is the one asked as "experience": a field of
        the request (a "memory" of its own) never changes what was checked against the scope. */
     const run = q.run;

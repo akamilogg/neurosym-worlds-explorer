@@ -104,6 +104,7 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'no-grade', help: 'skip the operator-only grading of the recovered rule (one LLM call)' },
   { name: 'no-reflection', help: 'skip the final reflection round' },
   { name: 'task-as-model', help: 'the task of the assisted researcher framed as before: a model of the environment, not the task its world and its operator state (the comparison)' },
+  { name: 'experience-guidance', help: 'with --experience-mode meta: the researcher may read the help each run\'s researcher was delivered (who, when, its words, the response) - SPEC-METAPOLITICA-INVESTIGACION §7' },
   { name: 'no-pins', help: 'the assisted researcher cannot pin messages of its own in its channel (SPEC-CANAL-MENSAJES §6): the condition without' },
   { name: 'no-close-round', help: 'the assisted researcher cannot close a round without a new model (PLAN-Y-SI, Entrega 1): the condition without' },
   { name: 'budget-hidden', help: 'the assisted researcher is not shown its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the condition without it' },
@@ -501,7 +502,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {}),
     ...(arg('memory') ? { memory: arg('memory') } : {}),
     ...(arg('team') ? { team: arg('team'), member: arg('member') } : {}),
-    ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all' } : {}),
+    ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all', ...(flag('experience-guidance') ? { experience_guidance: true } : {}) } : {}),
     ...(arg('evolution-search') ? { evolution_search: path.basename(arg('evolution-search')) } : {})
   };
   Object.defineProperty(cfg, '__options', { value: worldOptions, enumerable: false });
@@ -583,7 +584,10 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   /* An evolutionary search, read as experience through its own adapter (SPEC-DELEGACION-EVOLUTIVA §9): the run "search". */
   const searchRun = arg('evolution-search') ? loadSearch(arg('evolution-search'), researcher) : null;
   const allRuns = [...(experienceRuns?.runs ?? []), ...(searchRun ? [searchRun.run] : [])];
-  const experience = allRuns.length ? { mode: experienceRuns?.mode ?? ('meta' as ExperienceMode), scope: experienceRuns?.scope ?? ('all' as ExperienceScope), reader: new Experience(allRuns, { scope: experienceRuns?.scope ?? 'all',
+  /* The help delivered in those runs (SPEC-METAPOLITICA-INVESTIGACION §7): only for a researcher of researchers, and only asked. */
+  const guidance = (cfg as { experience_guidance?: boolean }).experience_guidance === true;
+  if (guidance && experienceRuns?.mode !== 'meta') throw new LabError('--experience-guidance: the help other researchers were delivered is read by a researcher of researchers: with --experience-mode meta');
+  const experience = allRuns.length ? { mode: experienceRuns?.mode ?? ('meta' as ExperienceMode), scope: experienceRuns?.scope ?? ('all' as ExperienceScope), guidance, reader: new Experience(allRuns, { scope: experienceRuns?.scope ?? 'all', guidance,
     ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), onSelect: (record) => run.log('experience_select', record) }) } : null;
   if (experienceRuns || searchRun) run.log('experience', { mode: experience!.mode, scope: experience!.scope, runs: [...(experienceRuns?.given ?? []), ...(searchRun ? [searchRun.given] : [])] });
   Object.defineProperty(cfg, '__experience', { value: experience, enumerable: false });
@@ -1714,7 +1718,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The researcher that runs: the unknown-world one's session as it is, or the assisted one's (its own prompt, and the
      operator's messages with its questions; resuming, delivered again at the same questions). */
   const withMemory = cfg.memory === 'selective';
-  const experience = (cfg as { __experience?: { mode: ExperienceMode; scope: ExperienceScope; reader: Experience } | null }).__experience ?? null;
+  const experience = (cfg as { __experience?: { mode: ExperienceMode; scope: ExperienceScope; guidance?: boolean; reader: Experience } | null }).__experience ?? null;
   /* Its tests of its own (SPEC-PRUEBAS-PROPIAS T2), where it may act: informative - they never change what is accepted. */
   const actLab = journal.researcher === 'assisted' && lab.act && tools.has('act') ? lab.act : null;
   const latestCheckCases = (): Map<string, Case[]> => {
@@ -1895,7 +1899,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       /* A message sent while a resumed run still replays its history waits: delivered then, the question would differ from
          the one its log answers, and the run would diverge. It goes with the first question asked live. */
       take: (round?: number) => (helping && run.replay.pending() === 0 ? [...branchResults(), ...run.operator.take(round)] : []), scheduled: deliveredMessages(previous),
-      system: () => (helping ? assistedSystem(assistedPromptFor(focus), statedTask && channelOn) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope) : '')
+      system: () => (helping ? assistedSystem(assistedPromptFor(focus), statedTask && channelOn) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope, experience.guidance) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (closesRounds() ? '\n\n' + CLOSE_ROUND_SECTION : '')
         + (delegating() && delegationCfg ? '\n\n' + DELEGATION_SECTION({ fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds }) : '')

@@ -211,6 +211,79 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         out('follow it: lab watch ' + path.basename(journal, '.json'));
         return 0;
       }
+      case 'meta': {
+        /* The meta-laboratory (SPEC-METAPOLITICA-INVESTIGACION, M2): the corpus, a policy read against a run, trials, a search
+           over policies, and their verification - all in runs/meta. */
+        const sub = args.shift();
+        const env = ctx.env ?? process.env;
+        const readJson = (f: string) => JSON.parse(fs.readFileSync(fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f), 'utf8'));
+        const metaDir = path.join(ctx.root, 'runs', 'meta');
+        const { indexCorpus } = await import('../meta/corpus.ts');
+        const { Trials, inProcessLauncher, policyEvaluator, verifyTrials, manifestProblems } = await import('../meta/lab.ts');
+        const { readPolicyConfig } = await import('../learn/assisted/research-policy.ts');
+        const { nodeVmRunner } = await import('./node-vm.ts');
+        const policyAt = (f: string) => { const at = fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f); return readPolicyConfig(fs.readFileSync(at, 'utf8'), (x) => fs.readFileSync(path.resolve(path.dirname(at), x), 'utf8')); };
+        if (sub === 'index') {
+          const index = indexCorpus(path.join(ctx.root, 'runs'));
+          fs.mkdirSync(metaDir, { recursive: true });
+          const file = take(args, 'out') ?? path.join(metaDir, 'corpus.json');
+          fs.writeFileSync(file, JSON.stringify(index, null, 2));
+          const byWorld: Record<string, number> = {};
+          for (const e of index.entries) byWorld[e.world] = (byWorld[e.world] ?? 0) + 1;
+          out(index.entries.length + ' runs in ' + Object.keys(index.lineages).length + ' lineages: ' + Object.entries(byWorld).map(([w, n]) => w + ' ' + n).join(', '));
+          out('rebuildable ' + index.entries.filter((e) => e.material.rebuild).length + ', with help delivered ' + index.entries.filter((e) => Object.keys(e.help.delivered).length).length);
+          out('index ' + file);
+          return 0;
+        }
+        if (sub === 'inspect') {
+          const [policyFile, journalFile] = args;
+          if (!policyFile || !journalFile) { out('lab meta inspect <policy.json> <journal.json>'); return 2; }
+          const { inspectHistory } = await import('../meta/inspect.ts');
+          const { JevJudge } = await import('../core/jev.ts');
+          const { labEndpointsFromEnv } = await import('../orchestra/launch.ts');
+          const judge = labEndpointsFromEnv(env).judge;
+          const r = await inspectHistory(policyAt(policyFile), readJson(journalFile), new JevJudge({ ...(judge?.url ? { url: judge.url } : {}), ...(judge?.key ? { apiKey: judge.key } : {}), ...(judge?.model ? { model: judge.model } : {}) }), nodeVmRunner({ timeoutMs: 2000 }));
+          for (const d of r.decisions) out('cut ' + d.cut + (d.round !== null ? ' (round ' + d.round + ')' : '') + ': ' + (d.failure ? d.failure + ' - ' + d.why : JSON.stringify(d.guidance)));
+          out(r.reading);
+          return 0;
+        }
+        if (sub === 'trials' || sub === 'search' || sub === 'verify') {
+          const [manifestFile, policyFile] = args;
+          if (!manifestFile || (sub !== 'verify' && !policyFile)) { out('lab meta ' + sub + ' <meta-lab.json>' + (sub === 'verify' ? '' : ' <policy.json>') + (sub === 'search' ? ' [--evaluations N] [--attempts N] [--tokens N]' : sub === 'trials' ? ' [--partition development|confirmation]' : '')); return 2; }
+          const manifest = readJson(manifestFile);
+          const problems = manifestProblems(manifest);
+          if (problems.length) { out('the manifest is refused, nothing was run:'); for (const e of problems) out('  ' + e); return 2; }
+          const dir = path.join(metaDir, manifest.id);
+          if (sub === 'verify') {
+            const v = verifyTrials(dir, manifest, nodeVmRunner({ timeoutMs: 2000 }));
+            out((v.holds ? 'holds' : 'DOES NOT HOLD') + ': ' + v.trials + ' trials, ' + v.decisions + ' decisions of their policies rebuilt with no Judge');
+            for (const p of v.problems) out('  ' + p);
+            return v.holds ? 0 : 1;
+          }
+          const { labEndpointsFromEnv, chatFromEnv } = await import('../orchestra/launch.ts');
+          const ends = labEndpointsFromEnv(env);
+          const trials = new Trials(dir, manifest, inProcessLauncher({ root: dir, llm: ends.llm, ...(ends.judge ? { judge: ends.judge } : {}) }));
+          const config = policyAt(policyFile);
+          if (sub === 'trials') {
+            const partition = (take(args, 'partition') ?? 'development') as 'development' | 'confirmation';
+            const ran = await trials.run(config.policy, partition);
+            for (const t of ran) out(t.case + '#' + t.rep + ' ' + t.result.state + (t.result.solved !== null ? (t.result.solved ? ' solved' : ' not solved') : '') + ', ' + t.result.advice + ' advice' + (t.result.policy_errors ? ', ' + t.result.policy_errors + ' policy errors' : ''));
+            return 0;
+          }
+          const { runSearch } = await import('../learn/evolve/engine.ts');
+          const { balanced } = await import('../learn/evolve/policy.ts');
+          const { chatMutator } = await import('../learn/evolve/mutator.ts');
+          const n = (k: string, d: number) => Math.max(1, Math.floor(Number(take(args, k) ?? d)) || d);
+          const { manifest: sealed } = await runSearch({ evaluator: policyEvaluator(trials, config.policy), mutator: chatMutator(chatFromEnv(env, 'AGENT_LLM')), profile: balanced(0),
+            question: 'a research policy that helps this junior solve more of its tasks', limits: { evaluations: n('evaluations', 6), attempts: n('attempts', 12), tokens: n('tokens', 400000) },
+            out: path.join(dir, 'search.jsonl') });
+          fs.writeFileSync(path.join(dir, 'search.manifest.json'), JSON.stringify(sealed, null, 2));
+          out('search ' + sealed.stoppedBy + ': ' + sealed.cost.evaluations + ' evaluations, ' + sealed.cost.tokens + ' tokens; ' + path.join(dir, 'search.manifest.json'));
+          return 0;
+        }
+        out('lab meta index | inspect <policy> <journal> | trials <meta-lab.json> <policy> | search <meta-lab.json> <policy> | verify <meta-lab.json>');
+        return 2;
+      }
       case 'live': {
         /* A shared session continued from its record: a session of its own beside it, more rounds where they ran out. */
         const resumeGiven = take(args, 'resume');
