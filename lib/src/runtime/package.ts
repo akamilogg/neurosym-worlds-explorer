@@ -1,4 +1,6 @@
 import { verifySearch } from '../learn/evolve/verify.ts';
+import { nodeVmRunner } from './node-vm.ts';
+import { verifyPolicyDecisions } from '../learn/assisted/research-policy.ts';
 import { artifactsLab } from '../worlds/artifacts/lab.ts';
 import type { ArtifactTask } from '../artifacts/task.ts';
 import type { SearchManifest } from '../learn/evolve/engine.ts';
@@ -146,6 +148,9 @@ export interface PackageVerification {
   readonly world?: { readonly holds: boolean; readonly record: ReturnType<typeof verifyWorld>; readonly rebuilt: ReturnType<typeof compareWorlds> | { readonly holds: false; readonly why: string } };
   /** Each evolutionary search it holds, rebuilt from its record without a model or a measure (SPEC-DELEGACION-EVOLUTIVA §13). */
   readonly searches: readonly { readonly file: string; readonly holds: boolean; readonly why: string }[];
+  /** Its research policy's decisions (SPEC-METAPOLITICA-INVESTIGACION §11), each rebuilt from its capture and the Judge's
+      recorded answers, with no Judge. */
+  readonly research_policy?: { readonly holds: boolean; readonly decisions: number; readonly rebuilt: number; readonly problems: readonly string[] };
   readonly re_execution: { readonly done: false; readonly needs: string; readonly environments_recorded: readonly string[] };
   readonly reproduction: { readonly done: false; readonly needs: string };
 }
@@ -255,9 +260,11 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
     try { const r = JSON.parse(fs.readFileSync(request, 'utf8')); task = (artifactsLab.generate(r.seed, r.options) as { world: { task: ArtifactTask } }).world.task; } catch { /* no request: rebuilt only */ }
     searches.push({ file: p, ...(await verifySearch(path.join(dir, p), path.join(dir, p.replace(/\.jsonl$/, '.manifest.json')), (h) => manifests.get(h) ?? null, task)) });
   }
+  const policyProof = verifyPolicyDecisions(original, nodeVmRunner({ timeoutMs: 2000 }));
   const environments = [...new Set(JSON.stringify(original).match(/"fingerprint":\s*"[0-9a-f]{16}"/g) ?? [])].map((m) => m.replace(/.*"([0-9a-f]{16})"/, '$1'));
   return {
     format: 'research_verification@1', verified: new Date().toISOString(), manifest_sha256: sha(manifestFile), integrity, reconstruction, ...(worldProof ? { world: worldProof } : {}), searches,
+    ...(policyProof ? { research_policy: policyProof } : {}),
     re_execution: { done: false, needs: 'the same acts run again against the instrument now, with its dependencies and environment as recorded, and compared with what was recorded', environments_recorded: environments },
     reproduction: { done: false, needs: 'the experiment repeated, its conclusion judged again by the criteria it declared (the same verdict, not the same numbers)' }
   };

@@ -44,6 +44,7 @@ import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntr
 import { mulberry32 } from '../worlds/grid/gen.ts';
 import { WorldJournal, type LivingSession } from '../living/world.ts';
 import { LivingBridge } from '../living/bridge.ts';
+import { PolicyRunner, asksJudge as asksPolicyJudge, policySummary, readPolicyConfig, type PolicyConfig } from '../learn/assisted/research-policy.ts';
 
 /** The researcher's identity as an actor of a living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO §2). */
 const LIVING_ACTOR = 'researcher';
@@ -71,6 +72,7 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'every', default: '3', help: 'take every N-th step of an episode as a point of a check' },
   { name: 'family', default: '3', help: 'places of the family to validate on' },
   { name: 'validations', default: '3', help: 'how many times System 2 may validate' },
+  { name: 'research-policy', default: '', help: 'FILE: a research policy orients the assisted researcher before each question (SPEC-METAPOLITICA-INVESTIGACION): research-policy@1, or {"policy": ..., "context": {"events", "text"}, "limits": {"evaluations", "advice", "judge_calls", "state_bytes"}}; its advice is help' },
   { name: 'delegation-fund', default: '0', help: 'N > 0: the assisted researcher may delegate investigations to branches, with N tokens in all for them, apart from its own budget (SPEC-DELEGACION-INVESTIGACIONES)' },
   { name: 'delegation-tokens', default: '200000', help: 'at most N tokens a branch' },
   { name: 'delegation-rounds', default: '3', help: 'the rounds a branch gets when it asks none' },
@@ -535,6 +537,21 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     throw new LabError('the assisted researcher of ' + lab.id + ' takes messages and a selective memory; a task, a focus and sources are not built for it yet (SPEC-INVESTIGADOR-ASISTIDO, A7)');
   if (arg('memory') && arg('memory') !== 'selective') throw new LabError('--memory: the only memory is "selective"');
   if (arg('memory') && researcher !== 'assisted') throw new LabError('--memory: a selective memory changes what the researcher is given: only the assisted researcher has one');
+  /* A research policy (SPEC-METAPOLITICA-INVESTIGACION §5): the assisted researcher's, in a laboratory of laws; one that asks
+     the Judge never runs on a Judge that knows nothing. A run resumed keeps the one it ran with, as recorded. */
+  let researchPolicy: PolicyConfig | null = previous?.research_policy ?? null;
+  if (!researchPolicy && arg('research-policy')) {
+    const file = path.resolve(options.root, arg('research-policy'));
+    try { researchPolicy = readPolicyConfig(fs.readFileSync(file, 'utf8'), (f) => fs.readFileSync(path.resolve(path.dirname(file), f), 'utf8')); }
+    catch (e) { throw new LabError('--research-policy: ' + String((e as Error).message ?? e)); }
+  }
+  if (researchPolicy) {
+    if (researcher !== 'assisted') throw new LabError('--research-policy: its advice is help: only the assisted researcher takes it');
+    if (isGameLab(lab)) throw new LabError('--research-policy: not built yet for ' + lab.id + ', a laboratory with a loop of its own');
+    if (asksPolicyJudge(researchPolicy.policy) && cfg.flat) throw new LabError('--research-policy: this policy asks the Judge, and --flat gives one that knows nothing: run a policy of code only, or without --flat');
+    (cfg as Record<string, unknown>).research_policy = policySummary(researchPolicy);
+    Object.defineProperty(cfg, '__research_policy', { value: researchPolicy, enumerable: false });
+  }
   /* A run handed over keeps the unknown-world researcher's history word for word: its notebook would travel otherwise. */
   if (arg('memory') && assistedAfter !== null) throw new LabError('--memory: a run handed to the assisted researcher keeps its history as it was; give the memory to a run that starts assisted');
   /* A laboratory's options that are help (e.g. the grid's boards to explore): the assisted researcher's only. */
@@ -707,6 +724,8 @@ interface OpenRun {
   readonly llmUse: { calls: number; tokens: number };
   readonly replay: ReplayLog;
   readonly journal: Record<string, any>;
+  /** Its research policy (SPEC-METAPOLITICA-INVESTIGACION), when it has one. */
+  readonly policy: PolicyRunner | null;
   readonly outFile: string;
   readonly commit: string | null;
   /** The environment outside, when the laboratory has one. */
@@ -831,9 +850,14 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const helpBudget = Number(arg('help-budget', '')) > 0 ? Number(arg('help-budget', '')) : typeof previous?.help_budget === 'number' ? previous.help_budget as number : null;
   if (agentPolicy.size) journal.agents = Object.fromEntries([...agentPolicy].map(([id, kinds]) => [id, [...kinds]]));
   if (helpBudget !== null) journal.help_budget = helpBudget;
+  /* Its research policy, whole: what a resumed run runs again and what rebuilds its decisions. */
+  const researchPolicy = (cfg as { __research_policy?: PolicyConfig }).__research_policy ?? null;
+  if (researchPolicy) journal.research_policy = researchPolicy;
   const HELP = new Set(['message', 'focus', 'source']);
   /* The help already accepted in the history it resumes counts too. */
-  let helpUsed = ((previous?.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'operator_command' && e.accepted && HELP.has(e.kind)).length;
+  let helpUsed = ((previous?.events ?? []) as Record<string, any>[]).filter((e) => e.type === 'operator_command' && e.accepted && HELP.has(e.kind)).length
+    /* A research policy's advice is help too, paid once when it was published. */
+    + PolicyRunner.delivered((previous?.events ?? []) as Record<string, any>[]);
   let state: 'running' | 'stopping' | 'ended' = 'running';
   let stoppedBy: string | null = null;
   let stopRequested = false;
@@ -1070,7 +1094,11 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     const r = await local('local://' + lab.id + route, { method: 'POST', headers: {}, body: JSON.stringify(body), signal: new AbortController().signal });
     return JSON.parse(await r.text()) as T;
   };
-  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), recorded, finish, diverged, verdicts,
+  /* Its research policy (SPEC-METAPOLITICA-INVESTIGACION): decided before a question at a cut of this journal, paid from the
+     run's help, its decisions in the run it resumes used again. */
+  const policy = researchPolicy ? new PolicyRunner(researchPolicy, { events: () => journal.events as Record<string, any>[], log, judge, runner: nodeVmRunner({ timeoutMs: 2000 }),
+    helpLeft: () => (helpBudget === null ? null : helpBudget - helpUsed), spendHelp: () => { helpUsed++; }, previous: (previous?.events ?? []) as Record<string, any>[] }) : null;
+  return { services, judge, llm, llmUse, replay, journal, outFile, commit, log, say, halt, ...(effects ? { effects } : {}), recorded, finish, diverged, verdicts, policy,
     operator: { take: (round?: number) => {
       const due = waiting.filter((m) => m.round === undefined || round === undefined || m.round <= round);
       for (const m of due) waiting.splice(waiting.indexOf(m), 1);
@@ -1875,6 +1903,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
         + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '') : promptFor(focus)),
       task: () => (helping ? task : null),
+      /* Its research policy's advice, before a question it is asked as the assisted researcher; never while its history replays. */
+      ...(run.policy ? { advise: (question: number, recorded?: OperatorMessage) => (helping ? run.policy!.advise(question, run.replay.pending() === 0, recorded) : Promise.resolve(recorded ?? null)) } : {}),
       /* Its channel (SPEC-CANAL-MENSAJES): the client delivers it, and everything it placed itself goes through it. */
       ...(channelOn ? { messages: channelNow } : {}),
       /* Its conversation only grows: its system prompt fixed from its first question, what changes added as messages. */

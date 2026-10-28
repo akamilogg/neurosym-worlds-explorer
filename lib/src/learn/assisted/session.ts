@@ -149,6 +149,8 @@ export interface OperatorChannel {
   task?(): string | null;
   /** Told of each message as it is delivered, with its question (a focus is applied, a source read, then). */
   onDeliver?(message: OperatorMessage, question: number): void | Promise<void>;
+  /** A research policy (SPEC-METAPOLITICA-INVESTIGACION): its advice before this question, or null. Absent: nothing changes. */
+  advise?(question: number, recorded?: OperatorMessage): Promise<OperatorMessage | null>;
   /** The sources it may read: once an origin is allowed, the prompt says how, and each question lists the origins. */
   readonly sources?: Sources;
   /** Its selective memory (SPEC-INVESTIGADOR-ASISTIDO §13): the Judge as the selector of its `find` (none in --flat), and
@@ -180,6 +182,9 @@ export function deliveredMessages(journal: { events?: readonly Record<string, an
   return out;
 }
 
+/** The author of a research policy's advice. */
+export const RESEARCH_POLICY = 'agent:research-policy';
+
 /** System 2's client for the assisted researcher, and the directives of its senior still open (SPEC-ORQUESTADOR §3.3.3). */
 export type OperatorClient = ChatClient & { openDirectives(): readonly (OperatorMessage & { readonly round?: number })[] };
 
@@ -209,10 +214,17 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
     async complete(request) {
       question++;
       /* Resuming, up to where the run it resumes went: exactly what it delivered, at the same questions. Then, live. */
-      const fresh = channel.scheduled?.has(question) ? [...channel.scheduled.get(question)!]
+      const scheduled = channel.scheduled?.has(question) ? [...channel.scheduled.get(question)!] : null;
+      /* A research policy's advice delivered then is given back where it was: after its decision is written again. */
+      const advised = (scheduled ?? []).filter((m) => m.by === RESEARCH_POLICY);
+      const fresh = scheduled ? scheduled.filter((m) => m.by !== RESEARCH_POLICY)
         : question <= lastScheduled ? [] : channel.take(channel.round?.());
       if (fresh.length) log('operator_message', { question, messages: fresh });
       for (const m of fresh) await channel.onDeliver?.(m, question);
+      /* A research policy's advice (SPEC-METAPOLITICA-INVESTIGACION §5): decided at a cut taken now, after what reached it
+         was recorded and before anything of its own; delivered with this question, as one more message from its author. */
+      const advice = channel.advise ? await channel.advise(question, advised[0]) : advised[0] ?? null;
+      if (advice) { log('operator_message', { question, messages: [advice] }); fresh.push(advice); }
       const task = channel.task?.() ?? null;
       const origins = channel.sources?.origins() ?? [];
       const ch = channel.messages?.() ?? null;

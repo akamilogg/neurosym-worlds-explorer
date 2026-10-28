@@ -1,6 +1,6 @@
 # SPEC · Aprender una metapolítica de investigación
 
-Estado (27/10/2026): **propuesta para desarrollo; sin implementar ni ejecutar el piloto**.
+Estado (28/10/2026): **M1 implementado (§13.1); M2 y M3 pendientes; piloto sin ejecutar**.
 
 Se apoya en el [investigador asistido](SPEC-INVESTIGADOR-ASISTIDO.md), el [senior](SPEC-ORQUESTADOR.md),
 el [canal de mensajes](SPEC-CANAL-MENSAJES.md), el [mundo de artefactos](SPEC-MUNDO-ARTEFACTOS.md) y la
@@ -366,6 +366,69 @@ histórico se toma como valor implícito. No hace falta terminar otras ampliacio
 La entrega de software se acepta cuando estos contratos funcionan. **La mejora investigadora se acepta cuando los
 runs la muestran.** También se conserva un resultado negativo: una política puede diagnosticar bien y no ayudar al
 junior a inventar el experimento necesario. Eso localiza una limitación que un procedimiento no ha sustituido.
+
+### 13.1 Hecho: M1 (28/10/2026)
+
+**Dónde está:**
+- **Código:** `lib/src/learn/assisted/research-policy.ts`.
+- **Conexión al run:** `--research-policy FILE` en `lib/src/runtime/lab-runner.ts`.
+- **Punto antes de cada pregunta:** `advise` en `lib/src/learn/assisted/session.ts`.
+- **Pruebas:** `lib/test/research-policy.test.ts`, con un Judge y un junior simulados, incluido un run completo con
+  reanudación y paquete.
+
+**El artefacto** `research-policy@1` es un modelo más del arnés. Lleva observaciones en código sobre la captura, reglas
+opcionales que responde el Judge y una composición en código `(p, m) => ({ guidance, state })`, más plantillas, estado
+inicial y procedencia.
+- Se evalúa con el `Observer`, el `Evaluator` y el `Predictor` existentes, en el sandbox `node:vm` con límite de tiempo.
+- `checkPolicy` valida el contrato antes de nada.
+- `policyHash` identifica lo que se ejecuta; la procedencia queda fuera.
+
+**La captura** (`research-view@1`) es la vista del junior hasta el corte, hecha con la lista de `researcherEvents`:
+- en cada petición, si se ejecutó, se rechazó o falló, y su respuesta recortada;
+- la ayuda entregada;
+- los hechos de `stuckSignals`, calculados sobre esa misma vista;
+- sus consejos anteriores, sus recursos y su estado.
+
+Tiene una ventana de los eventos más recientes y declara lo omitido y lo recortado. Nunca incluye nada posterior al
+corte ni nada que el junior no recibiera.
+
+**La decisión** se valida contra el contrato:
+- el foco es `develop`, `contrast` o `reframe`;
+- la plantilla existe y lleva exactamente los argumentos que declara;
+- la evidencia está en la captura;
+- los juicios son reglas de la política;
+- el estado no supera su límite.
+
+El texto sale de la plantilla. Se distinguen `no_context`, `judge_failed` (incluida una regla sin respuesta, que nunca
+se toma como neutra), `invalid_output` y `limit`.
+
+**Antes de cada pregunta** del investigador asistido, la decisión se toma tras registrar lo que le llegó. Se anota con
+`research_policy_requested` (corte, captura, estado y reserva), `research_policy_decided` (observaciones, respuestas
+del Judge, salida o fallo) y `research_policy_delivered` (el mensaje o por qué no se entregó: abstención, fallo,
+límite u obsolescencia).
+- **Entrega:** el consejo llega como aviso de `agent:research-policy` por el canal, nunca como directiva. Se paga una
+  sola vez del presupuesto de ayuda del run.
+- **Recursos agotados:** sin ayuda ni límites propios restantes, no hay inferencia.
+- **Durante la reproducción** del historial de un run reanudado, no se decide.
+- **Obsolescencia:** lo que llega mientras decide vuelve vieja la captura, y el consejo no se entrega como actual.
+
+**Al reanudar,** se usan otra vez las decisiones registradas, sin Judge y sin volver a pagar, y se reescriben palabra
+por palabra en el mismo sitio. Una decisión tomada y no entregada se entrega entonces.
+
+**Configuración:** la política forma parte de la condición (`config.research_policy` con hash, contexto, límites y si
+usa el Judge). Se guarda entera en el diario. Se rechaza antes de gastar:
+- fuera del investigador asistido;
+- en la rejilla, que tiene un bucle propio;
+- si pide el Judge y el run va con `--flat`.
+
+**Reconstrucción:** `lab verify` comprueba que cada decisión se reconstruye desde su captura y las respuestas
+registradas del Judge, sin Judge (`verifyPolicyDecisions`). Además, el run completo se reconstruye fuera de línea.
+
+**La vista de escalada** dibuja el consejo como una cuerda propia, «consejo de la política», separada de las
+directivas del senior.
+
+**Pendiente para M2:** el índice del corpus y la proyección de lo entregado al junior en la experiencia, los ensayos
+interiores, el evaluador fijo, el adaptador para el motor evolutivo y la política en la rejilla.
 
 ## 14. Resultado esperado
 

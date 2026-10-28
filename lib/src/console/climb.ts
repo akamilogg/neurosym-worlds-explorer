@@ -45,7 +45,7 @@ export interface ClimbMetric extends ProgressMetric {
 }
 /** A delivery from one to another (§5): `from` and `to` are climbers, or who is not one - "senior", "operator",
     "branch:<id>", "evolve:<id>". It says something arrived, never that it influenced. */
-export interface Rope { kind: 'message' | 'material' | 'board' | 'directive' | 'branch_opened' | 'branch_result' | 'adoption' | 'announcement'; from: string; to: string; t: number; ref: string; label?: string }
+export interface Rope { kind: 'message' | 'material' | 'board' | 'directive' | 'advice' | 'branch_opened' | 'branch_result' | 'adoption' | 'announcement'; from: string; to: string; t: number; ref: string; label?: string }
 export interface ClimbEvent { kind: string; origin: 'world' | 'operator' | 'harness'; t: number; to?: number; label: string; ref: string; climber?: string; profile: 'operator' | 'researcher'; data?: Json }
 export interface ClimbGroup {
   key: Json;
@@ -273,6 +273,7 @@ export function climb(store: ResearchStore, ids: readonly string[], profile: Pro
       if (e.type === 'delegation_requested' && typeof d.id === 'string') g.ropes.push({ kind: 'branch_opened', from: id, to: branchIdOf(id, d.id) ?? (d.mode === 'evolve' ? 'evolve:' : 'branch:') + d.id, t, ref: e.id, label: String(d.question ?? '').slice(0, 120) });
       if (e.type === 'operator_message') for (const m of (d.messages ?? []) as Json[]) {
         if (m.research_result) g.ropes.push({ kind: 'branch_result', from: branchIdOf(id, m.research_result) ?? 'branch:' + m.research_result, to: id, t, ref: e.id, label: String(m.text ?? '').slice(0, 120) });
+        else if (m.by === 'agent:research-policy') g.ropes.push({ kind: 'advice', from: 'research-policy', to: id, t, ref: e.id, label: String(m.text ?? '').slice(0, 120) });
         else if (m.directive || String(m.by ?? '').startsWith('agent:')) g.ropes.push({ kind: 'directive', from: 'senior', to: id, t, ref: e.id, label: String(m.text ?? '').slice(0, 120) });
         else g.events.push({ kind: 'operator_message', origin: 'operator', t, label: 'mensaje del operador: ' + String(m.text ?? '').slice(0, 80), ref: e.id, climber: id, profile });
       }
