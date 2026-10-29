@@ -377,6 +377,7 @@ def render(job):
     if raw is None:
         return {}
     dev = pickle.loads(raw)
+    from chipformer.rv import store as ST
     tok = tokenizer_of(job["files"]["base"])
     files = {}
     # Device.names(): the live keys in creation order, each (length, name) - length the name's tokens (capped at NMAX + 1),
@@ -384,9 +385,28 @@ def render(job):
     for key in dev.names():
         length, name = key
         shown = [int(t) for t in name[:min(int(length), len(name))] if int(t) != 0]
-        text = dev.text(key) or []
-        files[native_to_file(tok.decode(shown))] = native_to_file(tok.decode([int(t) for t in text]))
+        # A file is its chunks, one per put or append, each with the newline the call format put after its value: each
+        # chunk read as the value it was, then joined - never the whole file trimmed once.
+        # A chunk filled to CMAX had no room left for the protocol's newline: nothing of it is the protocol's.
+        cmax = getattr(ST, "CMAX", 104)
+        files[native_to_file(tok.decode(shown))] = "".join(tok.decode(chunk) if len(chunk) >= cmax else native_to_file(tok.decode(chunk)) for chunk in chunks_of(dev, key))
     return files
+
+
+def chunks_of(dev, key):
+    """A live file's chunks, in order, as the store keeps them (Device: its entry's head, nexts between chunks, lens and
+    content per chunk)."""
+    entry = next((e for e in dev.dir.values() if e.alive and e.key == key), None)
+    if entry is None:
+        return []
+    out, g, seen = [], entry.head, set()
+    while g not in seen:
+        seen.add(g)
+        out.append([int(dev.content.get((g, i), 0)) for i in range(dev.lens.get(g, 0))])
+        if g not in dev.nexts:
+            break
+        g = dev.nexts[g]
+    return out
 
 
 def native_to_file(s):

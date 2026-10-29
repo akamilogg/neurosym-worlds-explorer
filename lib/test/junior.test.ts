@@ -564,6 +564,28 @@ test('review 2: the simulator of the teacher and render take the forms of the st
     assert.deepEqual(await server.render({ pkg, twin: put.twin }), { memo: 'hello there' });
     const own = await server.memoryCall({ pkg, twin: put.twin, call: { op: 'put', name: 'two', text: 'line one\n' } });
     assert.deepEqual(await server.render({ pkg, twin: own.twin }), { memo: 'hello there', two: 'line one\n' }, 'a newline of the content stays');
+    /* Review 4: a file built by append is its chunks, each read as the value it was, then joined. */
+    const call = async (twin: string | null, op: 'put' | 'append', name: string, text: string) => (await server.memoryCall({ pkg, twin, call: { op, name, text } })).twin;
+    let t = await call(null, 'put', 'memo', 'hello');
+    t = await call(t, 'append', 'memo', 'world');
+    assert.deepEqual(await server.render({ pkg, twin: t }), { memo: 'helloworld' });
+    t = await call(t, 'append', 'memo', '!');
+    assert.deepEqual(await server.render({ pkg, twin: t }), { memo: 'helloworld!' }, 'several appends');
+    let u = await call(null, 'put', 'notes', 'a\nb');
+    u = await call(u, 'append', 'notes', '\nc\n');
+    u = await call(u, 'append', 'notes', 'd');
+    assert.deepEqual(await server.render({ pkg, twin: u }), { notes: 'a\nb\nc\nd' }, 'the content\'s own newlines, inside and at the end of a chunk, stay');
+    /* A call holds at most CMAX (104) tokens: more is cut, and the reading says so - a memory asked with more is not what was asked. */
+    const long = 'x'.repeat(150);
+    const cut = await server.render({ pkg, twin: await call(null, 'put', 'big', long) });
+    assert.equal(cut.big.length, 104);
+    const { memoryDiff } = await import('../src/junior/memory.ts');
+    assert.deepEqual(memoryDiff({ big: long }, cut), ['big differs']);
+    let whole = await call(null, 'put', 'big', 'x'.repeat(100));
+    whole = await call(whole, 'append', 'big', 'x'.repeat(50));
+    assert.deepEqual(memoryDiff({ big: long }, await server.render({ pkg, twin: whole })), [], 'split by append, it fits');
+    const full = 'y'.repeat(103) + String.fromCharCode(10);
+    assert.deepEqual(await server.render({ pkg, twin: await call(null, 'put', 'full', full) }), { full }, 'a chunk filled to CMAX keeps its own last newline');
   } finally { server.stop(); }
 });
 

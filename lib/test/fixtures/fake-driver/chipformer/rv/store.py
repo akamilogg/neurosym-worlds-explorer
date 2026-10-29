@@ -22,20 +22,41 @@ def key_of(name):
 
 
 class Entry:
-    def __init__(self, key, text):
-        self.key, self.text, self.alive = key, list(text), True
+    def __init__(self, length, name, head):
+        self.length, self.name, self.alive, self.head, self.tail = length, name, True, head, head
+
+    @property
+    def key(self):
+        return self.length, self.name
 
 
 class Device:
+    """As the real one: dir slot -> Entry, order of slots, and chunks - lens, nexts, content[(chunk, index)]."""
+
     def __init__(self):
-        self.dir, self.order = {}, []
+        self.dir, self.order, self.lens, self.nexts, self.content, self.nextg = {}, [], {}, {}, {}, 0
 
     def names(self):
-        return [self.dir[k].key for k in self.order if self.dir[k].alive]
+        return [self.dir[s].key for s in self.order if self.dir[s].alive]
 
     def text(self, key):
-        e = self.dir.get(key)
-        return list(e.text) if e is not None and e.alive else None
+        for e in self.dir.values():
+            if e.alive and e.key == key:
+                out, g = [], e.head
+                while True:
+                    out += [self.content.get((g, i), 0) for i in range(self.lens.get(g, 0))]
+                    if g not in self.nexts:
+                        return out
+                    g = self.nexts[g]
+        return None
+
+    def write_chunk(self, tokens):
+        g = self.nextg
+        for i, t in enumerate(tokens[:CMAX]):
+            self.content[(g, i)] = t
+        self.lens[g] = min(len(tokens), CMAX)
+        self.nextg = g + 1
+        return g
 
 
 class StoreSession:
@@ -83,17 +104,17 @@ class StoreSession:
         k = key_of(name) if name is not None else None
         e = self.dev.dir.get(k) if k else None
         if op in ("put", "append"):
-            if e is None or not e.alive:
-                self.dev.dir[k] = Entry(k, text[:CMAX])
+            g = self.dev.write_chunk(text)
+            if e is None or not e.alive or op == "put":
+                self.dev.dir[k] = Entry(k[0], k[1], g)
                 if k not in self.dev.order:
                     self.dev.order.append(k)
-            elif op == "put":
-                e.text = list(text[:CMAX])
             else:
-                e.text += list(text[:CMAX])
+                self.dev.nexts[e.tail] = g
+                e.tail = g
             body, ans = "ok", (op, e is not None, False)
         elif op == "get":
-            body = "".join(chr(t) for t in e.text) if e is not None and e.alive else "not found"
+            body = "".join(chr(t) for t in self.dev.text(k)) if e is not None and e.alive else "not found"
             ans = (op, e is not None and e.alive, False)
         elif op == "delete":
             found = e is not None and e.alive

@@ -70,8 +70,9 @@ Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecuta
   precisión) coincide con el paquete; que el plazo declarado corta la generación desde dentro (`generate` llama a
   `lock.qwen` por cada token) y devuelve el prefijo como `limit_reached`, con lo que imprimió el circuito; y que
   `StoreSession.call_tokens` da la secuencia que el junior emite para una llamada, la que se entrena como decisión.
-- que la lectura de una memoria como archivos quita sólo el salto de línea que el formato de llamada pone tras cada valor
-  (`native_to_file`): con el tokenizer real, ese salto puede ir unido al último token del valor;
+- que la lectura de una memoria como archivos recorre sus fragmentos (uno por `put` o `append`) y quita de cada uno sólo
+  el salto de línea que el formato de llamada pone tras su valor, salvo en un fragmento lleno hasta `CMAX`, donde no cupo
+  (`chunks_of`, `native_to_file`): con el tokenizer real, ese salto puede ir unido al último token del valor;
 - **Pendiente de construir, no sólo de confirmar:** la equivalencia entre el snapshot neuronal y su gemelo (que sus filas
   sean, valor a valor, las que dejan en el almacén las escrituras de los archivos del gemelo). Hasta que exista, el
   verificador rechaza lo que contradice al gemelo pero nunca da por buena la memoria: `lab junior verify` de una sesión
