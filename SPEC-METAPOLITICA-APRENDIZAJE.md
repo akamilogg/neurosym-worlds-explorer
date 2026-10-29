@@ -18,7 +18,12 @@ implementado** (`lib/src/junior/train.ts`, `junior_train.py`): receta `junior-re
 entrenamiento como trabajo recuperable en su propio proceso (capacidad medida antes, puntos de control, adaptador por hash
 sólo al terminar), rechazo por solapamiento con los grupos de selección, validez del circuito antes de evaluar (suite que
 exige ejercitar cálculo, escritura, lectura, borrado y memoria restaurada sin discrepancias, y parámetros del circuito
-iguales a los de la base) y el acto `train`. La divergencia KL como diagnóstico queda pendiente. MA6–MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
+iguales a los de la base) y el acto `train`. La divergencia KL como diagnóstico queda pendiente. **MA6 implementado** (`lib/src/junior/confirm.ts`, `lab junior
+confirm`): el servicio del operador importa los paquetes congelados comprobando cada fichero por hash en su propio
+almacén, los evalúa con su propio servidor en los casos reservados de su manifiesto, guarda el informe completo del
+operador y publica sólo un resumen (veredicto, componentes que mejoran o empeoran, lo que el candidato debe a otros); cada
+resumen expone sus casos y, pasado el tope, el servicio deja de confirmar en ellos. El investigador lee los resúmenes con el
+acto `confirmations`. MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
 destilación, entrenamiento y método reutilizable. El mecanismo de relevo de fase B queda definido y desactivado hasta
 que el operador configure su batería y umbrales a partir de la evidencia de fase A, antes de evaluarlos. Este documento
 fija los contratos para desarrollo; los valores de cada experimento se declaran en su manifiesto antes de ejecutarlo.

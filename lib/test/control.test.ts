@@ -34,10 +34,10 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
     particles3d: ['268b63917ce2663e', 'f21aea4aefef35aa', 'c82859a959caa037'],
     c302nav: ['2ec794d2b3b97ce8', 'f020fd16447faf91', '71f6699109c68c7e'],
     c302closed: ['49b560bc501cd3f0', 'e40ead68b23b4af2', '86b67843a966cf1d'],
-    /* The world of artifacts (SPEC-MUNDO-ARTEFACTOS, 14/10/2026): its prompt, frozen from its first version; its memory files and publish_memory added (MA3), distill and dataset (MA4), train (MA5), 29/10/2026. */
+    /* The world of artifacts (SPEC-MUNDO-ARTEFACTOS, 14/10/2026): its prompt, frozen from its first version; its memory files and publish_memory added (MA3), distill and dataset (MA4), train (MA5), confirmations (MA6), 29/10/2026. */
     artifacts: ['ba29707e3ee08ebd', '8aaa432f3610a8ee', 'd2d45f19e85d6bc9'],
-    /* The world of a junior's competence (SPEC-METAPOLITICA-APRENDIZAJE MA2, 29/10/2026): its prompt, frozen from its first version; its memory files and publish_memory added (MA3), distill and dataset (MA4), train (MA5), 29/10/2026. */
-    junior: ['3948344d21474115', '3948344d21474115', 'a8847ad2436a04c0'],
+    /* The world of a junior's competence (SPEC-METAPOLITICA-APRENDIZAJE MA2, 29/10/2026): its prompt, frozen from its first version; its memory files and publish_memory added (MA3), distill and dataset (MA4), train (MA5), confirmations (MA6), 29/10/2026. */
+    junior: ['75ff23654b2b3eec', '75ff23654b2b3eec', 'a8847ad2436a04c0'],
     grid: ['655eb619829d609f']
   };
   for (const [name, lab] of Object.entries(LABS)) {

@@ -93,3 +93,17 @@ Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto
    --server http://127.0.0.1:18700 --work <dir> --evaluations 10`, con el modelo fuerte como System 2. Su exploración es
    la línea base; cambia `prompt.md` y `decoding.json`, evalúa versiones y pone una adelante para que se compare con la
    referencia.
+
+## 6. La confirmación (MA6), en la máquina del operador
+
+1. **Su manifiesto:** un `junior-competence-manifest@1` propio, sólo en la máquina del operador, con los casos reservados
+   (partición `confirmation`) y su referencia. Nada en la máquina del junior lo lee.
+2. **Exportar los juniors:** el mundo deja el paquete de cada versión en `<work>/packages/<versión>.json`;
+   `lab junior package <ese fichero> --blobs <blobs> --export <carpeta>` lo exporta cerrado, y lo mismo con la referencia.
+   Las carpetas exportadas se llevan a la máquina del operador.
+3. **Confirmar:** `lab junior confirm <manifiesto de confirmación> <export candidato> <export referencia> --dir <servicio>
+   --python <python> [--max-exposures 3]`. Importa los paquetes comprobando cada fichero, los evalúa con su propio servidor
+   y deja el informe del operador en `<servicio>/reports/` y el resumen en `<servicio>/outbox/`.
+4. **Publicar:** sólo el resumen de `outbox/` se copia a la carpeta que el run del investigador lee con `--confirmations`;
+   lo ve con el acto `confirmations`. Cada resumen publicado expone sus casos: pasado el tope, el servicio se niega a
+   confirmar en ellos y hay que reservar casos nuevos.

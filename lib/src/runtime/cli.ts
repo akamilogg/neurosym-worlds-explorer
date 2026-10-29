@@ -356,7 +356,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       case 'junior': {
         /* The junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1): its blobs, its package, a session verified from
            its ledger, the machine checked, the driver's resources measured. The server and the proxy are scripts of their own. */
-        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json>';
+        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P';
         const sub = args.shift();
         const file = (f: string) => fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f);
         const J = await import('../junior/package.ts');
@@ -379,6 +379,35 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           out('cut ' + cut.hash);
           out('lab ' + cut.lab + ', question ' + q + ', ' + cut.events_before + ' events before it, ' + cut.content.user.parts.length + ' user parts');
           return 0;
+        }
+        if (sub === 'confirm') {
+          /* The operator's confirmation (MA6): its own manifest of reserved cases, the frozen packages exported, its own junior
+             server - on the operator's machine. The report is the operator's; the summary in its outbox is what is published. */
+          const [mf, cand, ref] = [args.shift(), args.shift(), args.shift()];
+          const dir = take(args, 'dir'), python = take(args, 'python'), backend = (take(args, 'backend') ?? 'qwenputer') as 'qwenputer' | 'fake';
+          const maxExposures = Number(take(args, 'max-exposures') ?? 3);
+          if (!mf || !cand || !ref || !dir || !python) { out('lab junior confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <service dir> --python <python> [--backend qwenputer|fake] [--max-exposures 3]'); return 2; }
+          const { ConfirmationService } = await import('../junior/confirm.ts');
+          const { SessionServer } = await import('../junior/sessions.ts');
+          const { serveJunior } = await import('../junior/http.ts');
+          const { ProcessWorker } = await import('../junior/worker.ts');
+          const { JuniorSessionClient } = await import('../junior/client.ts');
+          const { inProcessLauncher } = await import('../meta/lab.ts');
+          const { labEndpointsFromEnv } = await import('../orchestra/launch.ts');
+          const root = path.resolve(dir);
+          const J2 = await import('../junior/package.ts');
+          const worker = new ProcessWorker({ python: [python, '-u'], backend, work: path.join(root, 'work') });
+          const server = new SessionServer({ root: path.join(root, 'junior'), store: new J2.BlobStore(path.join(root, 'blobs')), worker });
+          const h = await serveJunior(server);
+          try {
+            const ends = labEndpointsFromEnv(ctx.env ?? process.env);
+            const svc = new ConfirmationService({ root, manifest: JSON.parse(fs.readFileSync(file(mf), 'utf8')), client: new JuniorSessionClient(h.url), maxExposures,
+              launcher: inProcessLauncher({ root, llm: { url: '', model: undefined }, ...(ends.judge ? { judge: ends.judge } : {}) }), ...(ends.judge ? { judge: ends.judge } : {}) });
+            const r = await svc.confirm(file(cand), file(ref));
+            out(r.verdict + (r.summary ? '; summary to publish: ' + r.summary : '; incomplete: nothing is published'));
+            out('the operator\'s report: ' + r.report);
+            return 0;
+          } finally { server.stop(); await h.close(); }
         }
         if (sub === 'manifest' || sub === 'promote') {
           const f = args.shift();
