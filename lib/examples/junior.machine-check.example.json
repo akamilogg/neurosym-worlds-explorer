@@ -1,0 +1,12 @@
+{
+  "format": "junior-machine-check@1",
+  "checks": [
+    { "id": "backups-target", "covers": ["backups"], "kind": "command", "argv": ["rsync", "--dry-run", "-a", "/srv/junior/", "backup@operator:/backups/junior/"] },
+    { "id": "snapshots", "covers": ["snapshots"], "kind": "command", "argv": ["zfs", "list", "-t", "snapshot", "tank/junior"] },
+    { "id": "no-provider-keys", "covers": ["keys"], "kind": "no_keys", "allow": ["LLM_KEY", "JUDGE_KEY", "SENIOR_LLM_KEY"] },
+    { "id": "proxy", "covers": ["proxy"], "kind": "http", "url": "http://10.0.0.2:18800/status", "expect": [401] },
+    { "id": "egress-closed", "covers": ["egress"], "kind": "unreachable", "url": "https://example.com" },
+    { "id": "disk", "covers": ["limits"], "kind": "disk_free", "path": "/srv/junior", "min_gb": 200 },
+    { "id": "gpu-quota", "covers": ["limits"], "kind": "command", "argv": ["test", "-f", "/etc/junior/gpu-hours.limit"] }
+  ]
+}

@@ -48,6 +48,7 @@ export const CLI_USAGE = [
   'lab start <lab> [--researcher R] [--policy P] [args...]   start a run in a process of its own (labs: ' + Object.keys(LABS).join(', ') + ')',
   'lab live <manifest.json>                                  a living world\'s session, as its manifest declares it (living-world@1)',
   'lab world <run|session> <op> ...                         control of a living world by the operator: programs, pause/resume/close, join/retire, say/pin, status',
+  'lab junior store|package|verify|check|probe ...           the junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1)',
   'lab list                                                  the runs, newest first',
   'lab status <run>                                          a run\'s state and its latest events',
   'lab watch <run>                                           its events as they come, until it ends',
@@ -351,6 +352,72 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         out('started a shared session of ' + m.lab + ' (pid ' + pid + '): ' + m.plan.actors.map((a) => a.id + ' (' + a.kind + ')').join(', '));
         out('folder ' + dir + ': the run of each researcher is session.<id>.json, the world session.world.jsonl');
         return 0;
+      }
+      case 'junior': {
+        /* The junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1): its blobs, its package, a session verified from
+           its ledger, the machine checked, the driver's resources measured. The server and the proxy are scripts of their own. */
+        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir>';
+        const sub = args.shift();
+        const file = (f: string) => fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f);
+        const J = await import('../junior/package.ts');
+        const blobsDir = take(args, 'blobs');
+        if (sub === 'check') {
+          const f = args.shift();
+          if (!f) { out(usage); return 2; }
+          const { checkMachine } = await import('../junior/setup.ts');
+          const r = await checkMachine(JSON.parse(fs.readFileSync(file(f), 'utf8')), ctx.env ? { env: ctx.env } : {});
+          for (const x of r.results) out((x.ok ? 'ok   ' : 'FAIL ') + x.id + ': ' + x.detail);
+          for (const p of r.uncovered) out('FAIL ' + p + ': no check covers it');
+          out(r.ok ? 'the machine is ready' : 'the machine is NOT ready: no investigation starts on it');
+          return r.ok ? 0 : 1;
+        }
+        if (!blobsDir) { out(usage); return 2; }
+        const store = new J.BlobStore(file(blobsDir));
+        if (sub === 'store') {
+          const f = args.shift();
+          if (!f) { out(usage); return 2; }
+          const p = file(f);
+          out((fs.statSync(p).isDirectory() ? 'tree ' + store.putTree(p) : 'blob ' + store.putFile(p)));
+          return 0;
+        }
+        const f = args.shift();
+        if (!f) { out(usage); return 2; }
+        if (sub === 'package' || sub === 'probe') {
+          let pkg;
+          try { pkg = J.normalizePackage(JSON.parse(fs.readFileSync(file(f), 'utf8'))); } catch (e) { out('the package is refused: ' + (e as Error).message); return 2; }
+          const execution = J.executionHash(pkg);
+          const closed = J.checkClosed(pkg, store);
+          if (sub === 'package') {
+            out('execution ' + execution);
+            out('edition   ' + J.editionHash(pkg));
+            for (const m of closed.missing) out('missing ' + m);
+            for (const c of closed.corrupt) out('corrupt ' + c);
+            out(closed.closed ? 'closed: every blob is in the store with its bytes' : 'NOT closed: it cannot be served nor called reconstructible');
+            const exp = take(args, 'export');
+            if (exp && closed.closed) out('exported ' + J.exportPackage(pkg, store, path.resolve(exp)).blobs + ' blobs to ' + path.resolve(exp));
+            return closed.closed ? 0 : 1;
+          }
+          if (!closed.closed) { out('the package is not closed: nothing to measure'); return 1; }
+          const { ProcessWorker } = await import('../junior/worker.ts');
+          const python = take(args, 'python') ?? 'python', work = take(args, 'work'), lengths = (take(args, 'lengths') ?? '').split(',').map(Number).filter((n) => n > 0);
+          if (!work || !lengths.length) { out(usage); return 2; }
+          const w = new ProcessWorker({ python: [python, '-u'], backend: (take(args, 'backend') ?? 'qwenputer') as 'qwenputer' | 'fake', work: path.resolve(work) });
+          try { out(JSON.stringify(await w.probe(pkg, execution, store, lengths), null, 2)); } finally { w.invalidate(); }
+          return 0;
+        }
+        if (sub === 'verify') {
+          const { verifySession, processReference } = await import('../junior/verify.ts');
+          const { VERIFY_PY } = await import('../junior/worker.ts');
+          const python = take(args, 'python'), backend = take(args, 'backend'), firmware = take(args, 'firmware'), tokenizer = take(args, 'tokenizer');
+          const reference = python && backend ? processReference([python, VERIFY_PY, '--backend', backend, ...(firmware ? ['--firmware', firmware] : []), ...(tokenizer ? ['--tokenizer', tokenizer] : [])]) : null;
+          const r = await verifySession(file(f), store, reference);
+          out('session ' + r.session + ': ' + r.receipts + ' receipts, the memory of ' + r.memory_checked + ' rebuilt by the reference');
+          for (const p of r.problems) out('  ' + p);
+          out(r.ok ? 'verified' : 'NOT verified');
+          return r.ok ? 0 : 1;
+        }
+        out(usage);
+        return 2;
       }
       case 'list': {
         for (const l of table(listRuns(path.join(ctx.root, 'runs')))) out(l);

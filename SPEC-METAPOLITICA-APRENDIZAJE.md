@@ -1,6 +1,9 @@
 # SPEC · Metapolítica de aprendizaje: un investigador que aprende a mejorarse
 
-Estado (29/10/2026): **fase A lista para implementar; todavía sin implementar**. MA1–MA7 definen ejecución, evaluación,
+Estado (29/10/2026): **MA1 implementado salvo su prueba real** (`lib/src/junior`, guía en
+`lib/examples/junior.setup.md`): paquete, sesiones con recibos, verificador, intermediario y comprobación de la máquina,
+probados con un servidor simulado. Falta ejecutar el driver real de Qwenputer en la máquina del junior. MA2–MA7 sin
+implementar. MA1–MA7 definen ejecución, evaluación,
 destilación, entrenamiento y método reutilizable. El mecanismo de relevo de fase B queda definido y desactivado hasta
 que el operador configure su batería y umbrales a partir de la evidencia de fase A, antes de evaluarlos. Este documento
 fija los contratos para desarrollo; los valores de cada experimento se declaran en su manifiesto antes de ejecutarlo.
@@ -87,7 +90,7 @@ Formato `junior-package@1`. Una versión es todo lo que define al junior:
 | Modelo base | El checkpoint de partida (Qwenputer Filesystem) | Por hash, fuera del almacén de artefactos |
 | Adaptador | LoRA sobre las capas de Qwen, o ninguno | Por hash, fuera del almacén; el artefacto guarda su manifiesto |
 | Prompt de arranque | Lo que el junior recibe al empezar, además del prompt del arnés | Texto, en el artefacto |
-| Memoria inicial | El estado del sistema de archivos con el que arranca cada run | `memory.npz` por hash, y su contenido legible en el artefacto |
+| Memoria inicial | El estado del sistema de archivos con el que arranca cada run | `memory.npz` por hash y su gemelo de referencia (el dispositivo del verificador, §5.2) por hash: los dos o ninguno; su contenido legible en el artefacto |
 | Decodificación | Temperatura, límites, formato forzado si se usa | En el artefacto |
 | Ejecución | Firmware, tokenizer, plantilla de chat, driver, configuración del circuito, precisión y cuantización | Versiones y contenido por hash; opciones efectivas en el manifiesto |
 | Procedencia | Padres, motivo de cada cambio, datos y entrenamientos que lo produjeron | En el artefacto |

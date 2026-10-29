@@ -1,0 +1,15 @@
+{
+  "upstreams": {
+    "strong": { "url": "https://openrouter.ai/api", "key_env": "STRONG_PROVIDER_KEY" },
+    "judge": { "url": "https://openrouter.ai/api", "key_env": "JUDGE_PROVIDER_KEY" }
+  },
+  "bags": {
+    "strong": { "tokens": 20000000, "calls": 20000, "reserve_prompt_tokens": 0 },
+    "judge": { "tokens": 5000000, "calls": 20000 }
+  },
+  "clients": {
+    "<sha256 of the token the junior's machine uses for the strong model>": { "bag": "strong", "upstreams": ["strong"] },
+    "<sha256 of the token it uses for the Judge>": { "bag": "judge", "upstreams": ["judge"] }
+  },
+  "ledger": "D:/junior-operator/proxy.ledger.jsonl"
+}
