@@ -64,6 +64,9 @@ export interface JuniorWorker {
   check?(pkg: JuniorPackage): string | null;
   /** Make sure a worker that may still be running can never answer again (kill its process). */
   invalidate?(): void;
+  /** A memory read as files (§4: its readable content, derived from its snapshot): name to text. Through the reference twin,
+      in the package's own terms - never a second reading of the store written here. */
+  render?(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore }): Promise<Record<string, string> | { readonly error: string }>;
 }
 
 export interface Receipt {
@@ -316,6 +319,16 @@ export class SessionServer {
     if (r) return { state: 'published', receipt: r };
     if (s.pending?.request_id === request_id) return { state: 'pending' };
     return { state: 'unknown' };
+  }
+
+  /** A memory state read as files, by the worker that serves its package (§4). */
+  async render(o: { pkg: unknown; twin: BlobId | null }): Promise<Record<string, string>> {
+    const pkg = normalizePackage(o.pkg);
+    if (!this.worker.render) throw new SessionError('unsupported', 'this worker cannot read a memory as files');
+    if (o.twin !== null && !this.store.intact(o.twin)) throw new SessionError('bad_state', 'the twin ' + o.twin + ' is missing or corrupt');
+    const r = await this.worker.render({ pkg, execution: executionHash(pkg), twin: o.twin === null ? null : this.store.get(o.twin), store: this.store });
+    if ('error' in r && typeof r.error === 'string' && Object.keys(r).length === 1) throw new SessionError('render_failed', r.error);
+    return r as Record<string, string>;
   }
 
   /** The state a new question starts from: the last one published, its blobs checked (§5.2: never the initial one). */

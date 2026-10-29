@@ -378,3 +378,17 @@ test('lab junior: a directory stored as a tree, a package checked closed and exp
     assert.equal(lines.at(-1), 'verified');
   }
 });
+
+test('a memory read as files through the Python worker (fake backend)', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const worker = new ProcessWorker({ python: [python!], backend: 'fake', work: path.join(dir, 'work') });
+  const server = new SessionServer({ root: dir, store, worker });
+  try {
+    const pkg = fixture(store);
+    const s = server.open({ run_id: 'r', pkg, session_id: 's' });
+    const r = await server.ask('s', { request_id: 'q', content: { user: 'remember note=keep the protocol' }, expected: s.head_id });
+    assert.deepEqual(await server.render({ pkg, twin: r.after.twin }), { note: 'keep the protocol' });
+    assert.deepEqual(await server.render({ pkg, twin: null }), {});
+  } finally { server.stop(); }
+});

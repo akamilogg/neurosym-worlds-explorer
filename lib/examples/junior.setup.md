@@ -54,6 +54,9 @@ Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecuta
   token a token contra el circuito;
 - que repetir en el verificador las mismas llamadas a `qwen()` reproduce el mismo flujo;
 - que el `pickle` del dispositivo de referencia da los mismos bytes en el trabajador y en el verificador.
+- que la lectura de la memoria como archivos (`render`: `Device.names()` y `Device.text()` del almacén, decodificados
+  con el tokenizer del paquete) da los nombres y textos escritos; de ella dependen la palanca de memoria inicial y
+  `publish_memory` (MA3).
 
 Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto del contrato no cambia.
 

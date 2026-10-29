@@ -121,6 +121,18 @@ export class ProcessWorker implements JuniorWorker {
     return a.probe;
   }
 
+  /** A memory read as files by the package's own driver (§4). */
+  async render(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore }): Promise<Record<string, string> | { readonly error: string }> {
+    const files = this.o.backend === 'fake' ? null : materialize(job.pkg, job.execution, job.store, path.join(this.o.work, 'packages'));
+    const id = 'r' + (++this.next) + '-' + process.pid;
+    const child = this.start();
+    const a = await new Promise<Record<string, unknown>>((resolve) => {
+      this.waiting.set(id, resolve as never);
+      child.stdin.write(JSON.stringify({ id, op: 'render', execution: job.execution, backend: this.o.backend, files, circuit: job.pkg.execution.circuit, twin: job.twin === null ? null : job.twin.toString('base64') }) + '\n');
+    });
+    return a.files && typeof a.files === 'object' ? a.files as Record<string, string> : { error: String(a.reason ?? 'no answer') };
+  }
+
   async run(job: WorkerJob): Promise<WorkerResult> {
     const files = materialize(job.pkg, job.execution, job.store, path.join(this.o.work, 'packages'));
     const id = 'j' + (++this.next) + '-' + process.pid;

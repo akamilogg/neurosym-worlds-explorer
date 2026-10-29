@@ -30,7 +30,14 @@ import { BlobStore, checkClosed, executionHash, normalizePackage, type JuniorPac
  * The confirmation partition is never run here: it is the operator's, out of this machine (§9).
  * ========================================================================== */
 
-const EDITABLE = ['prompt.md', 'decoding.json'] as const;
+const PARTS = ['prompt.md', 'decoding.json'] as const;
+/** A file the junior is to hold in its memory from the start: memory/<name>. */
+const MEMORY_FILE = /^memory\/[^/\\]{1,64}$/;
+/** The memory published from a session (publish_memory): written by the world, never by a change. */
+const PUBLISHED = 'memory.state.json';
+const editable = (f: string): boolean => (PARTS as readonly string[]).includes(f) || MEMORY_FILE.test(f);
+
+interface Published { readonly neural: string | null; readonly twin: string | null; readonly source: { readonly session: string; readonly run_id: string } }
 
 export class JuniorWorld {
   readonly manifest: CompetenceManifest;
@@ -43,8 +50,9 @@ export class JuniorWorld {
   readonly reference: string;
   readonly jobs: JobLedger;
   private readonly evaluations = new Map<string, Evaluation>();
+  private readonly packages = new Map<string, JuniorPackage>();
 
-  constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; store?: ArtifactStore }) {
+  constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; store?: ArtifactStore }) {
     const problems = competenceProblems(o.manifest);
     if (problems.length) throw new Error('the competence manifest: ' + problems.join('; '));
     this.manifest = o.manifest;
@@ -59,40 +67,125 @@ export class JuniorWorld {
     fs.mkdirSync(o.dir, { recursive: true });
     this.store = o.store ?? new ArtifactStore(new Map([['prompt.md', this.base.prompt], ['decoding.json', JSON.stringify(this.base.decoding, null, 2) + '\n']]));
     this.reference = this.store.base;
-    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations });
+    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations, memory_builds: o.memoryBuilds ?? o.evaluations });
   }
 
   archive(): { base: JuniorPackage; manifest: CompetenceManifest; files: Record<string, string> } {
     return { base: this.base, manifest: this.manifest, files: Object.fromEntries(this.store.get(this.reference)!.files) };
   }
 
-  /** The junior a version is: the base package with its editable parts, its provenance the version's line. */
-  packageOf(version: string): JuniorPackage | string {
+  /** A version's parts as they are written: its prompt, its decoding, the memory files it asks for, the memory it published. */
+  private parts(version: string): { prompt: string; decoding: unknown; files: Record<string, string>; published: Published | null } | string {
     const v = this.store.get(version);
     if (!v) return 'no version ' + version;
-    let decoding: unknown;
+    let decoding: unknown, published: Published | null = null;
     try { decoding = JSON.parse(v.files.get('decoding.json') ?? ''); } catch { return 'decoding.json is not JSON'; }
-    try {
-      return normalizePackage({ ...this.base, prompt: v.files.get('prompt.md') ?? '', decoding,
-        provenance: { parents: [executionHash(this.base)], reason: 'version ' + version + ' of the junior-competence world', sources: this.store.lineage(version).map((t) => t.from + '->' + t.to) } });
-    } catch (e) { return (e as Error).message; }
+    if (v.files.has(PUBLISHED)) { try { published = JSON.parse(v.files.get(PUBLISHED)!); } catch { return PUBLISHED + ' is not JSON'; } }
+    const files = Object.fromEntries([...v.files].filter(([f]) => MEMORY_FILE.test(f)).map(([f, t]) => [f.slice('memory/'.length), t]));
+    return { prompt: v.files.get('prompt.md') ?? '', decoding, files, published };
+  }
+
+  private shell(version: string, prompt: string, decoding: unknown, memory: { neural: string | null; twin: string | null }): JuniorPackage {
+    return normalizePackage({ ...this.base, prompt, decoding, memory,
+      provenance: { parents: [executionHash(this.base)], reason: 'version ' + version + ' of the junior-competence world', sources: this.store.lineage(version).map((t) => t.from + '->' + t.to) } });
+  }
+
+  /** The junior a version is: the base package with its parts; its memory the base's, or the one it published, with the
+      files it asks for written on top BY THE JUNIOR (memory.ts) - a job of the ledger, done once per memory asked. */
+  async packageOf(version: string): Promise<JuniorPackage | string> {
+    const known = this.packages.get(version);
+    if (known) return known;
+    const parts = this.parts(version);
+    if (typeof parts === 'string') return parts;
+    const start = parts.published ? { neural: parts.published.neural, twin: parts.published.twin } : this.base.memory;
+    let pkg: JuniorPackage;
+    try { pkg = this.shell(version, parts.prompt, parts.decoding, start); } catch (e) { return (e as Error).message; }
+    if (Object.keys(parts.files).length) {
+      const { buildMemory } = await import('../../junior/memory.ts');
+      const operation = 'mem-' + createHash('sha256').update(executionHash(pkg) + ':' + JSON.stringify(Object.entries(parts.files).sort())).digest('hex').slice(0, 24);
+      try {
+        const writer = pkg;
+        const { done } = this.jobs.start({ operation_id: operation, op: 'build_memory', inputs: { execution: executionHash(pkg), files: parts.files }, reserve: { memory_builds: 1 },
+          run: async () => {
+            const b = await buildMemory({ client: this.client, pkg: writer, files: parts.files, ledger: path.join(this.dir, 'memory.jsonl') });
+            return 'error' in b ? { spent: { memory_builds: 1 }, failed: b.error + ': ' + b.attempts.map((a) => a.why).join(' | ') } : { spent: { memory_builds: 1 }, products: b };
+          } });
+        const job = await done;
+        if (job.state !== 'completed') return 'its memory was not written: ' + (job.reason ?? job.state);
+        const b = job.products as { state: { neural: string | null; twin: string | null } };
+        pkg = this.shell(version, parts.prompt, parts.decoding, b.state);
+      } catch (e) { return e instanceof JobRefused ? e.message : String((e as Error).message ?? e); }
+    }
+    this.packages.set(version, pkg);
+    return pkg;
   }
 
   change(from: string, files: Readonly<Record<string, string | null>>, reason: unknown): { version: string; parent: string } | { error: string } {
-    for (const f of Object.keys(files)) if (!EDITABLE.includes(f as typeof EDITABLE[number])) return { error: 'only ' + EDITABLE.join(' and ') + ' can be changed here' };
-    if (Object.values(files).some((t) => t === null)) return { error: 'the junior\'s parts are changed, never removed' };
+    for (const [f, t] of Object.entries(files)) {
+      if (!editable(f)) return { error: 'only prompt.md, decoding.json and memory/<name> files can be changed here' };
+      if (t === null && !MEMORY_FILE.test(f)) return { error: f + ' is changed, never removed' };
+    }
     const v = this.store.apply(from, { files }, reason);
     if (typeof v === 'string') return { error: v };
-    const pkg = this.packageOf(v.hash);
-    if (typeof pkg === 'string') return { error: pkg };
+    const parts = this.parts(v.hash);
+    if (typeof parts === 'string') return { error: parts };
+    try { this.shell(v.hash, parts.prompt, parts.decoding, this.base.memory); } catch (e) { return { error: (e as Error).message }; }
     return { version: v.hash, parent: from };
+  }
+
+  /** A new version whose memory is the one a development session of this world ended with (§5.3, publish_memory): its
+      origin kept. Only a session of an investigation this world evaluated may be published. */
+  async publish(from: string, session: string, reason: unknown): Promise<{ version: string; parent: string; files: Record<string, string> } | { error: string }> {
+    const parts = this.parts(from);
+    if (typeof parts === 'string') return { error: parts };
+    if (!this.developmentSessions().has(session)) return { error: 'session ' + session + ' is not one of the development investigations evaluated here' };
+    let info;
+    try { info = await this.client.info(session); } catch (e) { return { error: String((e as Error).message ?? e) }; }
+    if (info.pending) return { error: 'session ' + session + ' has a question pending' };
+    const published: Published = { neural: info.head.neural, twin: info.head.twin, source: { session, run_id: info.run_id } };
+    const v = this.store.apply(from, { files: { [PUBLISHED]: JSON.stringify(published, null, 2) + '\n' } }, reason);
+    if (typeof v === 'string') return { error: v };
+    fs.appendFileSync(path.join(this.dir, 'publications.jsonl'), JSON.stringify({ from, session, published, version: v.hash }) + '\n');
+    let files: Record<string, string> = {};
+    try { files = await this.client.render(this.shell(v.hash, parts.prompt, parts.decoding, info.head), info.head.twin); } catch { /* shown when it can be read */ }
+    return { version: v.hash, parent: from, files };
+  }
+
+  /** A publication made again from the world's own record of it (a run rebuilt): the same state, never asked again. */
+  republish(from: string, session: string, reason: unknown): string | null {
+    const file = path.join(this.dir, 'publications.jsonl');
+    if (!fs.existsSync(file)) return null;
+    for (const l of fs.readFileSync(file, 'utf8').split('\n')) {
+      let e: { from?: string; session?: string; published?: Published };
+      try { e = JSON.parse(l); } catch { continue; }
+      if (e.from !== from || e.session !== session || !e.published) continue;
+      const v = this.store.apply(from, { files: { [PUBLISHED]: JSON.stringify(e.published, null, 2) + '\n' } }, reason);
+      return typeof v === 'string' ? null : v.hash;
+    }
+    return null;
+  }
+
+  /** The sessions of the development investigations this world's evaluations ran: session to its case and junior. */
+  developmentSessions(): Map<string, { case: string; execution: string }> {
+    const out = new Map<string, { case: string; execution: string }>();
+    const ledger = path.join(this.dir, 'trials', 'trials.jsonl');
+    if (!fs.existsSync(ledger)) return out;
+    const requested = new Map<string, { case: string; execution: string }>();
+    for (const l of fs.readFileSync(ledger, 'utf8').split('\n')) {
+      let e: Record<string, any>;
+      try { e = JSON.parse(l); } catch { continue; }
+      const c = this.manifest.cases.find((x) => x.id === e.case);
+      if (e.type === 'research_trial_requested' && String(e.config).startsWith('junior:') && c?.partition === 'development') requested.set(e.trial, { case: e.case, execution: String(e.config).slice('junior:'.length) });
+      if (e.type === 'research_trial_reserved' && requested.has(e.trial)) out.set(String(e.launch).replace(/[^\w.-]/g, '.').replace(/\.(\d+)$/, '.L$1'), requested.get(e.trial)!);
+    }
+    return out;
   }
 
   /** A version evaluated on the development cases: a job of the world's ledger (asked again, the same job), kept. */
   async evaluate(version: string, judge?: import('../../runtime/lab-runner.ts').LabConnection): Promise<Evaluation | string> {
     const cached = this.evaluations.get(version);
     if (cached) return cached;
-    const pkg = this.packageOf(version);
+    const pkg = await this.packageOf(version);
     if (typeof pkg === 'string') return pkg;
     try {
       /* One job per junior evaluated: the baseline, a run and a check of the same version are the same evaluation. */
@@ -132,26 +225,31 @@ export interface JuniorPoint {
 export type JuniorEpisode =
   | { readonly kind: 'version'; readonly version: string; readonly parent: string | null; readonly reason?: unknown; readonly lines: readonly { readonly file: string; readonly line: number; readonly text: string }[] }
   | { readonly kind: 'evaluation'; readonly version: string; readonly execution: string; readonly complete: boolean; readonly points: readonly JuniorPoint[]; readonly observations: readonly Observation[];
-      readonly components: readonly { readonly id: string; readonly deficit: number | null }[] };
+      readonly components: readonly { readonly id: string; readonly deficit: number | null }[];
+      /** Its development investigations' sessions, case to session: what publish_memory may take. */
+      readonly sessions: Readonly<Record<string, string>> };
 
 export interface JuniorCase { readonly point: string; readonly state: JuniorPoint; readonly came: { readonly value: number | null } }
 
 type Reason = { readonly why: string; readonly because?: readonly string[] } & ({ readonly expect: string } | { readonly exploratory: true });
 export type JuniorAct =
   | { readonly change: { readonly from: string; readonly files: Readonly<Record<string, string>> } & Reason }
-  | { readonly run: { readonly version: string } };
+  | { readonly run: { readonly version: string } }
+  | { readonly publish_memory: { readonly from: string; readonly session: string } & Reason };
 
 const latest = new WeakMap<JuniorWorld, string>();
 
 function changedOf(w: JuniorWorld, version: string): string[] {
   const v = w.store.get(version)!, b = w.store.get(w.reference)!;
-  return EDITABLE.filter((f) => v.files.get(f) !== b.files.get(f));
+  return [...new Set([...v.files.keys(), ...b.files.keys()])].filter((f) => v.files.get(f) !== b.files.get(f)).sort();
 }
 
-function versionEpisode(w: JuniorWorld, version: string, reason?: unknown, parent?: string): JuniorEpisode {
+/** A version to read: its files' lines, and the memory it published read as files (`memory (published)/<name>`). */
+function versionEpisode(w: JuniorWorld, version: string, reason?: unknown, parent?: string, published?: Readonly<Record<string, string>>): JuniorEpisode {
   const v = w.store.get(version)!;
   const lines: { file: string; line: number; text: string }[] = [];
-  for (const file of EDITABLE) (v.files.get(file) ?? '').split('\n').forEach((t, i) => lines.push({ file, line: i + 1, text: t }));
+  for (const [file, text] of [...v.files].sort(([a], [b]) => (a < b ? -1 : 1))) text.split('\n').forEach((t, i) => lines.push({ file, line: i + 1, text: t }));
+  for (const [name, text] of Object.entries(published ?? {})) text.split('\n').forEach((t, i) => lines.push({ file: 'memory (published)/' + name, line: i + 1, text: t }));
   return { kind: 'version', version, parent: parent ?? v.parent, ...(reason ? { reason } : {}), lines };
 }
 
@@ -162,8 +260,9 @@ function evaluationEpisode(w: JuniorWorld, version: string, e: Evaluation): Juni
     const c = w.manifest.cases.find((x) => x.id === o.case)!;
     return { version, changed, case: o.case, component: o.component, rung: comps.get(o.component)!.rung, lab: c.lab, kind: c.kind, rep: o.rep };
   });
+  const sessions = Object.fromEntries([...w.developmentSessions()].filter(([, s]) => s.execution === e.execution).map(([sid, s]) => [s.case, sid]));
   return { kind: 'evaluation', version, execution: e.execution, complete: e.measure.complete, points, observations: e.observations,
-    components: e.measure.components.map((c) => ({ id: c.id, deficit: c.quality })) };
+    components: e.measure.components.map((c) => ({ id: c.id, deficit: c.quality })), sessions };
 }
 
 const ANSWER: AnswerForm = { form: ['YOUR ANSWER, at a point (one observation of a version of the junior at a case): the value it will measure there, in its component\'s unit (a share or solved: 0 to 1), predicted from what is known before.'], use: 'predict' };
@@ -215,7 +314,9 @@ function juniorInterface(tolerance: number): WorldInterface {
       [INVESTIGATION, 'Requests:'],
       [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   a stretch of one of your episodes (at most 60 rows): of a VERSION, its files\' lines; of an EVALUATION, each observation - the case, its component, its rung, what was measured'],
       [['act'], '  {"act": {"change": {"from": "<version>", "files": {"prompt.md" | "decoding.json": "<the file\'s whole new text>"}, "why": "<the hypothesis it tests>", "expect": "<what you expect of it>" | "exploratory": true}}}   a new junior; its reason is written with it, before anything of it is measured. '
-        + 'Or {"act": {"run": {"version": "<version>"}}}   that version evaluated on every development case: an episode of observations. An evaluation costs one of `evaluations`; asked again for the same version it is the same. At most `acts_left` this round.'],
+        + 'A file "memory/<name>" asks for a file the junior holds in its own memory from the start (null removes the request): the junior writes it itself, in a session of its own, before the version is evaluated; if what it wrote is not exactly what was asked, the version cannot be evaluated and you are told so. Each memory written costs one of `memory_builds`. '
+        + 'Or {"act": {"run": {"version": "<version>"}}}   that version evaluated on every development case: an episode of observations, with the session of each investigation. An evaluation costs one of `evaluations`; asked again for the same version it is the same. '
+        + 'Or {"act": {"publish_memory": {"from": "<version>", "session": "<a session of an evaluation>", "why": "...", "expect": "..." | "exploratory": true}}}   a new version whose memory is the one the junior ended that investigation with: you read it as files in the version. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at an observation, part by part, and what was measured there'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
       [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the observations of your episodes, or of the checks, each with the value of the code and what was measured']
@@ -254,10 +355,18 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
   rebuild: (spec, events) => {
     for (const e of events) if (e.type === 'investigation') for (const r of (e.requests ?? []) as Record<string, any>[]) {
       const c = r?.act?.change;
-      if (!c || typeof c.from !== 'string' || !c.files) continue;
-      const { from: _f, files: _x, ...reason } = c;
-      const made = spec.world.change(c.from, c.files, reason);
-      if (!('error' in made)) latest.set(spec.world, made.version);
+      if (c && typeof c.from === 'string' && c.files) {
+        const { from: _f, files: _x, ...reason } = c;
+        const made = spec.world.change(c.from, c.files, reason);
+        if (!('error' in made)) latest.set(spec.world, made.version);
+      }
+      /* A publication, from the world's record of the state it published. */
+      const pm = r?.act?.publish_memory;
+      if (pm && typeof pm.from === 'string' && typeof pm.session === 'string') {
+        const { from: _f, session: _s, ...reason } = pm;
+        const made = spec.world.republish(pm.from, pm.session, { ...reason, published_from: pm.session });
+        if (made) latest.set(spec.world, made);
+      }
     }
   },
   lineage: (spec, product) => spec.world.store.lineage(product).map((t) => ({ change: t.change, from: t.from, to: t.to, ...(t.reason !== undefined ? { reason: t.reason } : {}) })),
@@ -351,14 +460,26 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
 
   act: {
     parse: (raw) => {
-      const unknown = unknownFields(raw, ['change', 'run']);
+      const unknown = unknownFields(raw, ['change', 'run', 'publish_memory']);
       if (unknown) return unknown;
       const c = raw.change as Record<string, unknown> | undefined, r = raw.run as Record<string, unknown> | undefined;
+      const pm = raw.publish_memory as Record<string, unknown> | undefined;
+      if (pm && typeof pm === 'object') {
+        const form = '"publish_memory": {"from": "<version>", "session": "<session of an evaluation>", "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true}';
+        const extra = unknownFields(pm, ['from', 'session', 'why', 'expect', 'exploratory', 'because']);
+        if (extra) return extra;
+        if (typeof pm.from !== 'string' || typeof pm.session !== 'string') return form;
+        if (typeof pm.why !== 'string' || !pm.why.trim()) return 'a publication says why: ' + form;
+        const expect = typeof pm.expect === 'string' && pm.expect.trim() ? pm.expect : null;
+        if (!expect && pm.exploratory !== true) return 'a publication says what it expects, or that it is exploratory: ' + form;
+        const because = Array.isArray(pm.because) && pm.because.length && pm.because.every((b) => typeof b === 'string') ? { because: [...new Set(pm.because as string[])] } : {};
+        return { publish_memory: { from: pm.from, session: pm.session, why: pm.why, ...because, ...(expect ? { expect } : { exploratory: true as const }) } };
+      }
       if (c && typeof c === 'object') {
-        const form = '"change": {"from": "<version>", "files": {"prompt.md" | "decoding.json": "<text>"}, "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true}';
+        const form = '"change": {"from": "<version>", "files": {"prompt.md" | "decoding.json" | "memory/<name>": "<text>"}, "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true}';
         const extra = unknownFields(c, ['from', 'files', 'why', 'expect', 'exploratory', 'because']);
         if (extra) return extra;
-        if (typeof c.from !== 'string' || !c.files || typeof c.files !== 'object' || Object.values(c.files).some((t) => typeof t !== 'string')) return form;
+        if (typeof c.from !== 'string' || !c.files || typeof c.files !== 'object' || Object.entries(c.files).some(([f, t]) => typeof t !== 'string' && !(t === null && f.startsWith('memory/')))) return form;
         if (typeof c.why !== 'string' || !c.why.trim()) return 'a change says why: ' + form;
         const expect = typeof c.expect === 'string' && c.expect.trim() ? c.expect : null;
         if (!expect && c.exploratory !== true) return 'a change says what it expects, or that it is exploratory: ' + form;
@@ -369,7 +490,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         if (typeof r.version !== 'string') return '"run": {"version": "<version>"}';
         return { run: { version: r.version } };
       }
-      return 'act needs "change" or "run"';
+      return 'act needs "change", "run" or "publish_memory"';
     },
     place: () => undefined,
     async start(spec, a, _id, _ctx?: LabContext) {
@@ -380,10 +501,17 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         latest.set(spec.world, made.version);
         return versionEpisode(spec.world, made.version, reason, made.parent);
       }
+      if ('publish_memory' in a) {
+        const { from: _f, session: _s, ...reason } = a.publish_memory;
+        const made = await spec.world.publish(a.publish_memory.from, a.publish_memory.session, { ...reason, published_from: a.publish_memory.session });
+        if ('error' in made) return null;
+        latest.set(spec.world, made.version);
+        return versionEpisode(spec.world, made.version, reason, made.parent, made.files);
+      }
       const e = await spec.world.evaluate(a.run.version, spec.judge);
       return typeof e === 'string' ? null : evaluationEpisode(spec.world, a.run.version, e);
     },
-    shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length } : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components }),
+    shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length } : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions }),
     asWritten: (a) => a,
     identity: (_spec, a) => ('run' in a ? a.run.version : null),
     examples: (spec) => [{ run: { version: spec.world.reference } }, { change: { from: spec.world.reference, files: { 'prompt.md': 'Answer only with the JSON the protocol asks for.' }, why: 'the protocol stated first', expect: 'more answers accepted at once' } }]

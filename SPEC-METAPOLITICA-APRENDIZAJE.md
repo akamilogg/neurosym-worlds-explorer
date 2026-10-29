@@ -6,7 +6,10 @@ probados con un servidor simulado. Falta ejecutar el driver real de Qwenputer en
 implementado** (`lib/src/junior/competence.ts`, `jobs.ts`, `trials.ts`, `probes.ts`, `evaluate.ts`, mundo
 `junior-competence@1` en `lib/src/worlds/junior`): manifiesto, medidas y `paired-cases@1`, libro de trabajos, ensayos de
 M2 con el junior como System 2, sondas por corte de la cola de repetición y comprobadas por el propio arnés, línea base y
-mundo con `change`/`run`. Falta su primera línea base real. MA3–MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
+mundo con `change`/`run`. Falta su primera línea base real. **MA3 implementado** (`lib/src/junior/memory.ts`): la
+memoria inicial como palanca (`memory/<nombre>`, escrita por el propio junior en una sesión y aceptada sólo si su
+referencia lee exactamente lo pedido), `publish_memory` desde las sesiones de investigaciones de desarrollo, la memoria
+legible por `render` y la promoción sin entrenar. MA4–MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
 destilación, entrenamiento y método reutilizable. El mecanismo de relevo de fase B queda definido y desactivado hasta
 que el operador configure su batería y umbrales a partir de la evidencia de fase A, antes de evaluarlos. Este documento
 fija los contratos para desarrollo; los valores de cada experimento se declaran en su manifiesto antes de ejecutarlo.

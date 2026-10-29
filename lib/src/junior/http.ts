@@ -10,6 +10,7 @@ import { SessionError, type SessionServer } from './sessions.ts';
  *   GET  /sessions/:id/receipts/:request    published | pending | unknown
  *   POST /sessions/:id/restore              the last state published, its blobs checked
  *   POST /sessions/:id/cancel               {request_id}
+ *   POST /render                           a memory read as files {pkg, twin} -> {name: text}
  *   POST /sessions/:id/close
  *   POST /sessions/:id/v1/chat/completions   the next question as an OpenAI chat completion (a laboratory's LLM_URL)
  *
@@ -22,6 +23,7 @@ const STATUS: Record<string, number> = { no_session: 404, package_open: 400, bad
 export async function handleJunior(server: SessionServer, method: string, route: string, body: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
   const parts = route.split('/').filter(Boolean).map(decodeURIComponent);
   try {
+    if (parts.length === 1 && parts[0] === 'render' && method === 'POST') return { status: 200, body: await server.render(body as Parameters<SessionServer['render']>[0]) };
     if (parts[0] !== 'sessions') return { status: 404, body: { error: 'see the routes of /sessions' } };
     if (parts.length === 1 && method === 'POST') return { status: 200, body: server.open(body as Parameters<SessionServer['open']>[0]) };
     const id = parts[1];

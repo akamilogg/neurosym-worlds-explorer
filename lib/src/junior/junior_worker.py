@@ -151,6 +151,26 @@ def run_qwenputer(job):
 BACKENDS = {"fake": run_fake, "qwenputer": run_qwenputer}
 
 
+def render(job):
+    """A memory read as files (§4): from its reference twin, name to text."""
+    import base64
+    raw = base64.b64decode(job["twin"]) if job.get("twin") else None
+    if job["backend"] == "fake":
+        return json.loads(raw.decode("utf8")) if raw else {}
+    if raw is None:
+        return {}
+    dev = pickle.loads(raw)
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(job["files"]["base"])
+    files = {}
+    # Device.names(): the live names in creation order; Device.text(key): a live file's tokens (chipformer.rv.store).
+    for name in dev.names():
+        tokens = [int(t) for t in (name if isinstance(name, (list, tuple)) else [name])]
+        text = dev.text(name)
+        files[tok.decode(tokens)] = tok.decode([int(t) for t in text])
+    return files
+
+
 def probe(job):
     """The driver's resources measured, never assumed (§2, §11): for each context length, the peak GPU memory of one
     answer with the package's limits. A length that does not fit is reported as such, with its error."""
@@ -185,6 +205,9 @@ def main():
             continue
         job = json.loads(line)
         try:
+            if job.get("op") == "render":
+                emit({"files": render(job), "id": job["id"]})
+                continue
             if job.get("op") == "probe":
                 out = {"probe": probe(job)}
                 emit({**out, "id": job["id"]})
