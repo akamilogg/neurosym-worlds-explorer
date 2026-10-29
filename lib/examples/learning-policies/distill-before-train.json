@@ -1,0 +1,64 @@
+{
+  "format": "learning-policy@1",
+  "id": "distill-before-train",
+  "policy": {
+    "format": "research-policy@1",
+    "contract": "research-view@1",
+    "about": "The course of an improvement investigation of the junior. It reads which round is under way and whether a version was trained.",
+    "observations": {},
+    "composition": {
+      "kind": "code",
+      "lang": "js",
+      "source": "(p) => { const round = Math.max(0, ...p.events.map((e) => typeof e.round === 'number' ? e.round : 0)); if (round === 1 && !p.state.cheap) return { guidance: { kind: 'advise', focus: 'develop', template: 'cheap_first', arguments: {}, evidence: [], judgments: [] }, state: { ...p.state, cheap: true } }; if (round >= 2 && !p.state.distill) return { guidance: { kind: 'advise', focus: 'contrast', template: 'distill_first', arguments: { version: 'your latest version' }, evidence: [], judgments: [] }, state: { ...p.state, distill: true } }; return { guidance: { kind: 'abstain', reason: 'advised already' }, state: p.state }; }"
+    },
+    "state": {
+      "cheap": false,
+      "distill": false
+    },
+    "templates": {
+      "cheap_first": {
+        "text": "A reminder of method, the same for every researcher of this world:"
+      },
+      "distill_first": {
+        "text": "A reminder of method, the same for every researcher of this world:",
+        "arguments": [
+          "version"
+        ]
+      }
+    },
+    "provenance": {
+      "parents": [],
+      "reason": "An example of SPEC-METAPOLITICA-APRENDIZAJE §14.1: the order of the levers of §7 as a procedure - cheap first, then distillation from cuts before training. Written by the operator before any trial; its usefulness is measured only by comparing improvement investigations (§14.2).",
+      "authorship": "operator"
+    }
+  },
+  "procedures": {
+    "cheap_first": {
+      "text": "Try the cheapest levers first: a starting prompt or a memory file that states the protocol, evaluated once, before any distillation or training.",
+      "sha256": "57426e95f894a847c767f854272af3bfea11038b6273b783dc4bf9967c5807ea"
+    },
+    "distill_from_cuts": {
+      "text": "Before training anything, look at the cuts where the junior failed in the latest evaluation of {{version}}: distill from those cuts with a checker that fixes the competence (request, rules or proposal), and build a dataset of the verified examples only. Train only on a dataset that shares no group with the selecting probes.",
+      "sha256": "7bfe40b32d14d7b0af6eb9dea63af19bbb9d8d10cdc708d69f6cbdb91dd0e17a"
+    }
+  },
+  "template_procedures": {
+    "cheap_first": [
+      "cheap_first"
+    ],
+    "distill_first": [
+      "distill_from_cuts"
+    ]
+  },
+  "scope": {
+    "worlds": [
+      "junior-competence@1"
+    ]
+  },
+  "provenance": {
+    "parents": [],
+    "authorship": "operator",
+    "reason": "example"
+  },
+  "evaluations": []
+}

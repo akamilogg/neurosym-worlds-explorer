@@ -17,7 +17,9 @@ import { readLedger, stateId, type MemoryState, type Receipt } from './sessions.
 
 /** What the reference is given: the twin before, the question, the trace, and the neural snapshot the answer published
     after - which it must find to be a snapshot of its own store's kind, and the one its twin after corresponds to. */
-export interface ReferenceInput { readonly twin_before: Buffer | null; readonly content: unknown; readonly trace: Buffer; readonly circuit: unknown; readonly neural_after: Buffer | null }
+export interface ReferenceInput { readonly twin_before: Buffer | null; readonly content: unknown; readonly trace: Buffer; readonly circuit: unknown; readonly neural_after: Buffer | null;
+  /** The neural snapshot the answer started from: what the circuit is loaded with to compute the state after. */
+  readonly neural_before: Buffer | null }
 /** `neural.checked: false`: the reference could not say whether the snapshot is the same memory as its twin - the
     verification is incomplete, never ok. */
 export type ReferenceOutput = { readonly twin_after: Buffer | null; readonly ops: readonly unknown[]; readonly neural?: { readonly ok: boolean; readonly checked?: boolean; readonly why?: string } } | { readonly error: string };
@@ -79,7 +81,8 @@ export async function verifySession(file: string, store: BlobStore, reference: R
       if (!reference) { /* counted as unchecked below */ }
       else if (!trace || !content) problems.push(at + ': nothing to replay');
       else {
-        const out = await reference.check({ twin_before: head.twin === null ? null : store.get(head.twin), content: JSON.parse(content.toString('utf8')), trace, circuit, neural_after: neuralAfter });
+        const out = await reference.check({ twin_before: head.twin === null ? null : store.get(head.twin), content: JSON.parse(content.toString('utf8')), trace, circuit, neural_after: neuralAfter,
+          neural_before: head.neural === null ? null : store.get(head.neural) });
         if ('error' in out) problems.push(at + ': the reference verifier refused it: ' + out.error);
         else {
           const want = out.twin_after === null ? null : sha256(out.twin_after);
@@ -124,7 +127,8 @@ export function processReference(command: readonly string[], timeoutMs = 120_000
         child.stdin.end(JSON.stringify({
           twin_before: input.twin_before === null ? null : input.twin_before.toString('base64'),
           content: input.content, trace: input.trace.toString('utf8'), circuit: input.circuit,
-          neural_after: input.neural_after === null ? null : input.neural_after.toString('base64')
+          neural_after: input.neural_after === null ? null : input.neural_after.toString('base64'),
+          neural_before: input.neural_before === null ? null : input.neural_before.toString('base64')
         }));
       });
     }

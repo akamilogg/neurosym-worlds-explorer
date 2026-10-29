@@ -1,0 +1,2 @@
+VOCAB = 248320
+TEXT_TOKEN = 1 << 20

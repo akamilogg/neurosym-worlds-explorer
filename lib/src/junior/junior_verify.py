@@ -55,24 +55,99 @@ def qwenputer(inp, args):
     if [int(t) for t in lock.toks] != trace["stream"]:
         return {"error": "the reference stream differs from the one recorded"}
     ops = [list(a) if isinstance(a, tuple) else a for a in lock.answers]
-    return {"twin_after": base64.b64encode(pickle.dumps(lock.dev, protocol=4)).decode("ascii"), "ops": ops, "neural": neural_check(inp, lock.dev, cfg)}
+    return {"twin_after": base64.b64encode(pickle.dumps(lock.dev, protocol=4)).decode("ascii"), "ops": ops, "neural": neural_check(inp, lock.dev, cfg, args)}
 
 
-def neural_check(inp, dev, cfg):
-    """The neural snapshot published after the answer (memory.npz) against its twin. What can be refused here is refused:
-    a snapshot that is not readable as the store's, or whose rows contradict its twin (rows with no live file, none with
-    some). What would make it the SAME memory - its rows, value by value, those the store's writes of the twin's files make
-    - has no offline mapping yet: so it is never answered ok, only `checked: false`, and the session's verification is
-    incomplete until that mapping exists."""
+def read_snapshot(b64):
+    """A store snapshot (memory.npz) from its bytes, as the driver reads it; None when there is none."""
     import tempfile
     from chipformer.rv.chat import load_store_file
+    if not b64:
+        return None
+    path = os.path.join(tempfile.mkdtemp(), "snap.npz")
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(b64))
+    return load_store_file(path)
+
+
+def rows_equal(a, b):
+    try:
+        import numpy as np
+        return np.array_equal(np.asarray(a), np.asarray(b))
+    except ImportError:
+        return list(a) == list(b)
+
+
+def snapshot_diff(want, got):
+    """Where two store snapshots differ: heads, value heads, rows, values. Empty: the same memory, value by value."""
+    out = []
+    if set(want) != set(got):
+        return ["heads %s against %s" % (sorted(want), sorted(got))]
+    for head in sorted(want):
+        if len(want[head]) != len(got[head]):
+            out.append(head + ": %d value heads against %d" % (len(want[head]), len(got[head])))
+            continue
+        for x, (w, g) in enumerate(zip(want[head], got[head])):
+            if set(map(int, w)) != set(map(int, g)):
+                out.append("%s[%d]: rows %s against %s" % (head, x, sorted(map(int, w)), sorted(map(int, g))))
+                continue
+            for r in w:
+                if not rows_equal(w[r], g[int(r)] if int(r) in g else g[r]):
+                    out.append("%s[%d] row %s differs" % (head, x, r))
+    return out
+
+
+def circuit_state(inp, args):
+    """The store's state after the answer as the compiled circuit computes it - its executor, never Qwen's layers - from
+    the state published before it and the recorded stream, the way chipformer.rv.storecheck checks its store: reset
+    (core.snapshot), the memory before loaded (load_store), the prompt started, every token after it stepped (as model
+    ids), the rows read (save_store of the executor). It needs the package's checkpoint (the circuit is built from its
+    configuration and its token embeddings) and a GPU: without them, None and why."""
+    if not args.base:
+        return None, "no --base: the circuit is built from the package's checkpoint"
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return None, "no GPU: the circuit's executor runs on CUDA"
+    except ImportError:
+        return None, "no torch: the circuit's executor runs on CUDA"
+    from chipformer.rv import bridge as BR, core, elf, ref
+    from chipformer.rv import spec as S
+    chat = _chat_of(args.base)
+    if getattr(chat, "erow", None) is None:
+        return None, "the checkpoint built no executor"
+    trace = json.loads(inp["trace"])
+    ids, stream = [int(i) for i in trace["prompt_ids"]], [int(t) for t in trace["stream"]]
+    m = ref.Machine.from_program(elf.program(args.firmware))
+    BR.park(m)
+    core.snapshot(chat.c, m)
+    chat.load_store(read_snapshot(inp.get("neural_before")))
+    chat.erow.start(ids)
+    for t in stream[len(ids):]:
+        chat.erow.step(t + chat.v0 if t < S.VOCAB else t - S.TEXT_TOKEN)
+    return chat.save_store(("exec", chat.erow)), None
+
+
+_chats = {}
+
+
+def _chat_of(base):
+    from chipformer.rv.chat import RvChat
+    if base not in _chats:
+        _chats[base] = RvChat(base, executor=True)
+    return _chats[base]
+
+
+def neural_check(inp, dev, cfg, args=None):
+    """The neural snapshot published after the answer (memory.npz) against its twin. Refused when it is not readable as
+    the store's or its rows contradict its twin. The SAME memory, value by value, when the circuit's own executor, run on
+    the recorded stream from the state before, leaves exactly its rows (circuit_state) - the stream itself was rebuilt by
+    the reference from the twin, so a snapshot equal to the circuit's is its twin's memory. Where the circuit cannot be
+    run here (no checkpoint or no GPU) it is `checked: false`: the verification is incomplete, never ok."""
     if not inp.get("neural_after"):
         return {"ok": False, "why": "no neural snapshot"}
-    path = os.path.join(tempfile.mkdtemp(), "after.npz")
-    with open(path, "wb") as f:
-        f.write(base64.b64decode(inp["neural_after"]))
     try:
-        snap = load_store_file(path)
+        snap = read_snapshot(inp["neural_after"])
     except Exception as e:
         return {"ok": False, "why": "not a store snapshot: " + type(e).__name__ + ": " + str(e)}
     if not isinstance(snap, dict):
@@ -81,7 +156,18 @@ def neural_check(inp, dev, cfg):
     live = len(list(dev.names())) if dev is not None else 0
     if (rows == 0) != (live == 0):
         return {"ok": False, "why": "its rows (%d) do not match its twin's live files (%d)" % (rows, live)}
-    return {"ok": False, "checked": False, "why": "readable and not contradicting its twin; its equivalence to the twin's files is not checked (no offline mapping from the twin to the store's rows)"}
+    if args is None:
+        return {"ok": False, "checked": False, "why": "the circuit was not run"}
+    try:
+        state, why = circuit_state(inp, args)
+    except Exception as e:
+        return {"ok": False, "checked": False, "why": "the circuit could not be run: " + type(e).__name__ + ": " + str(e)}
+    if state is None:
+        return {"ok": False, "checked": False, "why": "readable and not contradicting its twin; not compared with the circuit's own state: " + why}
+    diff = snapshot_diff(state, snap)
+    if diff:
+        return {"ok": False, "why": "its rows are not those the circuit leaves: " + "; ".join(diff[:5])}
+    return {"ok": True}
 
 
 def load_driver(path):
@@ -100,6 +186,7 @@ def main():
     ap.add_argument("--firmware")
     ap.add_argument("--tokenizer")
     ap.add_argument("--driver")
+    ap.add_argument("--base", help="the package's checkpoint (materialized): the circuit is built from it to check the neural snapshot")
     args = ap.parse_args()
     inp = json.loads(sys.stdin.read())
     try:

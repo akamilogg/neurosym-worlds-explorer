@@ -356,7 +356,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       case 'junior': {
         /* The junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1): its blobs, its package, a session verified from
            its ledger, the machine checked, the driver's resources measured. The server and the proxy are scripts of their own. */
-        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T --driver D] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P';
+        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T --driver D --base B] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P | policy <learning-policy.json> --max-advice N [--out <dir>] | policies <dir>';
         const sub = args.shift();
         const file = (f: string) => fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f);
         const J = await import('../junior/package.ts');
@@ -408,6 +408,27 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
             out('the operator\'s report: ' + r.report);
             return 0;
           } finally { server.stop(); await h.close(); }
+        }
+        if (sub === 'policy' || sub === 'policies') {
+          /* MA7: a learning-policy@1 checked and expanded for M1 (--research-policy of the junior's world), or the catalog of a
+             folder of them for a world. */
+          const f = args.shift();
+          if (!f) { out('lab junior policy <learning-policy.json> --max-advice N [--out <dir>] [--world junior-competence@1] | policies <dir> [--world W]'); return 2; }
+          const LP = await import('../junior/learning-policy.ts');
+          const world = take(args, 'world') ?? 'junior-competence@1';
+          if (sub === 'policies') {
+            for (const e of LP.catalog(file(f), { id: world })) out((e.usable ? 'usable  ' : 'not     ') + e.id + '  ' + e.file + (e.why.length ? '  (' + e.why.slice(0, 2).join('; ') + ')' : ''));
+            return 0;
+          }
+          const raw = JSON.parse(fs.readFileSync(file(f), 'utf8'));
+          const x = LP.expandLearningPolicy(raw, { max_advice_chars: Number(take(args, 'max-advice') ?? 0) });
+          if ('errors' in x) { out('the learning policy is refused:'); for (const e of x.errors) out('  ' + e); return 2; }
+          const scope = LP.scopeProblems(x.package, { id: world });
+          if (scope.length) { out('out of its scope: ' + scope.join('; ')); return 2; }
+          const w = LP.writeExpansion(x, path.resolve(take(args, 'out') ?? path.dirname(file(f))));
+          out('execution ' + x.execution);
+          out('--research-policy ' + w.policy + '   (record: ' + w.record + ')');
+          return 0;
         }
         if (sub === 'manifest' || sub === 'promote') {
           const f = args.shift();
@@ -479,8 +500,8 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         if (sub === 'verify') {
           const { verifySession, processReference } = await import('../junior/verify.ts');
           const { VERIFY_PY } = await import('../junior/worker.ts');
-          const python = take(args, 'python'), backend = take(args, 'backend'), firmware = take(args, 'firmware'), tokenizer = take(args, 'tokenizer'), driver = take(args, 'driver');
-          const reference = python && backend ? processReference([python, VERIFY_PY, '--backend', backend, ...(firmware ? ['--firmware', firmware] : []), ...(tokenizer ? ['--tokenizer', tokenizer] : []), ...(driver ? ['--driver', driver] : [])]) : null;
+          const python = take(args, 'python'), backend = take(args, 'backend'), firmware = take(args, 'firmware'), tokenizer = take(args, 'tokenizer'), driver = take(args, 'driver'), base = take(args, 'base');
+          const reference = python && backend ? processReference([python, VERIFY_PY, '--backend', backend, ...(firmware ? ['--firmware', firmware] : []), ...(tokenizer ? ['--tokenizer', tokenizer] : []), ...(driver ? ['--driver', driver] : []), ...(base ? ['--base', base] : [])]) : null;
           const r = await verifySession(file(f), store, reference);
           out('session ' + r.session + ': ' + r.receipts + ' receipts, the memory of ' + r.memory_checked + ' rebuilt by the reference');
           for (const p of r.problems) out('  ' + p);

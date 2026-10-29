@@ -644,3 +644,53 @@ test('review 3: two versions with one driver - only their prompt differs - are s
     assert.equal(fs.readdirSync(path.join(dir, 'work', 'drivers')).length, 1, 'one folder for the one driver');
   } finally { server.stop(); }
 });
+
+/* --- The neural snapshot against its twin (29/10/2026): the circuit's own executor, run on the recorded stream from the
+   state before, must leave exactly the rows published - as chipformer.rv.storecheck checks its store. ---------------- */
+
+test('a verification complete: the circuit, run on the recorded stream from the state before, leaves exactly the snapshot published', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const pkg = drivenPackage(store);
+  const server = new SessionServer({ root: dir, store, worker: new ProcessWorker({ python: [python!], backend: 'qwenputer', work: path.join(dir, 'work') }) });
+  try {
+    const s = server.open({ run_id: 'r', pkg, session_id: 's' });
+    const r1 = await server.ask('s', { request_id: 'q1', content: { user: 'compute' }, expected: s.head_id });
+    await server.ask('s', { request_id: 'q2', content: { user: 'compute again' }, expected: r1.state_after });
+  } finally { server.stop(); }
+  const files = path.join(dir, 'work', 'packages', executionHash(pkg));
+  const args = [python!, VERIFY_PY, '--backend', 'qwenputer', '--firmware', path.join(files, 'firmware.elf'), '--tokenizer', path.join(files, 'base', 'tokenizer.json'),
+    '--driver', path.join(dir, 'work', 'drivers', pkg.execution.driver)];
+  const complete = await verifySession(path.join(dir, 'sessions', 's.jsonl'), store, processReference([...args, '--base', path.join(files, 'base')]));
+  assert.deepEqual([complete.problems, complete.incomplete, complete.ok, complete.memory_checked], [[], [], true, 2]);
+  const without = await verifySession(path.join(dir, 'sessions', 's.jsonl'), store, processReference(args));
+  assert.equal(without.ok, false);
+  assert.match(without.incomplete.join(), /no --base/);
+});
+
+test('a snapshot whose rows are not those the circuit leaves is refused, row by row', { skip: !python && 'no Python' }, () => {
+  const base = tmp();
+  fs.writeFileSync(path.join(base, 'chipformer.json'), JSON.stringify({ chip_layers: 2, store: {} }));
+  fs.writeFileSync(path.join(base, 'fw'), 'firmware');
+  const script = [
+    'import sys, json, base64, pickle, types',
+    'sys.path.insert(0, ' + JSON.stringify(FAKE_DRIVER) + ')', 'sys.path.insert(0, ' + JSON.stringify(path.dirname(VERIFY_PY)) + ')',
+    'import junior_verify as V',
+    'from chipformer.rv import store as ST',
+    'dev = ST.Device(); s = ST.StoreSession(None, None, None, dev=dev); s.call("put", [109], [104])',
+    'snap = lambda v: base64.b64encode(json.dumps({"files": [{"0": [v]}]}).encode()).decode()',
+    'args = types.SimpleNamespace(base=' + JSON.stringify(base) + ', firmware=' + JSON.stringify(path.join(base, 'fw')) + ')',
+    'inp = {"trace": json.dumps({"prompt_ids": [1, 2], "stream": [1, 2, 3]}), "neural_before": snap(1.0)}',
+    'same = V.neural_check(dict(inp, neural_after=snap(1.0)), dev, None, args)',
+    'other = V.neural_check(dict(inp, neural_after=snap(3.0)), dev, None, args)',
+    'print(json.dumps({"same": same, "other": other, "diff": V.snapshot_diff({"h": [{"0": [1.0], "1": [2.0]}]}, {"h": [{"0": [1.0]}]})}))'
+  ].join('\n');
+  const r = spawnSync(python!, ['-c', script], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  assert.deepEqual(out.same, { ok: true });
+  assert.equal(out.other.ok, false);
+  assert.notEqual(out.other.checked, false, 'a difference found is a refusal, not an incomplete check');
+  assert.match(out.other.why, /not those the circuit leaves: files\[0\] row 0 differs/);
+  assert.match(out.diff[0], /rows \[0, 1\] against \[0\]/);
+});

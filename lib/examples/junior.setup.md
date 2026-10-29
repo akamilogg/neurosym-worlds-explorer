@@ -45,7 +45,7 @@ junior.
    segunda, que lo recupere con `get`. Después abre otra sesión que continúe desde la primera (`continues`) y vuelve a
    preguntar: la memoria debe venir del último estado publicado.
 4. **Verificación sin modelo:**
-   `lab junior verify <sesiones>/sessions/<id>.jsonl --blobs <blobs> --python <python> --backend qwenputer --firmware <firmware.elf> --tokenizer <tokenizer.json> --driver <work>/drivers/<hash del driver>`
+   `lab junior verify <sesiones>/sessions/<id>.jsonl --blobs <blobs> --python <python> --backend qwenputer --firmware <firmware.elf> --tokenizer <tokenizer.json> --driver <work>/drivers/<hash del driver> --base <work>/packages/<hash de ejecución>/base`
    debe decir `verified`, con la memoria de cada respuesta reconstruida por la referencia.
 
 Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecutar:
@@ -73,10 +73,11 @@ Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecuta
 - que la lectura de una memoria como archivos recorre sus fragmentos (uno por `put` o `append`) y quita de cada uno sólo
   el salto de línea que el formato de llamada pone tras su valor, salvo en un fragmento lleno hasta `CMAX`, donde no cupo
   (`chunks_of`, `native_to_file`): con el tokenizer real, ese salto puede ir unido al último token del valor;
-- **Pendiente de construir, no sólo de confirmar:** la equivalencia entre el snapshot neuronal y su gemelo (que sus filas
-  sean, valor a valor, las que dejan en el almacén las escrituras de los archivos del gemelo). Hasta que exista, el
-  verificador rechaza lo que contradice al gemelo pero nunca da por buena la memoria: `lab junior verify` de una sesión
-  de Qwenputer termina en «NOT verified: incomplete».
+- la equivalencia del snapshot neuronal con su gemelo: el verificador ejecuta el circuito con su propio ejecutor (como
+  `chipformer.rv.storecheck`: `core.snapshot`, `load_store` del estado anterior, `erow.start` y `erow.step` de cada token
+  registrado, `save_store(("exec", erow))`) y compara sus filas, valor a valor, con el snapshot publicado. Necesita el
+  checkpoint (`--base`) y una GPU; sin ellos la verificación termina en «NOT verified: incomplete». En la máquina real
+  falta confirmar que el ejecutor deja exactamente las filas que publica el camino de generación.
 
 Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto del contrato no cambia.
 
@@ -112,3 +113,17 @@ Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto
 4. **Publicar:** sólo el resumen de `outbox/` se copia a la carpeta que el run del investigador lee con `--confirmations`;
    lo ve con el acto `confirmations`. Cada resumen publicado expone sus casos: pasado el tope, el servicio se niega a
    confirmar en ellos y hay que reservar casos nuevos.
+
+## 7. El método reutilizable (MA7)
+
+1. **Una política de aprendizaje:** `learning-policy@1`, como `lib/examples/learning-policies/distill-before-train.json`:
+   una `research-policy@1` de M1, sus procedimientos con el SHA-256 de cada texto, qué procedimientos acompañan a cada
+   plantilla y su `scope` (`junior-competence@1`).
+2. **Expandirla:** `lab junior policy <política> --max-advice <caracteres> --out <dir>` la valida, la expande y escribe el
+   fichero para `--research-policy`; `lab junior policies <dir>` lista las que sirven en el mundo.
+3. **Usarla:** `lab start junior ... --researcher assisted --research-policy <fichero expandido>`: aconseja al investigador
+   fuerte mediante M1; nunca actúa ni entrena por sí misma.
+4. **Medirla (§14.2):** investigaciones de mejora completas por pares, cada par desde el mismo junior y las mismas
+   bolsas, una sin la política (o con una receta fija) y otra con ella. El producto de cada una es su último junior
+   aceptado (`productOf`); `compareImprovements` compara los productos caso a caso. Una investigación interrumpida no se
+   acredita al método, y un par aislado nunca declara útil un procedimiento.

@@ -1,6 +1,6 @@
 # SPEC · Metapolítica de aprendizaje: un investigador que aprende a mejorarse
 
-Estado (29/10/2026): **MA1 implementado salvo su prueba real** (`lib/src/junior`, guía en
+Estado (29/10/2026): **fase A implementada (MA1–MA7), sin ejecuciones reales todavía**. **MA1 implementado salvo su prueba real** (`lib/src/junior`, guía en
 `lib/examples/junior.setup.md`): paquete, sesiones con recibos, verificador, intermediario y comprobación de la máquina,
 probados con un servidor simulado. Falta ejecutar el driver real de Qwenputer en la máquina del junior. **MA2
 implementado** (`lib/src/junior/competence.ts`, `jobs.ts`, `trials.ts`, `probes.ts`, `evaluate.ts`, mundo
@@ -23,7 +23,13 @@ confirm`): el servicio del operador importa los paquetes congelados comprobando 
 almacén, los evalúa con su propio servidor en los casos reservados de su manifiesto, guarda el informe completo del
 operador y publica sólo un resumen (veredicto, componentes que mejoran o empeoran, lo que el candidato debe a otros); cada
 resumen expone sus casos y, pasado el tope, el servicio deja de confirmar en ellos. El investigador lee los resúmenes con el
-acto `confirmations`. MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
+acto `confirmations`. **MA7 implementado** (`lib/src/junior/learning-policy.ts`, `lab junior policy|policies`):
+`learning-policy@1` validado (procedimientos por SHA-256, parámetros declarados, `scope`), expandido para M1 con
+`expansion@1` (rechazado si excede el consejo máximo, nunca recortado), su hash de ejecución, catálogo por mundo, el
+producto de una investigación de mejora leído de su diario y la comparación de investigaciones de mejora por pares; una
+política expandida aconseja en una corrida real del mundo del junior. La equivalencia entre snapshot neuronal y gemelo se
+comprueba ejecutando el circuito (su ejecutor, como `storecheck`) sobre el flujo registrado, con el checkpoint y una GPU;
+sin ellos la verificación queda incompleta. Fase A completa en código: faltan las ejecuciones reales. MA1–MA7 definen ejecución, evaluación,
 destilación, entrenamiento y método reutilizable. El mecanismo de relevo de fase B queda definido y desactivado hasta
 que el operador configure su batería y umbrales a partir de la evidencia de fase A, antes de evaluarlos. Este documento
 fija los contratos para desarrollo; los valores de cada experimento se declaran en su manifiesto antes de ejecutarlo.
