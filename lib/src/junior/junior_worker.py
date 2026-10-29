@@ -24,6 +24,9 @@ import pickle
 import copy
 import hashlib
 
+# Running the driver writes no bytecode next to it: what is in its folder is what the package declared.
+sys.dont_write_bytecode = True
+
 
 def emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -45,8 +48,12 @@ def loaded_identity(job, chat=None):
     drv = files["driver"]
     if os.path.isdir(drv):
         driver = {}
-        for d, _, names in os.walk(drv):
+        for d, dirs, names in os.walk(drv):
+            # What running it generates (bytecode caches) is not the driver: never part of its identity.
+            dirs[:] = [x for x in dirs if x != "__pycache__"]
             for n in names:
+                if n.endswith((".pyc", ".pyo")) or (d == drv and n == ".complete"):
+                    continue
                 full = os.path.join(d, n)
                 driver[os.path.relpath(full, drv).replace(os.sep, "/")] = sha_file(full)
     else:
@@ -62,7 +69,10 @@ def loaded_identity(job, chat=None):
 
 
 def load_driver(path):
-    """The package's driver, imported from its own folder: a chipformer imported from anywhere else is not its driver."""
+    """The package's driver, imported from its own folder: a chipformer imported from anywhere else is not its driver.
+    Called before anything imports chipformer (main does it for every qwenputer job), so the package's is the first found."""
+    if not os.path.isdir(path):
+        raise RuntimeError("the package's driver is not a folder to import from")
     if path not in sys.path:
         sys.path.insert(0, path)
     import chipformer
@@ -154,7 +164,6 @@ def apply_adapter(chat, adapter_dir, chip_layers):
 
 
 def qwenputer_chat(job):
-    load_driver(job["files"]["driver"])
     from chipformer.rv.chat import RvChat
     if _resident["execution"] != job["execution"]:
         _resident["chat"] = None
@@ -259,6 +268,8 @@ def run_qwenputer(job):
     # The reference starts from the twin of the memory loaded: the lock holds for a preloaded store too.
     lock = ST.StoreSession(chat.T, m2, chat.store_cfg, dev=copy.deepcopy(dev) if dev is not None else None)
     lock.history(ids)
+    # Where the stream stands before the answer: what comes after is what the generation emitted, text and circuit alike.
+    stream_start, text_start = len(lock.toks), len(lock.qwen_text())
     fed = []
     original = lock.qwen
 
@@ -279,11 +290,14 @@ def run_qwenputer(job):
     try:
         r = chat.generate(ids, m, job["limits"]["max_tokens"], max_chip=job["limits"]["max_circuit_tokens"], lock=lock)
     except TimeLimit:
-        emitted = [int(q) for call in fed for q in call["qids"]]
+        # The generation's own buffer is gone with it; the reference's stream holds everything it emitted - Qwen's tokens
+        # and what the circuit printed (qwen_text keeps both as text), the circuit's records apart.
+        emitted = [int(t) for t in lock.qwen_text()[text_start:]]
+        stream = [int(t) for t in lock.toks[stream_start:]]
         trace = json.dumps({"prompt_ids": [int(i) for i in ids], "tokens": emitted, "fed": fed, "stream": [int(t) for t in lock.toks], "lock_error": None, "timeout": True})
         return {"terminal": "limit_reached", "text": chat.text_of(emitted), "trace": trace, "ops": [list(a) if isinstance(a, tuple) else a for a in lock.answers],
                 "after": None, "reason": "timeout",
-                "usage": {"prompt_tokens": len(ids), "text_tokens": len(emitted), "circuit_tokens": 0, "gpu_ms": int((time.time() - started) * 1000)}}
+                "usage": {"prompt_tokens": len(ids), "text_tokens": len(emitted), "circuit_tokens": max(0, len(stream) - len(emitted)), "gpu_ms": int((time.time() - started) * 1000)}}
     gpu_ms = int((time.time() - started) * 1000)
     tokens = [int(t) for t in r["tokens"]]
     text = chat.text_of(tokens)
@@ -337,13 +351,21 @@ def memory_call(job):
     T = BR.Text(os.path.join(job["files"]["base"], "tokenizer.json"))
     sess = ST.StoreSession(T, m, ST.Config(**(job["circuit"] or {}).get("store", {})), dev=copy.deepcopy(dev) if dev is not None else None)
     start = len(sess.toks)
-    sess.call(op, name or "", text or "")
-    from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(job["files"]["base"])
+    tok = tokenizer_of(job["files"]["base"])
+    sess.call(op, token_ids(tok, name), token_ids(tok, text))
     bodies = sess.printed(start)
-    last = bodies[-1] if bodies else []
-    result = last if isinstance(last, str) else tok.decode([int(t) for t in last])
+    result = bodies[-1] if bodies else ""
     return {"result": result, "twin": base64.b64encode(pickle.dumps(sess.dev, protocol=4)).decode("ascii")}
+
+
+def tokenizer_of(base):
+    from transformers import AutoTokenizer
+    return AutoTokenizer.from_pretrained(base)
+
+
+def token_ids(tok, s):
+    """A name or a text as the store's tools take it: the package's token ids, or None when the call has none."""
+    return None if s is None else [int(t) for t in tok(s, add_special_tokens=False)["input_ids"]]
 
 
 def render(job):
@@ -355,15 +377,23 @@ def render(job):
     if raw is None:
         return {}
     dev = pickle.loads(raw)
-    from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(job["files"]["base"])
+    tok = tokenizer_of(job["files"]["base"])
     files = {}
-    # Device.names(): the live names in creation order; Device.text(key): a live file's tokens (chipformer.rv.store).
-    for name in dev.names():
-        tokens = [int(t) for t in (name if isinstance(name, (list, tuple)) else [name])]
-        text = dev.text(name)
-        files[tok.decode(tokens)] = tok.decode([int(t) for t in text])
+    # Device.names(): the live keys in creation order, each (length, name) - length the name's tokens (capped at NMAX + 1),
+    # name its first NMAX tokens padded with 0. Device.text(key) takes the whole key.
+    for key in dev.names():
+        length, name = key
+        shown = [int(t) for t in name[:min(int(length), len(name))] if int(t) != 0]
+        text = dev.text(key) or []
+        files[native_to_file(tok.decode(shown))] = native_to_file(tok.decode([int(t) for t in text]))
     return files
+
+
+def native_to_file(s):
+    """A name or a text as the store keeps it, read as the file it is. The tools' call format puts a newline after each
+    value, before its closing tag (<parameter=...>, newline, value, newline, </parameter>), and the store captures it with
+    the value: that one newline is the protocol's and is taken away; any newline before it is the content's and stays."""
+    return s[:-1] if s.endswith("\n") else s
 
 
 def probe(job):
@@ -400,6 +430,9 @@ def main():
             continue
         job = json.loads(line)
         try:
+            # The package's driver first: nothing of chipformer is imported before its path is set.
+            if job.get("backend") == "qwenputer" and (job.get("files") or {}).get("driver"):
+                load_driver(job["files"]["driver"])
             if job.get("op") == "validity":
                 emit({"validity": validity(job), "id": job["id"]})
                 continue

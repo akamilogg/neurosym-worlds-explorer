@@ -13,6 +13,8 @@ Usage: junior_verify.py --backend fake|qwenputer [--firmware path] [--tokenizer 
 import argparse
 import base64
 import os
+import sys as _sys
+_sys.dont_write_bytecode = True
 import copy
 import json
 import pickle
@@ -57,10 +59,11 @@ def qwenputer(inp, args):
 
 
 def neural_check(inp, dev, cfg):
-    """The neural snapshot published after the answer (memory.npz): readable as the store's snapshot, with one entry per
-    persistent head of the store, and holding rows exactly when its twin holds live files - an empty store's snapshot is
-    empty, a store with files is not. The finer correspondence of rows to the twin's chunks is confirmed with the real
-    driver (MA1's run on the junior's machine)."""
+    """The neural snapshot published after the answer (memory.npz) against its twin. What can be refused here is refused:
+    a snapshot that is not readable as the store's, or whose rows contradict its twin (rows with no live file, none with
+    some). What would make it the SAME memory - its rows, value by value, those the store's writes of the twin's files make
+    - has no offline mapping yet: so it is never answered ok, only `checked: false`, and the session's verification is
+    incomplete until that mapping exists."""
     import tempfile
     from chipformer.rv.chat import load_store_file
     if not inp.get("neural_after"):
@@ -78,7 +81,17 @@ def neural_check(inp, dev, cfg):
     live = len(list(dev.names())) if dev is not None else 0
     if (rows == 0) != (live == 0):
         return {"ok": False, "why": "its rows (%d) do not match its twin's live files (%d)" % (rows, live)}
-    return {"ok": True}
+    return {"ok": False, "checked": False, "why": "readable and not contradicting its twin; its equivalence to the twin's files is not checked (no offline mapping from the twin to the store's rows)"}
+
+
+def load_driver(path):
+    """The package's driver, imported from its own folder before anything of chipformer is."""
+    if not path or not os.path.isdir(path):
+        raise RuntimeError("--driver: the package's driver folder is needed")
+    sys.path.insert(0, path)
+    import chipformer
+    if not os.path.realpath(os.path.dirname(chipformer.__file__)).startswith(os.path.realpath(path)):
+        raise RuntimeError("the driver imported is not the package's")
 
 
 def main():
@@ -86,9 +99,13 @@ def main():
     ap.add_argument("--backend", required=True, choices=["fake", "qwenputer"])
     ap.add_argument("--firmware")
     ap.add_argument("--tokenizer")
+    ap.add_argument("--driver")
     args = ap.parse_args()
     inp = json.loads(sys.stdin.read())
     try:
+        if args.backend == "qwenputer":
+            # The package's driver first: nothing of chipformer is imported before its path is set.
+            load_driver(args.driver)
         out = fake(inp) if args.backend == "fake" else qwenputer(inp, args)
     except Exception as e:
         out = {"error": type(e).__name__ + ": " + str(e)}

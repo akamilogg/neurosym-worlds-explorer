@@ -100,7 +100,9 @@ def encode(tok, row, prompt, max_length):
     ids = ids["input_ids"] if isinstance(ids, dict) else list(ids)
     seq, labels = [], []
     for c in row.get("calls", []):
-        call = [int(t) for t in ST.StoreSession.call_tokens(c["op"], c.get("name", ""), c.get("text", ""))]
+        # The store's tools take the package's token ids, None for what a call has not (list has no name, get no text).
+        ids_of = lambda s: None if s is None else [int(t) for t in tok(s, add_special_tokens=False)["input_ids"]]
+        call = [int(t) for t in ST.StoreSession.call_tokens(c["op"], ids_of(c.get("name")), ids_of(c.get("text")))]
         seen = tok("<tool_response>\n" + c["result"] + "\n</tool_response>\n", add_special_tokens=False)["input_ids"]
         seq += call + seen
         labels += call + [-100] * len(seen)

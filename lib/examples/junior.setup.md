@@ -45,7 +45,7 @@ junior.
    segunda, que lo recupere con `get`. Después abre otra sesión que continúe desde la primera (`continues`) y vuelve a
    preguntar: la memoria debe venir del último estado publicado.
 4. **Verificación sin modelo:**
-   `lab junior verify <sesiones>/sessions/<id>.jsonl --blobs <blobs> --python <python> --backend qwenputer --firmware <firmware.elf> --tokenizer <tokenizer.json>`
+   `lab junior verify <sesiones>/sessions/<id>.jsonl --blobs <blobs> --python <python> --backend qwenputer --firmware <firmware.elf> --tokenizer <tokenizer.json> --driver <work>/drivers/<hash del driver>`
    debe decir `verified`, con la memoria de cada respuesta reconstruida por la referencia.
 
 Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecutar:
@@ -68,10 +68,14 @@ Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecuta
 - tras la revisión externa del 29/10: que el driver se importa desde la carpeta del paquete (`load_driver`) y que lo
   que el trabajador declara haber cargado (tokenizer, plantilla, firmware, ficheros del driver, `chipformer.json`,
   precisión) coincide con el paquete; que el plazo declarado corta la generación desde dentro (`generate` llama a
-  `lock.qwen` por cada token) y devuelve el prefijo como `limit_reached`; que la comprobación del snapshot neuronal
-  (`neural_check`: legible como snapshot del almacén, con filas exactamente cuando el gemelo tiene archivos) se afina con
-  la correspondencia real filas–fragmentos; y que `StoreSession.call_tokens` da la secuencia que el junior emite para
-  una llamada, la que se entrena como decisión.
+  `lock.qwen` por cada token) y devuelve el prefijo como `limit_reached`, con lo que imprimió el circuito; y que
+  `StoreSession.call_tokens` da la secuencia que el junior emite para una llamada, la que se entrena como decisión.
+- que la lectura de una memoria como archivos quita sólo el salto de línea que el formato de llamada pone tras cada valor
+  (`native_to_file`): con el tokenizer real, ese salto puede ir unido al último token del valor;
+- **Pendiente de construir, no sólo de confirmar:** la equivalencia entre el snapshot neuronal y su gemelo (que sus filas
+  sean, valor a valor, las que dejan en el almacén las escrituras de los archivos del gemelo). Hasta que exista, el
+  verificador rechaza lo que contradice al gemelo pero nunca da por buena la memoria: `lab junior verify` de una sesión
+  de Qwenputer termina en «NOT verified: incomplete».
 
 Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto del contrato no cambia.
 

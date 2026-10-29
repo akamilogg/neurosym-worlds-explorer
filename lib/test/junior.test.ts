@@ -4,10 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { BlobStore, checkClosed, editionHash, executionHash, exportPackage, normalizePackage, type JuniorPackage } from '../src/junior/package.ts';
 import { SessionError, SessionServer, stateId, type JuniorWorker, type WorkerJob, type WorkerResult } from '../src/junior/sessions.ts';
 import { processReference, verifySession, type ReferenceVerifier } from '../src/junior/verify.ts';
 import { ProcessWorker, VERIFY_PY } from '../src/junior/worker.ts';
+import { TRAIN_PY as TRAIN_PY_PATH } from '../src/junior/train.ts';
 
 /* SPEC-METAPOLITICA-APRENDIZAJE MA1: the junior packaged (§4), its sessions (§5.1) and their reconstruction (§5.2). */
 
@@ -437,7 +439,9 @@ test('review 2: verify finds a neural snapshot that is not the memory its twin i
   assert.equal(report.ok, false);
   assert.match(report.problems.join(), /neural snapshot is not the memory its twin is/);
   const silent: ReferenceVerifier = { async check(i) { const o = await toyReference.check(i); if ('error' in o) return o; const { neural: _n, ...rest } = o; return rest; } };
-  assert.match((await verifySession(path.join(dir, 'sessions', 's.jsonl'), store, silent)).problems.join(), /did not check its neural snapshot/);
+  const unchecked = await verifySession(path.join(dir, 'sessions', 's.jsonl'), store, silent);
+  assert.equal(unchecked.ok, false);
+  assert.match(unchecked.incomplete.join(), /did not check its neural snapshot/, 'a snapshot not checked leaves the verification incomplete');
 });
 
 test('review 3: a line cut by a stop is cut away before the next record; the chain holds after', async () => {
@@ -492,5 +496,129 @@ test('review 6: running out of its declared time is the junior\'s measured limit
     assert.equal(r.text, 'ok ');
     assert.ok(r.usage !== null && !r.uncertain);
     assert.equal(r.state_after, s.head_id);
+  } finally { server.stop(); }
+});
+
+/* --- A second review of MA1-MA5 (29/10/2026), against a stand-in of Qwenputer's driver that keeps its contracts
+   (test/fixtures/fake-driver: the store's keys and token ids, the circuit printing inside qwen()). ------------------ */
+
+const FAKE_DRIVER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-driver');
+
+function drivenPackage(store: BlobStore) {
+  const base = tmp();
+  fs.writeFileSync(path.join(base, 'chipformer.json'), JSON.stringify({ chip_layers: 2, store: { slot_bits: 10 } }));
+  fs.writeFileSync(path.join(base, 'tokenizer.json'), JSON.stringify({ of: 'the checkpoint' }));
+  return normalizePackage({ format: 'junior-package@1', name: 'driven', base: store.putTree(base), prompt: '',
+    execution: { firmware: store.put('firmware'), tokenizer: store.put(JSON.stringify({ of: 'the package' })), chat_template: store.put('the template of the package'),
+      driver: store.putTree(FAKE_DRIVER), verifier: store.put('v'), circuit: { chip_layers: 2, store: { slot_bits: 10 } }, precision: 'bf16' } });
+}
+
+test('review 2: the driver of the package imported from its folder with none installed; what running it generates is not its identity, a file added is', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const pkg = drivenPackage(store);
+  const server = new SessionServer({ root: dir, store, worker: new ProcessWorker({ python: [python!], backend: 'qwenputer', work: path.join(dir, 'work') }) });
+  try {
+    const s = server.open({ run_id: 'r', pkg, session_id: 's' });
+    const r1 = await server.ask('s', { request_id: 'q1', content: { user: 'compute' }, expected: s.head_id });
+    assert.equal(r1.terminal, 'answered', r1.reason ?? '');
+    assert.equal(r1.served, executionHash(pkg));
+    assert.equal(r1.text, 'ARESULTnswer');
+    const drv = path.join(dir, 'work', 'drivers', pkg.execution.driver);
+    assert.ok(!fs.existsSync(path.join(drv, 'chipformer', '__pycache__')), 'running it wrote no bytecode next to it');
+    fs.mkdirSync(path.join(drv, 'chipformer', '__pycache__'), { recursive: true });
+    fs.writeFileSync(path.join(drv, 'chipformer', '__pycache__', 'x.cpython-311.pyc'), 'bytecode');
+    const r2 = await server.ask('s', { request_id: 'q2', content: { user: 'compute' }, expected: r1.state_after });
+    assert.equal(r2.served, executionHash(pkg), 'a cache is not part of the driver');
+    fs.writeFileSync(path.join(drv, 'chipformer', 'extra.py'), 'x = 1');
+    const r3 = await server.ask('s', { request_id: 'q3', content: { user: 'compute' }, expected: r2.state_after });
+    assert.equal(r3.terminal, 'infra_failed');
+    assert.match(r3.reason ?? '', /driver/);
+  } finally { server.stop(); }
+});
+
+test('review 2: a timeout keeps what the generation emitted - what the circuit printed and its count - as limit_reached', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const server = new SessionServer({ root: dir, store, worker: new ProcessWorker({ python: [python!], backend: 'qwenputer', work: path.join(dir, 'work') }), graceMs: 5000 });
+  try {
+    const s = server.open({ run_id: 'r', pkg: drivenPackage(store), session_id: 's' });
+    const r = await server.ask('s', { request_id: 'q', content: { user: 'slow' }, expected: s.head_id, limits: { timeout_ms: 300 } });
+    assert.deepEqual([r.terminal, r.reason], ['limit_reached', 'timeout']);
+    assert.match(r.text, /^ARESULTn/, 'the answer of the circuit is in the prefix');
+    assert.equal(r.usage?.circuit_tokens, 6);
+  } finally { server.stop(); }
+});
+
+test('review 2: the simulator of the teacher and render take the forms of the store - token ids, None, whole keys', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const pkg = drivenPackage(store);
+  const server = new SessionServer({ root: dir, store, worker: new ProcessWorker({ python: [python!], backend: 'qwenputer', work: path.join(dir, 'work') }) });
+  try {
+    const put = await server.memoryCall({ pkg, twin: null, call: { op: 'put', name: 'memo', text: 'hello there' } });
+    assert.equal(put.result, 'ok');
+    /* What the circuit prints is what the junior would read: the value as the store keeps it. */
+    assert.equal((await server.memoryCall({ pkg, twin: put.twin, call: { op: 'get', name: 'memo' } })).result, 'hello there\n');
+    /* Read as files, the protocol's newline after each value is not the file's (review 3). */
+    assert.deepEqual(await server.render({ pkg, twin: put.twin }), { memo: 'hello there' });
+    const own = await server.memoryCall({ pkg, twin: put.twin, call: { op: 'put', name: 'two', text: 'line one\n' } });
+    assert.deepEqual(await server.render({ pkg, twin: own.twin }), { memo: 'hello there', two: 'line one\n' }, 'a newline of the content stays');
+  } finally { server.stop(); }
+});
+
+test('review 2: without the neural snapshot shown to be the memory of its twin, a verification is incomplete - never ok', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const pkg = drivenPackage(store);
+  const server = new SessionServer({ root: dir, store, worker: new ProcessWorker({ python: [python!], backend: 'qwenputer', work: path.join(dir, 'work') }) });
+  try {
+    const s = server.open({ run_id: 'r', pkg, session_id: 's' });
+    await server.ask('s', { request_id: 'q', content: { user: 'compute' }, expected: s.head_id });
+  } finally { server.stop(); }
+  const files = path.join(dir, 'work', 'packages', executionHash(pkg));
+  const reference = processReference([python!, VERIFY_PY, '--backend', 'qwenputer', '--firmware', path.join(files, 'firmware.elf'), '--tokenizer', path.join(files, 'base', 'tokenizer.json'), '--driver', path.join(dir, 'work', 'drivers', pkg.execution.driver)]);
+  const report = await verifySession(path.join(dir, 'sessions', 's.jsonl'), store, reference);
+  assert.deepEqual(report.problems, [], 'the stream and the twin are rebuilt');
+  assert.equal(report.ok, false);
+  assert.match(report.incomplete.join(), /not shown to be the memory its twin is/);
+});
+
+test('review 2: the trainer translates a memory call with the token ids of the package, its result out of the loss', { skip: !python && 'no Python' }, () => {
+  const script = [
+    'import sys, json', 'sys.path.insert(0, ' + JSON.stringify(FAKE_DRIVER) + ')', 'sys.path.insert(0, ' + JSON.stringify(path.dirname(TRAIN_PY_PATH)) + ')',
+    'import junior_train as T', 'from transformers import AutoTokenizer', 'tok = AutoTokenizer.from_pretrained("x")',
+    'row = {"system": "S", "user": ["U"], "calls": [{"op": "get", "name": "memo", "result": "hi"}, {"op": "list", "result": "memo"}], "answer": "A"}',
+    'ids, labels = T.encode(tok, row, "", 4096)', 'print(json.dumps({"labels": labels, "ids": ids}))'
+  ].join('\n');
+  const r = spawnSync(python!, ['-c', script], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const { labels, ids } = JSON.parse(r.stdout.trim()) as { labels: number[]; ids: number[] };
+  const code = (s: string) => [...s].map((c) => c.charCodeAt(0));
+  const trained = labels.filter((l) => l !== -100);
+  assert.deepEqual(trained.slice(0, 11), [1, 2, ...code('get'), 3, ...code('memo'), 5], 'the call in the protocol of the junior, its name as token ids');
+  assert.deepEqual(trained.slice(11, 11 + 7), [1, 2, ...code('list'), 5], 'a call without a name passes None');
+  assert.deepEqual(trained.slice(-2), [code('A')[0], 10], 'the answer, then its end');
+  const read = ids.findIndex((t, i) => t === code('h')[0] && ids[i + 1] === code('i')[0]);
+  assert.ok(read > 0 && labels[read] === -100, 'what it read is context, out of the loss');
+});
+
+/* --- A third review (29/10/2026). ------------------------------------------------------------------------------------- */
+
+test('review 3: two versions with one driver - only their prompt differs - are served by the same process, one after the other', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const a = drivenPackage(store);
+  const b = normalizePackage({ ...a, prompt: 'Another prompt.' });
+  assert.notEqual(executionHash(a), executionHash(b));
+  const server = new SessionServer({ root: dir, store, worker: new ProcessWorker({ python: [python!], backend: 'qwenputer', work: path.join(dir, 'work') }) });
+  try {
+    const sa = server.open({ run_id: 'r', pkg: a, session_id: 'a' });
+    const ra = await server.ask('a', { request_id: 'q', content: { user: 'compute' }, expected: sa.head_id });
+    const sb = server.open({ run_id: 'r', pkg: b, session_id: 'b' });
+    const rb = await server.ask('b', { request_id: 'q', content: { user: 'compute' }, expected: sb.head_id });
+    assert.deepEqual([ra.terminal, rb.terminal], ['answered', 'answered'], rb.reason ?? '');
+    assert.equal(rb.served, executionHash(b));
+    assert.equal(fs.readdirSync(path.join(dir, 'work', 'drivers')).length, 1, 'one folder for the one driver');
   } finally { server.stop(); }
 });

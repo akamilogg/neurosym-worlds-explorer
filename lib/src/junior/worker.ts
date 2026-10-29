@@ -57,6 +57,15 @@ export function materialize(pkg: JuniorPackage, execution: string, store: BlobSt
     return target;
   };
   const driverIsTree = store.tree(pkg.execution.driver) !== null;
+  /* The driver lives where its own hash says, shared by every package that has it: a process that imported it from there
+     serves any of them; another driver is another folder (and another process). */
+  const driverDir = path.join(path.dirname(cache), 'drivers', pkg.execution.driver);
+  if (driverIsTree && !fs.existsSync(path.join(driverDir, '.complete'))) {
+    fs.rmSync(driverDir, { recursive: true, force: true });
+    const t = store.tree(pkg.execution.driver)!;
+    for (const [rel, blob] of Object.entries(t.files)) linkOrCopy(store.pathOf(blob), path.join(driverDir, ...rel.split('/')));
+    fs.writeFileSync(path.join(driverDir, '.complete'), pkg.execution.driver);
+  }
   if (!fs.existsSync(done)) {
     fs.rmSync(dir, { recursive: true, force: true });
     tree(pkg.base, 'base');
@@ -66,12 +75,11 @@ export function materialize(pkg: JuniorPackage, execution: string, store: BlobSt
     fs.rmSync(path.join(dir, 'base', 'tokenizer.json'), { force: true });
     fs.copyFileSync(store.pathOf(pkg.execution.tokenizer), path.join(dir, 'base', 'tokenizer.json'));
     fs.copyFileSync(store.pathOf(pkg.execution.chat_template), path.join(dir, 'chat_template.jinja'));
-    if (driverIsTree) tree(pkg.execution.driver, 'driver');
-    else linkOrCopy(store.pathOf(pkg.execution.driver), path.join(dir, 'driver.bin'));
+    if (!driverIsTree) linkOrCopy(store.pathOf(pkg.execution.driver), path.join(dir, 'driver.bin'));
     fs.writeFileSync(done, execution);
   }
   return { base: path.join(dir, 'base'), adapter: pkg.adapter ? path.join(dir, 'adapter') : null, firmware: path.join(dir, 'firmware.elf'),
-    tokenizer: path.join(dir, 'base', 'tokenizer.json'), chat_template: path.join(dir, 'chat_template.jinja'), driver: path.join(dir, driverIsTree ? 'driver' : 'driver.bin') };
+    tokenizer: path.join(dir, 'base', 'tokenizer.json'), chat_template: path.join(dir, 'chat_template.jinja'), driver: driverIsTree ? driverDir : path.join(dir, 'driver.bin') };
 }
 
 /** What a worker says it loaded: the digests of the files it read and the configuration it runs with. */

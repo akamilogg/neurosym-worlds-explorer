@@ -356,7 +356,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       case 'junior': {
         /* The junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1): its blobs, its package, a session verified from
            its ledger, the machine checked, the driver's resources measured. The server and the proxy are scripts of their own. */
-        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P';
+        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T --driver D] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P';
         const sub = args.shift();
         const file = (f: string) => fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f);
         const J = await import('../junior/package.ts');
@@ -479,12 +479,13 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         if (sub === 'verify') {
           const { verifySession, processReference } = await import('../junior/verify.ts');
           const { VERIFY_PY } = await import('../junior/worker.ts');
-          const python = take(args, 'python'), backend = take(args, 'backend'), firmware = take(args, 'firmware'), tokenizer = take(args, 'tokenizer');
-          const reference = python && backend ? processReference([python, VERIFY_PY, '--backend', backend, ...(firmware ? ['--firmware', firmware] : []), ...(tokenizer ? ['--tokenizer', tokenizer] : [])]) : null;
+          const python = take(args, 'python'), backend = take(args, 'backend'), firmware = take(args, 'firmware'), tokenizer = take(args, 'tokenizer'), driver = take(args, 'driver');
+          const reference = python && backend ? processReference([python, VERIFY_PY, '--backend', backend, ...(firmware ? ['--firmware', firmware] : []), ...(tokenizer ? ['--tokenizer', tokenizer] : []), ...(driver ? ['--driver', driver] : [])]) : null;
           const r = await verifySession(file(f), store, reference);
           out('session ' + r.session + ': ' + r.receipts + ' receipts, the memory of ' + r.memory_checked + ' rebuilt by the reference');
           for (const p of r.problems) out('  ' + p);
-          out(r.ok ? 'verified' : 'NOT verified');
+          for (const p of r.incomplete) out('  incomplete: ' + p);
+          out(r.ok ? 'verified' : r.problems.length ? 'NOT verified' : 'NOT verified: incomplete');
           return r.ok ? 0 : 1;
         }
         out(usage);

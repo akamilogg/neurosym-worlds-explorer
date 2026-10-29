@@ -18,7 +18,9 @@ import { readLedger, stateId, type MemoryState, type Receipt } from './sessions.
 /** What the reference is given: the twin before, the question, the trace, and the neural snapshot the answer published
     after - which it must find to be a snapshot of its own store's kind, and the one its twin after corresponds to. */
 export interface ReferenceInput { readonly twin_before: Buffer | null; readonly content: unknown; readonly trace: Buffer; readonly circuit: unknown; readonly neural_after: Buffer | null }
-export type ReferenceOutput = { readonly twin_after: Buffer | null; readonly ops: readonly unknown[]; readonly neural?: { readonly ok: boolean; readonly why?: string } } | { readonly error: string };
+/** `neural.checked: false`: the reference could not say whether the snapshot is the same memory as its twin - the
+    verification is incomplete, never ok. */
+export type ReferenceOutput = { readonly twin_after: Buffer | null; readonly ops: readonly unknown[]; readonly neural?: { readonly ok: boolean; readonly checked?: boolean; readonly why?: string } } | { readonly error: string };
 
 export interface ReferenceVerifier { check(input: ReferenceInput): Promise<ReferenceOutput> }
 
@@ -29,16 +31,18 @@ export interface VerifyReport {
   /** Answers whose memory the reference verifier rebuilt and matched. */
   readonly memory_checked: number;
   readonly problems: readonly string[];
+  /** What could not be checked: a verification with anything here is incomplete, never ok. */
+  readonly incomplete: readonly string[];
 }
 
 /** A session checked from its ledger file. Without a reference verifier, everything but the memory's content is checked,
     and the report says so: a session is never called verified on its hashes alone. */
 export async function verifySession(file: string, store: BlobStore, reference: ReferenceVerifier | null): Promise<VerifyReport> {
-  const problems: string[] = [];
+  const problems: string[] = [], incomplete: string[] = [];
   let lines;
-  try { lines = readLedger(file); } catch (e) { return { ok: false, session: null, receipts: 0, memory_checked: 0, problems: [(e as Error).message] }; }
+  try { lines = readLedger(file); } catch (e) { return { ok: false, session: null, receipts: 0, memory_checked: 0, problems: [(e as Error).message], incomplete: [] }; }
   const open = lines.find((l) => l.kind === 'open');
-  if (!open) return { ok: false, session: null, receipts: 0, memory_checked: 0, problems: ['the ledger has no open'] };
+  if (!open) return { ok: false, session: null, receipts: 0, memory_checked: 0, problems: ['the ledger has no open'], incomplete: [] };
   if (lines[0] !== open) problems.push('the ledger does not begin with its open');
   const circuit = (open.package as { execution?: { circuit?: unknown } })?.execution?.circuit ?? null;
   const blob = (id: string | null, what: string): Buffer | null => {
@@ -82,7 +86,8 @@ export async function verifySession(file: string, store: BlobStore, reference: R
           if (want !== (r.after.twin ?? null) || (twinAfter !== null) !== (out.twin_after !== null)) problems.push(at + ': the memory after is not what the reference rebuilds');
           if (stableStringify(out.ops) !== stableStringify(r.ops)) problems.push(at + ': its memory operations are not those the reference reads in its trace');
           /* The memory a later question restores is the neural snapshot: a twin that matches says nothing of it. */
-          if (!out.neural) problems.push(at + ': the reference did not check its neural snapshot');
+          if (!out.neural) incomplete.push(at + ': the reference did not check its neural snapshot');
+          else if (out.neural.checked === false) incomplete.push(at + ': its neural snapshot was not shown to be the memory its twin is: ' + (out.neural.why ?? ''));
           else if (!out.neural.ok) problems.push(at + ': its neural snapshot is not the memory its twin is: ' + (out.neural.why ?? 'it does not correspond'));
           checked++;
         }
@@ -92,7 +97,7 @@ export async function verifySession(file: string, store: BlobStore, reference: R
   }
   const answered = lines.filter((l) => l.kind === 'receipt' && (l.receipt as Receipt).terminal === 'answered').length;
   if (!reference && answered) problems.push('no reference verifier: the memory of ' + answered + ' answer(s) is unchecked');
-  return { ok: problems.length === 0, session: String(open.session_id), receipts, memory_checked: checked, problems };
+  return { ok: problems.length === 0 && incomplete.length === 0, session: String(open.session_id), receipts, memory_checked: checked, problems, incomplete };
 }
 
 /** The reference verifier as a process: the package's own program, given one JSON on stdin, answering one JSON on stdout.
@@ -112,7 +117,8 @@ export function processReference(command: readonly string[], timeoutMs = 120_000
           try {
             const a = JSON.parse(out.trim().split('\n').pop() ?? '');
             if (a.error) resolve({ error: String(a.error) });
-            else resolve({ twin_after: a.twin_after === null ? null : Buffer.from(a.twin_after, 'base64'), ops: a.ops ?? [], ...(a.neural ? { neural: { ok: a.neural.ok === true, ...(a.neural.why ? { why: String(a.neural.why) } : {}) } } : {}) });
+            else resolve({ twin_after: a.twin_after === null ? null : Buffer.from(a.twin_after, 'base64'), ops: a.ops ?? [],
+              ...(a.neural ? { neural: { ok: a.neural.ok === true, ...(a.neural.checked === false ? { checked: false } : {}), ...(a.neural.why ? { why: String(a.neural.why) } : {}) } } : {}) });
           } catch { resolve({ error: 'the verifier answered nothing readable (exit ' + code + ')' + (err ? ': ' + err.trim().slice(-400) : '') }); }
         });
         child.stdin.end(JSON.stringify({
