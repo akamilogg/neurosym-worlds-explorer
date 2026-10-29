@@ -9,7 +9,12 @@ M2 con el junior como System 2, sondas por corte de la cola de repetición y com
 mundo con `change`/`run`. Falta su primera línea base real. **MA3 implementado** (`lib/src/junior/memory.ts`): la
 memoria inicial como palanca (`memory/<nombre>`, escrita por el propio junior en una sesión y aceptada sólo si su
 referencia lee exactamente lo pedido), `publish_memory` desde las sesiones de investigaciones de desarrollo, la memoria
-legible por `render` y la promoción sin entrenar. MA4–MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
+legible por `render` y la promoción sin entrenar. **MA4 implementado** (`lib/src/junior/distill.ts`): el maestro en un
+corte, con su memoria servida por el simulador de referencia en una copia (`POST /memory`, traducción `teacher-memory-json@1`
+registrada), el junior en el mismo corte, la aceptación de §8.1 por el comprobador fijado antes (verified, unverified,
+rejected), datasets por contenido con su solapamiento con los grupos de selección, y los actos `distill` y `dataset`.
+Las comparaciones semánticas por continuaciones y las demostraciones con juicio quedan para otra condición. MA5–MA7 sin
+implementar. MA1–MA7 definen ejecución, evaluación,
 destilación, entrenamiento y método reutilizable. El mecanismo de relevo de fase B queda definido y desactivado hasta
 que el operador configure su batería y umbrales a partir de la evidencia de fase A, antes de evaluarlos. Este documento
 fija los contratos para desarrollo; los valores de cada experimento se declaran en su manifiesto antes de ejecutarlo.

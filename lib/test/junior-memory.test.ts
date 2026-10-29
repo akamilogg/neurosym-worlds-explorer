@@ -120,8 +120,9 @@ test('junior-competence@1: a memory file is a lever; a memory not written as ask
     assert.ok(typeof pkg !== 'string' && pkg.prompt === '' && pkg.memory.twin !== null);
     assert.equal((await juniorLab.artifact!.check(spec, v!.version, { round: 1, purpose: 'check', index: 0 }, {} as never)).holds, true);
     const bad = await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'memory/bad': 'x' }, why: 'w', expect: 'e' } }, 'a3', {} as never);
-    assert.equal(await juniorLab.act!.start(spec, { run: { version: bad!.version } }, 'a4', {} as never), null);
-    assert.match(String(await spec.world.evaluate(bad!.version)), /its memory was not written/);
+    assert.ok(bad && bad.kind === 'version');
+    assert.equal(await juniorLab.act!.start(spec, { run: { version: bad.version } }, 'a4', {} as never), null);
+    assert.match(String(await spec.world.evaluate(bad.version)), /its memory was not written/);
     assert.equal(await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'memory.state.json': '{}' }, why: 'w', expect: 'e' } }, 'a5', {} as never), null, 'a published memory is never a change');
   } finally { server.stop(); await h.close(); }
 });

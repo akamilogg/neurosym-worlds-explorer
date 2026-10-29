@@ -16,6 +16,7 @@ export const WORKER_PY = path.join(path.dirname(fileURLToPath(import.meta.url)),
 export const VERIFY_PY = path.join(path.dirname(fileURLToPath(import.meta.url)), 'junior_verify.py');
 
 export type Backend = 'fake' | 'qwenputer';
+const NL = String.fromCharCode(10);
 
 /** What a backend cannot serve, refused when a session opens - before any inference (§6.5: an option ignored or a backend
     incompatible is detected before the trial). */
@@ -119,6 +120,19 @@ export class ProcessWorker implements JuniorWorker {
     });
     if (!a.probe) throw new Error('the probe failed: ' + String(a.reason ?? 'no answer'));
     return a.probe;
+  }
+
+  /** One memory operation on a copy of a twin, by the package's reference store (§8). */
+  async memoryCall(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore; readonly call: { op: string; name?: string; text?: string } }): Promise<{ readonly result: string; readonly twin: Buffer } | { readonly error: string }> {
+    const files = this.o.backend === 'fake' ? null : materialize(job.pkg, job.execution, job.store, path.join(this.o.work, 'packages'));
+    const id = 'c' + (++this.next) + '-' + process.pid;
+    const child = this.start();
+    const a = await new Promise<Record<string, unknown>>((resolve) => {
+      this.waiting.set(id, resolve as never);
+      child.stdin.write(JSON.stringify({ id, op: 'memory_call', execution: job.execution, backend: this.o.backend, files, circuit: job.pkg.execution.circuit,
+        twin: job.twin === null ? null : job.twin.toString('base64'), call: job.call }) + NL);
+    });
+    return typeof a.result === 'string' && typeof a.twin === 'string' ? { result: a.result, twin: Buffer.from(a.twin, 'base64') } : { error: String(a.reason ?? 'no answer') };
   }
 
   /** A memory read as files by the package's own driver (§4). */

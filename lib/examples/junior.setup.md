@@ -57,6 +57,8 @@ Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecuta
 - que la lectura de la memoria como archivos (`render`: `Device.names()` y `Device.text()` del almacén, decodificados
   con el tokenizer del paquete) da los nombres y textos escritos; de ella dependen la palanca de memoria inicial y
   `publish_memory` (MA3).
+- que el simulador de memoria del maestro (`memory_call`: `StoreSession.call(op, name, text)` sobre una copia del gemelo,
+  su respuesta leída con `printed()`) responde como el circuito; de él depende la destilación desde un corte (MA4).
 
 Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto del contrato no cambia.
 

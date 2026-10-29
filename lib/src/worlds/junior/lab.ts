@@ -10,6 +10,9 @@ import { ArtifactStore } from '../../artifacts/store.ts';
 import { JuniorSessionClient } from '../../junior/client.ts';
 import { competenceHash, competenceProblems, type CompetenceManifest, type Component, type Observation } from '../../junior/competence.ts';
 import type { Evaluation } from '../../junior/evaluate.ts';
+import type { Dataset, Example } from '../../junior/distill.ts';
+import type { Mode } from '../../junior/competence.ts';
+import { openAiChatClient, type ChatClient } from '../../learn/system2.ts';
 import { JobLedger, JobRefused } from '../../junior/jobs.ts';
 import { BlobStore, checkClosed, executionHash, normalizePackage, type JuniorPackage } from '../../junior/package.ts';
 
@@ -52,7 +55,7 @@ export class JuniorWorld {
   private readonly evaluations = new Map<string, Evaluation>();
   private readonly packages = new Map<string, JuniorPackage>();
 
-  constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; store?: ArtifactStore }) {
+  constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; distillations?: number; store?: ArtifactStore }) {
     const problems = competenceProblems(o.manifest);
     if (problems.length) throw new Error('the competence manifest: ' + problems.join('; '));
     this.manifest = o.manifest;
@@ -67,7 +70,7 @@ export class JuniorWorld {
     fs.mkdirSync(o.dir, { recursive: true });
     this.store = o.store ?? new ArtifactStore(new Map([['prompt.md', this.base.prompt], ['decoding.json', JSON.stringify(this.base.decoding, null, 2) + '\n']]));
     this.reference = this.store.base;
-    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations, memory_builds: o.memoryBuilds ?? o.evaluations });
+    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations, memory_builds: o.memoryBuilds ?? o.evaluations, distillations: o.distillations ?? 20 });
   }
 
   archive(): { base: JuniorPackage; manifest: CompetenceManifest; files: Record<string, string> } {
@@ -165,6 +168,65 @@ export class JuniorWorld {
     return null;
   }
 
+  /** The record of a development investigation a junior ran here: its journal, the session of its last launch, its launches. */
+  investigationRecord(execution: string, caseId: string): { record: string; session: string; launches: number } | null {
+    const ledger = path.join(this.dir, 'trials', 'trials.jsonl');
+    if (!fs.existsSync(ledger)) return null;
+    let trial: string | null = null, record: string | null = null, launches = 0;
+    for (const l of fs.readFileSync(ledger, 'utf8').split('\n')) {
+      let e: Record<string, any>;
+      try { e = JSON.parse(l); } catch { continue; }
+      if (e.type === 'research_trial_requested' && e.case === caseId && e.config === 'junior:' + execution) trial = e.trial;
+      if (trial && e.trial === trial && e.type === 'research_trial_reserved') launches++;
+      if (trial && e.trial === trial && e.type === 'research_trial_finished') record = path.join(this.dir, 'trials', String(e.record));
+    }
+    if (!trial || !record || !launches) return null;
+    return { record, session: (trial + '#' + (launches - 1)).replace(/[^\w.-]/g, '.').replace(/\.(\d+)$/, '.L$1'), launches };
+  }
+
+  /** An example distilled at a cut of a development investigation of a version (§8): a job of the ledger, from
+      `distillations`. In cut mode the junior's memory at the cut is its own session's, before that question. */
+  async distillAt(o: { version: string; case: string; question: number; mode: Mode; checker: { id: string; version: number }; request?: string; instruction?: string },
+    teacher: { client: ChatClient; identity: Readonly<Record<string, unknown>> } | undefined, judge?: import('../../runtime/lab-runner.ts').LabConnection): Promise<Example | string> {
+    if (!teacher) return 'no teacher is configured for this run (--teacher-url, --teacher-model)';
+    const c = this.manifest.cases.find((x) => x.id === o.case);
+    if (!c || c.kind !== 'investigation' || c.partition !== 'development') return 'case ' + o.case + ' is not a development investigation of the manifest';
+    const pkg = await this.packageOf(o.version);
+    if (typeof pkg === 'string') return pkg;
+    const rec = this.investigationRecord(executionHash(pkg), o.case);
+    if (!rec) return 'version ' + o.version + ' has not run case ' + o.case + ' here: evaluate it first';
+    let snapshot: { neural: string | null; twin: string | null } | undefined;
+    if (o.mode === 'cut') {
+      if (rec.launches > 1) return 'that investigation was resumed: the junior\'s memory at a cut of it is not known here';
+      if (o.question === 0) snapshot = pkg.memory;
+      else {
+        try {
+          const r = await this.client.receipt(rec.session, 'chat:' + (o.question - 1));
+          if (r.state !== 'published') return 'the session has no answer before question ' + o.question;
+          snapshot = r.receipt.after;
+        } catch (e) { return String((e as Error).message ?? e); }
+      }
+    }
+    const { distill } = await import('../../junior/distill.ts');
+    const req = { run: rec.record, question: o.question, group: c.group, mode: o.mode, ...(snapshot ? { snapshot } : {}), checker: o.checker,
+      ...(o.request ? { request: o.request } : {}), ...(o.instruction ? { instruction: o.instruction } : {}) };
+    try {
+      const operation = 'dist-' + createHash('sha256').update(JSON.stringify([executionHash(pkg), req, teacher.identity])).digest('hex').slice(0, 24);
+      const { done } = this.jobs.start({ operation_id: operation, op: 'distill', inputs: { execution: executionHash(pkg), req, teacher: teacher.identity }, reserve: { distillations: 1 },
+        run: async (signal) => ({ spent: { distillations: 1 }, products: await distill({ dir: this.dir, req, pkg, client: this.client, teacher: teacher.client, teacherIdentity: teacher.identity, ...(judge ? { judge } : {}), signal }) }) });
+      const job = await done;
+      return job.state === 'completed' ? job.products as Example : 'the distillation ' + job.state + (job.reason ? ': ' + job.reason : '');
+    } catch (e) { return e instanceof JobRefused ? e.message : String((e as Error).message ?? e); }
+  }
+
+  /** A dataset of examples distilled here, with the selection groups it shares (a training on it is refused while any is). */
+  async dataset(ids: readonly string[], admits: readonly ('verified' | 'demonstration')[]): Promise<{ dataset: Dataset; overlap: string[] } | string> {
+    const { makeDataset, selectionOverlap } = await import('../../junior/distill.ts');
+    const ds = makeDataset(this.dir, ids, admits);
+    if ('error' in ds) return ds.error;
+    return { dataset: ds, overlap: selectionOverlap(ds, this.manifest) };
+  }
+
   /** The sessions of the development investigations this world's evaluations ran: session to its case and junior. */
   developmentSessions(): Map<string, { case: string; execution: string }> {
     const out = new Map<string, { case: string; execution: string }>();
@@ -208,7 +270,12 @@ export class JuniorWorld {
   }
 }
 
-export interface JuniorSpec { readonly world: JuniorWorld; readonly judge?: import('../../runtime/lab-runner.ts').LabConnection }
+export interface JuniorSpec {
+  readonly world: JuniorWorld;
+  readonly judge?: import('../../runtime/lab-runner.ts').LabConnection;
+  /** The strong model as teacher (§8), configured as any researcher: its client and its identity (model, endpoint path). */
+  readonly teacher?: { readonly client: ChatClient; readonly identity: Readonly<Record<string, unknown>> };
+}
 
 /** What is known of an observation before it is made. */
 export interface JuniorPoint {
@@ -227,7 +294,9 @@ export type JuniorEpisode =
   | { readonly kind: 'evaluation'; readonly version: string; readonly execution: string; readonly complete: boolean; readonly points: readonly JuniorPoint[]; readonly observations: readonly Observation[];
       readonly components: readonly { readonly id: string; readonly deficit: number | null }[];
       /** Its development investigations' sessions, case to session: what publish_memory may take. */
-      readonly sessions: Readonly<Record<string, string>> };
+      readonly sessions: Readonly<Record<string, string>> }
+  /** What a distillation or a dataset produced: rows to read and what they add up to. */
+  | { readonly kind: 'records'; readonly what: 'examples' | 'dataset'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
 
 export interface JuniorCase { readonly point: string; readonly state: JuniorPoint; readonly came: { readonly value: number | null } }
 
@@ -235,7 +304,9 @@ type Reason = { readonly why: string; readonly because?: readonly string[] } & (
 export type JuniorAct =
   | { readonly change: { readonly from: string; readonly files: Readonly<Record<string, string>> } & Reason }
   | { readonly run: { readonly version: string } }
-  | { readonly publish_memory: { readonly from: string; readonly session: string } & Reason };
+  | { readonly publish_memory: { readonly from: string; readonly session: string } & Reason }
+  | { readonly distill: { readonly version: string; readonly case: string; readonly question: number; readonly mode: Mode; readonly checker: string; readonly request?: string; readonly instruction?: string } }
+  | { readonly dataset: { readonly examples: readonly string[]; readonly admits: readonly ('verified' | 'demonstration')[] } };
 
 const latest = new WeakMap<JuniorWorld, string>();
 
@@ -316,7 +387,10 @@ function juniorInterface(tolerance: number): WorldInterface {
       [['act'], '  {"act": {"change": {"from": "<version>", "files": {"prompt.md" | "decoding.json": "<the file\'s whole new text>"}, "why": "<the hypothesis it tests>", "expect": "<what you expect of it>" | "exploratory": true}}}   a new junior; its reason is written with it, before anything of it is measured. '
         + 'A file "memory/<name>" asks for a file the junior holds in its own memory from the start (null removes the request): the junior writes it itself, in a session of its own, before the version is evaluated; if what it wrote is not exactly what was asked, the version cannot be evaluated and you are told so. Each memory written costs one of `memory_builds`. '
         + 'Or {"act": {"run": {"version": "<version>"}}}   that version evaluated on every development case: an episode of observations, with the session of each investigation. An evaluation costs one of `evaluations`; asked again for the same version it is the same. '
-        + 'Or {"act": {"publish_memory": {"from": "<version>", "session": "<a session of an evaluation>", "why": "...", "expect": "..." | "exploratory": true}}}   a new version whose memory is the one the junior ended that investigation with: you read it as files in the version. At most `acts_left` this round.'],
+        + 'Or {"act": {"publish_memory": {"from": "<version>", "session": "<a session of an evaluation>", "why": "...", "expect": "..." | "exploratory": true}}}   a new version whose memory is the one the junior ended that investigation with: you read it as files in the version. '
+        + 'Or {"act": {"distill": {"version": "<version evaluated>", "case": "<a development investigation>", "question": <n, from 0>, "mode": "start" | "cut", "checker": "protocol" | "request" | "rules" | "proposal", "request": "<kind>", "instruction": "<a visible task>"}}}   '
+        + 'the junior and the teacher answer from the same point of that investigation (cut: with the junior\'s memory there; start: with its initial memory), each in a copy; the checker, fixed before the teacher answers, judges both: an EXAMPLE, verified when the teacher passes where the junior fails, unverified when both pass, rejected when the teacher fails. Each costs one of `distillations`. '
+        + 'Or {"act": {"dataset": {"examples": ["<example id>", ...], "admits": ["verified"]}}}   a dataset of examples, by its content, with the groups of runs it comes from and those it shares with the probes that select juniors. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at an observation, part by part, and what was measured there'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
       [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the observations of your episodes, or of the checks, each with the value of the code and what was measured']
@@ -379,7 +453,10 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     { name: 'work', default: '', help: 'where evaluations, trials and the job ledger are kept (default: beside the run)' },
     { name: 'evaluations', default: '10', help: 'evaluations of versions the run may make in all' },
     { name: 'acts', default: '2', help: 'changes and runs System 2 may make per round' },
-    { name: 'tolerance', default: '0.25', help: 'how far from what was measured an answer may be' }
+    { name: 'tolerance', default: '0.25', help: 'how far from what was measured an answer may be' },
+    { name: 'distillations', default: '20', help: 'distillations from a cut the run may make in all' },
+    { name: 'teacher-url', default: '', help: 'the teacher\'s endpoint (or TEACHER_LLM_URL; its key from TEACHER_LLM_KEY)' },
+    { name: 'teacher-model', default: '', help: 'the teacher\'s model (or TEACHER_LLM_MODEL)' }
   ],
   generate: (_seed, o, archived) => {
     const a = archived as ReturnType<JuniorWorld['archive']> | undefined;
@@ -389,10 +466,16 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     if (!o.blobs) throw new Error('--blobs is needed');
     const dir = path.resolve(o.work || path.join('runs', 'junior-competence', competenceHash(manifest).slice(0, 12)));
     const store = a ? new ArtifactStore(new Map(Object.entries(a.files))) : undefined;
-    const world = new JuniorWorld({ manifest, base, blobs: path.resolve(o.blobs), server: o.server, dir, evaluations: Math.max(1, Math.floor(Number(o.evaluations) || 10)), ...(store ? { store } : {}) });
+    const world = new JuniorWorld({ manifest, base, blobs: path.resolve(o.blobs), server: o.server, dir, evaluations: Math.max(1, Math.floor(Number(o.evaluations) || 10)),
+      distillations: Math.max(0, Math.floor(Number(o.distillations) || 20)), ...(store ? { store } : {}) });
     const env = process.env;
     const judge = env.JEV_KEY ? { url: env.JEV_URL || 'https://openrouter.ai/api/v1/chat/completions', key: env.JEV_KEY, ...(env.JEV_MODEL ? { model: env.JEV_MODEL } : {}) } : undefined;
-    return { world, ...(judge ? { judge } : {}) };
+    /* The teacher, configured as any researcher: its endpoint and model given, its key from the environment (the proxy's
+       client token on the junior's machine), never recorded. */
+    const teacherUrl = o['teacher-url'] || env.TEACHER_LLM_URL, teacherModel = o['teacher-model'] || env.TEACHER_LLM_MODEL;
+    const teacher = teacherUrl && teacherModel ? { client: openAiChatClient({ url: teacherUrl, apiKey: env.TEACHER_LLM_KEY, model: teacherModel, jsonMode: true, temperature: 0.3, timeoutMs: 180000, retries: 1 }),
+      identity: { model: teacherModel, path: (() => { try { return new URL(teacherUrl).pathname; } catch { return null; } })() } } : undefined;
+    return { world, ...(judge ? { judge } : {}), ...(teacher ? { teacher } : {}) };
   },
   placeOf: (spec) => spec,
   places: (spec) => ({ laboratories: [{ id: 'development', spec }], family: [{ id: 'development-again', spec }] }),
@@ -445,14 +528,15 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       };
     }
   },
-  steps: (e) => (e.kind === 'version' ? e.lines.length - 1 : e.observations.length - 1),
-  indexInfo: (e) => (e.kind === 'version' ? { version: e.version, lines: e.lines.length } : { version: e.version, observations: e.observations.length, complete: e.complete }),
-  explored: (e) => (e.kind === 'version' ? { version: e.version } : { version: e.version, execution: e.execution, components: e.components }),
+  steps: (e) => (e.kind === 'version' ? e.lines.length - 1 : e.kind === 'records' ? e.rows.length - 1 : e.observations.length - 1),
+  indexInfo: (e) => (e.kind === 'version' ? { version: e.version, lines: e.lines.length } : e.kind === 'records' ? { what: e.what, rows: e.rows.length, ...e.summary } : { version: e.version, observations: e.observations.length, complete: e.complete }),
+  explored: (e) => (e.kind === 'version' ? { version: e.version } : e.kind === 'records' ? { what: e.what, ...e.summary } : { version: e.version, execution: e.execution, components: e.components }),
   at: (e, step) => (e.kind === 'evaluation' && step >= 0 && step < e.observations.length
     ? { state: e.points[step], shown: { measured: e.observations[step].value, state: e.observations[step].state } } : null),
   cases: (_spec, id, e, every) => (e.kind !== 'evaluation' ? [] : e.observations.map((o, i) => ({ point: id + '@' + i, state: e.points[i], came: { value: o.value } })).filter((_, i) => i % every === 0)),
   ownEvery: 1,
-  view: (e, from, to) => (e.kind === 'version'
+  view: (e, from, to) => (e.kind === 'records' ? { what: e.what, ...e.summary, steps: e.rows.length - 1, rows: e.rows.slice(from, Math.min(to, from + 59) + 1).map((r, i) => ({ step: from + i, ...r })) }
+    : e.kind === 'version'
     ? { version: e.version, parent: e.parent, ...(e.reason ? { reason: e.reason } : {}), steps: e.lines.length - 1, rows: e.lines.slice(from, Math.min(to, from + 59) + 1).map((l, i) => ({ step: from + i, file: l.file, line: l.line, text: l.text })) }
     : { version: e.version, complete: e.complete, components: e.components, steps: e.observations.length - 1,
       rows: e.observations.slice(from, Math.min(to, from + 59) + 1).map((o, i) => ({ step: from + i, case: o.case, component: o.component, rung: e.points[from + i].rung, rep: o.rep, measured: o.value, state: o.state, ...(o.why ? { why: o.why } : {}) })) }),
@@ -460,8 +544,26 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
 
   act: {
     parse: (raw) => {
-      const unknown = unknownFields(raw, ['change', 'run', 'publish_memory']);
+      const unknown = unknownFields(raw, ['change', 'run', 'publish_memory', 'distill', 'dataset']);
       if (unknown) return unknown;
+      const d = raw.distill as Record<string, unknown> | undefined, ds = raw.dataset as Record<string, unknown> | undefined;
+      if (d && typeof d === 'object') {
+        const form = '"distill": {"version": "<version>", "case": "<a development investigation>", "question": <its question, from 0>, "mode": "start" | "cut", "checker": "protocol" | "request" | "rules" | "proposal", "request": "<kind, for checker request>", "instruction": "<a visible task, optional>"}';
+        const extra = unknownFields(d, ['version', 'case', 'question', 'mode', 'checker', 'request', 'instruction']);
+        if (extra) return extra;
+        if (typeof d.version !== 'string' || typeof d.case !== 'string' || !Number.isInteger(d.question) || (d.question as number) < 0 || (d.mode !== 'start' && d.mode !== 'cut')
+          || !['protocol', 'request', 'rules', 'proposal'].includes(String(d.checker)) || (d.checker === 'request' && typeof d.request !== 'string')) return form;
+        return { distill: { version: d.version, case: d.case, question: d.question as number, mode: d.mode, checker: String(d.checker),
+          ...(typeof d.request === 'string' ? { request: d.request } : {}), ...(typeof d.instruction === 'string' && d.instruction.trim() ? { instruction: d.instruction } : {}) } };
+      }
+      if (ds && typeof ds === 'object') {
+        const extra = unknownFields(ds, ['examples', 'admits']);
+        if (extra) return extra;
+        const admits = ds.admits === undefined ? ['verified'] : ds.admits;
+        if (!Array.isArray(ds.examples) || !ds.examples.every((x) => typeof x === 'string') || !Array.isArray(admits) || !admits.every((a) => a === 'verified' || a === 'demonstration'))
+          return '"dataset": {"examples": ["<example id>", ...], "admits": ["verified"] | ["verified", "demonstration"]}';
+        return { dataset: { examples: ds.examples as string[], admits: admits as ('verified' | 'demonstration')[] } };
+      }
       const c = raw.change as Record<string, unknown> | undefined, r = raw.run as Record<string, unknown> | undefined;
       const pm = raw.publish_memory as Record<string, unknown> | undefined;
       if (pm && typeof pm === 'object') {
@@ -490,7 +592,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         if (typeof r.version !== 'string') return '"run": {"version": "<version>"}';
         return { run: { version: r.version } };
       }
-      return 'act needs "change", "run" or "publish_memory"';
+      return 'act needs "change", "run", "publish_memory", "distill" or "dataset"';
     },
     place: () => undefined,
     async start(spec, a, _id, _ctx?: LabContext) {
@@ -508,10 +610,22 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         latest.set(spec.world, made.version);
         return versionEpisode(spec.world, made.version, reason, made.parent, made.files);
       }
+      if ('distill' in a) {
+        const ex = await spec.world.distillAt({ ...a.distill, checker: { id: a.distill.checker, version: 1 } }, spec.teacher, spec.judge);
+        if (typeof ex === 'string') return null;
+        return { kind: 'records', what: 'examples', summary: { example: ex.id, state: ex.state, group: ex.group, junior_passed: ex.junior.outcome?.pass ?? null, teacher_passed: ex.teacher.outcome?.pass ?? null, memory_calls: ex.teacher.memory.calls.length },
+          rows: [{ example: ex.id, state: ex.state, cut: ex.cut, competence: ex.competence, junior: { answer: ex.junior.answer, outcome: ex.junior.outcome }, teacher: { answer: ex.teacher.answer, outcome: ex.teacher.outcome, memory_calls: ex.teacher.memory.calls } }] };
+      }
+      if ('dataset' in a) {
+        const r = await spec.world.dataset(a.dataset.examples, a.dataset.admits);
+        if (typeof r === 'string') return null;
+        return { kind: 'records', what: 'dataset', summary: { dataset: r.dataset.id, examples: r.dataset.examples.length, admits: r.dataset.admits, proportions: r.dataset.proportions, groups: r.dataset.groups,
+          shares_selection_groups: r.overlap }, rows: r.dataset.examples.map((id) => ({ example: id })) };
+      }
       const e = await spec.world.evaluate(a.run.version, spec.judge);
       return typeof e === 'string' ? null : evaluationEpisode(spec.world, a.run.version, e);
     },
-    shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length } : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions }),
+    shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length } : e.kind === 'records' ? { what: e.what, ...e.summary } : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions }),
     asWritten: (a) => a,
     identity: (_spec, a) => ('run' in a ? a.run.version : null),
     examples: (spec) => [{ run: { version: spec.world.reference } }, { change: { from: spec.world.reference, files: { 'prompt.md': 'Answer only with the JSON the protocol asks for.' }, why: 'the protocol stated first', expect: 'more answers accepted at once' } }]

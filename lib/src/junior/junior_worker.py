@@ -151,6 +151,45 @@ def run_qwenputer(job):
 BACKENDS = {"fake": run_fake, "qwenputer": run_qwenputer}
 
 
+def memory_call(job):
+    """One memory operation on a copy of a twin (§8: the teacher's memory tools): the answer the circuit would print, and
+    the twin after. fake: the toy's JSON map. qwenputer: the store's reference session started from the twin, the call
+    made with StoreSession.call(op, name, text), its printed body decoded with the package's tokenizer."""
+    import base64
+    raw = base64.b64decode(job["twin"]) if job.get("twin") else None
+    c = job["call"]
+    op, name, text = c["op"], c.get("name"), c.get("text")
+    if job["backend"] == "fake":
+        mem = json.loads(raw.decode("utf8")) if raw else {}
+        if op == "put":
+            mem[name] = text; result = "ok"
+        elif op == "append":
+            mem[name] = mem.get(name, "") + text; result = "ok"
+        elif op == "get":
+            result = mem.get(name, "not found")
+        elif op == "list":
+            result = "\n".join(mem.keys()) if mem else "empty"
+        else:
+            result = "ok" if mem.pop(name, None) is not None else "not found"
+        twin = json.dumps(mem, sort_keys=True, separators=(",", ":")).encode("utf8")
+        return {"result": result, "twin": base64.b64encode(twin).decode("ascii")}
+    from chipformer.rv import bridge as BR, elf, ref
+    from chipformer.rv import store as ST
+    dev = pickle.loads(raw) if raw else None
+    m = ref.Machine.from_program(elf.program(job["files"]["firmware"]))
+    BR.park(m)
+    T = BR.Text(os.path.join(job["files"]["base"], "tokenizer.json"))
+    sess = ST.StoreSession(T, m, ST.Config(**(job["circuit"] or {}).get("store", {})), dev=copy.deepcopy(dev) if dev is not None else None)
+    start = len(sess.toks)
+    sess.call(op, name or "", text or "")
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(job["files"]["base"])
+    bodies = sess.printed(start)
+    last = bodies[-1] if bodies else []
+    result = last if isinstance(last, str) else tok.decode([int(t) for t in last])
+    return {"result": result, "twin": base64.b64encode(pickle.dumps(sess.dev, protocol=4)).decode("ascii")}
+
+
 def render(job):
     """A memory read as files (§4): from its reference twin, name to text."""
     import base64
@@ -205,6 +244,9 @@ def main():
             continue
         job = json.loads(line)
         try:
+            if job.get("op") == "memory_call":
+                emit({**memory_call(job), "id": job["id"]})
+                continue
             if job.get("op") == "render":
                 emit({"files": render(job), "id": job["id"]})
                 continue

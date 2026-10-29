@@ -21,6 +21,10 @@ import { BlobStore, checkClosed, executionHash, normalizePackage, sha256, type B
  * ========================================================================== */
 
 export interface MemoryState { readonly neural: BlobId | null; readonly twin: BlobId | null }
+
+/** A memory tool's call, as the junior's tools take it (put, append, get, list, delete). */
+export interface MemoryCall { readonly op: 'put' | 'append' | 'get' | 'list' | 'delete'; readonly name?: string; readonly text?: string }
+export const MEMORY_OPS = ['put', 'append', 'get', 'list', 'delete'] as const;
 export const stateId = (s: MemoryState): string => sha256(stableStringify({ neural: s.neural, twin: s.twin }));
 
 export type Terminal = 'answered' | 'limit_reached' | 'cancelled' | 'infra_failed';
@@ -66,6 +70,9 @@ export interface JuniorWorker {
   invalidate?(): void;
   /** A memory read as files (§4: its readable content, derived from its snapshot): name to text. Through the reference twin,
       in the package's own terms - never a second reading of the store written here. */
+  /** One memory operation on a copy of a state's reference twin (§8: the teacher's memory tools): its answer, as the
+      junior's circuit would print it, and the twin after. The model is never asked. */
+  memoryCall?(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore; readonly call: MemoryCall }): Promise<{ readonly result: string; readonly twin: Buffer } | { readonly error: string }>;
   render?(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore }): Promise<Record<string, string> | { readonly error: string }>;
 }
 
@@ -319,6 +326,20 @@ export class SessionServer {
     if (r) return { state: 'published', receipt: r };
     if (s.pending?.request_id === request_id) return { state: 'pending' };
     return { state: 'unknown' };
+  }
+
+  /** One memory operation on a copy of a twin, by the reference simulator of the package (§8): its answer and the twin
+      after, stored; the twin given is never changed. */
+  async memoryCall(o: { pkg: unknown; twin: BlobId | null; call: MemoryCall }): Promise<{ result: string; twin: BlobId }> {
+    const pkg = normalizePackage(o.pkg);
+    if (!this.worker.memoryCall) throw new SessionError('unsupported', 'this worker has no memory simulator');
+    if (!o.call || !(MEMORY_OPS as readonly string[]).includes(o.call.op)) throw new SessionError('bad_call', 'a memory call is one of ' + MEMORY_OPS.join(', '));
+    if (o.call.op !== 'list' && typeof o.call.name !== 'string') throw new SessionError('bad_call', o.call.op + ' names its file');
+    if ((o.call.op === 'put' || o.call.op === 'append') && typeof o.call.text !== 'string') throw new SessionError('bad_call', o.call.op + ' gives its text');
+    if (o.twin !== null && !this.store.intact(o.twin)) throw new SessionError('bad_state', 'the twin ' + o.twin + ' is missing or corrupt');
+    const r = await this.worker.memoryCall({ pkg, execution: executionHash(pkg), twin: o.twin === null ? null : this.store.get(o.twin), store: this.store, call: o.call });
+    if ('error' in r) throw new SessionError('memory_failed', r.error);
+    return { result: r.result, twin: this.store.put(r.twin) };
   }
 
   /** A memory state read as files, by the worker that serves its package (§4). */
