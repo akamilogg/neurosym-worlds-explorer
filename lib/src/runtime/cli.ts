@@ -356,7 +356,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       case 'junior': {
         /* The junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1): its blobs, its package, a session verified from
            its ledger, the machine checked, the driver's resources measured. The server and the proxy are scripts of their own. */
-        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir>';
+        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json>';
         const sub = args.shift();
         const file = (f: string) => fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f);
         const J = await import('../junior/package.ts');
@@ -371,8 +371,50 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           out(r.ok ? 'the machine is ready' : 'the machine is NOT ready: no investigation starts on it');
           return r.ok ? 0 : 1;
         }
+        if (sub === 'cut') {
+          const run = args.shift(), q = Number(args.shift());
+          if (!run || !Number.isInteger(q) || q < 0) { out(usage); return 2; }
+          const { captureCut } = await import('../junior/probes.ts');
+          const cut = await captureCut(file(run), q);
+          out('cut ' + cut.hash);
+          out('lab ' + cut.lab + ', question ' + q + ', ' + cut.events_before + ' events before it, ' + cut.content.user.parts.length + ' user parts');
+          return 0;
+        }
+        if (sub === 'manifest' || sub === 'promote') {
+          const f = args.shift();
+          if (!f) { out(usage); return 2; }
+          const { prepareManifest, promoteEvaluations } = await import('../junior/evaluate.ts');
+          const prepared = await prepareManifest(JSON.parse(fs.readFileSync(file(f), 'utf8')));
+          if (prepared.problems.length) { out('the manifest is refused, nothing runs:'); for (const p of prepared.problems) out('  ' + p); return 2; }
+          if (sub === 'manifest') { out('manifest ' + prepared.hash + ': valid, every cut taken again as declared'); return 0; }
+          const [refFile, candFile] = [args.shift(), args.shift()];
+          if (!refFile || !candFile) { out(usage); return 2; }
+          const p = promoteEvaluations(prepared.manifest, prepared.hash, JSON.parse(fs.readFileSync(file(refFile), 'utf8')), JSON.parse(fs.readFileSync(file(candFile), 'utf8')));
+          out(p.verdict + ': ' + p.why);
+          for (const c of p.components) out('  ' + c.id + ': mean delta ' + (c.mean_delta ?? 0).toFixed(4) + ', p ' + (c.p ?? 1).toFixed(4) + (c.improves ? ', improves' : '') + (c.regresses ? ', REGRESSES' : ''));
+          return 0;
+        }
         if (!blobsDir) { out(usage); return 2; }
         const store = new J.BlobStore(file(blobsDir));
+        if (sub === 'evaluate') {
+          const [mf, pf] = [args.shift(), args.shift()];
+          const server = take(args, 'server'), dir = take(args, 'dir'), partition = (take(args, 'partition') ?? 'development') as 'development' | 'confirmation';
+          if (!mf || !pf || !server || !dir) { out(usage); return 2; }
+          const { prepareManifest, evaluate } = await import('../junior/evaluate.ts');
+          const prepared = await prepareManifest(JSON.parse(fs.readFileSync(file(mf), 'utf8')));
+          if (prepared.problems.length) { out('the manifest is refused, nothing runs:'); for (const p of prepared.problems) out('  ' + p); return 2; }
+          const pkg = J.normalizePackage(JSON.parse(fs.readFileSync(file(pf), 'utf8')));
+          if (!J.checkClosed(pkg, store).closed) { out('the package is not closed in the store: nothing runs'); return 1; }
+          const { inProcessLauncher } = await import('../meta/lab.ts');
+          const { JuniorSessionClient } = await import('../junior/client.ts');
+          const { labEndpointsFromEnv } = await import('../orchestra/launch.ts');
+          const ends = labEndpointsFromEnv(ctx.env ?? process.env);
+          const e = await evaluate({ dir: path.resolve(dir), manifest: prepared.manifest, manifestHash: prepared.hash, pkg, client: new JuniorSessionClient(server), partition,
+            launcher: inProcessLauncher({ root: path.resolve(dir), llm: { url: '', model: undefined }, ...(ends.judge ? { judge: ends.judge } : {}) }), ...(ends.judge ? { judge: ends.judge } : {}) });
+          out('junior ' + e.execution + ' on ' + partition + ': ' + (e.measure.complete ? 'complete' : 'INCOMPLETE'));
+          for (const c of e.measure.components) out('  ' + c.id + ': ' + (c.quality === null ? 'no quality (' + c.missing.slice(0, 3).join('; ') + ')' : 'deficit ' + c.quality.toFixed(4)));
+          return e.measure.complete ? 0 : 1;
+        }
         if (sub === 'store') {
           const f = args.shift();
           if (!f) { out(usage); return 2; }

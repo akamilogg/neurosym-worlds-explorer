@@ -2,8 +2,11 @@
 
 Estado (29/10/2026): **MA1 implementado salvo su prueba real** (`lib/src/junior`, guía en
 `lib/examples/junior.setup.md`): paquete, sesiones con recibos, verificador, intermediario y comprobación de la máquina,
-probados con un servidor simulado. Falta ejecutar el driver real de Qwenputer en la máquina del junior. MA2–MA7 sin
-implementar. MA1–MA7 definen ejecución, evaluación,
+probados con un servidor simulado. Falta ejecutar el driver real de Qwenputer en la máquina del junior. **MA2
+implementado** (`lib/src/junior/competence.ts`, `jobs.ts`, `trials.ts`, `probes.ts`, `evaluate.ts`, mundo
+`junior-competence@1` en `lib/src/worlds/junior`): manifiesto, medidas y `paired-cases@1`, libro de trabajos, ensayos de
+M2 con el junior como System 2, sondas por corte de la cola de repetición y comprobadas por el propio arnés, línea base y
+mundo con `change`/`run`. Falta su primera línea base real. MA3–MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
 destilación, entrenamiento y método reutilizable. El mecanismo de relevo de fase B queda definido y desactivado hasta
 que el operador configure su batería y umbrales a partir de la evidencia de fase A, antes de evaluarlos. Este documento
 fija los contratos para desarrollo; los valores de cada experimento se declaran en su manifiesto antes de ejecutarlo.

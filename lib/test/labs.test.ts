@@ -19,7 +19,7 @@ import { c302NavObjective, FLAT_FRACTION, type C302NavCase } from '../src/worlds
 
 /* The laboratories whose world runs here (tank@1's runs in a service of its own: test/tank.test.ts). artifacts@1 runs real
    processes for seconds at its default scale: its contract is test/artifacts-lab.test.ts, at a small scale. */
-const OWN_CONTRACT = new Set(['artifacts']);
+const OWN_CONTRACT = new Set(['artifacts', 'junior']);
 const LAW_LABS = Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && !(l as LawLab).external && !OWN_CONTRACT.has(n)) as [string, LawLab][];
 
 for (const [name, lab] of LAW_LABS) {
@@ -180,7 +180,7 @@ const ACT_LABS = Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as 
 
 test('every laboratory that acts is in the contract (or has its own)', () => {
   assert.deepEqual(ACT_LABS.map(([n]) => n).sort(), ['c302closed', 'c302nav', 'cells', 'orbit', 'particles3d', 'tank']);
-  assert.deepEqual(Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as LawLab).act && OWN_CONTRACT.has(n)).map(([n]) => n), ['artifacts']);
+  assert.deepEqual(Object.entries(LABS).filter(([n, l]) => !isGameLab(l) && (l as LawLab).act && OWN_CONTRACT.has(n)).map(([n]) => n), ['artifacts', 'junior']);
   assert.deepEqual(Object.entries(LABS).filter(([, l]) => !isGameLab(l) && (l as LawLab).living).map(([n]) => n), ['plates']);
 });
 

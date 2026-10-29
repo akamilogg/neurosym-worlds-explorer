@@ -1,0 +1,31 @@
+{
+  "format": "junior-competence-manifest@1",
+  "id": "qwenputer-phase-a-1",
+  "reference": "<execution hash of the reference package: lab junior package package.json --blobs <blobs>>",
+  "components": [
+    { "id": "protocol-start", "rung": 1, "mode": "start", "extractor": { "id": "probe", "version": 1 }, "unit": "share", "direction": "up", "target": 1, "bad": 0, "tolerance": 0, "protected": true },
+    { "id": "requests-view-cut", "rung": 2, "mode": "cut", "request": "view", "extractor": { "id": "probe", "version": 1 }, "unit": "share", "direction": "up", "target": 1, "bad": 0, "tolerance": 0 },
+    { "id": "model-cut", "rung": 4, "mode": "cut", "extractor": { "id": "probe", "version": 1 }, "unit": "share", "direction": "up", "target": 1, "bad": 0, "tolerance": 0 },
+    { "id": "cells-L1", "rung": 6, "lab": "cells", "level": "L1", "extractor": { "id": "model_accepted", "version": 1 }, "unit": "solved", "direction": "up", "target": 1, "bad": 0, "tolerance": 0 }
+  ],
+  "cases": [
+    { "id": "start-cells-1", "kind": "probe", "partition": "development", "group": "runs/cells-s1L1", "component": "protocol-start", "lab": "cells", "mode": "start",
+      "cut": { "run": "runs/cells-s1L1.json", "question": 0, "hash": "<lab junior cut runs/cells-s1L1.json 0>" },
+      "competence": "an answer in the protocol", "instruction": "Answer with the JSON the protocol asks for, nothing else.", "checker": { "id": "protocol", "version": 1 } },
+    { "id": "view-cells-3", "kind": "probe", "partition": "development", "group": "runs/cells-s1L1", "component": "requests-view-cut", "lab": "cells", "mode": "cut",
+      "cut": { "run": "runs/cells-s1L1.json", "question": 3, "hash": "<lab junior cut runs/cells-s1L1.json 3>" },
+      "snapshot": { "neural": null, "twin": null },
+      "competence": "a valid view request", "instruction": "Emit one valid view request for this world.", "checker": { "id": "request", "version": 1 } },
+    { "id": "model-cells-5", "kind": "probe", "partition": "development", "group": "runs/cells-s1L1", "component": "model-cut", "lab": "cells", "mode": "cut",
+      "cut": { "run": "runs/cells-s1L1.json", "question": 5, "hash": "<lab junior cut runs/cells-s1L1.json 5>" },
+      "snapshot": { "neural": null, "twin": null },
+      "competence": "a checkable model", "instruction": "Propose your model now, in the protocol's form.", "checker": { "id": "proposal", "version": 1 } },
+    { "id": "cells-L1-s2", "kind": "investigation", "lab": "cells", "args": ["--seed", "2", "--level", "1"], "partition": "development", "group": "cells-L1-s2", "components": ["cells-L1"] },
+    { "id": "cells-L1-s9", "kind": "investigation", "lab": "cells", "args": ["--seed", "9", "--level", "1"], "partition": "confirmation", "group": "cells-L1-s9", "components": ["cells-L1"] }
+  ],
+  "investigation_repetitions": 1,
+  "execution": { "harness": "<commit>", "checkers": { "protocol": 1, "request": 1, "proposal": 1 }, "snapshots": ["qwenputer-npz+twin@1"], "judge": "<the Judge's model>", "teacher": null },
+  "sampling": { "seed": 20261029 },
+  "promotion": { "procedure": "paired-cases@1", "alpha": 0.05, "permutations": 10000, "seed": 1 },
+  "limits": { "junior_args": ["--attempts", "6", "--max-tokens", "400000", "--max-judge-calls", "2000"], "probe_max_tokens": 2000, "timeout_ms": 600000 }
+}

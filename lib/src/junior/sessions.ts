@@ -340,6 +340,24 @@ export class SessionServer {
     return s.pending.done;
   }
 
+  /** A question as an OpenAI chat completion, for a laboratory that talks to the junior as to any System 2: its system
+      message and its user parts are the content; its max_tokens a limit requested. The same content asked again (a retry
+      of the harness) is its receipt; after a failure of the infrastructure it is asked anew, as another request. It always
+      starts from the state the session is at. */
+  async chat(id: string, body: { messages?: { role: string; content: unknown }[]; max_tokens?: number; max_completion_tokens?: number }): Promise<Receipt> {
+    const s = this.get(id);
+    const msgs = Array.isArray(body.messages) ? body.messages : [];
+    const text = (c: unknown): string => (typeof c === 'string' ? c : JSON.stringify(c));
+    const content = { system: msgs.filter((m) => m.role === 'system').map((m) => text(m.content)).join('\n\n'), user: { parts: msgs.filter((m) => m.role !== 'system').map((m) => text(m.content)) } };
+    const most = Number(body.max_completion_tokens ?? body.max_tokens);
+    const limits: Partial<Limits> = most > 0 ? { max_tokens: most } : {};
+    const content_hash = sha256(stableStringify({ content, limits, seed: null }));
+    if (s.pending?.content_hash === content_hash) return s.pending.done;
+    const last = [...s.order].reverse().map((r) => s.receipts.get(r)!).find((r) => r.content_hash === content_hash);
+    if (last && (last.terminal === 'answered' || last.terminal === 'limit_reached') && last.state_after === stateId(s.head)) return last;
+    return this.ask(id, { request_id: 'chat:' + s.order.length, content, expected: stateId(s.head), limits });
+  }
+
   /** Asks one question. `expected` is the id of the state it must start from (stateId). */
   ask(id: string, q: { request_id: string; content: unknown; expected: string; limits?: Partial<Limits>; seed?: number | null }): Promise<Receipt> {
     if (this.stopped) return Promise.reject(new SessionError('stopped', 'this server is stopped'));

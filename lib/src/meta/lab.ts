@@ -107,7 +107,20 @@ export interface TrialLauncher {
   readonly identity: Readonly<Record<string, unknown>>;
   /** Runs one child: its journal at `out` - resuming `resume` when given, with `args` the trial's arguments, its controls
       among them (they are given again on a resumption: a resumed run takes its controls anew). */
-  run(t: { readonly lab: string; readonly args: readonly string[]; readonly out: string; readonly resume?: string; readonly signal?: AbortSignal }): Promise<{ readonly journal: string }>;
+  run(t: { readonly lab: string; readonly args: readonly string[]; readonly out: string; readonly resume?: string; readonly signal?: AbortSignal;
+    /** System 2's connection for this launch, when the candidate brings its own (a junior's session): the launcher's otherwise. */
+    readonly connection?: import('../runtime/lab-runner.ts').LabConnection }): Promise<{ readonly journal: string }>;
+}
+
+/** What a trial measures (SPEC-METAPOLITICA-APRENDIZAJE §6): a research policy, or a junior packaged. Its `config` names it
+    with everything that configures it - part of every trial's id; its `label` is what the ledger records it as; its `args`
+    go to the child after the case's and the junior's. `connect` gives a launch its own System 2 (a junior's session),
+    told the launch and the record it resumes. */
+export interface TrialCandidate {
+  readonly config: string;
+  readonly label: string;
+  readonly args: readonly string[];
+  connect?(t: { readonly trial: string; readonly launch: string; readonly resume?: string }): Promise<import('../runtime/lab-runner.ts').LabConnection>;
 }
 
 /** A child's result, read from its record only - its journal and the files beside it (its finding): the world's own
@@ -218,11 +231,17 @@ export class Trials {
     const errors = checkPolicy(policy);
     if (errors.length) throw new Error('the policy: ' + errors.join('; '));
     const { file, hash } = this.policyFile(policy);
+    return this.runCandidate({ config: hash, label: policyHash(policy), args: ['--researcher', 'assisted', '--research-policy', rel(this.dir, file)] }, partition, signal);
+  }
+
+  /** Every trial of a candidate on the cases of a partition, in order (`only`: those cases alone); the same reservations,
+      ledger and reconciliation whatever the candidate is. */
+  async runCandidate(candidate: TrialCandidate, partition: 'development' | 'confirmation', signal?: AbortSignal, only?: ReadonlySet<string>): Promise<{ trial: string; case: string; rep: number; kind: string; result: TrialResult }[]> {
     const out: { trial: string; case: string; rep: number; kind: string; result: TrialResult }[] = [];
-    for (const c of this.manifest.cases.filter((x) => x.partition === partition)) {
+    for (const c of this.manifest.cases.filter((x) => x.partition === partition && (!only || only.has(x.id)))) {
       for (let rep = 0; rep < (this.manifest.repetitions ?? 1); rep++) {
-        const id = this.trialId(hash, c, rep);
-        const result = await this.one(id, policyHash(policy), hash, file, c, rep, signal);
+        const id = this.trialId(candidate.config, c, rep);
+        const result = await this.one(id, candidate, c, rep, signal);
         out.push({ trial: id, case: c.id, rep, kind: c.kind ?? c.lab, result });
         if (signal?.aborted || result.state === 'unfunded') return out;
       }
@@ -230,11 +249,12 @@ export class Trials {
     return out;
   }
 
-  private async one(id: string, policy: string, config: string, policyFile: string, c: MetaCase, rep: number, signal?: AbortSignal): Promise<TrialResult> {
+  private async one(id: string, candidate: TrialCandidate, c: MetaCase, rep: number, signal?: AbortSignal): Promise<TrialResult> {
+    const policy = candidate.label, config = candidate.config;
     let ledger = this.ledger();
     const finished = ledger.find((e) => e.type === 'research_trial_finished' && e.trial === id && e.result.state === 'ended');
     if (finished) return finished.result;
-    const args = [...c.args, ...this.manifest.junior.args, '--researcher', 'assisted', '--research-policy', rel(this.dir, policyFile)];
+    const args = [...c.args, ...this.manifest.junior.args, ...candidate.args];
     /* A child with a record: its end read as it is (never run again), or resumed from it where it was cut. */
     const record = this.recordOf(id, ledger);
     let resume: string | undefined;
@@ -280,7 +300,8 @@ export class Trials {
     let result: TrialResult;
     let journal = target;
     try {
-      journal = (await this.launcher.run({ lab: c.lab, args, out: target, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) })).journal;
+      const connection = candidate.connect ? await candidate.connect({ trial: id, launch, ...(resume ? { resume } : {}) }) : undefined;
+      journal = (await this.launcher.run({ lab: c.lab, args, out: target, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}), ...(connection ? { connection } : {}) })).journal;
       result = trialResult(journal, c.criterion);
       /* Its child must have run with the configuration the trial is named by: another model is another trial. */
       const mismatch = configurationMismatch(journal, this.launcher.identity);
@@ -335,7 +356,7 @@ export function inProcessLauncher(o: { root: string; llm: import('../runtime/lab
     identity: { llm_model: o.llm.model ?? null, llm_path: pathOf(o.llm.url), llm_tuning: tuning(o.llm as J), judge_model: o.judge?.model ?? null },
     async run(t) {
       const { runLaboratory, controlArgs } = await import('../runtime/lab-runner.ts');
-      const r = await runLaboratory(LABS[t.lab], { args: t.resume ? ['--resume', t.resume, ...controlArgs(t.args), '--out', t.out] : [...t.args, '--out', t.out], root: o.root, llm: o.llm,
+      const r = await runLaboratory(LABS[t.lab], { args: t.resume ? ['--resume', t.resume, ...controlArgs(t.args), '--out', t.out] : [...t.args, '--out', t.out], root: o.root, llm: t.connection ?? o.llm,
         ...(o.judge ? { judge: o.judge } : {}), ...(o.fetch ? { fetch: o.fetch } : {}), ...(t.signal ? { signal: t.signal } : {}), print: () => {} });
       return { journal: r.journal };
     }

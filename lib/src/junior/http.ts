@@ -11,6 +11,7 @@ import { SessionError, type SessionServer } from './sessions.ts';
  *   POST /sessions/:id/restore              the last state published, its blobs checked
  *   POST /sessions/:id/cancel               {request_id}
  *   POST /sessions/:id/close
+ *   POST /sessions/:id/v1/chat/completions   the next question as an OpenAI chat completion (a laboratory's LLM_URL)
  *
  * A refusal answers 409 with its code (request_conflict, stale_state, busy, closed, pending...); 404 an unknown session;
  * 400 a package or state it cannot open. An answer can take minutes: the connection waits for it.
@@ -26,6 +27,17 @@ export async function handleJunior(server: SessionServer, method: string, route:
     const id = parts[1];
     if (parts.length === 2 && method === 'GET') return { status: 200, body: server.info(id) };
     if (parts.length === 4 && parts[2] === 'receipts' && method === 'GET') return { status: 200, body: server.receipt(id, parts[3]) };
+    if (parts.length >= 4 && method === 'POST' && parts.slice(2).join('/').endsWith('chat/completions')) {
+      const r = await server.chat(id, body as Parameters<SessionServer['chat']>[1]);
+      if (r.terminal === 'cancelled' || r.terminal === 'infra_failed') return { status: 503, body: { error: { message: 'the junior did not answer (' + r.terminal + '): ' + (r.reason ?? ''), receipt: r.request_id } } };
+      const u = r.usage;
+      return { status: 200, body: {
+        id: r.request_id, object: 'chat.completion', model: r.served,
+        choices: [{ index: 0, message: { role: 'assistant', content: r.text }, finish_reason: r.terminal === 'limit_reached' ? 'length' : 'stop' }],
+        usage: u ? { prompt_tokens: u.prompt_tokens, completion_tokens: u.text_tokens, total_tokens: u.prompt_tokens + u.text_tokens, circuit_tokens: u.circuit_tokens } : undefined,
+        junior: { receipt: r.request_id, state_after: r.state_after, terminal: r.terminal }
+      } };
+    }
     if (parts.length === 3 && method === 'POST') {
       if (parts[2] === 'ask') return { status: 200, body: await server.ask(id, body as Parameters<SessionServer['ask']>[1]) };
       if (parts[2] === 'restore') return { status: 200, body: server.restore(id) };

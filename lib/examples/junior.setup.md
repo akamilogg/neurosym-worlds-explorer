@@ -56,3 +56,22 @@ Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecuta
 - que el `pickle` del dispositivo de referencia da los mismos bytes en el trabajador y en el verificador.
 
 Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto del contrato no cambia.
+
+## 5. La línea base (MA2)
+
+1. **Cortes:** elige preguntas de runs de desarrollo y toma su hash: `lab junior cut <run.json> <pregunta>`. La pregunta
+   cuenta las de System 2 desde 0. El run se reanuda desde su propio registro hasta esa pregunta; lo que se le pregunta
+   ahí es el prefijo de la sonda.
+2. **Manifiesto:** copia `junior.competence.example.json`. Cada componente de sondas recibe el mismo número de sondas
+   de cada mundo; los grupos (el linaje del run) no se reparten entre particiones. `lab junior manifest <manifiesto>`
+   lo valida y vuelve a tomar cada corte: si algo no cuadra, no corre nada.
+3. **Medida:** con el servidor del junior en marcha,
+   `lab junior evaluate <manifiesto> package.json --blobs <blobs> --server http://127.0.0.1:18700 --dir <evaluación>`.
+   Corre las investigaciones como ensayos de M2 y las sondas en sus cortes, y deja la evaluación en
+   `<evaluación>/evaluations/`. Lo ya medido no se repite.
+4. **Comparar dos juniors:** `lab junior promote <manifiesto> <evaluación de referencia> <evaluación candidata>` aplica
+   `paired-cases@1` desde lo medido, sin modelos.
+5. **El mundo del investigador fuerte:** `lab start junior --manifest <manifiesto> --package package.json --blobs <blobs>
+   --server http://127.0.0.1:18700 --work <dir> --evaluations 10`, con el modelo fuerte como System 2. Su exploración es
+   la línea base; cambia `prompt.md` y `decoding.json`, evalúa versiones y pone una adelante para que se compare con la
+   referencia.
