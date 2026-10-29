@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { appendRecord } from './jsonl.ts';
 import http from 'node:http';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -26,6 +27,9 @@ export interface ProxyConfig {
 }
 
 interface BagState { tokens: number; calls: number; reserved_tokens: number; reserved_calls: number; uncertain_tokens: number }
+
+/** The chat format's tokens around each message and around a call (role markers, separators): a bound, not a count. */
+const PER_MESSAGE = 16, PER_CALL = 64;
 
 export const tokenHash = (token: string): string => createHash('sha256').update(token).digest('hex');
 
@@ -90,8 +94,7 @@ export class ProviderProxy {
   }
 
   private write(line: Record<string, unknown>): void {
-    const fd = fs.openSync(this.c.ledger, 'a');
-    try { fs.writeSync(fd, JSON.stringify({ at: new Date().toISOString(), ...line }) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    appendRecord(this.c.ledger, { at: new Date().toISOString(), ...line }, { sync: true });
   }
 
   /** What each bag holds: its limits, spent, reserved and uncertain. */
@@ -114,11 +117,16 @@ export class ProviderProxy {
     let body: Record<string, unknown>;
     try { body = JSON.parse(raw); } catch { return { status: 400, body: { error: { message: 'not JSON' } } }; }
     if (body.stream) return { status: 400, body: { error: { message: 'streaming is not proxied: its spending could not be settled' } } };
+    /* One completion per call: what is reserved bounds one answer. Several (n, best_of) would multiply what is spent past it. */
+    if ((body.n !== undefined && body.n !== 1) || body.best_of !== undefined) return { status: 400, body: { error: { message: 'one completion per call: n must be 1 and best_of is not proxied' } } };
     if (up.models && !up.models.includes(String(body.model))) return { status: 403, body: { error: { message: 'model ' + body.model + ' is not allowed on ' + name } } };
     const most = Number(body.max_completion_tokens ?? body.max_tokens);
     if (!(most > 0)) return { status: 400, body: { error: { message: 'a call through the proxy names its max_tokens: its most is reserved before it is sent' } } };
     const lim = this.c.bags[client.bag], b = this.bags.get(client.bag)!;
-    const reserve = most + (lim.reserve_prompt_tokens ?? 0) + Math.ceil(raw.length / 2);
+    /* What it may spend at most, before it is sent: its completion's bound, and its input bounded by its bytes - no token of
+       a byte-level tokenizer covers less than one byte - plus the chat format's own tokens around each message. */
+    const messages = Array.isArray(body.messages) ? body.messages.length : 1;
+    const reserve = most + (lim.reserve_prompt_tokens ?? 0) + Buffer.byteLength(raw, 'utf8') + PER_MESSAGE * messages + PER_CALL;
     if (b.tokens + b.reserved_tokens + reserve > lim.tokens || b.calls + b.reserved_calls + 1 > lim.calls)
       return { status: 402, body: { error: { message: 'the bag ' + client.bag + ' cannot hold this call', code: 'budget' }, bag: this.status()[client.bag] } };
     const id = (++this.seq) + '-' + process.pid;
@@ -139,6 +147,8 @@ export class ProviderProxy {
     } finally {
       b.reserved_tokens -= reserve; b.reserved_calls -= 1;
       b.tokens += tokens; b.calls += 1;
+      /* A provider that spent more than its bound (it ignored max_tokens): spent as it was, and said so. */
+      if (tokens > reserve) this.write({ kind: 'over_reserve', id, bag: client.bag, reserved: reserve, spent: tokens });
       if (uncertain) b.uncertain_tokens += tokens;
       this.write({ kind: 'settle', id, bag: client.bag, tokens, calls: 1, uncertain, status });
     }

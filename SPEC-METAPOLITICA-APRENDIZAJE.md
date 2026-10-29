@@ -13,8 +13,12 @@ legible por `render` y la promoción sin entrenar. **MA4 implementado** (`lib/sr
 corte, con su memoria servida por el simulador de referencia en una copia (`POST /memory`, traducción `teacher-memory-json@1`
 registrada), el junior en el mismo corte, la aceptación de §8.1 por el comprobador fijado antes (verified, unverified,
 rejected), datasets por contenido con su solapamiento con los grupos de selección, y los actos `distill` y `dataset`.
-Las comparaciones semánticas por continuaciones y las demostraciones con juicio quedan para otra condición. MA5–MA7 sin
-implementar. MA1–MA7 definen ejecución, evaluación,
+Las comparaciones semánticas por continuaciones y las demostraciones con juicio quedan para otra condición. **MA5
+implementado** (`lib/src/junior/train.ts`, `junior_train.py`): receta `junior-recipe@1` rechazada si toca el circuito,
+entrenamiento como trabajo recuperable en su propio proceso (capacidad medida antes, puntos de control, adaptador por hash
+sólo al terminar), rechazo por solapamiento con los grupos de selección, validez del circuito antes de evaluar (suite que
+exige ejercitar cálculo, escritura, lectura, borrado y memoria restaurada sin discrepancias, y parámetros del circuito
+iguales a los de la base) y el acto `train`. La divergencia KL como diagnóstico queda pendiente. MA6–MA7 sin implementar. MA1–MA7 definen ejecución, evaluación,
 destilación, entrenamiento y método reutilizable. El mecanismo de relevo de fase B queda definido y desactivado hasta
 que el operador configure su batería y umbrales a partir de la evidencia de fase A, antes de evaluarlos. Este documento
 fija los contratos para desarrollo; los valores de cada experimento se declaran en su manifiesto antes de ejecutarlo.

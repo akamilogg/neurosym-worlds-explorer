@@ -59,6 +59,19 @@ Lo que esta prueba confirma por primera vez, y que aquí no se ha podido ejecuta
   `publish_memory` (MA3).
 - que el simulador de memoria del maestro (`memory_call`: `StoreSession.call(op, name, text)` sobre una copia del gemelo,
   su respuesta leída con `printed()`) responde como el circuito; de él depende la destilación desde un corte (MA4).
+- el entrenamiento (MA5, `junior_train.py`): que el patrón de módulos de peft encuentra las proyecciones de Qwen3.5 en
+  las capas pedidas y ninguna del circuito; que una QLoRA deja sin cuantizar las capas del circuito; y que la prueba de
+  capacidad mide el pico real en la GPU de entrenamiento;
+- servir un adaptador (`apply_adapter`: el LoRA sumado en su sitio a los pesos de Qwen tras cargar `RvChat`) y que la vista
+  rápida del driver lo ve; y que la suite de validez de verdad ejercita cálculo, `put`, `get`, `delete` y una memoria
+  restaurada, con el resumen de los parámetros del circuito igual al de la base.
+- tras la revisión externa del 29/10: que el driver se importa desde la carpeta del paquete (`load_driver`) y que lo
+  que el trabajador declara haber cargado (tokenizer, plantilla, firmware, ficheros del driver, `chipformer.json`,
+  precisión) coincide con el paquete; que el plazo declarado corta la generación desde dentro (`generate` llama a
+  `lock.qwen` por cada token) y devuelve el prefijo como `limit_reached`; que la comprobación del snapshot neuronal
+  (`neural_check`: legible como snapshot del almacén, con filas exactamente cuando el gemelo tiene archivos) se afina con
+  la correspondencia real filas–fragmentos; y que `StoreSession.call_tokens` da la secuencia que el junior emite para
+  una llamada, la que se entrena como decisión.
 
 Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto del contrato no cambia.
 

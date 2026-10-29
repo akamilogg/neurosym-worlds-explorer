@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { appendRecord } from './jsonl.ts';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
@@ -58,8 +59,7 @@ export class JobLedger {
   }
 
   private write(line: Record<string, unknown>): void {
-    const fd = fs.openSync(this.file, 'a');
-    try { fs.writeSync(fd, JSON.stringify({ at: new Date().toISOString(), ...line }) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    appendRecord(this.file, { at: new Date().toISOString(), ...line }, { sync: true });
   }
 
   /** The jobs from the ledger. One left running or queued by a process that is gone is uncertain: it may have run. */

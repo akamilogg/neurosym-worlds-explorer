@@ -22,11 +22,53 @@ import sys
 import time
 import pickle
 import copy
+import hashlib
 
 
 def emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
+
+
+def sha_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def loaded_identity(job, chat=None):
+    """What this worker loaded, by digest: the tokenizer and chat template it reads, the firmware it runs, the driver it
+    imported, the circuit's configuration and the precision of the weights - checked by the server against the package."""
+    files = job["files"]
+    drv = files["driver"]
+    if os.path.isdir(drv):
+        driver = {}
+        for d, _, names in os.walk(drv):
+            for n in names:
+                full = os.path.join(d, n)
+                driver[os.path.relpath(full, drv).replace(os.sep, "/")] = sha_file(full)
+    else:
+        driver = sha_file(drv)
+    template = chat.tok.chat_template if chat is not None else open(files["chat_template"], encoding="utf8").read()
+    meta_file = os.path.join(files["base"], "chipformer.json")
+    circuit = chat.meta if chat is not None else (json.load(open(meta_file)) if os.path.exists(meta_file) else None)
+    precision = None
+    if chat is not None:
+        precision = {"torch.bfloat16": "bf16", "torch.float16": "fp16", "torch.float32": "fp32"}.get(str(next(chat.model.parameters()).dtype), str(next(chat.model.parameters()).dtype))
+    return {"tokenizer": sha_file(os.path.join(files["base"], "tokenizer.json")), "chat_template": hashlib.sha256(template.encode("utf8")).hexdigest(),
+            "firmware": sha_file(files["firmware"]), "driver": driver, "circuit": circuit, "precision": precision}
+
+
+def load_driver(path):
+    """The package's driver, imported from its own folder: a chipformer imported from anywhere else is not its driver."""
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    import chipformer
+    where = os.path.realpath(os.path.dirname(chipformer.__file__))
+    if not where.startswith(os.path.realpath(path)):
+        raise RuntimeError("the driver imported is " + where + ", not the package's")
 
 
 def text_of_user(user):
@@ -59,7 +101,13 @@ def run_fake(job):
             ops.append({"op": "put", "name": k.strip(), "result": "ok"})
     text = "ok " + json.dumps(sorted(mem.items()))
     if "sleep" in user:
-        time.sleep(float(user.split("sleep", 1)[1].split()[0]))
+        wanted = float(user.split("sleep", 1)[1].split()[0])
+        budget = job["limits"]["timeout_ms"] / 1000.0
+        time.sleep(min(wanted, budget))
+        if wanted > budget:
+            # Its own time ran out: what it emitted is kept and measured, the memory before it stays.
+            return {"terminal": "limit_reached", "text": text[:3], "trace": json.dumps({"fake": user}), "ops": [], "after": None,
+                    "usage": {"prompt_tokens": len(user), "text_tokens": 3, "circuit_tokens": 0, "gpu_ms": int(budget * 1000)}, "reason": "timeout"}
     if "overflow" in user or len(text) > job["limits"]["max_tokens"]:
         return {"terminal": "limit_reached", "text": text[: job["limits"]["max_tokens"]], "trace": json.dumps({"fake": user}),
                 "ops": [], "after": None, "usage": {"prompt_tokens": len(user), "text_tokens": job["limits"]["max_tokens"], "circuit_tokens": 0, "gpu_ms": 0},
@@ -80,16 +128,109 @@ def run_fake(job):
 _resident = {"execution": None, "chat": None}
 
 
+class TimeLimit(Exception):
+    """The declared time of an answer reached (§5.1): a limit of the junior, never a failure of the worker."""
+
+
+def apply_adapter(chat, adapter_dir, chip_layers):
+    """A LoRA adapter added into Qwen's weights in place (W += alpha/r * B A), never into the circuit's layers."""
+    import torch
+    from safetensors.torch import load_file
+    cfg = json.load(open(os.path.join(adapter_dir, "adapter_config.json")))
+    sd = load_file(os.path.join(adapter_dir, "adapter_model.safetensors"))
+    scale = float(cfg["lora_alpha"]) / float(cfg["r"])
+    for key, A in sd.items():
+        if ".lora_A." not in key:
+            continue
+        name = key.replace("base_model.model.", "").split(".lora_A.")[0]
+        parts = name.split(".")
+        layer = int(parts[parts.index("layers") + 1]) if "layers" in parts else None
+        if layer is None or layer < chip_layers:
+            raise RuntimeError("the adapter reaches the circuit: " + name)
+        B = sd[key.replace(".lora_A.", ".lora_B.")]
+        W = chat.model.get_submodule(name).weight
+        with torch.no_grad():
+            W.add_((scale * (B.float() @ A.float())).to(W.dtype).to(W.device))
+
+
 def qwenputer_chat(job):
+    load_driver(job["files"]["driver"])
     from chipformer.rv.chat import RvChat
     if _resident["execution"] != job["execution"]:
         _resident["chat"] = None
         _resident["execution"] = None
+        chat = RvChat(job["files"]["base"])
+        # The package's chat template, in place of the checkpoint's.
+        chat.tok.chat_template = open(job["files"]["chat_template"], encoding="utf8").read()
         if job["files"].get("adapter"):
-            raise RuntimeError("unsupported: adapters are served from MA5 on")
-        _resident["chat"] = RvChat(job["files"]["base"])
+            apply_adapter(chat, job["files"]["adapter"], int(chat.meta["chip_layers"]))
+        _resident["chat"] = chat
         _resident["execution"] = job["execution"]
     return _resident["chat"]
+
+
+def circuit_digest(chat):
+    """The digest of the compiled layers' parameters as served: the same for a child whose training never reached them."""
+    chip = int(chat.meta["chip_layers"])
+    h = hashlib.sha256()
+    for name, p in sorted(chat.model.named_parameters(), key=lambda x: x[0]):
+        parts = name.split(".")
+        if "layers" in parts and int(parts[parts.index("layers") + 1]) < chip:
+            h.update(name.encode("utf8"))
+            h.update(p.detach().float().cpu().numpy().tobytes())
+    return h.hexdigest()
+
+
+VALIDITY_TASKS = [
+    ("calc", "Use calc: what is 123456789 * 987654321?"),
+    ("put", "Save a file named suite1 with the text alpha beta, using put."),
+    ("get", "Read the file named suite1 with get and tell me its text."),
+    ("delete", "Delete the file named suite1."),
+]
+
+
+def validity(job):
+    """The circuit's suite (§10.1): each task generated under the reference lock; a task counts as exercised only when the
+    reference saw the operation; any token where the circuit and the reference differ is a mismatch. The memory of each
+    task is the one the task before left, saved and loaded again (the restore exercised)."""
+    if job["backend"] == "fake":
+        touches = False
+        if job["files"].get("adapter"):
+            touches = json.load(open(os.path.join(job["files"]["adapter"], "adapter_config.json"))).get("touches_circuit", False)
+        return {"exercised": {"calc": True, "put": True, "get": True, "delete": True, "restore": True}, "mismatches": 0,
+                "circuit_digest": hashlib.sha256(b"fake-circuit" + (b"-touched" if touches else b"")).hexdigest(), "details": []}
+    from chipformer.rv import bridge as BR, elf, ref
+    from chipformer.rv import store as ST
+    from chipformer.rv.chat import CALC_TOOL, load_store_file, save_store_file
+    import tempfile
+    chat = qwenputer_chat(job)
+    exercised = {"calc": False, "put": False, "get": False, "delete": False, "restore": False}
+    mismatches, details, dev, snap = 0, [], None, None
+    tmp = tempfile.mkdtemp()
+    for i, (kind, ask) in enumerate(VALIDITY_TASKS):
+        m = ref.Machine.from_program(elf.program(job["files"]["firmware"])); BR.park(m)
+        m2 = ref.Machine.from_program(elf.program(job["files"]["firmware"])); BR.park(m2)
+        ids = chat.prompt_ids([{"role": "system", "content": ST.MEM_SYSTEM}, {"role": "user", "content": ask}], (CALC_TOOL, *ST.TOOLS))
+        if snap is not None:
+            path = os.path.join(tmp, "m%d.npz" % i)
+            save_store_file(path, snap)
+            chat.store_snap = load_store_file(path)
+            exercised["restore"] = True
+        else:
+            chat.store_snap = None
+        lock = ST.StoreSession(chat.T, m2, chat.store_cfg, dev=copy.deepcopy(dev) if dev is not None else None)
+        lock.history(ids)
+        r = chat.generate(ids, m, 400, lock=lock)
+        ops = [a[0] if isinstance(a, (list, tuple)) else a for a in lock.answers]
+        if kind == "calc" and getattr(lock, "runs", None):
+            exercised["calc"] = True
+        if kind in ops:
+            exercised[kind] = True
+        if r.get("lock_error") is not None:
+            mismatches += 1
+        details.append({"task": kind, "ops": [str(o) for o in ops], "lock_error": r.get("lock_error")})
+        dev, snap = lock.dev, chat.save_store()
+    return {"exercised": exercised, "mismatches": mismatches, "circuit_digest": circuit_digest(chat), "details": details}
 
 
 def run_qwenputer(job):
@@ -125,9 +266,24 @@ def run_qwenputer(job):
         fed.append({"qids": [int(q) for q in qids], "args": list(a), "kwargs": k})
         return original(qids, *a, **k)
 
-    lock.qwen = recorded
     started = time.time()
-    r = chat.generate(ids, m, job["limits"]["max_tokens"], max_chip=job["limits"]["max_circuit_tokens"], lock=lock)
+    deadline = started + job["limits"]["timeout_ms"] / 1000.0
+
+    def timed(qids, *a, **k):
+        # The declared time is the worker's own limit: past it the generation stops where it is, a measured end.
+        if time.time() > deadline:
+            raise TimeLimit()
+        return recorded(qids, *a, **k)
+
+    lock.qwen = timed
+    try:
+        r = chat.generate(ids, m, job["limits"]["max_tokens"], max_chip=job["limits"]["max_circuit_tokens"], lock=lock)
+    except TimeLimit:
+        emitted = [int(q) for call in fed for q in call["qids"]]
+        trace = json.dumps({"prompt_ids": [int(i) for i in ids], "tokens": emitted, "fed": fed, "stream": [int(t) for t in lock.toks], "lock_error": None, "timeout": True})
+        return {"terminal": "limit_reached", "text": chat.text_of(emitted), "trace": trace, "ops": [list(a) if isinstance(a, tuple) else a for a in lock.answers],
+                "after": None, "reason": "timeout",
+                "usage": {"prompt_tokens": len(ids), "text_tokens": len(emitted), "circuit_tokens": 0, "gpu_ms": int((time.time() - started) * 1000)}}
     gpu_ms = int((time.time() - started) * 1000)
     tokens = [int(t) for t in r["tokens"]]
     text = chat.text_of(tokens)
@@ -244,6 +400,9 @@ def main():
             continue
         job = json.loads(line)
         try:
+            if job.get("op") == "validity":
+                emit({"validity": validity(job), "id": job["id"]})
+                continue
             if job.get("op") == "memory_call":
                 emit({**memory_call(job), "id": job["id"]})
                 continue
@@ -255,6 +414,8 @@ def main():
                 emit({**out, "id": job["id"]})
                 continue
             out = BACKENDS[job["backend"]](job)
+            # What it loaded, said by digest: the server checks it against the package (it never takes this hash back).
+            out["loaded"] = loaded_identity(job, _resident["chat"] if job["backend"] == "qwenputer" else None)
             out["served"] = job["execution"]
         except Exception as e:  # the worker failed: never an answer of the junior
             out = {"terminal": "infra_failed", "text": "", "trace": "", "ops": [], "after": None, "usage": None,

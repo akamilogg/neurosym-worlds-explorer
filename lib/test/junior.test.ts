@@ -16,6 +16,8 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'junior-test-'));
 function fixture(store: BlobStore, over: Partial<Record<string, unknown>> = {}): JuniorPackage {
   const base = tmp();
   fs.writeFileSync(path.join(base, 'config.json'), '{"model":"tiny"}');
+  /* The circuit's configuration the driver reads: what the package declares it serves. */
+  fs.writeFileSync(path.join(base, 'chipformer.json'), '{"store":{"slot_bits":10}}');
   fs.mkdirSync(path.join(base, 'shards'));
   fs.writeFileSync(path.join(base, 'shards', 'a.bin'), 'weights');
   const blob = (s: string) => store.put(s);
@@ -52,7 +54,7 @@ function toyWorker(o: { served?: (job: WorkerJob) => string; gate?: Promise<void
 }
 
 const toyReference: ReferenceVerifier = {
-  async check({ twin_before, trace }) {
+  async check({ twin_before, trace, neural_after }) {
     const mem = twin_before ? JSON.parse(twin_before.toString('utf8')) : {};
     const user = JSON.parse(trace.toString('utf8')).fake as string;
     const ops: unknown[] = [];
@@ -60,7 +62,8 @@ const toyReference: ReferenceVerifier = {
       const m = /^remember (.+?)=(.*)$/.exec(line.trim());
       if (m) { mem[m[1].trim()] = m[2].trim(); ops.push({ op: 'put', name: m[1].trim(), result: 'ok' }); }
     }
-    return { twin_after: Buffer.from(JSON.stringify(Object.fromEntries(Object.entries(mem).sort()))), ops };
+    const twin = Buffer.from(JSON.stringify(Object.fromEntries(Object.entries(mem).sort())));
+    return { twin_after: twin, ops, neural: { ok: neural_after !== null && neural_after.equals(Buffer.concat([Buffer.from('neural:'), twin])) } };
   }
 };
 
@@ -90,7 +93,7 @@ test('a closed package: every blob there with its bytes, trees walked; exported,
   const store = new BlobStore(path.join(dir, 'blobs'));
   const p = fixture(store);
   assert.deepEqual(checkClosed(p, store), { closed: true, missing: [], corrupt: [] });
-  const shard = Object.values(store.tree(p.base)!.files)[1];
+  const shard = store.tree(p.base)!.files['shards/a.bin'];
   fs.writeFileSync(store.pathOf(shard), 'tampered');
   const broken = checkClosed(p, store);
   assert.equal(broken.closed, false);
@@ -102,7 +105,7 @@ test('a closed package: every blob there with its bytes, trees walked; exported,
   store.put('ver');
   const out = exportPackage(p, store, path.join(dir, 'out'));
   assert.equal(checkClosed(p, new BlobStore(path.join(dir, 'out', 'blobs'))).closed, true);
-  assert.equal(out.blobs, 8, 'the tree, its two files and five execution blobs');
+  assert.equal(out.blobs, 9, 'the tree, its three files and five execution blobs');
 });
 
 test('one question, one published transition: asked again it is its receipt; another content or a stale state is refused', async () => {
@@ -239,6 +242,7 @@ test('the Python worker and verifier (fake backend): a session served by the pro
   const store = new BlobStore(path.join(dir, 'blobs'));
   const worker = new ProcessWorker({ python: [python!], backend: 'fake', work: path.join(dir, 'work') });
   const server = new SessionServer({ root: dir, store, worker });
+  try {
   const s = server.open({ run_id: 'r', pkg: fixture(store), session_id: 's' });
   const r1 = await server.ask('s', { request_id: 'q1', content: { system: 'S', user: 'remember a=1' }, expected: s.head_id });
   assert.equal(r1.terminal, 'answered');
@@ -256,6 +260,8 @@ test('the Python worker and verifier (fake backend): a session served by the pro
   const strict = new SessionServer({ root: tmp(), store, worker: new ProcessWorker({ python: [python!], backend: 'qwenputer', work: path.join(dir, 'w2') }) });
   const p = fixture(store);
   assert.throws(() => strict.open({ run_id: 'r', pkg: { ...p, decoding: { ...p.decoding, temperature: 0.7 } } }), /greedily/);
+  strict.stop();
+  } finally { server.stop(); }
 });
 
 test('stateId names a state by both its blobs', () => {
@@ -390,5 +396,101 @@ test('a memory read as files through the Python worker (fake backend)', { skip: 
     const r = await server.ask('s', { request_id: 'q', content: { user: 'remember note=keep the protocol' }, expected: s.head_id });
     assert.deepEqual(await server.render({ pkg, twin: r.after.twin }), { note: 'keep the protocol' });
     assert.deepEqual(await server.render({ pkg, twin: null }), {});
+  } finally { server.stop(); }
+});
+
+/* --- An external review of MA1-MA5 (29/10/2026): each failure it reproduced, reproduced here. ----------------------- */
+
+test('review 1: what is served is what the worker loaded, checked against the package - another tokenizer is no answer', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const worker = new ProcessWorker({ python: [python!], backend: 'fake', work: path.join(dir, 'work') });
+  const server = new SessionServer({ root: dir, store, worker });
+  try {
+    const pkg = fixture(store);
+    const s = server.open({ run_id: 'r', pkg, session_id: 's' });
+    const r1 = await server.ask('s', { request_id: 'q1', content: { user: 'remember a=1' }, expected: s.head_id });
+    assert.equal(r1.terminal, 'answered');
+    /* What the driver reads changed under the package: the next answer is not the package's. */
+    const loadedTokenizer = path.join(dir, 'work', 'packages', executionHash(pkg), 'base', 'tokenizer.json');
+    fs.writeFileSync(loadedTokenizer, 'another tokenizer');
+    assert.equal(store.get(pkg.execution.tokenizer).toString('utf8'), 'tok', 'the blob itself is untouched');
+    const r2 = await server.ask('s', { request_id: 'q2', content: { user: 'remember b=2' }, expected: r1.state_after });
+    assert.equal(r2.terminal, 'infra_failed');
+    assert.match(r2.reason ?? '', /served unverified.*tokenizer/);
+    assert.equal(r2.state_after, r1.state_after);
+  } finally { server.stop(); }
+});
+
+test('review 2: verify finds a neural snapshot that is not the memory its twin is', async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const liar: JuniorWorker = { async run(job) {
+    const r = await toyWorker().run(job);
+    return r.after ? { ...r, after: { neural: Buffer.from('not a snapshot at all'), twin: r.after.twin } } : r;
+  } };
+  const server = new SessionServer({ root: dir, store, worker: liar });
+  const s = server.open({ run_id: 'r', pkg: fixture(store), session_id: 's' });
+  await server.ask('s', { request_id: 'q', content: { user: 'remember a=1' }, expected: s.head_id });
+  server.stop();
+  const report = await verifySession(path.join(dir, 'sessions', 's.jsonl'), store, toyReference);
+  assert.equal(report.ok, false);
+  assert.match(report.problems.join(), /neural snapshot is not the memory its twin is/);
+  const silent: ReferenceVerifier = { async check(i) { const o = await toyReference.check(i); if ('error' in o) return o; const { neural: _n, ...rest } = o; return rest; } };
+  assert.match((await verifySession(path.join(dir, 'sessions', 's.jsonl'), store, silent)).problems.join(), /did not check its neural snapshot/);
+});
+
+test('review 3: a line cut by a stop is cut away before the next record; the chain holds after', async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const first = new SessionServer({ root: dir, store, worker: toyWorker() });
+  const s = first.open({ run_id: 'r', pkg: fixture(store), session_id: 's' });
+  const r1 = await first.ask('s', { request_id: 'q1', content: { user: 'remember a=1' }, expected: s.head_id });
+  first.stop();
+  const file = path.join(dir, 'sessions', 's.jsonl');
+  fs.appendFileSync(file, '{"kind":"intent","request_id":"q2","cont');
+  const second = new SessionServer({ root: dir, store, worker: toyWorker() });
+  const r2 = await second.ask('s', { request_id: 'q2', content: { user: 'remember b=2' }, expected: r1.state_after });
+  assert.equal(r2.terminal, 'answered');
+  second.stop();
+  const report = await verifySession(file, store, toyReference);
+  assert.deepEqual(report.problems, []);
+  assert.equal(report.receipts, 2);
+  /* Every ledger of the junior appends the same way. */
+  const { appendRecord } = await import('../src/junior/jsonl.ts');
+  const other = path.join(dir, 'other.jsonl');
+  fs.writeFileSync(other, '{"a":1}\n{"b":');
+  appendRecord(other, { c: 3 });
+  assert.equal(fs.readFileSync(other, 'utf8'), '{"a":1}\n{"c":3}\n');
+});
+
+test('review 4: the proxy reserves a bound before sending - one completion per call, its input bounded by its bytes', async () => {
+  const { ProviderProxy, tokenHash } = await import('../src/junior/proxy.ts');
+  const dir = tmp();
+  let sent = 0;
+  const upstream = (async () => { sent++; return new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }], usage: { total_tokens: 1010 } }), { status: 200 }); }) as unknown as typeof fetch;
+  const config = { upstreams: { strong: { url: 'https://provider.example/api', key_env: 'K' } }, bags: { b: { tokens: 200, calls: 10 } },
+    clients: { [tokenHash('t')]: { bag: 'b', upstreams: ['strong'] } }, ledger: path.join(dir, 'l.jsonl') };
+  const proxy = new ProviderProxy(config, { env: { K: 'k' }, fetch: upstream });
+  const call = (body: Record<string, unknown>) => proxy.handle('POST', '/strong/v1/chat/completions', { authorization: 'Bearer t' }, JSON.stringify(body));
+  assert.equal((await call({ model: 'm', max_tokens: 50, n: 2, messages: [{ role: 'user', content: 'hi' }] })).status, 400, 'several completions are never proxied');
+  assert.equal((await call({ model: 'm', max_tokens: 50, best_of: 3, messages: [] })).status, 400);
+  const long = 'x'.repeat(400);
+  assert.equal((await call({ model: 'm', max_tokens: 50, messages: [{ role: 'user', content: long }] })).status, 402, 'its input, bounded by its bytes, does not fit');
+  assert.equal(sent, 0, 'nothing was sent that the bag could not hold');
+});
+
+test('review 6: running out of its declared time is the junior\'s measured limit, its prefix kept - never a failure of the infrastructure', { skip: !python && 'no Python' }, async () => {
+  const dir = tmp();
+  const store = new BlobStore(path.join(dir, 'blobs'));
+  const server = new SessionServer({ root: dir, store, worker: new ProcessWorker({ python: [python!], backend: 'fake', work: path.join(dir, 'work') }), graceMs: 5000 });
+  try {
+    const s = server.open({ run_id: 'r', pkg: fixture(store), session_id: 's' });
+    const r = await server.ask('s', { request_id: 'q', content: { user: 'remember a=1 sleep 3' }, expected: s.head_id, limits: { timeout_ms: 300 } });
+    assert.equal(r.terminal, 'limit_reached');
+    assert.equal(r.reason, 'timeout');
+    assert.equal(r.text, 'ok ');
+    assert.ok(r.usage !== null && !r.uncertain);
+    assert.equal(r.state_after, s.head_id);
   } finally { server.stop(); }
 });

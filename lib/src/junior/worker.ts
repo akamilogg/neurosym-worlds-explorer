@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { BlobStore, JuniorPackage } from './package.ts';
+import { stableStringify } from '../core/hash.ts';
 import type { JuniorWorker, WorkerJob, WorkerResult } from './sessions.ts';
 
 /* ============================================================================
@@ -24,7 +25,6 @@ export function unsupported(backend: Backend, pkg: JuniorPackage): string | null
   if (backend !== 'qwenputer') return null;
   if (pkg.decoding.temperature !== 0) return 'the driver decodes greedily: temperature must be 0';
   if (pkg.decoding.forced_format !== null) return 'the driver has no forced format';
-  if (pkg.adapter !== null) return 'adapters are served from MA5 on';
   return null;
 }
 
@@ -33,8 +33,20 @@ function linkOrCopy(from: string, to: string): void {
   try { fs.linkSync(from, to); } catch { fs.copyFileSync(from, to); }
 }
 
-/** A package's files where the worker can read them: trees as folders, single blobs by path. Kept per execution hash. */
-export function materialize(pkg: JuniorPackage, execution: string, store: BlobStore, cache: string): { base: string; adapter: string | null; firmware: string } {
+export interface Materialized {
+  readonly base: string;
+  readonly adapter: string | null;
+  readonly firmware: string;
+  /** The package's tokenizer, put in place of the checkpoint's own: what the driver reads is the package's. */
+  readonly tokenizer: string;
+  readonly chat_template: string;
+  /** The package's driver: a folder to import from (a tree), or its one file. */
+  readonly driver: string;
+}
+
+/** A package's files where the worker can read them: trees as folders, single blobs by path, every part the package fixes
+    - base, adapter, firmware, tokenizer, chat template and driver. Kept per execution hash. */
+export function materialize(pkg: JuniorPackage, execution: string, store: BlobStore, cache: string): Materialized {
   const dir = path.join(cache, execution);
   const done = path.join(dir, '.complete');
   const tree = (id: string, where: string): string => {
@@ -44,14 +56,51 @@ export function materialize(pkg: JuniorPackage, execution: string, store: BlobSt
     for (const [rel, blob] of Object.entries(t.files)) linkOrCopy(store.pathOf(blob), path.join(target, ...rel.split('/')));
     return target;
   };
+  const driverIsTree = store.tree(pkg.execution.driver) !== null;
   if (!fs.existsSync(done)) {
     fs.rmSync(dir, { recursive: true, force: true });
     tree(pkg.base, 'base');
     if (pkg.adapter) tree(pkg.adapter, 'adapter');
     linkOrCopy(store.pathOf(pkg.execution.firmware), path.join(dir, 'firmware.elf'));
+    /* The checkpoint's tokenizer is replaced by the package's - unlinked first: its file may be a link to a blob. */
+    fs.rmSync(path.join(dir, 'base', 'tokenizer.json'), { force: true });
+    fs.copyFileSync(store.pathOf(pkg.execution.tokenizer), path.join(dir, 'base', 'tokenizer.json'));
+    fs.copyFileSync(store.pathOf(pkg.execution.chat_template), path.join(dir, 'chat_template.jinja'));
+    if (driverIsTree) tree(pkg.execution.driver, 'driver');
+    else linkOrCopy(store.pathOf(pkg.execution.driver), path.join(dir, 'driver.bin'));
     fs.writeFileSync(done, execution);
   }
-  return { base: path.join(dir, 'base'), adapter: pkg.adapter ? path.join(dir, 'adapter') : null, firmware: path.join(dir, 'firmware.elf') };
+  return { base: path.join(dir, 'base'), adapter: pkg.adapter ? path.join(dir, 'adapter') : null, firmware: path.join(dir, 'firmware.elf'),
+    tokenizer: path.join(dir, 'base', 'tokenizer.json'), chat_template: path.join(dir, 'chat_template.jinja'), driver: path.join(dir, driverIsTree ? 'driver' : 'driver.bin') };
+}
+
+/** What a worker says it loaded: the digests of the files it read and the configuration it runs with. */
+export interface Loaded {
+  readonly tokenizer: string;
+  readonly chat_template: string;
+  readonly firmware: string;
+  /** A driver folder: each file's digest by its path; a driver file: its digest. */
+  readonly driver: Readonly<Record<string, string>> | string;
+  /** The circuit's configuration as the driver read it (chipformer.json), or null where there is none. */
+  readonly circuit: Readonly<Record<string, unknown>> | null;
+  /** The precision its weights were loaded in, or null where the backend has none. */
+  readonly precision: string | null;
+}
+
+/** Where what a worker loaded is not what the package fixes, or null: the identity served is checked, never echoed. */
+export function identityMismatch(pkg: JuniorPackage, store: BlobStore, loaded: Loaded | undefined): string | null {
+  if (!loaded) return 'the worker did not say what it loaded';
+  const e = pkg.execution;
+  const wrong: string[] = [];
+  if (loaded.tokenizer !== e.tokenizer) wrong.push('tokenizer');
+  if (loaded.chat_template !== e.chat_template) wrong.push('chat template');
+  if (loaded.firmware !== e.firmware) wrong.push('firmware');
+  const t = store.tree(e.driver);
+  if (t ? stableStringify(loaded.driver) !== stableStringify(t.files) : loaded.driver !== e.driver) wrong.push('driver');
+  const declared = e.circuit as Record<string, unknown>;
+  if (Object.keys(declared).length && (loaded.circuit === null || Object.entries(declared).some(([k, v]) => stableStringify(loaded.circuit![k]) !== stableStringify(v)))) wrong.push('circuit configuration');
+  if (loaded.precision !== null && loaded.precision !== e.precision) wrong.push('precision (' + loaded.precision + ')');
+  return wrong.length ? 'it loaded another ' + wrong.join(', ') + ' than the package fixes' : null;
 }
 
 export interface ProcessWorkerOptions {
@@ -72,6 +121,13 @@ export class ProcessWorker implements JuniorWorker {
   constructor(o: ProcessWorkerOptions) { this.o = o; }
 
   check(pkg: JuniorPackage): string | null { return unsupported(this.o.backend, pkg); }
+
+  /** The driver its process imported: a package with another one needs a fresh process (a module is imported once). */
+  private driver: string | null = null;
+  private use(pkg: JuniorPackage): void {
+    if (this.driver !== null && this.driver !== pkg.execution.driver) this.invalidate();
+    this.driver = pkg.execution.driver;
+  }
 
   private start(): ChildProcessWithoutNullStreams {
     if (this.child) return this.child;
@@ -122,6 +178,19 @@ export class ProcessWorker implements JuniorWorker {
     return a.probe;
   }
 
+  /** The circuit's validity suite (§10.1), served on the inference GPU with the package's adapter applied. */
+  async validity(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly store: BlobStore }): Promise<import('./sessions.ts').Validity | { readonly error: string }> {
+    const files = materialize(job.pkg, job.execution, job.store, path.join(this.o.work, 'packages'));
+    this.use(job.pkg);
+    const id = 'v' + (++this.next) + '-' + process.pid;
+    const child = this.start();
+    const a = await new Promise<Record<string, unknown>>((resolve) => {
+      this.waiting.set(id, resolve as never);
+      child.stdin.write(JSON.stringify({ id, op: 'validity', execution: job.execution, backend: this.o.backend, files, circuit: job.pkg.execution.circuit, decoding: job.pkg.decoding }) + NL);
+    });
+    return a.validity && typeof a.validity === 'object' ? a.validity as import('./sessions.ts').Validity : { error: String(a.reason ?? 'no answer') };
+  }
+
   /** One memory operation on a copy of a twin, by the package's reference store (§8). */
   async memoryCall(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore; readonly call: { op: string; name?: string; text?: string } }): Promise<{ readonly result: string; readonly twin: Buffer } | { readonly error: string }> {
     const files = this.o.backend === 'fake' ? null : materialize(job.pkg, job.execution, job.store, path.join(this.o.work, 'packages'));
@@ -149,6 +218,7 @@ export class ProcessWorker implements JuniorWorker {
 
   async run(job: WorkerJob): Promise<WorkerResult> {
     const files = materialize(job.pkg, job.execution, job.store, path.join(this.o.work, 'packages'));
+    this.use(job.pkg);
     const id = 'j' + (++this.next) + '-' + process.pid;
     const out = path.join(this.o.work, 'jobs', id);
     fs.mkdirSync(out, { recursive: true });
@@ -164,7 +234,11 @@ export class ProcessWorker implements JuniorWorker {
     try {
       const a = answer as unknown as { after: { neural: string | null; twin: string | null } | null };
       const after = a.after ? { neural: a.after.neural ? fs.readFileSync(a.after.neural) : null, twin: a.after.twin ? fs.readFileSync(a.after.twin) : null } : null;
-      return { served: answer.served, terminal: answer.terminal, text: answer.text, trace: answer.trace, ops: answer.ops ?? [], after, usage: answer.usage ?? null, ...(answer.reason ? { reason: answer.reason } : {}) };
+      /* What it served is what it loaded, checked against the package - never the hash it was asked for, said back. */
+      const wrong = answer.terminal === 'infra_failed' ? null : identityMismatch(job.pkg, job.store, (answer as unknown as { loaded?: Loaded }).loaded);
+      const served = answer.terminal === 'infra_failed' ? answer.served : wrong ? 'unverified' : job.execution;
+      return { served, terminal: answer.terminal, text: answer.text, trace: answer.trace, ops: answer.ops ?? [], after, usage: answer.usage ?? null,
+        ...(wrong ? { reason: wrong } : answer.reason ? { reason: answer.reason } : {}) };
     } finally { fs.rmSync(out, { recursive: true, force: true }); }
   }
 }

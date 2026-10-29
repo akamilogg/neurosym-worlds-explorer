@@ -272,7 +272,8 @@ export function checkClosed(pkg: JuniorPackage, store: BlobStore): { closed: boo
     for (const b of Object.values(t.files)) visit(b, false);
   };
   const p = normalizePackage(pkg);
-  for (const b of blobsOf(p)) visit(b, treesOf(p).includes(b));
+  /* The driver may be a folder (a tree): its files are part of the package too. */
+  for (const b of blobsOf(p)) visit(b, treesOf(p).includes(b) || (b === p.execution.driver && store.has(b) && store.intact(b) && store.tree(b) !== null));
   return { closed: !missing.length && !corrupt.length, missing, corrupt };
 }
 
@@ -289,7 +290,7 @@ export function exportPackage(pkg: JuniorPackage, store: BlobStore, dir: string)
     blobs++;
     if (tree) for (const b of Object.values(store.tree(id)!.files)) copy(b, false);
   };
-  for (const b of blobsOf(p)) copy(b, treesOf(p).includes(b));
+  for (const b of blobsOf(p)) copy(b, treesOf(p).includes(b) || (b === p.execution.driver && store.tree(b) !== null));
   const manifest = path.join(dir, 'package.json');
   fs.writeFileSync(manifest, JSON.stringify(normalizePackage(pkg), null, 2) + '\n');
   return { manifest, blobs };

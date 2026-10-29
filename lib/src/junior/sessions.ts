@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { appendRecord, trimFragment } from './jsonl.ts';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
@@ -21,6 +22,16 @@ import { BlobStore, checkClosed, executionHash, normalizePackage, sha256, type B
  * ========================================================================== */
 
 export interface MemoryState { readonly neural: BlobId | null; readonly twin: BlobId | null }
+
+/** What the validity suite found (§10.1): which of the circuit's operations its tasks exercised, the discrepancies with
+    the reference, and the digest of the compiled parameters. Valid only with everything exercised and nothing differing. */
+export interface Validity {
+  readonly exercised: Readonly<Record<'calc' | 'put' | 'get' | 'delete' | 'restore', boolean>>;
+  readonly mismatches: number;
+  readonly circuit_digest: string;
+  readonly details: readonly unknown[];
+}
+export const VALIDITY_SUITE = 'circuit-suite@1';
 
 /** A memory tool's call, as the junior's tools take it (put, append, get, list, delete). */
 export interface MemoryCall { readonly op: 'put' | 'append' | 'get' | 'list' | 'delete'; readonly name?: string; readonly text?: string }
@@ -73,6 +84,9 @@ export interface JuniorWorker {
   /** One memory operation on a copy of a state's reference twin (§8: the teacher's memory tools): its answer, as the
       junior's circuit would print it, and the twin after. The model is never asked. */
   memoryCall?(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore; readonly call: MemoryCall }): Promise<{ readonly result: string; readonly twin: Buffer } | { readonly error: string }>;
+  /** The circuit's validity for a package (§10.1): the digest of its compiled parameters as served, and a fixed suite that
+      exercises calculation, writes, reads, deletion and a restored memory, each against the reference. */
+  validity?(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly store: BlobStore }): Promise<Validity | { readonly error: string }>;
   render?(job: { readonly pkg: JuniorPackage; readonly execution: string; readonly twin: Buffer | null; readonly store: BlobStore }): Promise<Record<string, string> | { readonly error: string }>;
 }
 
@@ -228,8 +242,7 @@ export class SessionServer {
   private append(s: Session, line: Record<string, unknown> & { kind: string }): void {
     const body = { ...line, prev: s.last } as Omit<Line, 'hash'>;
     const full = { ...body, hash: hashLine(body) };
-    const fd = fs.openSync(s.file, 'a');
-    try { fs.writeSync(fd, JSON.stringify(full) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    appendRecord(s.file, full, { sync: true });
     s.last = full.hash;
   }
 
@@ -238,6 +251,8 @@ export class SessionServer {
   private reload(): void {
     const dir = path.join(this.root, 'sessions');
     for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort()) {
+      /* A line cut by a stop was never published: cut away before anything is appended after it. */
+      trimFragment(path.join(dir, f));
       const lines = readLedger(path.join(dir, f));
       const open = lines.find((l) => l.kind === 'open');
       if (!open) continue;
@@ -340,6 +355,17 @@ export class SessionServer {
     const r = await this.worker.memoryCall({ pkg, execution: executionHash(pkg), twin: o.twin === null ? null : this.store.get(o.twin), store: this.store, call: o.call });
     if ('error' in r) throw new SessionError('memory_failed', r.error);
     return { result: r.result, twin: this.store.put(r.twin) };
+  }
+
+  /** The circuit's validity suite for a package, by the worker that serves it. */
+  async validity(o: { pkg: unknown }): Promise<Validity> {
+    const pkg = normalizePackage(o.pkg);
+    if (!this.worker.validity) throw new SessionError('unsupported', 'this worker has no validity suite');
+    const closed = checkClosed(pkg, this.store);
+    if (!closed.closed) throw new SessionError('package_open', 'the package is not closed in the store');
+    const r = await this.worker.validity({ pkg, execution: executionHash(pkg), store: this.store });
+    if ('error' in r && Object.keys(r).length === 1) throw new SessionError('validity_failed', String(r.error));
+    return r as Validity;
   }
 
   /** A memory state read as files, by the worker that serves its package (§4). */
@@ -453,7 +479,7 @@ export class SessionServer {
       }
       this.serving = -1;
       if (result.served !== s.info.execution)
-        return this.publish(s, this.failure(s, intentLine, 'infra_failed', 'the worker served ' + result.served + ', not ' + s.info.execution, result.served, queue_ms, run_ms));
+        return this.publish(s, this.failure(s, intentLine, 'infra_failed', 'the worker served ' + result.served + ', not ' + s.info.execution + (result.reason ? ': ' + result.reason : ''), result.served, queue_ms, run_ms));
       // A complete answer carries its memory after; anything else keeps the memory it started from (§5.1).
       let after: MemoryState = s.head;
       if (result.terminal === 'answered') {

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { appendRecord } from './jsonl.ts';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
@@ -68,10 +69,10 @@ export async function buildMemory(o: { client: JuniorSessionClient; pkg: JuniorP
       const diff = memoryDiff(want, got);
       if (diff.length) { attempts.push({ session, why: 'its memory is not what was asked: ' + diff.slice(0, 6).join(', ') }); continue; }
       const built: MemoryBuild = { key, state: r.after, session, receipt: r.request_id, files: got, attempts: i + 1 };
-      fs.appendFileSync(o.ledger, JSON.stringify({ kind: 'built', ...built }) + '\n');
+      appendRecord(o.ledger, { kind: 'built', ...built });
       return built;
     } catch (e) { attempts.push({ session, why: String((e as Error).message ?? e) }); }
   }
-  fs.appendFileSync(o.ledger, JSON.stringify({ kind: 'refused', key, attempts }) + '\n');
+  appendRecord(o.ledger, { kind: 'refused', key, attempts });
   return { error: 'the junior did not write the memory asked in ' + attempts.length + ' attempt(s)', attempts };
 }

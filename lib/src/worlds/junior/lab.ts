@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { appendRecord } from '../../junior/jsonl.ts';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { unknownFields, type Lab, type LabContext } from '../../learn/lab.ts';
@@ -11,6 +12,7 @@ import { JuniorSessionClient } from '../../junior/client.ts';
 import { competenceHash, competenceProblems, type CompetenceManifest, type Component, type Observation } from '../../junior/competence.ts';
 import type { Evaluation } from '../../junior/evaluate.ts';
 import type { Dataset, Example } from '../../junior/distill.ts';
+import type { Validity } from '../../junior/sessions.ts';
 import type { Mode } from '../../junior/competence.ts';
 import { openAiChatClient, type ChatClient } from '../../learn/system2.ts';
 import { JobLedger, JobRefused } from '../../junior/jobs.ts';
@@ -38,6 +40,8 @@ const PARTS = ['prompt.md', 'decoding.json'] as const;
 const MEMORY_FILE = /^memory\/[^/\\]{1,64}$/;
 /** The memory published from a session (publish_memory): written by the world, never by a change. */
 const PUBLISHED = 'memory.state.json';
+/** The adapter a training produced (train): written by the world, never by a change. */
+const ADAPTER = 'adapter.json';
 const editable = (f: string): boolean => (PARTS as readonly string[]).includes(f) || MEMORY_FILE.test(f);
 
 interface Published { readonly neural: string | null; readonly twin: string | null; readonly source: { readonly session: string; readonly run_id: string } }
@@ -55,7 +59,12 @@ export class JuniorWorld {
   private readonly evaluations = new Map<string, Evaluation>();
   private readonly packages = new Map<string, JuniorPackage>();
 
-  constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; distillations?: number; store?: ArtifactStore }) {
+  /** How trainings run here: the trainer's interpreter and backend, on the training GPU. */
+  readonly training: { readonly python: readonly string[]; readonly backend: 'fake' | 'qwenputer' } | null;
+  private readonly validities = new Map<string, Validity>();
+
+  constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; distillations?: number; gpuHours?: number;
+    training?: { python: readonly string[]; backend: 'fake' | 'qwenputer' }; store?: ArtifactStore }) {
     const problems = competenceProblems(o.manifest);
     if (problems.length) throw new Error('the competence manifest: ' + problems.join('; '));
     this.manifest = o.manifest;
@@ -70,7 +79,8 @@ export class JuniorWorld {
     fs.mkdirSync(o.dir, { recursive: true });
     this.store = o.store ?? new ArtifactStore(new Map([['prompt.md', this.base.prompt], ['decoding.json', JSON.stringify(this.base.decoding, null, 2) + '\n']]));
     this.reference = this.store.base;
-    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations, memory_builds: o.memoryBuilds ?? o.evaluations, distillations: o.distillations ?? 20 });
+    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations, memory_builds: o.memoryBuilds ?? o.evaluations, distillations: o.distillations ?? 20, gpu_hours: o.gpuHours ?? 0 });
+    this.training = o.training ?? null;
   }
 
   archive(): { base: JuniorPackage; manifest: CompetenceManifest; files: Record<string, string> } {
@@ -78,18 +88,20 @@ export class JuniorWorld {
   }
 
   /** A version's parts as they are written: its prompt, its decoding, the memory files it asks for, the memory it published. */
-  private parts(version: string): { prompt: string; decoding: unknown; files: Record<string, string>; published: Published | null } | string {
+  private parts(version: string): { prompt: string; decoding: unknown; files: Record<string, string>; published: Published | null; adapter: string | null } | string {
     const v = this.store.get(version);
     if (!v) return 'no version ' + version;
     let decoding: unknown, published: Published | null = null;
     try { decoding = JSON.parse(v.files.get('decoding.json') ?? ''); } catch { return 'decoding.json is not JSON'; }
     if (v.files.has(PUBLISHED)) { try { published = JSON.parse(v.files.get(PUBLISHED)!); } catch { return PUBLISHED + ' is not JSON'; } }
+    let adapter: string | null = null;
+    if (v.files.has(ADAPTER)) { try { adapter = String(JSON.parse(v.files.get(ADAPTER)!).adapter); } catch { return ADAPTER + ' is not JSON'; } }
     const files = Object.fromEntries([...v.files].filter(([f]) => MEMORY_FILE.test(f)).map(([f, t]) => [f.slice('memory/'.length), t]));
-    return { prompt: v.files.get('prompt.md') ?? '', decoding, files, published };
+    return { prompt: v.files.get('prompt.md') ?? '', decoding, files, published, adapter };
   }
 
-  private shell(version: string, prompt: string, decoding: unknown, memory: { neural: string | null; twin: string | null }): JuniorPackage {
-    return normalizePackage({ ...this.base, prompt, decoding, memory,
+  private shell(version: string, prompt: string, decoding: unknown, memory: { neural: string | null; twin: string | null }, adapter: string | null = null): JuniorPackage {
+    return normalizePackage({ ...this.base, prompt, decoding, memory, adapter,
       provenance: { parents: [executionHash(this.base)], reason: 'version ' + version + ' of the junior-competence world', sources: this.store.lineage(version).map((t) => t.from + '->' + t.to) } });
   }
 
@@ -102,7 +114,7 @@ export class JuniorWorld {
     if (typeof parts === 'string') return parts;
     const start = parts.published ? { neural: parts.published.neural, twin: parts.published.twin } : this.base.memory;
     let pkg: JuniorPackage;
-    try { pkg = this.shell(version, parts.prompt, parts.decoding, start); } catch (e) { return (e as Error).message; }
+    try { pkg = this.shell(version, parts.prompt, parts.decoding, start, parts.adapter); } catch (e) { return (e as Error).message; }
     if (Object.keys(parts.files).length) {
       const { buildMemory } = await import('../../junior/memory.ts');
       const operation = 'mem-' + createHash('sha256').update(executionHash(pkg) + ':' + JSON.stringify(Object.entries(parts.files).sort())).digest('hex').slice(0, 24);
@@ -116,7 +128,7 @@ export class JuniorWorld {
         const job = await done;
         if (job.state !== 'completed') return 'its memory was not written: ' + (job.reason ?? job.state);
         const b = job.products as { state: { neural: string | null; twin: string | null } };
-        pkg = this.shell(version, parts.prompt, parts.decoding, b.state);
+        pkg = this.shell(version, parts.prompt, parts.decoding, b.state, parts.adapter);
       } catch (e) { return e instanceof JobRefused ? e.message : String((e as Error).message ?? e); }
     }
     this.packages.set(version, pkg);
@@ -148,7 +160,7 @@ export class JuniorWorld {
     const published: Published = { neural: info.head.neural, twin: info.head.twin, source: { session, run_id: info.run_id } };
     const v = this.store.apply(from, { files: { [PUBLISHED]: JSON.stringify(published, null, 2) + '\n' } }, reason);
     if (typeof v === 'string') return { error: v };
-    fs.appendFileSync(path.join(this.dir, 'publications.jsonl'), JSON.stringify({ from, session, published, version: v.hash }) + '\n');
+    appendRecord(path.join(this.dir, 'publications.jsonl'), { from, session, published, version: v.hash }, { sync: true });
     let files: Record<string, string> = {};
     try { files = await this.client.render(this.shell(v.hash, parts.prompt, parts.decoding, info.head), info.head.twin); } catch { /* shown when it can be read */ }
     return { version: v.hash, parent: from, files };
@@ -243,12 +255,86 @@ export class JuniorWorld {
     return out;
   }
 
+  /** Whether a junior is valid to run (§10.1): its circuit's suite all exercised with no discrepancy, and its compiled
+      parameters those of the base junior. A package without an adapter is the base's circuit; one with an adapter is
+      checked, and what was found is kept. */
+  async validity(pkg: JuniorPackage): Promise<true | string> {
+    if (pkg.adapter === null) return true;
+    const of = async (p: JuniorPackage): Promise<Validity | string> => {
+      const k = executionHash(p);
+      const known = this.validities.get(k);
+      if (known) return known;
+      try { const v = await this.client.validity(p); this.validities.set(k, v); appendRecord(path.join(this.dir, 'validity.jsonl'), { execution: k, ...v }); return v; }
+      catch (e) { return String((e as Error).message ?? e); }
+    };
+    const [mine, base] = [await of(pkg), await of(this.base)];
+    if (typeof mine === 'string') return 'its suite did not run: ' + mine;
+    if (typeof base === 'string') return 'the base\'s suite did not run: ' + base;
+    const missing = Object.entries(mine.exercised).filter(([, x]) => !x).map(([k]) => k);
+    if (missing.length) return 'its suite did not exercise ' + missing.join(', ') + ': zero discrepancies on what was not exercised proves nothing';
+    if (mine.mismatches) return mine.mismatches + ' discrepancies between the circuit and the reference';
+    if (mine.circuit_digest !== base.circuit_digest) return 'its compiled parameters are not the base\'s';
+    return true;
+  }
+
+  /** A child of a version trained on a dataset (§11, train): a job paid from gpu_hours; the child a version whose adapter
+      is the training's, its line kept in the world's ledger. Refused before anything runs when the recipe reaches the
+      circuit or the dataset shares groups with the selection probes. */
+  async trainFrom(from: string, datasetId: string, recipe: unknown, reason: unknown): Promise<{ version?: string; state: string; reason: string | null; steps?: number | null; gpu_hours?: number | null }> {
+    if (!this.training) return { state: 'refused', reason: 'no trainer is configured for this run (--train-python)' };
+    const parent = await this.packageOf(from);
+    if (typeof parent === 'string') return { state: 'refused', reason: parent };
+    const file = path.join(this.dir, 'datasets', datasetId + '.json');
+    if (!/^[0-9a-f]{64}$/.test(datasetId) || !fs.existsSync(file)) return { state: 'refused', reason: 'no dataset ' + datasetId + ' here' };
+    const dataset = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const { train, recipeProblems } = await import('../../junior/train.ts');
+    const problems = recipeProblems(recipe, parent);
+    if (problems.length) return { state: 'refused', reason: 'the recipe: ' + problems.join('; ') };
+    const r = recipe as { max_gpu_hours: number };
+    const training = this.training;
+    try {
+      const operation = 'train-' + createHash('sha256').update(JSON.stringify([executionHash(parent), datasetId, recipe])).digest('hex').slice(0, 24);
+      const { done } = this.jobs.start({ operation_id: operation, op: 'train', inputs: { parent: executionHash(parent), dataset: datasetId, recipe }, reserve: { gpu_hours: r.max_gpu_hours },
+        run: async (signal) => {
+          const t = await train({ python: training.python, backend: training.backend, work: this.dir, store: this.blobs, parent, dataset, examplesDir: path.join(this.dir, 'examples'),
+            recipe: recipe as never, manifest: this.manifest, signal });
+          const spent = t.gpu_hours === null ? (t.state === 'refused' ? { gpu_hours: 0 } : null) : { gpu_hours: t.gpu_hours };
+          return t.state === 'finished' ? { spent, products: t } : { spent, products: t, failed: t.state + ': ' + (t.reason ?? '') };
+        } });
+      const job = await done;
+      const t = job.products as { state: string; reason: string | null; adapter: string | null; steps: number | null; gpu_hours: number | null } | null;
+      if (job.state !== 'completed' || !t || !t.adapter) return { state: t?.state ?? job.state, reason: t?.reason ?? job.reason, steps: t?.steps ?? null, gpu_hours: t?.gpu_hours ?? null };
+      const record = { adapter: t.adapter, dataset: datasetId, recipe, parent: executionHash(parent), job: operation };
+      const v = this.store.apply(from, { files: { [ADAPTER]: JSON.stringify(record, null, 2) + '\n' } }, reason);
+      if (typeof v === 'string') return { state: 'failed', reason: v };
+      appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe, record, version: v.hash }, { sync: true });
+      return { version: v.hash, state: 'finished', reason: null, steps: t.steps, gpu_hours: t.gpu_hours };
+    } catch (e) { return { state: 'refused', reason: e instanceof JobRefused ? e.message : String((e as Error).message ?? e) }; }
+  }
+
+  /** A training made again from the world's record of it (a run rebuilt): its adapter's line, never trained again. */
+  retrain(from: string, datasetId: string, recipe: unknown, reason: unknown): string | null {
+    const file = path.join(this.dir, 'trainings.jsonl');
+    if (!fs.existsSync(file)) return null;
+    for (const l of fs.readFileSync(file, 'utf8').split('\n')) {
+      let e: { from?: string; dataset?: string; recipe?: unknown; record?: unknown };
+      try { e = JSON.parse(l); } catch { continue; }
+      if (e.from !== from || e.dataset !== datasetId || JSON.stringify(e.recipe) !== JSON.stringify(recipe)) continue;
+      const v = this.store.apply(from, { files: { [ADAPTER]: JSON.stringify(e.record, null, 2) + '\n' } }, reason);
+      return typeof v === 'string' ? null : v.hash;
+    }
+    return null;
+  }
+
   /** A version evaluated on the development cases: a job of the world's ledger (asked again, the same job), kept. */
   async evaluate(version: string, judge?: import('../../runtime/lab-runner.ts').LabConnection): Promise<Evaluation | string> {
     const cached = this.evaluations.get(version);
     if (cached) return cached;
     const pkg = await this.packageOf(version);
     if (typeof pkg === 'string') return pkg;
+    /* Valid to run (§10.1) before anything costly: a version whose circuit is not exact is kept, never evaluated. */
+    const valid = await this.validity(pkg);
+    if (valid !== true) return 'the version is not valid to run: ' + valid;
     try {
       /* One job per junior evaluated: the baseline, a run and a check of the same version are the same evaluation. */
       const operation = 'eval-' + createHash('sha256').update(this.manifestHash + ':' + executionHash(pkg)).digest('hex').slice(0, 24);
@@ -296,7 +382,7 @@ export type JuniorEpisode =
       /** Its development investigations' sessions, case to session: what publish_memory may take. */
       readonly sessions: Readonly<Record<string, string>> }
   /** What a distillation or a dataset produced: rows to read and what they add up to. */
-  | { readonly kind: 'records'; readonly what: 'examples' | 'dataset'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
+  | { readonly kind: 'records'; readonly what: 'examples' | 'dataset' | 'training'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
 
 export interface JuniorCase { readonly point: string; readonly state: JuniorPoint; readonly came: { readonly value: number | null } }
 
@@ -306,7 +392,8 @@ export type JuniorAct =
   | { readonly run: { readonly version: string } }
   | { readonly publish_memory: { readonly from: string; readonly session: string } & Reason }
   | { readonly distill: { readonly version: string; readonly case: string; readonly question: number; readonly mode: Mode; readonly checker: string; readonly request?: string; readonly instruction?: string } }
-  | { readonly dataset: { readonly examples: readonly string[]; readonly admits: readonly ('verified' | 'demonstration')[] } };
+  | { readonly dataset: { readonly examples: readonly string[]; readonly admits: readonly ('verified' | 'demonstration')[] } }
+  | { readonly train: { readonly from: string; readonly dataset: string; readonly recipe: Readonly<Record<string, unknown>> } & Reason };
 
 const latest = new WeakMap<JuniorWorld, string>();
 
@@ -390,7 +477,9 @@ function juniorInterface(tolerance: number): WorldInterface {
         + 'Or {"act": {"publish_memory": {"from": "<version>", "session": "<a session of an evaluation>", "why": "...", "expect": "..." | "exploratory": true}}}   a new version whose memory is the one the junior ended that investigation with: you read it as files in the version. '
         + 'Or {"act": {"distill": {"version": "<version evaluated>", "case": "<a development investigation>", "question": <n, from 0>, "mode": "start" | "cut", "checker": "protocol" | "request" | "rules" | "proposal", "request": "<kind>", "instruction": "<a visible task>"}}}   '
         + 'the junior and the teacher answer from the same point of that investigation (cut: with the junior\'s memory there; start: with its initial memory), each in a copy; the checker, fixed before the teacher answers, judges both: an EXAMPLE, verified when the teacher passes where the junior fails, unverified when both pass, rejected when the teacher fails. Each costs one of `distillations`. '
-        + 'Or {"act": {"dataset": {"examples": ["<example id>", ...], "admits": ["verified"]}}}   a dataset of examples, by its content, with the groups of runs it comes from and those it shares with the probes that select juniors. At most `acts_left` this round.'],
+        + 'Or {"act": {"dataset": {"examples": ["<example id>", ...], "admits": ["verified"]}}}   a dataset of examples, by its content, with the groups of runs it comes from and those it shares with the probes that select juniors. '
+        + 'Or {"act": {"train": {"from": "<version>", "dataset": "<dataset id>", "recipe": {"format": "junior-recipe@1", "method": "lora" | "qlora", "layers": [<Qwen layers, past the circuit\'s>], "modules": ["q_proj", ...], "rank", "alpha", "dropout", "learning_rate", "epochs", "batch", "max_length", "seed", "mask": "answer", "admits": ["verified"], "max_gpu_hours"}, "why": "...", "expect": "..." | "exploratory": true}}}   '
+        + 'a child junior with a LoRA adapter trained on that dataset; its circuit is never trained. Its capacity is measured first; it costs its GPU hours; a dataset that shares groups with the selecting probes is refused. Before it is evaluated, its circuit must pass the validity suite. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at an observation, part by part, and what was measured there'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
       [['table'], '  {"table": {"source": "(p) => ...", "range": [min, max]}, "on": "episodes" | "checks"}   the observations of your episodes, or of the checks, each with the value of the code and what was measured']
@@ -434,6 +523,13 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         const made = spec.world.change(c.from, c.files, reason);
         if (!('error' in made)) latest.set(spec.world, made.version);
       }
+      /* A training, from the world's record of its adapter. */
+      const tr = r?.act?.train;
+      if (tr && typeof tr.from === 'string' && typeof tr.dataset === 'string' && tr.recipe) {
+        const { from: _f, dataset: _d, recipe: _r, ...reason } = tr;
+        const made = spec.world.retrain(tr.from, tr.dataset, tr.recipe, reason);
+        if (made) latest.set(spec.world, made);
+      }
       /* A publication, from the world's record of the state it published. */
       const pm = r?.act?.publish_memory;
       if (pm && typeof pm.from === 'string' && typeof pm.session === 'string') {
@@ -455,6 +551,9 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     { name: 'acts', default: '2', help: 'changes and runs System 2 may make per round' },
     { name: 'tolerance', default: '0.25', help: 'how far from what was measured an answer may be' },
     { name: 'distillations', default: '20', help: 'distillations from a cut the run may make in all' },
+    { name: 'gpu-hours', default: '0', help: 'GPU hours of training the run may spend in all (0: no training)' },
+    { name: 'train-python', default: '', help: 'the trainer\'s interpreter on the training GPU (none: no training)' },
+    { name: 'train-backend', default: 'qwenputer', help: 'the trainer\'s backend: qwenputer, or fake for tests' },
     { name: 'teacher-url', default: '', help: 'the teacher\'s endpoint (or TEACHER_LLM_URL; its key from TEACHER_LLM_KEY)' },
     { name: 'teacher-model', default: '', help: 'the teacher\'s model (or TEACHER_LLM_MODEL)' }
   ],
@@ -467,7 +566,8 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     const dir = path.resolve(o.work || path.join('runs', 'junior-competence', competenceHash(manifest).slice(0, 12)));
     const store = a ? new ArtifactStore(new Map(Object.entries(a.files))) : undefined;
     const world = new JuniorWorld({ manifest, base, blobs: path.resolve(o.blobs), server: o.server, dir, evaluations: Math.max(1, Math.floor(Number(o.evaluations) || 10)),
-      distillations: Math.max(0, Math.floor(Number(o.distillations) || 20)), ...(store ? { store } : {}) });
+      distillations: Math.max(0, Math.floor(Number(o.distillations) || 20)), gpuHours: Math.max(0, Number(o['gpu-hours']) || 0),
+      ...(o['train-python'] ? { training: { python: [o['train-python']], backend: (o['train-backend'] === 'fake' ? 'fake' : 'qwenputer') as 'fake' | 'qwenputer' } } : {}), ...(store ? { store } : {}) });
     const env = process.env;
     const judge = env.JEV_KEY ? { url: env.JEV_URL || 'https://openrouter.ai/api/v1/chat/completions', key: env.JEV_KEY, ...(env.JEV_MODEL ? { model: env.JEV_MODEL } : {}) } : undefined;
     /* The teacher, configured as any researcher: its endpoint and model given, its key from the environment (the proxy's
@@ -544,8 +644,19 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
 
   act: {
     parse: (raw) => {
-      const unknown = unknownFields(raw, ['change', 'run', 'publish_memory', 'distill', 'dataset']);
+      const unknown = unknownFields(raw, ['change', 'run', 'publish_memory', 'distill', 'dataset', 'train']);
       if (unknown) return unknown;
+      const tr = raw.train as Record<string, unknown> | undefined;
+      if (tr && typeof tr === 'object') {
+        const form = '"train": {"from": "<version>", "dataset": "<dataset id>", "recipe": {junior-recipe@1}, "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true}';
+        const extra = unknownFields(tr, ['from', 'dataset', 'recipe', 'why', 'expect', 'exploratory', 'because']);
+        if (extra) return extra;
+        if (typeof tr.from !== 'string' || typeof tr.dataset !== 'string' || !tr.recipe || typeof tr.recipe !== 'object') return form;
+        if (typeof tr.why !== 'string' || !tr.why.trim()) return 'a training says why: ' + form;
+        const expect = typeof tr.expect === 'string' && tr.expect.trim() ? tr.expect : null;
+        if (!expect && tr.exploratory !== true) return 'a training says what it expects, or that it is exploratory: ' + form;
+        return { train: { from: tr.from, dataset: tr.dataset, recipe: tr.recipe as Record<string, unknown>, why: tr.why, ...(expect ? { expect } : { exploratory: true as const }) } };
+      }
       const d = raw.distill as Record<string, unknown> | undefined, ds = raw.dataset as Record<string, unknown> | undefined;
       if (d && typeof d === 'object') {
         const form = '"distill": {"version": "<version>", "case": "<a development investigation>", "question": <its question, from 0>, "mode": "start" | "cut", "checker": "protocol" | "request" | "rules" | "proposal", "request": "<kind, for checker request>", "instruction": "<a visible task, optional>"}';
@@ -592,7 +703,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         if (typeof r.version !== 'string') return '"run": {"version": "<version>"}';
         return { run: { version: r.version } };
       }
-      return 'act needs "change", "run", "publish_memory", "distill" or "dataset"';
+      return 'act needs "change", "run", "publish_memory", "distill", "dataset" or "train"';
     },
     place: () => undefined,
     async start(spec, a, _id, _ctx?: LabContext) {
@@ -615,6 +726,12 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         if (typeof ex === 'string') return null;
         return { kind: 'records', what: 'examples', summary: { example: ex.id, state: ex.state, group: ex.group, junior_passed: ex.junior.outcome?.pass ?? null, teacher_passed: ex.teacher.outcome?.pass ?? null, memory_calls: ex.teacher.memory.calls.length },
           rows: [{ example: ex.id, state: ex.state, cut: ex.cut, competence: ex.competence, junior: { answer: ex.junior.answer, outcome: ex.junior.outcome }, teacher: { answer: ex.teacher.answer, outcome: ex.teacher.outcome, memory_calls: ex.teacher.memory.calls } }] };
+      }
+      if ('train' in a) {
+        const { from: _f, dataset: _d, recipe: _r, ...reason } = a.train;
+        const t = await spec.world.trainFrom(a.train.from, a.train.dataset, a.train.recipe, reason);
+        if (t.version) latest.set(spec.world, t.version);
+        return { kind: 'records', what: 'training', summary: { state: t.state, ...(t.version ? { version: t.version } : {}), ...(t.reason ? { reason: t.reason } : {}), steps: t.steps ?? null, gpu_hours: t.gpu_hours ?? null }, rows: [] };
       }
       if ('dataset' in a) {
         const r = await spec.world.dataset(a.dataset.examples, a.dataset.admits);

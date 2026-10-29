@@ -92,7 +92,13 @@ test('the teacher at a cut: its memory a copy served by the simulator; verified,
     assert.deepEqual(await f.client.render(f.pkg, f.pkg.memory.twin), { note: 'x' }, 'the junior\'s memory is untouched');
     assert.match(JSON.stringify(seen[1].at(-1)), /memory_result/);
     assert.equal(v.junior.outcome?.pass, false);
-    assert.equal(v.span, 'answer');
+    assert.equal(v.span, 'decisions', 'its answer needed a memory call: the call is a decision, its result context');
+    /* Review 5: the row a training reads keeps the call and what it read, never the answer alone. */
+    const { trainingRows } = await import('../src/junior/train.ts');
+    const rows = trainingRows(path.join(dir, 'examples'), makeDataset(dir, [v.id]) as never, { admits: ['verified'] } as never);
+    assert.ok(!('error' in rows));
+    assert.deepEqual(rows[0].calls, [{ op: 'put', name: 'plan', text: 'look first', result: 'ok' }]);
+    assert.equal(rows[0].answer, JSON.stringify(LOOK));
     const again = await distill({ dir, req, pkg: f.pkg, client: f.client, teacher: teacher('never asked'), teacherIdentity: { model: 'strong' } });
     assert.equal(again.id, v.id, 'the same request is made once');
     const r = await distill({ dir, req: { ...req, question: 0, group: 'g-other' }, pkg: f.pkg, client: f.client, teacher: teacher('I would look at the data.'), teacherIdentity: { model: 'strong' } });

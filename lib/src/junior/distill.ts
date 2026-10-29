@@ -48,8 +48,9 @@ export interface Example {
   readonly input: { readonly system: string; readonly user: { readonly parts: readonly string[] } };
   /** The answer to train on (the teacher's), or null when it is no target. */
   readonly target: string | null;
-  /** What of the target trains the junior's decisions: its final answer; tool results are context, never loss. */
-  readonly span: 'answer';
+  /** What trains the junior's decisions: its final answer, and the memory calls it made on the way when it made any
+      ('decisions'): each call in the loss, each result as context, never loss. */
+  readonly span: 'answer' | 'decisions';
   readonly state: ExampleState;
   readonly competence: { readonly checker: { readonly id: string; readonly version: number }; readonly request?: string };
   readonly junior: { readonly execution: string; readonly answer: string | null; readonly outcome: Pick<CheckOutcome, 'state' | 'pass' | 'detail'> | null; readonly receipt: string | null };
@@ -132,7 +133,7 @@ export async function distill(o: { dir: string; req: DistillRequest; pkg: Junior
   const slim = (x: CheckOutcome | null) => (x ? { state: x.state, pass: x.pass, detail: x.detail } : null);
   const body = {
     format: 'junior-example@1' as const, cut: { run: o.req.run, question: o.req.question, hash: cut.hash }, group: o.req.group, mode: o.req.mode, input: content,
-    target: state === 'verified' ? t!.answer : null, span: 'answer' as const, state,
+    target: state === 'verified' ? t!.answer : null, span: (t?.calls.length ? 'decisions' : 'answer') as 'answer' | 'decisions', state,
     competence: { checker: o.req.checker, ...(o.req.request ? { request: o.req.request } : {}) },
     junior: { execution, answer: j.answer, outcome: slim(jOut), receipt: j.receipt },
     teacher: { identity: o.teacherIdentity, answer: t?.answer ?? null, outcome: slim(tOut), memory: { start: start.twin, calls: t?.calls ?? [] }, translation: TEACHER_TOOLS, ...(why ?? j.why ? { why: why ?? j.why } : {}) },

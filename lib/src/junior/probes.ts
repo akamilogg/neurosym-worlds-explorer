@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { appendRecord } from './jsonl.ts';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -188,7 +189,7 @@ export async function runProbes(m: CompetenceManifest, manifestHash: string, o: 
       let rec = done.get(key);
       if (!rec) {
         rec = await oneProbe(m, manifestHash, c, comp, rep, o);
-        if (rec.outcome.state === 'measured') { fs.appendFileSync(o.ledger, JSON.stringify(rec) + '\n'); done.set(key, rec); }
+        if (rec.outcome.state === 'measured') { appendRecord(o.ledger, rec); done.set(key, rec); }
       }
       out.push({ component: c.component, case: c.id, rep, value: rec.outcome.state === 'measured' ? (rec.outcome.pass ? 1 : 0) : null, state: rec.outcome.state === 'measured' ? 'measured' : 'infra', why: rec.outcome.detail });
     }

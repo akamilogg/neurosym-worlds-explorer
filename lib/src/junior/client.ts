@@ -40,6 +40,7 @@ export class JuniorSessionClient {
     return this.call('GET', '/sessions/' + encodeURIComponent(id) + '/receipts/' + encodeURIComponent(request));
   }
   memory(pkg: unknown, twin: string | null, call: { op: string; name?: string; text?: string }): Promise<{ result: string; twin: string }> { return this.call('POST', '/memory', { pkg, twin, call }); }
+  validity(pkg: unknown): Promise<import('./sessions.ts').Validity> { return this.call('POST', '/validity', { pkg }); }
   render(pkg: unknown, twin: string | null): Promise<Record<string, string>> { return this.call('POST', '/render', { pkg, twin }); }
   close(id: string): Promise<SessionInfo> { return this.call('POST', '/sessions/' + encodeURIComponent(id) + '/close', {}); }
   cancel(id: string, request_id: string): Promise<{ receipt: Receipt | null }> { return this.call('POST', '/sessions/' + encodeURIComponent(id) + '/cancel', { request_id }); }
