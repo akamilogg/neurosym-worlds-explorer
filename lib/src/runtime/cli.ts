@@ -485,6 +485,18 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
             for (const m of closed.missing) out('missing ' + m);
             for (const c of closed.corrupt) out('corrupt ' + c);
             out(closed.closed ? 'closed: every blob is in the store with its bytes' : 'NOT closed: it cannot be served nor called reconstructible');
+            if (closed.closed) {
+              /* A set of weight edits (SPEC-EDICION-PESOS §3.2): composed again from its own tree, without a model. */
+              const W = await import('../junior/weights.ts');
+              if (W.adapterKind(store, pkg) === 'edits') {
+                const problems = W.verifyEditSet(store, pkg);
+                const set = W.readEditSet(store, pkg.adapter!)!;
+                out('edits     ' + set.genome.length + ' in its genome, from start ' + set.start.slice(0, 12) + ', ' + set.totals.changed + ' of ' + set.totals.entries + ' entries changed');
+                for (const p of problems) out('edit set: ' + p);
+                if (problems.length) return 1;
+                out('edit set: composed again from its tree, the same weights; its constructors give its values');
+              }
+            }
             const exp = take(args, 'export');
             if (exp && closed.closed) out('exported ' + J.exportPackage(pkg, store, path.resolve(exp)).blobs + ' blobs to ' + path.resolve(exp));
             return closed.closed ? 0 : 1;

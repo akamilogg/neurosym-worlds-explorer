@@ -127,3 +127,17 @@ Si falla alguna, se corrige en `junior_worker.py` o `junior_verify.py`: el resto
    bolsas, una sin la política (o con una receta fija) y otra con ella. El producto de cada una es su último junior
    aceptado (`productOf`); `compareImprovements` compara los productos caso a caso. Una investigación interrumpida no se
    acredita al método, y un par aislado nunca declara útil un procedimiento.
+
+## 8. La edición de pesos en la máquina real (SPEC-EDICION-PESOS, WE1)
+
+La composición de ediciones (`compose@1`) está probada con el backend de imitación: la referencia del arnés y el
+compositor en Python puro dan los mismos bits. En la máquina del junior falta comprobar la ruta torch (`apply_edit_set`):
+
+1. **Una versión editada pequeña:** una edición `sparse` de unas pocas entradas y otra `lowrank` de rango 2, en un módulo
+   de una capa de Qwen (no del circuito), compuestas con unas cotas `weight_edits` del manifiesto de competencia.
+2. **Servirla:** una pregunta cualquiera. Si el trabajador compuso otros pesos que el conjunto, la respuesta sale
+   `unverified` con el motivo. «its start is not the checkpoint's tensor» quiere decir que los nombres de módulo del
+   checkpoint no son los de `chat.model`, y hay que traducirlos antes de seguir.
+3. **La validez del circuito** (`circuit_digest` igual que el de la referencia) con la versión editada.
+4. **Verificarla sin modelo:** `lab junior package <paquete> --blobs <blobs>` vuelve a componer el conjunto desde su árbol
+   y comprueba sus constructores.

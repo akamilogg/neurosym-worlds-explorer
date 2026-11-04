@@ -27,6 +27,10 @@ import hashlib
 # Running the driver writes no bytecode next to it: what is in its folder is what the package declared.
 sys.dont_write_bytecode = True
 
+# The weight edits' composer, beside this script (SPEC-EDICION-PESOS §3.2).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import junior_weights as JW  # noqa: E402
+
 
 def emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -65,7 +69,23 @@ def loaded_identity(job, chat=None):
     if chat is not None:
         precision = {"torch.bfloat16": "bf16", "torch.float16": "fp16", "torch.float32": "fp32"}.get(str(next(chat.model.parameters()).dtype), str(next(chat.model.parameters()).dtype))
     return {"tokenizer": sha_file(os.path.join(files["base"], "tokenizer.json")), "chat_template": hashlib.sha256(template.encode("utf8")).hexdigest(),
-            "firmware": sha_file(files["firmware"]), "driver": driver, "circuit": circuit, "precision": precision}
+            "firmware": sha_file(files["firmware"]), "driver": driver, "circuit": circuit, "precision": precision, "weights": served_weights(job)}
+
+
+_composed = {}
+
+
+def served_weights(job):
+    """The digests of the edited modules as served, before and after (an edit set only; None otherwise): composed into the
+    resident model for the qwenputer backend, by the pure composer for the fake one."""
+    adapter = (job.get("files") or {}).get("adapter")
+    if not JW.is_edit_set(adapter):
+        return None
+    if job["backend"] == "qwenputer":
+        return _resident["weights"]
+    if job["execution"] not in _composed:
+        _composed[job["execution"]] = JW.compose_pure(adapter, job["files"]["base"], int((job.get("circuit") or {}).get("chip_layers", 0)))
+    return _composed[job["execution"]]
 
 
 def load_driver(path):
@@ -135,7 +155,7 @@ def run_fake(job):
 
 # --- qwenputer --------------------------------------------------------------------------------------------------------
 
-_resident = {"execution": None, "chat": None}
+_resident = {"execution": None, "chat": None, "weights": None}
 
 
 class TimeLimit(Exception):
@@ -168,10 +188,14 @@ def qwenputer_chat(job):
     if _resident["execution"] != job["execution"]:
         _resident["chat"] = None
         _resident["execution"] = None
+        _resident["weights"] = None
         chat = RvChat(job["files"]["base"])
         # The package's chat template, in place of the checkpoint's.
         chat.tok.chat_template = open(job["files"]["chat_template"], encoding="utf8").read()
-        if job["files"].get("adapter"):
+        if JW.is_edit_set(job["files"].get("adapter")):
+            # A set of edits, composed from the start's weights by its rule (never a LoRA's merge).
+            _resident["weights"] = JW.apply_edit_set(chat.model, job["files"]["adapter"], int(chat.meta["chip_layers"]))
+        elif job["files"].get("adapter"):
             apply_adapter(chat, job["files"]["adapter"], int(chat.meta["chip_layers"]))
         _resident["chat"] = chat
         _resident["execution"] = job["execution"]
@@ -203,11 +227,15 @@ def validity(job):
     reference saw the operation; any token where the circuit and the reference differ is a mismatch. The memory of each
     task is the one the task before left, saved and loaded again (the restore exercised)."""
     if job["backend"] == "fake":
-        touches = False
-        if job["files"].get("adapter"):
-            touches = json.load(open(os.path.join(job["files"]["adapter"], "adapter_config.json"))).get("touches_circuit", False)
+        touches, weights = False, None
+        adapter = job["files"].get("adapter")
+        if JW.is_edit_set(adapter):
+            # A set that reaches the circuit is refused while it is read, as on the served model.
+            weights = served_weights(job)
+        elif adapter:
+            touches = json.load(open(os.path.join(adapter, "adapter_config.json"))).get("touches_circuit", False)
         return {"exercised": {"calc": True, "put": True, "get": True, "delete": True, "restore": True}, "mismatches": 0,
-                "circuit_digest": hashlib.sha256(b"fake-circuit" + (b"-touched" if touches else b"")).hexdigest(), "details": []}
+                "circuit_digest": hashlib.sha256(b"fake-circuit" + (b"-touched" if touches else b"")).hexdigest(), "details": [], "weights": weights}
     from chipformer.rv import bridge as BR, elf, ref
     from chipformer.rv import store as ST
     from chipformer.rv.chat import CALC_TOOL, load_store_file, save_store_file
@@ -239,7 +267,7 @@ def validity(job):
             mismatches += 1
         details.append({"task": kind, "ops": [str(o) for o in ops], "lock_error": r.get("lock_error")})
         dev, snap = lock.dev, chat.save_store()
-    return {"exercised": exercised, "mismatches": mismatches, "circuit_digest": circuit_digest(chat), "details": details}
+    return {"exercised": exercised, "mismatches": mismatches, "circuit_digest": circuit_digest(chat), "details": details, "weights": _resident["weights"]}
 
 
 def run_qwenputer(job):

@@ -1,6 +1,7 @@
 # SPEC · Edición de pesos: el modelo fuerte escribe en los pesos del junior, y una búsqueda evolutiva los explora
 
-Estado (04/11/2026): **propuesta, sin implementar**; dos revisiones externas del mismo día conciliadas (§14); lista para desarrollo. Amplía
+Estado (04/11/2026): **WE1 implementada** (edición, composición, cotas, trabajador, verificación; §12); WE2 a WE6 sin
+implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -91,13 +92,25 @@ Una versión editada se define por tres cosas, y las tres forman parte de su ide
   la referencia, contra qué se compara.
 - **El genoma**: la lista ordenada de ediciones.
 - **La regla de composición**, versionada (`compose@1`):
-  1. Para cada módulo tocado, se suman en fp32, en el orden del genoma, todos los `ΔW` que lo tocan.
-  2. Se aplica una vez: `W' = redondeo_bf16( fp32(W_partida) + ΔW_total )`.
+  1. Para cada módulo tocado, se suman en fp32, en el orden del genoma, todos los `ΔW` que lo tocan. Una edición
+     `lowrank` se suma **rango a rango**, como productos exteriores `B[:,k]·A[k,:]` con `k` en orden: cada producto se
+     redondea a fp32 y cada suma también, sin reducciones. Nunca con un producto de matrices de librería, cuyo orden de
+     suma depende de la librería, del hardware y de los hilos, y daría otros bits en la máquina de confirmación. Una
+     `sparse`, entrada a entrada, con índices estrictamente crecientes.
+  2. Se aplica una vez a **todas** las entradas del módulo: `W' = redondeo_bf16( fp32(W_partida) + ΔW_total )`, con
+     redondeo al par más cercano.
   3. Nunca se aplica una edición sobre pesos ya editados.
 
 El orden importa en bf16: partiendo de 256, dos incrementos de 0,75 dan 256 si se redondea tras cada uno y 258 si se
-acumulan primero en fp32. La regla fija el segundo. Tras componer se registra el resumen de los pesos resultantes de cada
-módulo tocado; dos composiciones del mismo genoma deben dar los mismos resúmenes.
+acumulan primero en fp32. La regla fija el segundo. Por eso **ninguna librería de fusión sirve aquí**: fusionar un LoRA
+(PEFT) convierte `ΔW` a bf16 y lo suma sobre bf16, que son dos redondeos, uno más por adaptador. Tras componer se
+registra, por módulo tocado, el resumen de sus pesos antes y después; dos composiciones del mismo genoma deben dar los
+mismos resúmenes.
+
+La regla está escrita dos veces con la misma aritmética: la referencia del arnés, sin modelo, y el trabajador, en torch
+sobre el modelo servido. El trabajador dice los resúmenes de lo que sirve, antes y después de componer. El servidor los
+compara con los del conjunto: si el «antes» no coincide, el módulo servido no es el tensor del checkpoint con ese nombre;
+si no coincide el «después», compuso otros pesos. En ambos casos la respuesta queda sin verificar y la validez falla.
 
 Consecuencias:
 
@@ -131,6 +144,17 @@ solaparse o cancelarse):
 **Las cotas las fija el manifiesto autorizado de la condición**, por módulo y en total: fracción máxima de entradas
 cambiadas, norma relativa máxima y rango o número de entradas máximos. Un candidato puede declarar cotas más estrictas,
 nunca más laxas. Una intervención compuesta fuera de cotas se rechaza antes de evaluarse.
+
+- **El rango es una cota conservadora, declarada como tal.** Se mide `rank_bound`, la suma de los rangos de las
+  ediciones `lowrank` del módulo, que acota por arriba el rango de su parte de bajo rango compuesta. Así,
+  `diag(1,0) + diag(0,1) = I` cuenta como rango 2 y una edición más su opuesta también cuenta 2, aunque se anulen. El
+  rango numérico exacto exigiría una tolerancia propia. Las entradas `sparse` se acotan aparte, por su número.
+- **Una composición que no es finita no es una versión.** Factores finitos pueden desbordar fp32 en sus productos o
+  sumas (+∞ y −∞ suman NaN), y una suma finita en fp32 puede no caber en bf16. Se rechaza antes de crear el paquete,
+  aquí y en el trabajador. Una medida que no es un número nunca cuenta como dentro de una cota.
+- **La verificación recalcula todas las medidas** (por módulo y totales), las compara con las registradas y aplica las
+  cotas del conjunto. También comprueba que esas cotas son válidas, que no son más laxas que las autorizadas cuando se
+  conocen y que `chip_layers` coincide con el circuito del paquete.
 
 ## 4. El laboratorio de pesos
 
@@ -191,7 +215,13 @@ sin eso, `project_out` con `W = I` y `d = [2, 0]` daría `diag(−3, 1)` en vez 
 lo que debía quitar. Un argumento inválido rechaza la edición.
 
 Sus entradas (casos, activaciones) se toman de consultas al laboratorio, con sus recibos. Repetirlos con las mismas
-entradas da el mismo `ΔW`; el verificador lo comprueba.
+entradas da el mismo `ΔW`; el verificador lo comprueba. Cada constructor fija también su aritmética. `project_out@1`,
+por ejemplo, suma cada `A_j = Σ_i d̂_i·W_ij` en orden creciente de `i`, en float64, y redondea una vez.
+
+`project_out@1` existe desde WE1, como primer constructor y para probar la verificación. Los demás llegan con WE2. Dos
+métodos publicados sirven de referencia para ampliarlos, implementando la fórmula y no la librería, que no conoce este
+modelo: la actualización de rango 1 de ROME, construida a partir de claves y valores de activación, y la diferencia de
+medias de los vectores de control.
 
 ### 4.4 Programas libres
 
@@ -266,7 +296,9 @@ La población inicial tiene tres orígenes, en proporciones fijadas por el manif
 `scale`, `drop`, `combine` y `sparsify` desarrollan el material recibido, y `retarget` lo desplaza. **`perturb` y `reinit`
 introducen material nuevo sin llamar al LLM:** direcciones que nadie propuso, que es parte de la diversidad que se busca.
 Los operadores de código son deterministas dada su semilla; cada hijo guarda sus padres, el operador y la semilla.
-`refine` es ayuda ajena (E4) y se cuenta aparte en el presupuesto.
+`refine` es ayuda ajena (E4) y se cuenta aparte en el presupuesto. Para `combine`, los métodos de fusión de modelos
+(TIES, que elige signo por entrada, y DARE, que descarta al azar y reescala) son variantes naturales. Se escriben sobre los
+factores de las ediciones, no sobre checkpoints completos como hace mergekit.
 
 ### 6.4 Evaluación en cascada
 
@@ -405,6 +437,21 @@ programa libre sólo se vuelve a ejecutar en su backend aislado; sin él, la ver
 **WE1 a WE5 se prueban con el driver de imitación** (`lib/test/fixtures/fake-driver`) y modelos sustitutos. **WE6
 necesita la máquina real y la línea base de la fase A.**
 
+**WE1, hecha (04/11/2026):**
+
+- **Dónde está.** `lib/src/junior/weights.ts` contiene `weight-edit@1`, `compose@1` de referencia, medidas y cotas,
+  `weight-edit-set@1` y su verificación, y `project_out@1`. Las cotas autorizadas van en el manifiesto de competencia
+  (`weight_edits`). `lib/src/junior/junior_weights.py` es el compositor del trabajador: torch sobre el modelo servido y
+  Python puro para el backend de imitación.
+- **Pruebas.** Las de `lib/test/junior-weights.test.ts` cubren las aceptaciones 1 a 4, 12 y 13. Entre ellas, la
+  comparación bit a bit del compositor de TS con el de Python. `lab junior package` verifica un conjunto de ediciones
+  sin modelo.
+- **Formato de tensores.** Viajan como safetensors escritos por un escritor propio, con nombres ordenados y sin
+  metadatos, para que unos mismos tensores den los mismos bytes.
+- **Pendiente en la máquina real.**
+  - La ruta torch, `apply_edit_set`: comparar sus resúmenes con los de la referencia en un módulo de Qwen.
+  - Que los nombres de módulo del checkpoint sean los de `chat.model`. Si no lo son, el resumen del «antes» lo detecta.
+
 ## 13. Aceptación
 
 1. Una edición en capas del circuito o sin hipótesis se rechaza antes de crear la versión; una intervención compuesta
@@ -456,3 +503,11 @@ Segunda revisión, el mismo día:
 | `project_out` sólo quitaba la dirección si `d` era unitaria: se normaliza dentro, con argumentos comprobados | §4.3, aceptación 12 |
 | H2 atribuía a la evaluación distinguir desbloquear de construir: ahora mide la transferencia a investigaciones completas | H2 en §1, §8, §11 |
 | El exportador no sigue referencias dentro de un JSON: el árbol lleva como ficheros todo lo necesario para componer y verificar | §3.2, WE1, aceptación 13 |
+
+Revisión de la implementación de WE1, el mismo día:
+
+| Punto | Dónde |
+|---|---|
+| La composición aceptaba NaN (+∞ y −∞ de factores finitos) y la verificación lo daba por bueno: ahora se rechaza lo no finito, y una medida NaN nunca está dentro de una cota | §3.3, `compose` y el trabajador |
+| El verificador sólo comparaba los resúmenes de pesos: ahora recalcula todas las medidas y totales, aplica las cotas del conjunto y comprueba `chip_layers` | §3.3, `verifyEditSet` |
+| El rango se acotaba por edición: ahora `rank_bound` suma los rangos del módulo, una cota conservadora declarada como tal | §3.3 |

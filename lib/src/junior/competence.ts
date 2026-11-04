@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
 import { LABS } from '../worlds/labs.ts';
+import { boundsProblems, type WeightBounds } from './weights.ts';
 
 /* ============================================================================
  * The measure of a junior (SPEC-METAPOLITICA-APRENDIZAJE §6.1-§6.5): its manifest, the deficit of each observation, the
@@ -95,6 +96,8 @@ export interface CompetenceManifest {
     readonly probe_max_tokens: number;
     readonly timeout_ms: number;
   };
+  /** The bounds of the weight edits this condition authorizes (SPEC-EDICION-PESOS §3.3); without them, edits are refused. */
+  readonly weight_edits?: WeightBounds;
 }
 
 const PROBE_CHECKERS = new Set(['protocol', 'request', 'rules', 'proposal']);
@@ -120,6 +123,7 @@ export function competenceProblems(raw: unknown): string[] {
     if (!bounded('--max-tokens') || !bounded('--max-judge-calls')) e.push('"limits.junior_args": its --max-tokens and --max-judge-calls, what each investigation is reserved');
   }
   if (!m.execution || typeof m.execution !== 'object') e.push('"execution": the harness, checkers, snapshot formats, tools, Judge and teacher as they run');
+  if (m.weight_edits !== undefined) e.push(...boundsProblems(m.weight_edits));
 
   const comps = new Map<string, Component>();
   for (const [i, c] of (Array.isArray(m.components) ? m.components : []).entries()) {

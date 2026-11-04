@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { BlobStore, JuniorPackage } from './package.ts';
 import { stableStringify } from '../core/hash.ts';
 import type { JuniorWorker, WorkerJob, WorkerResult } from './sessions.ts';
+import { weightsMismatch } from './weights.ts';
 
 /* ============================================================================
  * The worker as a process (SPEC-METAPOLITICA-APRENDIZAJE §5): junior_worker.py, long-lived, its model resident. The
@@ -93,6 +94,8 @@ export interface Loaded {
   readonly circuit: Readonly<Record<string, unknown>> | null;
   /** The precision its weights were loaded in, or null where the backend has none. */
   readonly precision: string | null;
+  /** A set of weight edits composed: each module's digest before and after, as served; null without one. */
+  readonly weights?: Readonly<Record<string, { base: string; edited: string }>> | null;
 }
 
 /** Where what a worker loaded is not what the package fixes, or null: the identity served is checked, never echoed. */
@@ -108,7 +111,8 @@ export function identityMismatch(pkg: JuniorPackage, store: BlobStore, loaded: L
   const declared = e.circuit as Record<string, unknown>;
   if (Object.keys(declared).length && (loaded.circuit === null || Object.entries(declared).some(([k, v]) => stableStringify(loaded.circuit![k]) !== stableStringify(v)))) wrong.push('circuit configuration');
   if (loaded.precision !== null && loaded.precision !== e.precision) wrong.push('precision (' + loaded.precision + ')');
-  return wrong.length ? 'it loaded another ' + wrong.join(', ') + ' than the package fixes' : null;
+  if (wrong.length) return 'it loaded another ' + wrong.join(', ') + ' than the package fixes';
+  return weightsMismatch(store, pkg, loaded.weights);
 }
 
 export interface ProcessWorkerOptions {
@@ -196,7 +200,10 @@ export class ProcessWorker implements JuniorWorker {
       this.waiting.set(id, resolve as never);
       child.stdin.write(JSON.stringify({ id, op: 'validity', execution: job.execution, backend: this.o.backend, files, circuit: job.pkg.execution.circuit, decoding: job.pkg.decoding }) + NL);
     });
-    return a.validity && typeof a.validity === 'object' ? a.validity as import('./sessions.ts').Validity : { error: String(a.reason ?? 'no answer') };
+    if (!a.validity || typeof a.validity !== 'object') return { error: String(a.reason ?? 'no answer') };
+    /* A set of edits is valid only as the weights it says: what the worker composed is checked against its summaries. */
+    const wrong = weightsMismatch(job.store, job.pkg, (a.validity as { weights?: Loaded['weights'] }).weights);
+    return wrong ? { error: wrong } : a.validity as import('./sessions.ts').Validity;
   }
 
   /** One memory operation on a copy of a twin, by the package's reference store (§8). */
