@@ -3,6 +3,7 @@ import { stableStringify } from '../core/hash.ts';
 import { LABS } from '../worlds/labs.ts';
 import { boundsProblems, type WeightBounds } from './weights.ts';
 import { weightLabProblems, type WeightLabConfig } from './weight-lab.ts';
+import { searchConfigProblems } from './weight-search.ts';
 
 /* ============================================================================
  * The measure of a junior (SPEC-METAPOLITICA-APRENDIZAJE §6.1-§6.5): its manifest, the deficit of each observation, the
@@ -101,6 +102,19 @@ export interface CompetenceManifest {
   readonly weight_edits?: WeightBounds;
   /** The weight laboratory (SPEC-EDICION-PESOS §4): its diagnosis groups and runs, disjoint from the cases', and its limits. */
   readonly weight_lab?: WeightLabConfig;
+  /** What a search of juniors may do in this condition (SPEC-EDICION-PESOS §6): fixed before any search starts. */
+  readonly weight_search?: WeightSearchAuthorized;
+}
+
+export interface WeightSearchAuthorized {
+  readonly max_candidates: number;
+  /** Control seeds a search needs at least (E6): never below 1. */
+  readonly min_control_seeds: number;
+  readonly operators: Readonly<Record<string, number>>;
+  readonly tolerance: Readonly<Record<string, number>>;
+  readonly layer_groups: readonly (readonly [number, number])[];
+  readonly perturb: number;
+  readonly investigate_elites: boolean;
 }
 
 const PROBE_CHECKERS = new Set(['protocol', 'request', 'rules', 'proposal']);
@@ -128,6 +142,16 @@ export function competenceProblems(raw: unknown): string[] {
   if (!m.execution || typeof m.execution !== 'object') e.push('"execution": the harness, checkers, snapshot formats, tools, Judge and teacher as they run');
   if (m.weight_edits !== undefined) e.push(...boundsProblems(m.weight_edits));
   if (m.weight_lab !== undefined) e.push(...weightLabProblems(m.weight_lab, m));
+  if (m.weight_search !== undefined) {
+    const w = m.weight_search;
+    if (!w || typeof w !== 'object') e.push('"weight_search": {max_candidates, min_control_seeds, operators, tolerance, layer_groups, perturb, investigate_elites}');
+    else {
+      if (!Number.isInteger(w.min_control_seeds) || w.min_control_seeds < 1) e.push('"weight_search.min_control_seeds": at least 1 (E6)');
+      const probeComps = (m.components ?? []).filter((c) => c.rung <= 4 && (m.cases ?? []).some((k) => k.kind === 'probe' && k.component === c.id)).map((c) => c.id);
+      e.push(...searchConfigProblems({ format: 'weight-search@1', seed: 0, control_seeds: Math.max(1, w.min_control_seeds), max_candidates: w.max_candidates, operators: w.operators,
+        tolerance: w.tolerance, layer_groups: w.layer_groups, perturb: w.perturb, investigate_elites: w.investigate_elites }, probeComps).map((x) => '"weight_search": ' + x));
+    }
+  }
 
   const comps = new Map<string, Component>();
   for (const [i, c] of (Array.isArray(m.components) ? m.components : []).entries()) {

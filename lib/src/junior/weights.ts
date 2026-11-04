@@ -850,7 +850,7 @@ const meanDifference: Constructor = {
 };
 
 /** A seeded generator (mulberry32): the same start vectors on every machine. */
-function seeded(seed: number): () => number {
+export function seeded(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;

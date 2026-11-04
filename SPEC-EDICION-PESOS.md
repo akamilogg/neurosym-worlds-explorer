@@ -1,7 +1,7 @@
 # SPEC · Edición de pesos: el modelo fuerte escribe en los pesos del junior, y una búsqueda evolutiva los explora
 
-Estado (04/11/2026): **WE1 a WE3 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
-backend aislado; la palanca en el mundo del junior; §12); WE4 a WE6 sin implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
+Estado (04/11/2026): **WE1 a WE4 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
+backend aislado; la palanca en el mundo del junior; la búsqueda; §12); WE5 y WE6 sin implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -326,8 +326,18 @@ pesos y exige pasar la validez.
 
 ## 6. La búsqueda evolutiva de juniors
 
-Cuando la palanca individual no basta, una búsqueda explora muchas ediciones a la vez. Usa el motor evolutivo existente
-(`lib/src/learn/evolve`) con un candidato nuevo: el **genoma** sobre una partida fija.
+Cuando la palanca individual no basta, una búsqueda explora muchas ediciones a la vez, sobre un candidato nuevo: el
+**genoma** sobre una partida fija.
+
+**No usa la política del motor evolutivo existente** (`lib/src/learn/evolve`), y la razón está en ella misma: esa política
+planifica parches de ficheros que pide a un mutador LLM (local, rewrite, repair, recombination, restart). Aquí casi todos
+los operadores son código sobre tensores y el archivo es por nichos. Por eso es una búsqueda propia, `weight-search@1`,
+que conserva los principios del motor:
+
+- identificadores estables;
+- un registro de eventos escrito antes y después de cada efecto;
+- el archivo reconstruido desde el registro sin modelo;
+- una búsqueda reanudada que no vuelve a medir ni a cobrar lo que ya midió.
 
 ### 6.1 Genoma
 
@@ -416,7 +426,24 @@ La búsqueda se abre de una de tres formas:
 - **El operador la lanza** como rama de delegación, con su propio fondo.
 
 Lo que devuelve son versiones con su procedencia completa (partida, genoma, padres, operadores, semillas y autoría), que
-el investigador adopta o no. Como en las ramas evolutivas existentes, lo que importa es que abra líneas que el
+el investigador adopta o no.
+
+Cómo queda en el código (WE4):
+
+- **Lo autorizado.** `weight_search` en el manifiesto fija el máximo de candidatos, el mínimo de semillas de control
+  (al menos 1), los pesos de los operadores, las tolerancias de cada componente de sondas, los grupos de capas, el ruido
+  de `perturb` y si se investigan las élites. `evolve` se mueve dentro de eso.
+- **Las semillas.** El investigador las da en el acto como ediciones (`written`, `construct` o `program`), cada una con
+  su hipótesis. Dos semillas con los mismos módulos y el mismo origen se rechazan por ser la misma hipótesis.
+- **Los controles.** Cada semilla de control toma una semilla fuerte (en ciclo), sortea factores o entradas aleatorios
+  en los mismos módulos, con el mismo rango o número de entradas, y los escala para que la norma relativa compuesta de
+  cada módulo sea la de la fuerte. Su autoría es `control`.
+- **El coste.** Cada genoma compuesto es un trabajo de `edits` y cada candidato medido con sondas uno de `evaluations`,
+  los dos idempotentes por lo que piden. Agotar una bolsa detiene la búsqueda con su archivo.
+- **Las élites** se registran como versiones del mundo, con su conjunto en `edits.json`, su nicho y su origen.
+- **`refine`.** En el mundo no se usa: el modelo fuerte es el propio investigador, que siembra y vuelve a abrir
+  búsquedas. La búsqueda lo admite con un `refine` inyectado.
+- **Combinar.** `combine` une genomas. Las variantes TIES y DARE quedan como mejora. Como en las ramas evolutivas existentes, lo que importa es que abra líneas que el
 investigador no tenía, no que su primer resultado se promueva.
 
 ## 7. Medida y promoción
@@ -536,6 +563,14 @@ necesita la máquina real y la línea base de la fase A.**
     por consulta.
   - La autoprueba del aislamiento. Ubuntu 23.10 y posteriores pueden restringir los espacios de nombres de usuario sin
     privilegios: si la autoprueba falla, `program` sigue rechazado y los constructores cubren la palanca.
+
+**WE4, hecha (04/11/2026):**
+
+- **Dónde está.** La búsqueda está en `lib/src/junior/weight-search.ts`: genomas, semillas fuertes distintas, controles
+  del mismo tamaño, operadores, cascada, nichos, regla de calidad, reconstrucción y reanudación. El acto `evolve`, la
+  evaluación sólo con sondas (`probesOf`) y el evaluador de búsqueda están en el mundo. `weight_search` va en el
+  manifiesto.
+- **Pruebas.** `lib/test/junior-weight-search.test.ts` cubre las aceptaciones 7, 8, 9 y 11.
 
 **WE3, hecha (04/11/2026):**
 
