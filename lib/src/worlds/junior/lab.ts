@@ -73,11 +73,17 @@ export class JuniorWorld {
   /** The interpreter that runs the isolated backend's self-test and free programs, if programs are asked for. */
   private readonly labPython: readonly string[];
   private isolationP: Promise<Availability> | null = null;
+  private readonly weightBranches: string | null;
+  /** The evaluations of this run in their order, and the versions its checks promoted: what a stall is told from. */
+  private readonly history: { version: string; deficits: Record<string, number | null> }[] = [];
+  private readonly promoted = new Set<string>();
   private readonly probesStandIn: ((pkg: JuniorPackage) => Promise<{ complete: boolean; components: { id: string; quality: number | null }[] }>) | null;
 
   constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; distillations?: number; gpuHours?: number;
     training?: { python: readonly string[]; backend: 'fake' | 'qwenputer' }; store?: ArtifactStore;
     labQueries?: number; labTokens?: number; edits?: number; labPython?: readonly string[]; cutter?: import('../../junior/weight-lab.ts').Cutter;
+    /** Where the operator's weight-search branches leave their findings (SPEC-EDICION-PESOS §6.6): read, never written. */
+    weightBranches?: string;
     /** A stand-in of the selection probes (the harness's tests of the search): each probe component's deficit. */
     probes?: (pkg: JuniorPackage) => Promise<{ complete: boolean; components: { id: string; quality: number | null }[] }> }) {
     const problems = competenceProblems(o.manifest);
@@ -99,6 +105,7 @@ export class JuniorWorld {
     this.training = o.training ?? null;
     this.labPython = o.labPython ?? ['python3'];
     this.probesStandIn = o.probes ?? null;
+    this.weightBranches = o.weightBranches ?? null;
     if (o.manifest.weight_lab && (o.labQueries ?? 0) > 0) {
       const config = o.manifest.weight_lab;
       const cutter = o.cutter ?? (async (run: string, question: number) => {
@@ -402,7 +409,7 @@ export class JuniorWorld {
 
   /** The edit an act asks for, stored by its hash: written values, a closed constructor (its inputs from the lab's
       receipts or given), or a free program in the isolated backend. Nothing is charged here: a refused edit costs nothing. */
-  private async makeEdit(start: JuniorPackage, e: EditAsked, hypothesis: { competence: string; mechanism: string; effect: string }): Promise<{ id: string } | { problems: string[] }> {
+  async makeEdit(start: JuniorPackage, e: EditAsked, hypothesis: { competence: string; mechanism: string; effect: string }): Promise<{ id: string } | { problems: string[] }> {
     const W = await import('../../junior/weights.ts');
     const chip = Number((start.execution.circuit as Record<string, unknown>).chip_layers);
     if ('written' in e) {
@@ -625,8 +632,68 @@ export class JuniorWorld {
     const pkg = await this.packageOf(version);
     if (typeof pkg === 'string') return pkg;
     const e = await this.evaluatePackage(pkg, judge, version);
-    if (typeof e !== 'string') this.evaluations.set(version, e);
+    if (typeof e !== 'string') {
+      this.evaluations.set(version, e);
+      this.noteEvaluation(version, Object.fromEntries(e.measure.components.map((c) => [c.id, c.quality])));
+    }
     return e;
+  }
+
+  /** An evaluation of a version, in the order the run made it: what a stall is told from. */
+  noteEvaluation(version: string, deficits: Record<string, number | null>): void { this.history.push({ version, deficits }); }
+
+  /** A check's verdict, kept: a version promoted ends a stall. */
+  notePromotion(version: string, promoted: boolean): void { if (promoted) this.promoted.add(version); }
+
+  /** A STALL (SPEC-EDICION-PESOS §6.6), as facts: the last K evaluations of versions, none promoted, no component's
+      deficit better than the best before them by more than its tolerance. Only where the run may open a search (the
+      manifest authorizes one and edits are paid); each stall told once (kept in stalls.jsonl): the world never opens a
+      search itself. */
+  stall(): Record<string, unknown> | null {
+    const auth = this.manifest.weight_search;
+    if (!auth || !this.manifest.weight_edits || !(this.jobs.bags().edits?.limit > 0)) return null;
+    const k = auth.stuck_after ?? 4;
+    if (this.history.length < k + 1) return null;
+    const window = this.history.slice(-k), before = this.history.slice(0, -k);
+    if (window.some((h) => this.promoted.has(h.version))) return null;
+    for (const comp of this.manifest.components) {
+      const best = Math.min(...before.map((h) => h.deficits[comp.id]).filter((x): x is number => typeof x === 'number'));
+      const tol = auth.tolerance[comp.id] ?? 0;
+      if (window.some((h) => typeof h.deficits[comp.id] === 'number' && (h.deficits[comp.id] as number) < best - tol)) return null;
+    }
+    const id = window[0].version;
+    const file = path.join(this.dir, 'stalls.jsonl');
+    const told = fs.existsSync(file) && fs.readFileSync(file, 'utf8').split('\n').some((l) => { try { return JSON.parse(l).from === id; } catch { return false; } });
+    if (told) return null;
+    const notice = { stall: { evaluations: k, versions: window.map((h) => h.version), promoted: 0, deficits_moved: false,
+      what_you_may_do: 'open a search of juniors with the act "evolve" from a version without an adapter; the world does not open one itself' } };
+    appendRecord(file, { from: id, notice }, { sync: true });
+    return notice;
+  }
+
+  /** The operator's weight-search branches that have ended and are not yet delivered (§6.6): each one's elites made
+      versions of this world from the version it started from, and told as a delegated contribution - never an order nor an
+      answer of the world. Each delivered once (kept in branches.jsonl). */
+  deliverBranches(): Record<string, unknown>[] {
+    if (!this.weightBranches || !fs.existsSync(this.weightBranches)) return [];
+    const file = path.join(this.dir, 'branches.jsonl');
+    const done = new Set(fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l).id as string]; } catch { return []; } }) : []);
+    const out: Record<string, unknown>[] = [];
+    for (const f of fs.readdirSync(this.weightBranches).filter((n) => n.endsWith('.finding.json')).sort()) {
+      let finding: { id?: string; from?: string; question?: string; stoppedBy?: string; elites?: { niche: string; record: unknown; deficits: unknown }[] };
+      try { finding = JSON.parse(fs.readFileSync(path.join(this.weightBranches, f), 'utf8')); } catch { continue; }
+      if (!finding.id || done.has(finding.id) || typeof finding.from !== 'string' || !this.store.get(finding.from)) continue;
+      const versions: { version: string; niche: string; deficits: unknown }[] = [];
+      for (const e of finding.elites ?? []) {
+        const v = this.store.apply(finding.from, { files: { [EDITS]: JSON.stringify(e.record, null, 2) + '\n' } }, { branch: finding.id, niche: e.niche });
+        if (typeof v !== 'string') versions.push({ version: v.hash, niche: e.niche, deficits: e.deficits });
+      }
+      const notice = { delegated: { branch: finding.id, by: 'the operator', question: finding.question ?? null, stopped_by: finding.stoppedBy ?? null, versions,
+        note: 'a search of juniors the operator ran: its elites are versions you may run, adopt or leave' } };
+      appendRecord(file, { id: finding.id, versions: versions.map((v) => v.version) }, { sync: true });
+      out.push(notice);
+    }
+    return out;
   }
 
   /** A junior evaluated on the development cases, by its package (a version, or a candidate of a search). */
@@ -800,6 +867,12 @@ function editOf(raw: Record<string, any>): { edit: EditAsked; hypothesis: { comp
   return { edit, hypothesis: hypothesisOf(ed) };
 }
 
+/** A seed of a search as the act evolve (or an operator's branch) gives it: one edit with its competence and why. */
+export function editOfSeed(s: Record<string, unknown>): ReturnType<typeof editOf> {
+  if (typeof s?.competence !== 'string' || !s.competence.trim() || typeof s.why !== 'string' || !s.why.trim()) return null;
+  return editOf(s as Record<string, any>);
+}
+
 /** An edit's hypothesis (E1), from its act: the competence it corrects, the mechanism it supposes (its why), its effect. */
 function hypothesisOf(ed: Record<string, any>): { competence: string; mechanism: string; effect: string } {
   return { competence: String(ed.competence ?? ''), mechanism: String(ed.why ?? ''), effect: typeof ed.expect === 'string' && ed.expect.trim() ? ed.expect : 'exploratory' };
@@ -936,6 +1009,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     { name: 'lab-queries', default: '0', help: 'queries to the weight laboratory the run may make in all (0: none; the manifest needs weight_lab)' },
     { name: 'lab-tokens', default: '0', help: 'tokens the weight laboratory\'s queries may run in all' },
     { name: 'edits', default: '0', help: 'edited versions of the junior the run may make in all (0: none; the manifest needs weight_edits)' },
+    { name: 'weight-branches', default: '', help: 'where the weight-search branches of the operator leave their findings: their elites delivered to the researcher as versions (read-only)' },
     { name: 'lab-python', default: 'python3', help: 'the interpreter of the isolated backend for free programs (its self-test decides whether they run)' },
     { name: 'teacher-url', default: '', help: 'the teacher\'s endpoint (or TEACHER_LLM_URL; its key from TEACHER_LLM_KEY)' },
     { name: 'teacher-model', default: '', help: 'the teacher\'s model (or TEACHER_LLM_MODEL)' }
@@ -952,7 +1026,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       distillations: Math.max(0, Math.floor(Number(o.distillations) || 20)), gpuHours: Math.max(0, Number(o['gpu-hours']) || 0),
       ...(o['train-python'] ? { training: { python: [o['train-python']], backend: (o['train-backend'] === 'fake' ? 'fake' : 'qwenputer') as 'fake' | 'qwenputer' } } : {}), ...(store ? { store } : {}),
       labQueries: Math.max(0, Math.floor(Number(o['lab-queries']) || 0)), labTokens: Math.max(0, Math.floor(Number(o['lab-tokens']) || 0)), edits: Math.max(0, Math.floor(Number(o.edits) || 0)),
-      labPython: [o['lab-python'] || 'python3'] });
+      labPython: [o['lab-python'] || 'python3'], ...(o['weight-branches'] ? { weightBranches: path.resolve(o['weight-branches']) } : {}) });
     const env = process.env;
     const judge = env.JEV_KEY ? { url: env.JEV_URL || 'https://openrouter.ai/api/v1/chat/completions', key: env.JEV_KEY, ...(env.JEV_MODEL ? { model: env.JEV_MODEL } : {}) } : undefined;
     /* The teacher, configured as any researcher: its endpoint and model given, its key from the environment (the proxy's
@@ -1000,12 +1074,15 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
   },
   artifact: {
     known: (spec, version) => spec.world.store.get(version) !== null,
-    async check(spec, version) {
+    async check(spec, version, _context, ctx) {
       const ref = await spec.world.evaluate(spec.world.reference, spec.judge);
       const cand = await spec.world.evaluate(version, spec.judge);
       if (typeof ref === 'string' || typeof cand === 'string') return { holds: false, view: { verdict: 'inconclusive', why: 'not evaluated' }, journal: { error: typeof ref === 'string' ? ref : cand } };
       const { promoteEvaluations } = await import('../../junior/evaluate.ts');
       const p = promoteEvaluations(spec.world.manifest, spec.world.manifestHash, ref, cand);
+      spec.world.notePromotion(version, p.verdict === 'promoted');
+      const stall = spec.world.stall();
+      if (stall) ctx?.publish?.({ kind: 'notice', body: stall });
       return {
         holds: p.verdict === 'promoted',
         view: { verdict: p.verdict, components: p.components.map((c) => ({ id: c.id, improves: c.improves, regresses: c.regresses })) },
@@ -1135,7 +1212,8 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       return 'act needs "change", "run", "publish_memory", "distill", "dataset", "train", "inspect_weights", "edit", "evolve" or "confirmations"';
     },
     place: () => undefined,
-    async start(spec, a, _id, _ctx?: LabContext) {
+    async start(spec, a, _id, ctx?: LabContext) {
+      const episode = await (async (): Promise<JuniorEpisode | null> => {
       if ('change' in a) {
         const { from: _f, files: _x, ...reason } = a.change;
         const made = spec.world.change(a.change.from, a.change.files, reason);
@@ -1207,6 +1285,12 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       const run = (a as { run: { version: string } }).run;
       const e = await spec.world.evaluate(run.version, spec.judge);
       return typeof e === 'string' ? null : evaluationEpisode(spec.world, run.version, e);
+      })();
+      /* After the act: what the operator's branches delivered, and a stall if there is one - facts, published as the world. */
+      for (const n of spec.world.deliverBranches()) ctx?.publish?.({ kind: 'notice', body: n });
+      const stall = spec.world.stall();
+      if (stall) ctx?.publish?.({ kind: 'notice', body: stall });
+      return episode;
     },
     shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length } : e.kind === 'records' ? { what: e.what, ...e.summary } : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions }),
     asWritten: (a) => a,

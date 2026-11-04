@@ -1,7 +1,8 @@
 # SPEC · Edición de pesos: el modelo fuerte escribe en los pesos del junior, y una búsqueda evolutiva los explora
 
-Estado (04/11/2026): **WE1 a WE4 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
-backend aislado; la palanca en el mundo del junior; la búsqueda; §12); WE5 y WE6 sin implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
+Estado (04/11/2026): **WE1 a WE5 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
+backend aislado; la palanca en el mundo del junior; la búsqueda; el atasco y la rama del operador; §12). Falta WE6, que
+necesita la línea base real. Dos revisiones externas del mismo día conciliadas (§14). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -443,7 +444,28 @@ Cómo queda en el código (WE4):
 - **Las élites** se registran como versiones del mundo, con su conjunto en `edits.json`, su nicho y su origen.
 - **`refine`.** En el mundo no se usa: el modelo fuerte es el propio investigador, que siembra y vuelve a abrir
   búsquedas. La búsqueda lo admite con un `refine` inyectado.
-- **Combinar.** `combine` une genomas. Las variantes TIES y DARE quedan como mejora. Como en las ramas evolutivas existentes, lo que importa es que abra líneas que el
+- **Combinar.** `combine` une genomas. Las variantes TIES y DARE quedan como mejora.
+
+Cómo queda en el código (WE5):
+
+- **El atasco.**
+  - Sólo se mide en un run que puede abrir una búsqueda: el manifiesto autoriza `weight_search` y `weight_edits`, y el
+    run paga `edits`.
+  - Las K últimas evaluaciones de versiones (`weight_search.stuck_after`, 4 por defecto) cuentan como atasco si
+    ninguna se ha promovido y ningún componente mejora el mejor déficit anterior más allá de su tolerancia.
+  - El mundo lo publica en el canal tras un acto o una comprobación, como hechos: cuántas evaluaciones, qué versiones,
+    ninguna promovida, déficits sin moverse, y que `evolve` está disponible.
+  - Cada atasco se dice una sola vez (`stalls.jsonl`). El mundo nunca abre la búsqueda.
+- **La rama del operador** (`lab junior branch <weight-search-branch.json> --dir <dir>`).
+  - Tiene el ciclo de vida de toda rama delegada: registro, latido con su proceso, buzón de parada, hallazgo, y además
+    el registro de su búsqueda y un libro propio con su fondo (`edits`, `evaluations`), aparte de las bolsas del
+    investigador.
+  - Su mundo es una instancia propia sobre los mismos blobs y el mismo servidor, es decir, en la cola única de la GPU.
+  - Reanudada, no vuelve a medir. Terminada, no vuelve a correr.
+  - El mundo del investigador lee las ramas terminadas (`--weight-branches`), registra sus élites como versiones desde
+    la versión de partida y las entrega una vez por el canal, como contribución delegada: ni una orden ni una respuesta
+    del mundo.
+  - El investigador no pide esta rama con `delegate`: para eso tiene `evolve`. La rama es la vía del operador. Como en las ramas evolutivas existentes, lo que importa es que abra líneas que el
 investigador no tenía, no que su primer resultado se promueva.
 
 ## 7. Medida y promoción
@@ -563,6 +585,15 @@ necesita la máquina real y la línea base de la fase A.**
     por consulta.
   - La autoprueba del aislamiento. Ubuntu 23.10 y posteriores pueden restringir los espacios de nombres de usuario sin
     privilegios: si la autoprueba falla, `program` sigue rechazado y los constructores cubren la palanca.
+
+**WE5, hecha (04/11/2026):**
+
+- **Dónde está.** El atasco (`stall`) y la entrega de las ramas (`deliverBranches`) están en el mundo. La rama del
+  operador está en `lib/src/junior/weight-branch.ts`, y el subcomando es `lab junior branch`.
+- **Pruebas.** Están en `lib/test/junior-weight-stall-branch.test.ts`.
+- **Un ciclo de importación arreglado de paso.** Ya existía antes de WE5: cargar primero el mundo del junior fallaba
+  (`junior/lab.ts` → `competence.ts` → `labs.ts` → `junior/lab.ts`). El registro de laboratorios ahora lee el mundo del
+  junior cuando se le pide, no al construirse.
 
 **WE4, hecha (04/11/2026):**
 

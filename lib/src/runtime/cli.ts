@@ -356,7 +356,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       case 'junior': {
         /* The junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1): its blobs, its package, a session verified from
            its ledger, the machine checked, the driver's resources measured. The server and the proxy are scripts of their own. */
-        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T --driver D --base B] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P | policy <learning-policy.json> --max-advice N [--out <dir>] | policies <dir> | isolation [--python P]';
+        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T --driver D --base B] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P | policy <learning-policy.json> --max-advice N [--out <dir>] | policies <dir> | isolation [--python P] | branch <weight-search-branch.json> --dir <dir>';
         const sub = args.shift();
         const file = (f: string) => fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f);
         const J = await import('../junior/package.ts');
@@ -408,6 +408,15 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
             out('the operator\'s report: ' + r.report);
             return 0;
           } finally { server.stop(); await h.close(); }
+        }
+        if (sub === 'branch') {
+          /* SPEC-EDICION-PESOS §6.6: the operator's search of juniors as a branch with its own fund; resumed if run again. */
+          const specFile = args.shift(), dir = take(args, 'dir');
+          if (!specFile || !dir) { out('lab junior branch <weight-search-branch.json> --dir <branches dir>'); return 2; }
+          const { runWeightBranch } = await import('../junior/weight-branch.ts');
+          const finding = await runWeightBranch(path.resolve(specFile), path.resolve(dir));
+          out('stopped by ' + String(finding.stoppedBy) + '; ' + (finding.elites?.length ?? 0) + ' elites; spent ' + JSON.stringify(finding.cost ?? {}));
+          return 0;
         }
         if (sub === 'isolation') {
           /* SPEC-EDICION-PESOS §4.4: whether this machine has an isolated backend for free programs, by its self-test. */

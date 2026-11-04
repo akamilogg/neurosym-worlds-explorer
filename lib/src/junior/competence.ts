@@ -115,6 +115,9 @@ export interface WeightSearchAuthorized {
   readonly layer_groups: readonly (readonly [number, number])[];
   readonly perturb: number;
   readonly investigate_elites: boolean;
+  /** The stall that makes the world tell the researcher a search may be opened (§6.6): this many evaluations in a row of
+      versions none of which is promoted and whose deficits do not move. Default 4. */
+  readonly stuck_after?: number;
 }
 
 const PROBE_CHECKERS = new Set(['protocol', 'request', 'rules', 'proposal']);
@@ -147,6 +150,7 @@ export function competenceProblems(raw: unknown): string[] {
     if (!w || typeof w !== 'object') e.push('"weight_search": {max_candidates, min_control_seeds, operators, tolerance, layer_groups, perturb, investigate_elites}');
     else {
       if (!Number.isInteger(w.min_control_seeds) || w.min_control_seeds < 1) e.push('"weight_search.min_control_seeds": at least 1 (E6)');
+      if (w.stuck_after !== undefined && (!Number.isInteger(w.stuck_after) || w.stuck_after < 2)) e.push('"weight_search.stuck_after": at least 2 evaluations');
       const probeComps = (m.components ?? []).filter((c) => c.rung <= 4 && (m.cases ?? []).some((k) => k.kind === 'probe' && k.component === c.id)).map((c) => c.id);
       e.push(...searchConfigProblems({ format: 'weight-search@1', seed: 0, control_seeds: Math.max(1, w.min_control_seeds), max_candidates: w.max_candidates, operators: w.operators,
         tolerance: w.tolerance, layer_groups: w.layer_groups, perturb: w.perturb, investigate_elites: w.investigate_elites }, probeComps).map((x) => '"weight_search": ' + x));
