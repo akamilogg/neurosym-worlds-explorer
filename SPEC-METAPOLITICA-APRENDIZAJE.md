@@ -461,6 +461,9 @@ De más barata a más cara. El investigador elige cuáles usar, y cada uso queda
 4. **Destilación desde un corte** (§8): datos de entrenamiento construidos donde el junior se equivoca.
 5. **LoRA:** un entrenamiento sobre un conjunto de datos declarado, que produce un adaptador nuevo y una versión nueva.
 
+Propuesta, sin implementar: la **edición de pesos** por el modelo fuerte, entre la decodificación y la destilación, y
+una búsqueda evolutiva sobre ella ([SPEC-EDICION-PESOS](SPEC-EDICION-PESOS.md)).
+
 ### 7.1 Actos y trabajos del mundo
 
 Se amplía el adaptador de laboratorio sobre el almacén de artefactos; no se fuerza un entrenamiento a pasar por el
@@ -840,6 +843,7 @@ los resultados reales correspondientes. Las pruebas de recuperación y aislamien
 | **MA5 · Entrenamiento** | MA3 y MA4 | `train` recuperable con LoRA, diagnóstico de capacidad, validez del circuito y retención funcional, usando la promoción existente de MA2 |
 | **MA6 · Confirmación externa** | MA2 | Materialización aislada, ejecución reservada y publicación autorizada; se aplica también a mejoras sin LoRA |
 | **MA7 · Método reutilizable** | MA3 | Cargador de `learning-policy@1`, expansión M1, catálogo y comparación de investigaciones de mejora; incorpora las palancas de MA4/MA5 cuando estén disponibles |
+| **WE1–WE6 · Edición de pesos** | MA5 | Propuesta en [SPEC-EDICION-PESOS](SPEC-EDICION-PESOS.md): `weight-edit@1`, laboratorio de pesos, actos `edit` y `evolve`, búsqueda evolutiva con semillas del modelo fuerte y de control |
 | **Fase B · Relevo** | MA5, MA6 y MA7 | Activación mediante `handover`, investigador congelado por generación y nueva generación desde el paquete aprobado |
 
 MA1 y MA2 ya dan algo útil: saber dónde falla el junior en el arnés, medido con el arnés. Los casos reservados están
