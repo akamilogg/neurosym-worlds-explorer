@@ -83,7 +83,7 @@ test('confirmation on the operator\'s machine: imported and checked, evaluated b
     const summary = JSON.parse(fs.readFileSync(r.summary, 'utf8'));
     assert.deepEqual(Object.keys(summary).sort(), ['candidate', 'components', 'format', 'id', 'manifest', 'provenance', 'reference', 'verdict']);
     assert.doesNotMatch(JSON.stringify(summary), /reserved-|--seed|journal|twin/, 'no case, trace or memory leaves');
-    assert.deepEqual(summary.provenance, { distilled: true, trained: false, initial_memory: false, forced_format: false });
+    assert.deepEqual(summary.provenance, { distilled: true, trained: false, edited: false, initial_memory: false, forced_format: false });
     const report = JSON.parse(fs.readFileSync(r.report, 'utf8'));
     assert.deepEqual(report.cases, ['reserved-0', 'reserved-1']);
     assert.equal(report.candidate.observations.length, 2);

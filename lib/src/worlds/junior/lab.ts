@@ -17,6 +17,9 @@ import type { Mode } from '../../junior/competence.ts';
 import { openAiChatClient, type ChatClient } from '../../learn/system2.ts';
 import { JobLedger, JobRefused } from '../../junior/jobs.ts';
 import { BlobStore, checkClosed, executionHash, normalizePackage, type JuniorPackage } from '../../junior/package.ts';
+import { WeightLab, type LabCase, type LabQuery, type LabReceipt } from '../../junior/weight-lab.ts';
+import type { Availability } from '../../junior/isolation.ts';
+import type { RawTensor, WeightBounds } from '../../junior/weights.ts';
 
 /* ============================================================================
  * The world of a junior's COMPETENCE (SPEC-METAPOLITICA-APRENDIZAJE §6, §7.1): an artifact world whose artifact is the
@@ -42,6 +45,8 @@ const MEMORY_FILE = /^memory\/[^/\\]{1,64}$/;
 const PUBLISHED = 'memory.state.json';
 /** The adapter a training produced (train): written by the world, never by a change. */
 const ADAPTER = 'adapter.json';
+/** The set of weight edits a version carries (edit, SPEC-EDICION-PESOS §5): written by the world, never by a change. */
+const EDITS = 'edits.json';
 const editable = (f: string): boolean => (PARTS as readonly string[]).includes(f) || MEMORY_FILE.test(f);
 
 interface Published { readonly neural: string | null; readonly twin: string | null; readonly source: { readonly session: string; readonly run_id: string } }
@@ -63,8 +68,15 @@ export class JuniorWorld {
   readonly training: { readonly python: readonly string[]; readonly backend: 'fake' | 'qwenputer' } | null;
   private readonly validities = new Map<string, Validity>();
 
+  /** The weight laboratory (SPEC-EDICION-PESOS §4), when the manifest has one and the run pays for its queries. */
+  readonly weightLab: WeightLab | null = null;
+  /** The interpreter that runs the isolated backend's self-test and free programs, if programs are asked for. */
+  private readonly labPython: readonly string[];
+  private isolationP: Promise<Availability> | null = null;
+
   constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; distillations?: number; gpuHours?: number;
-    training?: { python: readonly string[]; backend: 'fake' | 'qwenputer' }; store?: ArtifactStore }) {
+    training?: { python: readonly string[]; backend: 'fake' | 'qwenputer' }; store?: ArtifactStore;
+    labQueries?: number; labTokens?: number; edits?: number; labPython?: readonly string[]; cutter?: import('../../junior/weight-lab.ts').Cutter }) {
     const problems = competenceProblems(o.manifest);
     if (problems.length) throw new Error('the competence manifest: ' + problems.join('; '));
     this.manifest = o.manifest;
@@ -79,8 +91,19 @@ export class JuniorWorld {
     fs.mkdirSync(o.dir, { recursive: true });
     this.store = o.store ?? new ArtifactStore(new Map([['prompt.md', this.base.prompt], ['decoding.json', JSON.stringify(this.base.decoding, null, 2) + '\n']]));
     this.reference = this.store.base;
-    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations, memory_builds: o.memoryBuilds ?? o.evaluations, distillations: o.distillations ?? 20, gpu_hours: o.gpuHours ?? 0 });
+    this.jobs = new JobLedger(path.join(o.dir, 'jobs.jsonl'), { evaluations: o.evaluations, memory_builds: o.memoryBuilds ?? o.evaluations, distillations: o.distillations ?? 20, gpu_hours: o.gpuHours ?? 0,
+      lab_queries: o.labQueries ?? 0, lab_tokens: o.labTokens ?? 0, edits: o.edits ?? 0 });
     this.training = o.training ?? null;
+    this.labPython = o.labPython ?? ['python3'];
+    if (o.manifest.weight_lab && (o.labQueries ?? 0) > 0) {
+      const config = o.manifest.weight_lab;
+      const cutter = o.cutter ?? (async (run: string, question: number) => {
+        const { captureCut } = await import('../../junior/probes.ts');
+        const c = await captureCut(run, question);
+        return { content: c.content, hash: c.hash };
+      });
+      this.weightLab = new WeightLab({ config, manifest: o.manifest, service: this.client, ledger: this.jobs, store: this.blobs, cutter });
+    }
   }
 
   archive(): { base: JuniorPackage; manifest: CompetenceManifest; files: Record<string, string> } {
@@ -97,6 +120,11 @@ export class JuniorWorld {
     let adapter: string | null = null, trainedOn: string[] = [];
     if (v.files.has(ADAPTER)) {
       try { const a = JSON.parse(v.files.get(ADAPTER)!); adapter = String(a.adapter); trainedOn = ['dataset:' + a.dataset, 'training:' + a.job]; } catch { return ADAPTER + ' is not JSON'; }
+    }
+    if (v.files.has(EDITS)) {
+      if (adapter !== null) return 'a version with a LoRA adapter and a set of edits: no recipe combines them';
+      /* What it owes (P3, E4): the set of edits, and each edit of its genome. */
+      try { const e = JSON.parse(v.files.get(EDITS)!); adapter = String(e.adapter); trainedOn = ['edit-set:' + e.adapter, ...((e.genome ?? []) as string[]).map((id) => 'edit:' + id)]; } catch { return EDITS + ' is not JSON'; }
     }
     const files = Object.fromEntries([...v.files].filter(([f]) => MEMORY_FILE.test(f)).map(([f, t]) => [f.slice('memory/'.length), t]));
     return { prompt: v.files.get('prompt.md') ?? '', decoding, files, published, adapter, trainedOn };
@@ -332,6 +360,134 @@ export class JuniorWorld {
     return null;
   }
 
+  /** A query of the weight laboratory on a version (inspect_weights, SPEC-EDICION-PESOS §5): its operation id fixed by
+      what it asks, so asked again it is the same query and never charged twice. */
+  async inspectWeights(version: string, q: { query: LabQuery['query']; args?: Record<string, unknown>; cases?: readonly LabCase[]; candidate?: string }): Promise<LabReceipt | { refused: string }> {
+    if (!this.weightLab) return { refused: 'this run has no weight laboratory: the manifest needs "weight_lab" and the run --lab-queries' };
+    const pkg = await this.packageOf(version);
+    if (typeof pkg === 'string') return { refused: pkg };
+    let candidate: JuniorPackage | undefined;
+    if (q.candidate !== undefined) {
+      const c = await this.packageOf(q.candidate);
+      if (typeof c === 'string') return { refused: c };
+      candidate = c;
+    }
+    const operation = 'wlab-' + createHash('sha256').update(JSON.stringify([executionHash(pkg), q.query, q.args ?? {}, q.cases ?? [], candidate ? executionHash(candidate) : null])).digest('hex').slice(0, 24);
+    return this.weightLab.query(pkg, { query: q.query, ...(q.args ? { args: q.args } : {}), ...(q.cases ? { cases: q.cases } : {}), ...(candidate ? { candidate } : {}) }, operation);
+  }
+
+  /** The isolated backend for free programs, by its self-test, asked once per run. */
+  isolation(): Promise<Availability> {
+    this.isolationP ??= import('../../junior/isolation.ts').then((m) => m.isolatedBackend({ python: this.labPython }));
+    return this.isolationP;
+  }
+
+  /** The base checkpoint as a folder a program reads (hard links where the disk allows). */
+  private baseDir(base: string): string {
+    const dir = path.join(this.dir, 'bases', base);
+    if (fs.existsSync(path.join(dir, '.complete'))) return dir;
+    const t = this.blobs.tree(base)!;
+    for (const [rel, blob] of Object.entries(t.files)) {
+      const target = path.join(dir, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      try { fs.linkSync(this.blobs.pathOf(blob), target); } catch { fs.copyFileSync(this.blobs.pathOf(blob), target); }
+    }
+    fs.writeFileSync(path.join(dir, '.complete'), base);
+    return dir;
+  }
+
+  /** The edit an act asks for, stored by its hash: written values, a closed constructor (its inputs from the lab's
+      receipts or given), or a free program in the isolated backend. Nothing is charged here: a refused edit costs nothing. */
+  private async makeEdit(start: JuniorPackage, e: EditAsked, hypothesis: { competence: string; mechanism: string; effect: string }): Promise<{ id: string } | { problems: string[] }> {
+    const W = await import('../../junior/weights.ts');
+    const chip = Number((start.execution.circuit as Record<string, unknown>).chip_layers);
+    if ('written' in e) {
+      const read = W.baseReader(this.blobs, start.base);
+      const modules: { module: string; encoding: 'lowrank' | 'sparse'; shape: [number, number]; tensors: Record<string, RawTensor> }[] = [];
+      for (const m of e.written.modules) {
+        let shape: [number, number];
+        try { shape = read(m.module + '.weight').shape; } catch (err) { return { problems: [(err as Error).message] }; }
+        if (m.encoding === 'lowrank') {
+          const B = m.B ?? [], A = m.A ?? [];
+          const r = A.length;
+          if (B.length !== shape[0] || B.some((row) => !Array.isArray(row) || row.length !== r) || A.some((row) => !Array.isArray(row) || row.length !== shape[1]) || r < 1)
+            return { problems: [m.module + ': B is ' + shape[0] + ' rows of r values and A r rows of ' + shape[1]] };
+          modules.push({ module: m.module, encoding: 'lowrank', shape, tensors: { B: W.tensorF32([shape[0], r], B.flat()), A: W.tensorF32([r, shape[1]], A.flat()) } });
+        } else {
+          const idx = m.indices ?? [], val = m.values ?? [];
+          if (idx.length !== val.length) return { problems: [m.module + ': as many indices as values'] };
+          modules.push({ module: m.module, encoding: 'sparse', shape, tensors: { indices: W.tensorI64(idx), values: W.tensorF32([val.length], val) } });
+        }
+      }
+      return W.putEdit(this.blobs, { modules, hypothesis, origin: { kind: 'written' }, authorship: 'strong' }, chip);
+    }
+    if ('construct' in e) {
+      const inputs: Record<string, { from: string; file: string } | Buffer> = {};
+      for (const [name, src] of Object.entries(e.construct.inputs ?? {})) {
+        if ('from' in src) inputs[name] = { from: src.from, file: src.file };
+        else inputs[name] = W.writeSafetensors(Object.fromEntries(Object.entries(src.tensors).map(([t, v]) => [t, W.tensorF32([v.length], v)])));
+      }
+      if (!this.weightLab) {
+        const direct: Record<string, Buffer> = {};
+        for (const [name, src] of Object.entries(inputs)) { if (!Buffer.isBuffer(src)) return { problems: ['this run has no weight laboratory to take ' + name + ' from'] }; direct[name] = src; }
+        return W.construct(this.blobs, start, { constructor: e.construct.name, args: e.construct.args, inputs: direct, hypothesis, authorship: 'strong' });
+      }
+      return this.weightLab.construct(start, { constructor: e.construct.name, args: e.construct.args, inputs, hypothesis, authorship: 'strong' });
+    }
+    const a = await this.isolation();
+    const limits = this.manifest.weight_lab?.program;
+    if (!a.available) return { problems: ['origin "program": ' + a.reason] };
+    if (!limits) return { problems: ['origin "program": the manifest fixes no "weight_lab.program" limits'] };
+    const inputs = Object.fromEntries(Object.entries(e.program.inputs ?? {}).map(([k, v]) => [k, Buffer.from(v, 'utf8')]));
+    return W.programEdit(this.blobs, start, { code: e.program.code, inputs, backend: a.backend, baseDir: this.baseDir(start.base), limits, hypothesis, authorship: 'strong' });
+  }
+
+  /** A child of a version with one edit more (edit, SPEC-EDICION-PESOS §5): the edit made, its genome composed from the
+      start within the condition's bounds (and any stricter it declares), a job paid from `edits` only when a version is
+      made. The child is a version whose set of edits sits in the adapter slot; before it is evaluated its circuit must
+      pass the validity suite. */
+  async editFrom(from: string, e: EditAsked, hypothesis: { competence: string; mechanism: string; effect: string }, declared: WeightBounds | undefined, reason: unknown, asked = askedKey(from, e, hypothesis, declared)):
+    Promise<{ version?: string; state: string; reason: string | null; edit?: string; genome?: number; totals?: unknown }> {
+    const parent = await this.packageOf(from);
+    if (typeof parent === 'string') return { state: 'refused', reason: parent };
+    const W = await import('../../junior/weights.ts');
+    if (W.adapterKind(this.blobs, parent) === 'lora') return { state: 'refused', reason: 'the version has a LoRA adapter: combining a trained adapter with edits is another recipe, which does not exist' };
+    if (!this.manifest.weight_edits) return { state: 'refused', reason: 'the condition authorizes no edits: its manifest fixes no "weight_edits" bounds' };
+    const made = await this.makeEdit(parent, e, hypothesis);
+    if ('problems' in made) return { state: 'refused', reason: made.problems.join('; ') };
+    const authorized = this.manifest.weight_edits;
+    try {
+      const operation = 'edit-' + createHash('sha256').update(JSON.stringify([executionHash(parent), made.id, declared ?? null])).digest('hex').slice(0, 24);
+      const { done } = this.jobs.start({ operation_id: operation, op: 'edit', inputs: { parent: executionHash(parent), edit: made.id, declared: declared ?? null }, reserve: { edits: 1 },
+        run: async () => {
+          const v = W.composeVersion({ store: this.blobs, parent, add: [made.id], authorized, ...(declared ? { declared } : {}) });
+          if ('problems' in v) return { spent: { edits: 0 }, failed: v.problems.join('; ') };
+          return { spent: { edits: 1 }, products: { adapter: v.adapter, start: v.set.start, genome: v.set.genome, totals: v.set.totals } };
+        } });
+      const job = await done;
+      if (job.state !== 'completed') return { state: 'refused', reason: job.reason, edit: made.id };
+      const record = job.products as { adapter: string; start: string; genome: string[]; totals: unknown };
+      const v = this.store.apply(from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, reason);
+      if (typeof v === 'string') return { state: 'failed', reason: v, edit: made.id };
+      appendRecord(path.join(this.dir, 'edits.jsonl'), { from, asked, edit: made.id, declared: declared ?? null, record, version: v.hash }, { sync: true });
+      return { version: v.hash, state: 'finished', reason: null, edit: made.id, genome: record.genome.length, totals: record.totals };
+    } catch (err) { return { state: 'refused', reason: err instanceof JobRefused ? err.message : String((err as Error).message ?? err) }; }
+  }
+
+  /** An edit made again from the world's record of it (a run rebuilt): its set's line, never composed again. */
+  reedit(from: string, asked: string, reason: unknown): string | null {
+    const file = path.join(this.dir, 'edits.jsonl');
+    if (!fs.existsSync(file)) return null;
+    for (const l of fs.readFileSync(file, 'utf8').split('\n')) {
+      let e: { from?: string; asked?: string; record?: unknown };
+      try { e = JSON.parse(l); } catch { continue; }
+      if (e.from !== from || e.asked !== asked) continue;
+      const v = this.store.apply(from, { files: { [EDITS]: JSON.stringify(e.record, null, 2) + '\n' } }, reason);
+      return typeof v === 'string' ? null : v.hash;
+    }
+    return null;
+  }
+
   /** A version evaluated on the development cases: a job of the world's ledger (asked again, the same job), kept. */
   async evaluate(version: string, judge?: import('../../runtime/lab-runner.ts').LabConnection): Promise<Evaluation | string> {
     const cached = this.evaluations.get(version);
@@ -362,6 +518,17 @@ export class JuniorWorld {
   }
 }
 
+/** The edit an act asks for: values written, a closed constructor, or a free program. */
+export type EditAsked =
+  | { readonly written: { readonly modules: readonly { readonly module: string; readonly encoding: 'lowrank' | 'sparse'; readonly B?: number[][]; readonly A?: number[][]; readonly indices?: number[]; readonly values?: number[] }[] } }
+  | { readonly construct: { readonly name: string; readonly args: Record<string, unknown>; readonly inputs?: Readonly<Record<string, { readonly from: string; readonly file: string } | { readonly tensors: Readonly<Record<string, number[]>> }>> } }
+  | { readonly program: { readonly code: string; readonly inputs?: Readonly<Record<string, string>> } };
+
+/** What an edit act asked, by its content: the key of its record when a run is rebuilt. */
+export function askedKey(from: string, e: EditAsked, hypothesis: unknown, declared: unknown): string {
+  return createHash('sha256').update(JSON.stringify([from, e, hypothesis, declared ?? null])).digest('hex').slice(0, 24);
+}
+
 export interface JuniorSpec {
   readonly world: JuniorWorld;
   /** Where the operator puts the confirmation summaries published for this run (§9): read-only, summaries only. */
@@ -390,7 +557,7 @@ export type JuniorEpisode =
       /** Its development investigations' sessions, case to session: what publish_memory may take. */
       readonly sessions: Readonly<Record<string, string>> }
   /** What a distillation or a dataset produced: rows to read and what they add up to. */
-  | { readonly kind: 'records'; readonly what: 'examples' | 'dataset' | 'training' | 'confirmations'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
+  | { readonly kind: 'records'; readonly what: 'examples' | 'dataset' | 'training' | 'confirmations' | 'weights' | 'edit'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
 
 export interface JuniorCase { readonly point: string; readonly state: JuniorPoint; readonly came: { readonly value: number | null } }
 
@@ -402,7 +569,9 @@ export type JuniorAct =
   | { readonly distill: { readonly version: string; readonly case: string; readonly question: number; readonly mode: Mode; readonly checker: string; readonly request?: string; readonly instruction?: string } }
   | { readonly dataset: { readonly examples: readonly string[]; readonly admits: readonly ('verified' | 'demonstration')[] } }
   | { readonly train: { readonly from: string; readonly dataset: string; readonly recipe: Readonly<Record<string, unknown>> } & Reason }
-  | { readonly confirmations: Readonly<Record<string, never>> };
+  | { readonly confirmations: Readonly<Record<string, never>> }
+  | { readonly inspect_weights: { readonly version: string; readonly query: LabQuery['query']; readonly args?: Record<string, unknown>; readonly cases?: readonly LabCase[]; readonly candidate?: string } }
+  | { readonly edit: { readonly from: string; readonly edit: EditAsked; readonly competence: string; readonly bounds?: WeightBounds } & Reason };
 
 const latest = new WeakMap<JuniorWorld, string>();
 
@@ -469,7 +638,47 @@ function juniorObjective<M, P extends Place>(host: { casesIn(place: P, c: unknow
   };
 }
 
-function juniorInterface(tolerance: number): WorldInterface {
+/** The edit an act asks for, or null when it asks for none or more than one. */
+function editOf(raw: Record<string, any>): { edit: EditAsked; hypothesis: { competence: string; mechanism: string; effect: string } } | null {
+  /* As the researcher wrote it, or as parsed (its edit nested under "edit"). */
+  const ed = raw.edit && typeof raw.edit === 'object' ? { ...raw, ...raw.edit } : raw;
+  const kinds = ['written', 'construct', 'program'].filter((k) => ed[k] && typeof ed[k] === 'object');
+  if (kinds.length !== 1) return null;
+  const k = kinds[0];
+  let edit: EditAsked;
+  if (k === 'written') {
+    if (!Array.isArray(ed.written.modules) || !ed.written.modules.length || ed.written.modules.some((m: Record<string, unknown>) => typeof m?.module !== 'string' || (m.encoding !== 'lowrank' && m.encoding !== 'sparse'))) return null;
+    edit = { written: { modules: ed.written.modules } };
+  } else if (k === 'construct') {
+    if (typeof ed.construct.name !== 'string' || !ed.construct.args || typeof ed.construct.args !== 'object') return null;
+    edit = { construct: { name: ed.construct.name, args: ed.construct.args, ...(ed.construct.inputs ? { inputs: ed.construct.inputs } : {}) } };
+  } else {
+    if (typeof ed.program.code !== 'string' || !ed.program.code.trim()) return null;
+    edit = { program: { code: ed.program.code, ...(ed.program.inputs ? { inputs: ed.program.inputs } : {}) } };
+  }
+  return { edit, hypothesis: hypothesisOf(ed) };
+}
+
+/** An edit's hypothesis (E1), from its act: the competence it corrects, the mechanism it supposes (its why), its effect. */
+function hypothesisOf(ed: Record<string, any>): { competence: string; mechanism: string; effect: string } {
+  return { competence: String(ed.competence ?? ''), mechanism: String(ed.why ?? ''), effect: typeof ed.expect === 'string' && ed.expect.trim() ? ed.expect : 'exploratory' };
+}
+
+/** What an act gives as its reason, as a change does. */
+function reasonOf(ed: Record<string, any>): Record<string, unknown> {
+  const { from: _f, written: _w, construct: _c, program: _p, bounds: _b, ...reason } = ed;
+  return reason;
+}
+
+/** The acts of weight editing, told only to a run that pays for them (SPEC-EDICION-PESOS §5). */
+const WEIGHT_ACTS = 'Or {"act": {"inspect_weights": {"version": "<version>", "query": "modules" | "weights.stats" | "weights.slice" | "forward" | "activations" | "attention" | "try", "args": {...}, "cases": [{"cut": {"run": "<diagnosis run>", "question": <n>}} | {"text": {"system": "...", "user": "..."}}], "candidate": "<version, for try>"}}}   '
+  + 'a reading of the junior\'s weights: its modules (the circuit\'s readable, never editable), a module\'s statistics ("module", "singular": k) or a slice ("module", "rows": [from, to], "cols": [from, to]); or the junior run on DIAGNOSIS cases only - cuts of the diagnosis runs, or texts you write: "forward" ("max_new_tokens", "top_logits"), "activations" ("modules", "positions": "last" | "generated" | [...], "directions"), "attention" ("layer", "heads"), "try" ("inner": forward | activations, "args", and a "candidate" version whose edits run on a copy). Each query costs one of `lab_queries`, and the tokens it runs of `lab_tokens`; its answer is withheld past the lab\'s limits; asked again it is the same. '
+  + 'Or {"act": {"edit": {"from": "<version>", "written": {"modules": [{"module": "<name>", "encoding": "lowrank", "B": [[...] per output row], "A": [[...] per rank]} | {"module": "<name>", "encoding": "sparse", "indices": [...], "values": [...]}]} '
+  + '| "construct": {"name": "project_out@1" | "add_direction@1" | "mean_difference@1" | "top_singular@1" | "scale_rows@1" | "scale_cols@1", "args": {...}, "inputs": {"<file>": {"from": "<operation of an inspect_weights>", "file": "activations.safetensors"} | {"tensors": {"<name>": [...]}}}} '
+  + '| "program": {"code": "...", "inputs": {...}}, "competence": "<what it corrects>", "why": "<the mechanism you suppose>", "expect": "<the effect you expect>" | "exploratory": true, "bounds": {stricter bounds}}}}   '
+  + 'a child junior with one edit more to its weights, on Qwen\'s modules only, composed from its start; refused out of the condition\'s bounds. A program runs only where an isolated backend proves itself. It costs one of `edits`; before it is evaluated its circuit must pass the validity suite.';
+
+function juniorInterface(tolerance: number, weights = false): WorldInterface {
   return {
     tools: ['view', 'inspect', 'act', 'measure', 'table'],
     features: ['check'],
@@ -489,6 +698,7 @@ function juniorInterface(tolerance: number): WorldInterface {
         + 'Or {"act": {"dataset": {"examples": ["<example id>", ...], "admits": ["verified"]}}}   a dataset of examples, by its content, with the groups of runs it comes from and those it shares with the probes that select juniors. '
         + 'Or {"act": {"train": {"from": "<version>", "dataset": "<dataset id>", "recipe": {"format": "junior-recipe@1", "method": "lora" | "qlora", "layers": [<Qwen layers, past the circuit\'s>], "modules": ["q_proj", ...], "rank", "alpha", "dropout", "learning_rate", "epochs", "batch", "max_length", "seed", "mask": "answer", "admits": ["verified"], "max_gpu_hours"}, "why": "...", "expect": "..." | "exploratory": true}}}   '
         + 'a child junior with a LoRA adapter trained on that dataset; its circuit is never trained. Its capacity is measured first; it costs its GPU hours; a dataset that shares groups with the selecting probes is refused. Before it is evaluated, its circuit must pass the validity suite. '
+        + (weights ? WEIGHT_ACTS + ' ' : '')
         + 'Or {"act": {"confirmations": {}}}   the confirmations the operator made of your juniors, out of this machine, on cases you never see: for each, the verdict against the reference and which components improve or regress - nothing more. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at an observation, part by part, and what was measured there'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
@@ -540,6 +750,15 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         const made = spec.world.retrain(tr.from, tr.dataset, tr.recipe, reason);
         if (made) latest.set(spec.world, made);
       }
+      /* An edit, from the world's record of its set: never composed again. */
+      const ed = r?.act?.edit;
+      if (ed && typeof ed.from === 'string') {
+        const asked = editOf(ed);
+        if (asked) {
+          const made = spec.world.reedit(ed.from, askedKey(ed.from, asked.edit, asked.hypothesis, ed.bounds), reasonOf(ed));
+          if (made) latest.set(spec.world, made);
+        }
+      }
       /* A publication, from the world's record of the state it published. */
       const pm = r?.act?.publish_memory;
       if (pm && typeof pm.from === 'string' && typeof pm.session === 'string') {
@@ -565,6 +784,10 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     { name: 'gpu-hours', default: '0', help: 'GPU hours of training the run may spend in all (0: no training)' },
     { name: 'train-python', default: '', help: 'the trainer\'s interpreter on the training GPU (none: no training)' },
     { name: 'train-backend', default: 'qwenputer', help: 'the trainer\'s backend: qwenputer, or fake for tests' },
+    { name: 'lab-queries', default: '0', help: 'queries to the weight laboratory the run may make in all (0: none; the manifest needs weight_lab)' },
+    { name: 'lab-tokens', default: '0', help: 'tokens the weight laboratory\'s queries may run in all' },
+    { name: 'edits', default: '0', help: 'edited versions of the junior the run may make in all (0: none; the manifest needs weight_edits)' },
+    { name: 'lab-python', default: 'python3', help: 'the interpreter of the isolated backend for free programs (its self-test decides whether they run)' },
     { name: 'teacher-url', default: '', help: 'the teacher\'s endpoint (or TEACHER_LLM_URL; its key from TEACHER_LLM_KEY)' },
     { name: 'teacher-model', default: '', help: 'the teacher\'s model (or TEACHER_LLM_MODEL)' }
   ],
@@ -578,7 +801,9 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     const store = a ? new ArtifactStore(new Map(Object.entries(a.files))) : undefined;
     const world = new JuniorWorld({ manifest, base, blobs: path.resolve(o.blobs), server: o.server, dir, evaluations: Math.max(1, Math.floor(Number(o.evaluations) || 10)),
       distillations: Math.max(0, Math.floor(Number(o.distillations) || 20)), gpuHours: Math.max(0, Number(o['gpu-hours']) || 0),
-      ...(o['train-python'] ? { training: { python: [o['train-python']], backend: (o['train-backend'] === 'fake' ? 'fake' : 'qwenputer') as 'fake' | 'qwenputer' } } : {}), ...(store ? { store } : {}) });
+      ...(o['train-python'] ? { training: { python: [o['train-python']], backend: (o['train-backend'] === 'fake' ? 'fake' : 'qwenputer') as 'fake' | 'qwenputer' } } : {}), ...(store ? { store } : {}),
+      labQueries: Math.max(0, Math.floor(Number(o['lab-queries']) || 0)), labTokens: Math.max(0, Math.floor(Number(o['lab-tokens']) || 0)), edits: Math.max(0, Math.floor(Number(o.edits) || 0)),
+      labPython: [o['lab-python'] || 'python3'] });
     const env = process.env;
     const judge = env.JEV_KEY ? { url: env.JEV_URL || 'https://openrouter.ai/api/v1/chat/completions', key: env.JEV_KEY, ...(env.JEV_MODEL ? { model: env.JEV_MODEL } : {}) } : undefined;
     /* The teacher, configured as any researcher: its endpoint and model given, its key from the environment (the proxy's
@@ -599,7 +824,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
   world: pointWorld,
   perceive: (p) => p,
   perceptDoc: PERCEPT_DOC,
-  interface: (options) => juniorInterface(Number(options.world?.tolerance) || 0.25),
+  interface: (options) => juniorInterface(Number(options.world?.tolerance) || 0.25, Number(options.world?.edits) > 0 || Number(options.world?.['lab-queries']) > 0),
 
   episode: async (spec) => {
     const e = await spec.world.evaluate(spec.world.reference, spec.judge);
@@ -655,9 +880,35 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
 
   act: {
     parse: (raw) => {
-      const unknown = unknownFields(raw, ['change', 'run', 'publish_memory', 'distill', 'dataset', 'train', 'confirmations']);
+      const unknown = unknownFields(raw, ['change', 'run', 'publish_memory', 'distill', 'dataset', 'train', 'confirmations', 'inspect_weights', 'edit']);
       if (unknown) return unknown;
       if (raw.confirmations !== undefined) return { confirmations: {} };
+      const iw = raw.inspect_weights as Record<string, unknown> | undefined;
+      if (iw && typeof iw === 'object') {
+        const form = '"inspect_weights": {"version": "<version>", "query": "modules" | "weights.stats" | "weights.slice" | "forward" | "activations" | "attention" | "try", "args": {...}, "cases": [{"cut": {"run": "<diagnosis run>", "question": <n>}} | {"text": {"system": "...", "user": "..."}}], "candidate": "<version, for try>"}';
+        const extra = unknownFields(iw, ['version', 'query', 'args', 'cases', 'candidate']);
+        if (extra) return extra;
+        if (typeof iw.version !== 'string' || typeof iw.query !== 'string' || (iw.args !== undefined && (typeof iw.args !== 'object' || iw.args === null || Array.isArray(iw.args)))
+          || (iw.cases !== undefined && !Array.isArray(iw.cases)) || (iw.candidate !== undefined && typeof iw.candidate !== 'string')) return form;
+        return { inspect_weights: { version: iw.version, query: iw.query as LabQuery['query'], ...(iw.args ? { args: iw.args as Record<string, unknown> } : {}),
+          ...(iw.cases ? { cases: iw.cases as LabCase[] } : {}), ...(iw.candidate ? { candidate: iw.candidate as string } : {}) } };
+      }
+      const ed = raw.edit as Record<string, unknown> | undefined;
+      if (ed && typeof ed === 'object') {
+        const form = '"edit": {"from": "<version>", "written": {"modules": [...]} | "construct": {"name": "<constructor>", "args": {...}, "inputs": {...}} | "program": {"code": "...", "inputs": {...}}, "competence": "<what it corrects>", "why": "<the mechanism you suppose>", "expect": "<the effect you expect>" | "exploratory": true, "bounds": {stricter bounds, optional}}';
+        const extra = unknownFields(ed, ['from', 'written', 'construct', 'program', 'competence', 'why', 'expect', 'exploratory', 'because', 'bounds']);
+        if (extra) return extra;
+        if (typeof ed.from !== 'string') return form;
+        if (typeof ed.why !== 'string' || !ed.why.trim()) return 'an edit says why (the mechanism it supposes): ' + form;
+        if (typeof ed.competence !== 'string' || !ed.competence.trim()) return 'an edit says the competence it corrects: ' + form;
+        const expect = typeof ed.expect === 'string' && ed.expect.trim() ? ed.expect : null;
+        if (!expect && ed.exploratory !== true) return 'an edit says what it expects, or that it is exploratory: ' + form;
+        const asked = editOf(ed);
+        if (!asked) return 'an edit is one of written, construct or program: ' + form;
+        const because = Array.isArray(ed.because) && ed.because.length && ed.because.every((b) => typeof b === 'string') ? { because: [...new Set(ed.because as string[])] } : {};
+        return { edit: { from: ed.from, edit: asked.edit, competence: ed.competence, why: ed.why, ...because, ...(expect ? { expect } : { exploratory: true as const }),
+          ...(ed.bounds && typeof ed.bounds === 'object' ? { bounds: ed.bounds as WeightBounds } : {}) } };
+      }
       const tr = raw.train as Record<string, unknown> | undefined;
       if (tr && typeof tr === 'object') {
         const form = '"train": {"from": "<version>", "dataset": "<dataset id>", "recipe": {junior-recipe@1}, "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true}';
@@ -715,7 +966,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         if (typeof r.version !== 'string') return '"run": {"version": "<version>"}';
         return { run: { version: r.version } };
       }
-      return 'act needs "change", "run", "publish_memory", "distill", "dataset", "train" or "confirmations"';
+      return 'act needs "change", "run", "publish_memory", "distill", "dataset", "train", "inspect_weights", "edit" or "confirmations"';
     },
     place: () => undefined,
     async start(spec, a, _id, _ctx?: LabContext) {
@@ -749,6 +1000,23 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         const rows = readSummaries(spec.confirmations ?? '').map((s) => ({ ...s, version: versions.get(s.candidate) ?? null }));
         return { kind: 'records', what: 'confirmations', summary: { confirmations: rows.length, promoted: rows.filter((r) => r.verdict === 'promoted').length }, rows };
       }
+      if ('inspect_weights' in a) {
+        const q = a.inspect_weights;
+        const r = await spec.world.inspectWeights(q.version, { query: q.query, ...(q.args ? { args: q.args } : {}), ...(q.cases ? { cases: q.cases } : {}), ...(q.candidate ? { candidate: q.candidate } : {}) });
+        if ('refused' in r) return { kind: 'records', what: 'weights', summary: { query: q.query, state: 'refused', reason: r.refused }, rows: [] };
+        const answer = spec.world.weightLab!.answer(r);
+        return { kind: 'records', what: 'weights', summary: { query: r.query, operation: r.operation_id, state: r.state, ...(r.reason ? { reason: r.reason } : {}),
+          tokens: r.usage ? r.usage.tokens_in + r.usage.tokens_out : null, circuit_steps: r.usage?.circuit_steps ?? null, files: Object.keys(r.files), cases: r.cases },
+          rows: answer === null ? [] : [{ answer: answer as Record<string, unknown> }] };
+      }
+      if ('edit' in a) {
+        const { from, edit, competence, bounds, ...reason } = a.edit;
+        const hypothesis = hypothesisOf(a.edit);
+        const t = await spec.world.editFrom(from, edit, hypothesis, bounds, { ...reason, competence });
+        if (t.version) latest.set(spec.world, t.version);
+        return { kind: 'records', what: 'edit', summary: { state: t.state, ...(t.version ? { version: t.version } : {}), ...(t.reason ? { reason: t.reason } : {}), ...(t.edit ? { edit: t.edit } : {}),
+          ...(t.genome !== undefined ? { genome: t.genome } : {}), ...(t.totals ? { totals: t.totals } : {}) }, rows: [] };
+      }
       if ('train' in a) {
         const { from: _f, dataset: _d, recipe: _r, ...reason } = a.train;
         const t = await spec.world.trainFrom(a.train.from, a.train.dataset, a.train.recipe, reason);
@@ -761,8 +1029,9 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         return { kind: 'records', what: 'dataset', summary: { dataset: r.dataset.id, examples: r.dataset.examples.length, admits: r.dataset.admits, proportions: r.dataset.proportions, groups: r.dataset.groups,
           shares_selection_groups: r.overlap }, rows: r.dataset.examples.map((id) => ({ example: id })) };
       }
-      const e = await spec.world.evaluate(a.run.version, spec.judge);
-      return typeof e === 'string' ? null : evaluationEpisode(spec.world, a.run.version, e);
+      const run = (a as { run: { version: string } }).run;
+      const e = await spec.world.evaluate(run.version, spec.judge);
+      return typeof e === 'string' ? null : evaluationEpisode(spec.world, run.version, e);
     },
     shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length } : e.kind === 'records' ? { what: e.what, ...e.summary } : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions }),
     asWritten: (a) => a,

@@ -1,7 +1,7 @@
 # SPEC · Edición de pesos: el modelo fuerte escribe en los pesos del junior, y una búsqueda evolutiva los explora
 
-Estado (04/11/2026): **WE1 y WE2 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
-backend aislado; §12); WE3 a WE6 sin implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
+Estado (04/11/2026): **WE1 a WE3 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
+backend aislado; la palanca en el mundo del junior; §12); WE4 a WE6 sin implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -301,6 +301,25 @@ Las versiones editadas se miden, se comparan y se promueven como cualquier otra:
 investigaciones y `paired-cases@1` contra la referencia de evaluación. Se confirman igual, fuera de la máquina (MA6). En
 la confirmación, el resumen declara `edited` junto a `distilled` y `trained`.
 
+Cómo queda en el código:
+
+- **Dónde vive el conjunto.** Una versión editada guarda su conjunto en el fichero `edits.json` de la versión, escrito
+  por el mundo y nunca por un `change`, y su paquete lo lleva en el hueco del adaptador.
+- **Qué hereda.** Un `change` de una versión editada conserva sus pesos. Un `edit` sobre ella alarga su genoma. Un
+  `train` sobre ella se rechaza.
+- **Su procedencia** declara `edit-set:` y cada `edit:`, y la confirmación lo lee como `edited`, no como `trained`.
+- **`edit`** lleva una de tres formas: `written` (valores), `construct` (un constructor cerrado, con entradas tomadas de
+  una consulta de `inspect_weights` o escritas) o `program`. Lleva también la competencia que corrige, su `why` (el
+  mecanismo supuesto) y su `expect` (el efecto), que forman la hipótesis de la edición (E1), y unas cotas más estrictas
+  opcionales.
+- **Qué cuesta.** Una edición rechazada no cuesta nada: `edits` sólo se paga cuando nace una versión.
+- **`inspect_weights`.** Su identificador de operación lo fija lo que pregunta, así que repetida es la misma consulta.
+  Si una consulta se rechaza, el investigador ve el motivo.
+- **El prompt.** Los dos actos sólo se explican en el prompt de un run que los paga (`--edits` o `--lab-queries`). Así,
+  el prompt de las configuraciones sin ellos no cambia.
+- **Reconstrucción.** Una ejecución reconstruida vuelve a crear la versión editada desde el registro del mundo
+  (`edits.jsonl`), sin componer de nuevo ni volver a cobrarla.
+
 Orden de las palancas, de más barata a más cara: prompt, memoria inicial, decodificación, **edición de pesos**,
 destilación, LoRA. La edición va antes que la destilación porque no entrena nada. Va después de la memoria porque cambia
 pesos y exige pasar la validez.
@@ -517,6 +536,19 @@ necesita la máquina real y la línea base de la fase A.**
     por consulta.
   - La autoprueba del aislamiento. Ubuntu 23.10 y posteriores pueden restringir los espacios de nombres de usuario sin
     privilegios: si la autoprueba falla, `program` sigue rechazado y los constructores cubren la palanca.
+
+**WE3, hecha (04/11/2026):**
+
+- **Dónde está.** Los actos `inspect_weights` y `edit` están en `lib/src/worlds/junior/lab.ts`, con las bolsas
+  `lab_queries`, `lab_tokens` y `edits` y las opciones `--lab-queries`, `--lab-tokens`, `--edits` y `--lab-python`. La
+  confirmación (`confirm.ts`) declara `edited`.
+- **Pruebas.** Están en `lib/test/junior-weight-edit-world.test.ts`. Cubren:
+  - lecturas cobradas una vez;
+  - versiones editadas que pasan la validez;
+  - genomas que se alargan;
+  - rechazos que no cuestan nada;
+  - un constructor alimentado por activaciones del laboratorio y probado con `try`;
+  - la reconstrucción.
 
 ## 13. Aceptación
 

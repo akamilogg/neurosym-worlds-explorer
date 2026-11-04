@@ -22,7 +22,7 @@ import { BlobStore, checkClosed, executionHash, normalizePackage, treesOf, type 
  *
  * Two products. The OPERATOR's report: the verdict, both evaluations, every observation and where its records are. The
  * researcher's SUMMARY, the only thing published: the verdict, which components improve or regress, the two juniors by
- * hash and what they owe to others - distilled from a teacher, trained, a memory published, a forced format - never a
+ * hash and what they owe to others - distilled from a teacher, trained, edited, a memory published, a forced format - never a
  * case, a trace or a memory. Each summary published exposes the cases it was measured on: a case exposed more than the
  * manifest allows has been used to develop, so the service confirms no more on it (§9: it is development now).
  * ========================================================================== */
@@ -36,7 +36,7 @@ export interface ConfirmationSummary {
   readonly verdict: 'promoted' | 'not_promoted' | 'inconclusive';
   readonly components: readonly { readonly id: string; readonly improves: boolean; readonly regresses: boolean }[];
   /** What the candidate owes to others, as its provenance says (P3): declared with its result. */
-  readonly provenance: { readonly distilled: boolean; readonly trained: boolean; readonly initial_memory: boolean; readonly forced_format: boolean };
+  readonly provenance: { readonly distilled: boolean; readonly trained: boolean; readonly edited: boolean; readonly initial_memory: boolean; readonly forced_format: boolean };
 }
 
 export interface ConfirmationReport {
@@ -69,7 +69,9 @@ export function importPackage(exportDir: string, store: BlobStore): JuniorPackag
 /** What a package owes to others, read from its provenance and its parts. */
 export function owes(pkg: JuniorPackage): ConfirmationSummary['provenance'] {
   const src = pkg.provenance.sources.join(' ');
-  return { distilled: /(^|\s)dataset:/.test(src), trained: pkg.adapter !== null, initial_memory: pkg.memory.twin !== null, forced_format: pkg.decoding.forced_format !== null };
+  /* Weight edits sit in the adapter slot (SPEC-EDICION-PESOS §3.2): an adapter that is a set of edits is not a training. */
+  const edited = /(^|\s)edit-set:/.test(src);
+  return { distilled: /(^|\s)dataset:/.test(src), trained: pkg.adapter !== null && !edited, edited, initial_memory: pkg.memory.twin !== null, forced_format: pkg.decoding.forced_format !== null };
 }
 
 export class ConfirmationService {
@@ -153,7 +155,7 @@ export function readSummaries(dir: string): ConfirmationSummary[] {
       if (s.format !== 'confirmation-summary@1') continue;
       out.push({ format: s.format, id: String(s.id), manifest: String(s.manifest), candidate: String(s.candidate), reference: String(s.reference), verdict: s.verdict,
         components: (s.components ?? []).map((c: Record<string, unknown>) => ({ id: String(c.id), improves: c.improves === true, regresses: c.regresses === true })),
-        provenance: { distilled: !!s.provenance?.distilled, trained: !!s.provenance?.trained, initial_memory: !!s.provenance?.initial_memory, forced_format: !!s.provenance?.forced_format } });
+        provenance: { distilled: !!s.provenance?.distilled, trained: !!s.provenance?.trained, edited: !!s.provenance?.edited, initial_memory: !!s.provenance?.initial_memory, forced_format: !!s.provenance?.forced_format } });
     } catch { /* not a summary */ }
   }
   return out;
