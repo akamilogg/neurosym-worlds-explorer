@@ -155,7 +155,7 @@ def run_fake(job):
 
 # --- qwenputer --------------------------------------------------------------------------------------------------------
 
-_resident = {"execution": None, "chat": None, "weights": None}
+_resident = {"execution": None, "chat": None, "weights": None, "bases": {}}
 
 
 class TimeLimit(Exception):
@@ -189,12 +189,13 @@ def qwenputer_chat(job):
         _resident["chat"] = None
         _resident["execution"] = None
         _resident["weights"] = None
+        _resident["bases"] = {}
         chat = RvChat(job["files"]["base"])
         # The package's chat template, in place of the checkpoint's.
         chat.tok.chat_template = open(job["files"]["chat_template"], encoding="utf8").read()
         if JW.is_edit_set(job["files"].get("adapter")):
             # A set of edits, composed from the start's weights by its rule (never a LoRA's merge).
-            _resident["weights"] = JW.apply_edit_set(chat.model, job["files"]["adapter"], int(chat.meta["chip_layers"]))
+            _resident["weights"] = JW.apply_edit_set(chat.model, job["files"]["adapter"], int(chat.meta["chip_layers"]), _resident["bases"])
         elif job["files"].get("adapter"):
             apply_adapter(chat, job["files"]["adapter"], int(chat.meta["chip_layers"]))
         _resident["chat"] = chat
@@ -366,7 +367,8 @@ def lab_job(job):
         trace = json.loads(r["trace"])
         return trace["stream"], trace["tokens"], r["terminal"] if r["terminal"] != "limit_reached" else (r.get("reason") or "limit_reached"), r["usage"]
 
-    return JL.lab(job, chat, run_case)
+    # The start of every module the package's own set changed: a try composes its candidate from there, never on top.
+    return JL.lab(job, chat, run_case, _resident["bases"])
 
 
 def memory_call(job):

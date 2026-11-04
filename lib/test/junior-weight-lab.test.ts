@@ -267,3 +267,31 @@ test('on a Linux machine whose isolation proves itself, a program runs with no n
   assert.equal(r.state, 'finished', r.reason ?? '');
   assert.equal(r.outputs.net.toString(), 'refused');
 });
+
+/* --- A review of WE2-WE6 (04/11/2026) ----------------------------------------------------------------------------------- */
+
+test('review: try composes the candidate from the start, never on the edits of the junior diagnosed; a candidate whose digests lie is refused', { skip: !python && 'no Python' }, async () => {
+  const f = fixture();
+  const { server, lab } = labOn(f);
+  const H2 = { competence: 'protocol', mechanism: 'm', effect: 'e' };
+  const BOUNDS: WeightBounds = { per_module: { max_changed_fraction: 1, max_relative_norm: 10, max_representation: 1000, max_rank: 8, max_sparse_entries: 100 }, total: { max_changed_fraction: 1, max_relative_norm: 10, max_representation: 1000 } };
+  const edit = (v: number) => { const r = putEdit(f.store, { modules: [{ module: DOWN, encoding: 'sparse', shape: [2, 2], tensors: { indices: tensorI64([0]), values: tensorF32([1], [v]) } }], hypothesis: { ...H2, effect: 'e' + v }, origin: { kind: 'written' }, authorship: 'strong' }, 2); assert.ok('id' in r); return r.id; };
+  const P = composeVersion({ store: f.store, parent: f.pkg, add: [edit(-1)], authorized: BOUNDS });
+  const C = composeVersion({ store: f.store, parent: f.pkg, add: [edit(-0.5)], authorized: BOUNDS });
+  assert.ok('child' in P && 'child' in C);
+  try {
+    const text = async (pkg: JuniorPackage, q: Parameters<typeof lab.query>[1], id: string) => { const r = await lab.query(pkg, q, id); assert.ok(!('refused' in r) && r.state === 'answered', JSON.stringify(r)); return (lab.answer(r) as { cases: { text: string }[] }).cases[0].text; };
+    const ask = { query: 'forward' as const, cases: [{ text: { user: 'hello' } }] };
+    const onP = await text(P.child, ask, 'p');
+    const onBase = await text(f.pkg, ask, 'b');
+    const onC = await text(C.child, ask, 'c');
+    assert.notEqual(onP, onBase, 'the junior diagnosed serves with its own edits');
+    const tried = await text(P.child, { query: 'try', candidate: C.child, args: { inner: 'forward', args: {} }, cases: [{ text: { user: 'hello' } }] }, 't');
+    assert.equal(tried, onC, 'try answers as the candidate itself: composed from the start, not on the junior\'s edits');
+    // A candidate whose set says other weights than it composes into: refused, never tried.
+    const t = f.store.tree(C.adapter)!;
+    const lying = normalizePackage({ ...C.child, adapter: f.store.put(JSON.stringify({ format: 'blob-tree@1', files: { ...t.files, 'set.json': f.store.put(JSON.stringify({ ...C.set, summaries: { [DOWN]: { ...C.set.summaries[DOWN], digest: '0'.repeat(64) } } })) } })) });
+    const r = await lab.query(P.child, { query: 'try', candidate: lying, args: { inner: 'forward', args: {} }, cases: [{ text: { user: 'hello' } }] }, 'l');
+    assert.ok(!('refused' in r) && r.state === 'failed' && /not the set's weights/.test(String(r.reason)), JSON.stringify(r));
+  } finally { server.stop(); }
+});

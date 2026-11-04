@@ -1,8 +1,9 @@
 # SPEC · Edición de pesos: el modelo fuerte escribe en los pesos del junior, y una búsqueda evolutiva los explora
 
-Estado (04/11/2026): **WE1 a WE5 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
-backend aislado; la palanca en el mundo del junior; la búsqueda; el atasco y la rama del operador; §12). Falta WE6, que
-necesita la línea base real. Dos revisiones externas del mismo día conciliadas (§14). Amplía
+Estado (04/11/2026): **WE1 a WE6 implementadas en código** (edición y composición; laboratorio de pesos, constructores
+cerrados y backend aislado; la palanca en el mundo del junior; la búsqueda; el atasco y la rama del operador; la
+comparación A–F con su plan, sus pasos C y E y su informe; §12). **Sin ejecuciones reales:** la comparación se lanza en la
+máquina 2×3090 después de la línea base de la fase A. Dos revisiones externas del mismo día conciliadas (§14). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -502,6 +503,39 @@ Lo que se lee:
 - **El coste** de cada mejora: tokens del modelo fuerte, consultas y tokens del laboratorio, evaluaciones y horas de GPU.
 - **La diversidad:** nichos ocupados, y cuántos se ocuparon con material de `perturb` y `reinit`.
 
+Cómo queda en el código (WE6):
+
+- **El manifiesto.** La comparación es un manifiesto `weight-comparison@1` con estos campos:
+  - el manifiesto de competencia, la referencia, los blobs y el servidor;
+  - las repeticiones y la semilla;
+  - **un solo presupuesto** para todas las condiciones;
+  - los argumentos del investigador, iguales para todas sus ejecuciones;
+  - el entrenador de F;
+  - la carpeta de confirmaciones externas.
+- **Qué varía entre condiciones.** Sólo lo que cada ejecución puede hacer, nunca con qué se mide: todas usan el mismo
+  manifiesto de competencia, y así sus evaluaciones se comparan caso a caso.
+  - A no edita ni entrena.
+  - B edita y consulta el laboratorio con `--searches 0`; su prompt ni siquiera menciona `evolve`.
+  - D además abre búsquedas.
+  - F destila y entrena.
+- **C**, un paso del operador tras B, sustituye cada edición de B por un control aleatorio de su tamaño compuesto. Cada
+  versión editada de B tiene su gemela, cuyo genoma son los controles del genoma de B, desde la misma partida.
+- **E**, un paso del operador tras D, repite la primera búsqueda de D desde la misma partida y con la misma
+  configuración. Las semillas de D sólo dan el tamaño de los controles: ninguna se evalúa ni hace de padre.
+- **El producto.**
+  - En una ejecución del investigador es la última versión que su protocolo aceptó (`productOf`, MA7).
+  - En C y E es la última candidata promovida frente a la referencia, revisadas en su orden: el orden de B en C, y de
+    peor a mejor calidad en E.
+  - Su paquete queda en la carpeta del mundo para exportarlo a la confirmación.
+- **El informe** se reconstruye sin modelo desde lo que dejaron las ejecuciones:
+  - H1: B frente a C y D frente a E, par a par, con `compareImprovements`;
+  - H2: por condición, cuántos productos mejoran una sonda, cuántos un mundo, cuántos ambas cosas, y cuántos confirmó
+    el operador, en mundos incluidos;
+  - el coste, bolsa a bolsa;
+  - la diversidad: búsquedas, nichos y élites cuyo linaje pasa por `perturb` o `reinit`.
+- **Los tokens del modelo fuerte** se igualan con los argumentos comunes del investigador. El informe no los suma
+  todavía: viven en el diario de cada ejecución, no en su libro.
+
 ## 9. Presupuesto
 
 Se añaden tres bolsas a las de la spec base:
@@ -585,6 +619,14 @@ necesita la máquina real y la línea base de la fase A.**
     por consulta.
   - La autoprueba del aislamiento. Ubuntu 23.10 y posteriores pueden restringir los espacios de nombres de usuario sin
     privilegios: si la autoprueba falla, `program` sigue rechazado y los constructores cubren la palanca.
+
+**WE6, hecha en código (04/11/2026):**
+
+- **Dónde está.** `lib/src/junior/comparison.ts` y `lab junior compare plan|control-edits|control-search|report`. La
+  bolsa `searches` y `--searches` del mundo cierran `evolve` a B. `runWeightSearch` ganó `controlsOnly` para E.
+- **Pruebas.** `lib/test/junior-weight-comparison.test.ts` cubre el plan, C, E y el informe con datos sintéticos.
+- **Pendiente.** Las ejecuciones reales, en la máquina 2×3090, tras la línea base de la fase A; la guía de montaje
+  (§10) dice cómo lanzarlas.
 
 **WE5, hecha (04/11/2026):**
 
@@ -675,3 +717,16 @@ Revisión de la implementación de WE1, el mismo día:
 | La composición aceptaba NaN (+∞ y −∞ de factores finitos) y la verificación lo daba por bueno: ahora se rechaza lo no finito, y una medida NaN nunca está dentro de una cota | §3.3, `compose` y el trabajador |
 | El verificador sólo comparaba los resúmenes de pesos: ahora recalcula todas las medidas y totales, aplica las cotas del conjunto y comprueba `chip_layers` | §3.3, `verifyEditSet` |
 | El rango se acotaba por edición: ahora `rank_bound` suma los rangos del módulo, una cota conservadora declarada como tal | §3.3 |
+
+Revisión de WE2–WE6, el mismo día:
+
+| Punto | Dónde |
+|---|---|
+| `try` sumaba el candidato sobre los pesos ya editados del junior diagnosticado: ahora vuelve a la partida, compone el candidato desde ella, comprueba sus resúmenes y restaura. El backend de imitación, a su vez, sirve ya las ediciones del propio paquete | §4.2, `junior_lab.py` |
+| Las versiones entregadas por una rama desaparecían al reconstruir el run: la entrega se guarda entera y se rehace antes de cada acto | §6.6, `redeliver` |
+| `--distillations 0` daba 20: un cero explícito es cero | opciones del mundo |
+| C y E partían de la referencia, perdiendo el prompt, la memoria y la decodificación de B y D: ahora parten del paquete exacto de partida | §8, `comparison.ts` |
+| C igualaba cada edición, no la intervención compuesta: ahora escala los controles módulo a módulo hasta la norma compuesta de B y lo verifica | §8, E6 |
+| Cancelar no detenía la población inicial ni la investigación de élites: ahora se comprueba antes de cada trabajo costoso | §6.4 |
+| Reanudar servía medidas de otro junior: el registro guarda la identidad completa de la búsqueda (ejecución de la partida, configuración, componentes, semillas, modo, evaluador) y otra se rechaza | §6, §10 |
+| Un registro cortado impedía reanudar y se reescribía entero: ahora se recupera el fragmento y sólo se anexa | §10 |

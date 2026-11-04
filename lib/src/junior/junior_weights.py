@@ -170,8 +170,20 @@ def compose_pure_weights(adapter_dir, base_dir, chip_layers):
 
 # --- torch ------------------------------------------------------------------------------------------------------------
 
-def apply_edit_set(model, adapter_dir, chip_layers):
-    """The set composed into the served model's weights in place; {module: {"base", "edited"}} digests of what it serves."""
+def check_digests(adapter_dir, composed):
+    """The digests composed against the set's own summaries: the start and the result of every module, or an error."""
+    summaries = json.loads(_read(os.path.join(adapter_dir, SET_MANIFEST)).decode("utf8"))["summaries"]
+    for name, s in summaries.items():
+        c = composed.get(name)
+        if c is None or c["base"] != s["base_digest"] or c["edited"] != s["digest"]:
+            raise RuntimeError("the set composed here is not the set's weights at " + name)
+    if set(composed) - set(summaries):
+        raise RuntimeError("composed modules the set does not summarize")
+
+
+def apply_edit_set(model, adapter_dir, chip_layers, bases=None):
+    """The set composed into the served model's weights in place; {module: {"base", "edited"}} digests of what it serves.
+    `bases`, when given, keeps a copy of each module's start before it is changed: what a `try` composes from."""
     import torch
     _, edits = load_set(adapter_dir, chip_layers)
     params = dict(model.named_parameters())
@@ -192,6 +204,8 @@ def apply_edit_set(model, adapter_dir, chip_layers):
             raise RuntimeError(name + " is served in " + str(W.dtype) + ": edits compose on bf16")
         shape = list(W.shape)
         before = digest(name, shape, bits(W))
+        if bases is not None:
+            bases[name] = W.detach().clone()
         delta = torch.zeros(shape, dtype=torch.float32, device=W.device)
         for mods in edits:
             for m, t in mods:

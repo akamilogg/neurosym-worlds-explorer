@@ -356,7 +356,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       case 'junior': {
         /* The junior packaged and served (SPEC-METAPOLITICA-APRENDIZAJE MA1): its blobs, its package, a session verified from
            its ledger, the machine checked, the driver's resources measured. The server and the proxy are scripts of their own. */
-        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T --driver D --base B] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P | policy <learning-policy.json> --max-advice N [--out <dir>] | policies <dir> | isolation [--python P] | branch <weight-search-branch.json> --dir <dir>';
+        const usage = 'lab junior store <dir|file> --blobs <dir> | package <manifest.json> --blobs <dir> [--export <dir>] | verify <session.jsonl> --blobs <dir> [--python P --backend fake|qwenputer --firmware F --tokenizer T --driver D --base B] | check <machine-check.json> | probe <manifest.json> --blobs <dir> --python P [--backend B] --lengths 1024,4096 --work <dir> | cut <run.json> <question> | manifest <competence.json> | evaluate <competence.json> <package.json> --blobs <dir> --server <url> --dir <dir> [--partition development|confirmation] | promote <competence.json> <reference-evaluation.json> <candidate-evaluation.json> | confirm <confirmation-manifest.json> <candidate export> <reference export> --dir <dir> --python P | policy <learning-policy.json> --max-advice N [--out <dir>] | policies <dir> | isolation [--python P] | branch <weight-search-branch.json> --dir <dir> | compare plan|control-edits|control-search|report <weight-comparison.json> [--rep N]';
         const sub = args.shift();
         const file = (f: string) => fs.existsSync(path.resolve(f)) ? path.resolve(f) : path.resolve(ctx.root, f);
         const J = await import('../junior/package.ts');
@@ -408,6 +408,46 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
             out('the operator\'s report: ' + r.report);
             return 0;
           } finally { server.stop(); await h.close(); }
+        }
+        if (sub === 'compare') {
+          /* SPEC-EDICION-PESOS §8 (WE6): the conditions A-F, launched by the operator - their plan, the steps C and E, the report. */
+          const what = args.shift(), file = args.shift();
+          if (!what || !file || !['plan', 'control-edits', 'control-search', 'report'].includes(what)) { out('lab junior compare plan|control-edits|control-search|report <weight-comparison.json> [--rep N]'); return 2; }
+          const C = await import('../junior/comparison.ts');
+          const m = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
+          const problems = C.comparisonProblems(m);
+          if (problems.length) { out('the comparison is refused: ' + problems.join('; ')); return 2; }
+          if (what === 'plan') {
+            const plan = C.planComparison(m);
+            fs.mkdirSync(path.resolve(m.work), { recursive: true });
+            fs.writeFileSync(path.join(path.resolve(m.work), 'plan.json'), JSON.stringify(plan, null, 2));
+            for (const r of plan) out(r.condition + '-' + r.rep + '  ' + (r.kind === 'run' ? 'lab start junior ' + r.args!.join(' ') : 'lab junior compare ' + (r.kind === 'control-edits' ? 'control-edits' : 'control-search') + ' ' + file + ' --rep ' + r.rep + '   (after ' + r.after!.condition + '-' + r.after!.rep + ')'));
+            return 0;
+          }
+          const manifest = JSON.parse(fs.readFileSync(path.resolve(m.competence), 'utf8'));
+          const base = JSON.parse(fs.readFileSync(path.resolve(m.reference), 'utf8'));
+          const { JuniorWorld } = await import('../worlds/junior/lab.ts');
+          const b = m.budget;
+          const world = (dir: string) => new JuniorWorld({ manifest, base, blobs: path.resolve(m.blobs), server: m.server, dir, evaluations: b.evaluations, edits: b.edits, searches: b.searches });
+          if (what === 'control-edits' || what === 'control-search') {
+            const rep = Number(take(args, 'rep') ?? '0');
+            const r = what === 'control-edits' ? await C.runControlEdits(m, rep, { world }) : await C.runControlSearch(m, rep, { world });
+            out(r.condition + '-' + rep + ': ' + r.state + ', product ' + r.product + '; spent ' + JSON.stringify(r.cost));
+            return 0;
+          }
+          const probe = world(path.join(path.resolve(m.work), 'report-world'));
+          const { executionHash } = await import('../junior/package.ts');
+          const refExec = executionHash(base);
+          let referenceEvaluation = null;
+          for (const d of fs.existsSync(path.resolve(m.work)) ? fs.readdirSync(path.resolve(m.work)) : []) {
+            const f = path.join(path.resolve(m.work), d, 'world', 'evaluations', probe.manifestHash.slice(0, 16) + '-' + refExec.slice(0, 16) + '-development.json');
+            if (fs.existsSync(f)) { referenceEvaluation = JSON.parse(fs.readFileSync(f, 'utf8')); break; }
+          }
+          const report = C.comparisonReport(m, { manifest, manifestHash: probe.manifestHash, reference: probe.reference, referenceEvaluation });
+          fs.writeFileSync(path.join(path.resolve(m.work), 'report.json'), JSON.stringify(report, null, 2));
+          fs.writeFileSync(path.join(path.resolve(m.work), 'report.md'), C.reportText(report));
+          out(C.reportText(report));
+          return 0;
         }
         if (sub === 'branch') {
           /* SPEC-EDICION-PESOS §6.6: the operator's search of juniors as a branch with its own fund; resumed if run again. */

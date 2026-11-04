@@ -153,3 +153,46 @@ test('a stop in the branch\'s inbox is obeyed before its next candidate', { skip
     assert.equal(finding.stoppedBy, 'cancelled');
   } finally { await f.close(); }
 });
+
+/* --- A review of WE2-WE6 (04/11/2026) ----------------------------------------------------------------------------------- */
+
+test('review: a run rebuilt makes the delivered versions again, and what the researcher built on them', { skip: !python && 'no Python' }, async () => {
+  const f = await fixture();
+  try {
+    const branches = path.join(f.dir, 'branches');
+    const researcher = f.make({ weightBranches: branches });
+    const startPkg = await researcher.packageOf(researcher.reference);
+    fs.writeFileSync(path.join(f.dir, 'start.json'), JSON.stringify(startPkg));
+    const spec: WeightBranchSpec = { format: 'weight-search-branch@1', id: 'wb3', question: 'q', from: researcher.reference, start: path.join(f.dir, 'start.json'), manifest: path.join(f.dir, 'manifest.json'),
+      reference: path.join(f.dir, 'reference.json'), blobs: path.join(f.dir, 'blobs'), server: f.h.url,
+      seeds: [{ written: { modules: [{ module: DOWN, encoding: 'sparse', indices: [0], values: [-1.5] }] }, competence: 'protocol', why: 'w', expect: 'e' }],
+      control_seeds: 1, max_candidates: 3, seed: 2, fund: { edits: 20, evaluations: 20 } };
+    fs.writeFileSync(path.join(f.dir, 'wb3.json'), JSON.stringify(spec));
+    await runWeightBranch(path.join(f.dir, 'wb3.json'), branches, { probes: f.probesOf, heartbeatMs: 50 });
+    const first = { change: { from: researcher.reference, files: { 'prompt.md': 'y' }, why: 'w', expect: 'e' } };
+    const published: Record<string, any>[] = [];
+    await juniorLab.act!.start({ world: researcher } as JuniorSpec, first, 'c1', { publish: (m: Record<string, any>) => published.push(m) } as never);
+    const delivered = published.find((m) => m.body?.delegated)!.body.delegated.versions[0].version as string;
+    const second = { change: { from: delivered, files: { 'prompt.md': 'built on the delivered junior' }, why: 'w', expect: 'e' } };
+    const child = await juniorLab.act!.start({ world: researcher } as JuniorSpec, second, 'c2', {} as never);
+    assert.ok(child && child.kind === 'version');
+    // The run rebuilt from its events: the delivered version and its child exist again.
+    const again = { world: f.make({ weightBranches: branches }) };
+    juniorLab.rebuild!(again as never, [{ type: 'investigation', requests: [{ act: first }] }, { type: 'investigation', requests: [{ act: second }] }] as never);
+    assert.ok(again.world.store.get(delivered), 'the delivered version made again');
+    assert.ok(again.world.store.get(child.version), 'and the version built on it');
+    assert.deepEqual(again.world.deliverBranches(), [], 'never delivered twice');
+  } finally { await f.close(); }
+});
+
+test('review: an explicit 0 is 0 - a condition that may not distill gets no distillations', async () => {
+  const f = await fixture();
+  try {
+    const made = juniorLab.generate(1, { manifest: path.join(f.dir, 'manifest.json'), package: path.join(f.dir, 'reference.json'), blobs: path.join(f.dir, 'blobs'), server: f.h.url,
+      work: path.join(f.dir, 'gen'), evaluations: '4', distillations: '0' } as never);
+    assert.equal(made.world.jobs.bags().distillations.limit, 0);
+    const dflt = juniorLab.generate(1, { manifest: path.join(f.dir, 'manifest.json'), package: path.join(f.dir, 'reference.json'), blobs: path.join(f.dir, 'blobs'), server: f.h.url,
+      work: path.join(f.dir, 'gen2'), evaluations: '4' } as never);
+    assert.equal(dflt.world.jobs.bags().distillations.limit, 20, 'absent: the default');
+  } finally { await f.close(); }
+});

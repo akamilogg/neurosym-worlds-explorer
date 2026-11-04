@@ -159,3 +159,20 @@ compositor en Python puro dan los mismos bits. En la máquina del junior falta c
 3. **El aislamiento:** `lab junior isolation --python <python>` ejecuta la autoprueba y dice `isolated` sólo si demuestra
    cada garantía. Si dice `NOT isolated`, las ediciones `program` siguen rechazadas y la palanca usa los constructores
    cerrados.
+
+## 10. La comparación A–F (WE6)
+
+Después de la línea base de la fase A, con la composición, el laboratorio y (si se quiere F) el entrenamiento comprobados
+en la máquina:
+
+1. **El manifiesto de la comparación** (`weight-comparison@1`): el manifiesto de competencia (con `weight_edits`,
+   `weight_lab` y `weight_search`), el paquete de referencia, los blobs, el servidor, la carpeta de trabajo, las
+   repeticiones, **un solo presupuesto** y los argumentos del investigador, iguales para todas sus ejecuciones.
+2. **El plan:** `lab junior compare plan <comparación.json>` escribe `plan.json` y lista, por condición y repetición, la
+   orden de cada ejecución del investigador (A, B, D, F) y los pasos del operador (C tras B, E tras D).
+3. **Lanzar** cada ejecución del investigador con su orden. Después, `lab junior compare control-edits <comparación.json>
+   --rep N` (C) y `lab junior compare control-search <comparación.json> --rep N` (E).
+4. **Confirmar fuera** (§6) el producto de cada condición: su paquete está en la carpeta del mundo de la ejecución (en C y
+   E, en `result.json`). Los resúmenes van a la carpeta `confirmations` del manifiesto.
+5. **El informe:** `lab junior compare report <comparación.json>` deja `report.json` y `report.md`: H1, H2, coste y
+   diversidad.

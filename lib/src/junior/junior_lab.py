@@ -77,7 +77,7 @@ def _top_singular_pure(rows, din, k, iterations=40):
 class FakeModel:
     """The base's safetensors as a model: modules by name, their bf16 bits, edits composed into a copy for `try`."""
 
-    def __init__(self, base_dir, chip):
+    def __init__(self, base_dir, chip, adapter_dir=None):
         self.base, self.chip = base_dir, chip
         self.weights = {}
         for f in sorted(os.listdir(base_dir)):
@@ -87,6 +87,10 @@ class FakeModel:
                         bits = array("H")
                         bits.frombytes(data)
                         self.weights[name[:-len(".weight")]] = (shape, bits)
+        # The package's own set of edits, composed from the start: what the junior diagnosed serves.
+        if JW.is_edit_set(adapter_dir):
+            for name, w in JW.compose_pure_weights(adapter_dir, base_dir, chip).items():
+                self.weights[name] = (w["shape"], w["bits"])
 
     def values(self, name):
         shape, bits = self.weights[name]
@@ -100,9 +104,11 @@ class FakeModel:
         return h.hexdigest()
 
     def edited(self, adapter_dir):
-        copy = FakeModel.__new__(FakeModel)
-        copy.base, copy.chip, copy.weights = self.base, self.chip, dict(self.weights)
-        for name, w in JW.compose_pure_weights(adapter_dir, self.base, self.chip).items():
+        """A candidate set composed from the START (never on the package's own edits), its digests the set's."""
+        copy = FakeModel(self.base, self.chip)
+        composed = JW.compose_pure_weights(adapter_dir, self.base, self.chip)
+        JW.check_digests(adapter_dir, {n: {"base": w["base"], "edited": w["edited"]} for n, w in composed.items()})
+        for name, w in composed.items():
             copy.weights[name] = (w["shape"], w["bits"])
         return copy
 
@@ -176,7 +182,7 @@ def _write_acts(acts, out_dir):
 
 def fake_lab(job, q, args, limits, out_dir):
     chip = int((job.get("circuit") or {}).get("chip_layers", 0))
-    model = FakeModel(job["files"]["base"], chip)
+    model = FakeModel(job["files"]["base"], chip, (job.get("files") or {}).get("adapter"))
     files = {}
     if q == "modules":
         return {"modules": [{"name": n, "shape": s, "layer": _layer(n), "editable": _editable(n, chip)} for n, (s, _) in sorted(model.weights.items())]}, {"tokens_in": 0, "tokens_out": 0, "circuit_steps": 0}, files
@@ -210,7 +216,7 @@ def fake_lab(job, q, args, limits, out_dir):
 
 # --- qwenputer ----------------------------------------------------------------------------------------------------------
 
-def qwen_lab(job, q, args, limits, out_dir, chat, run_case):
+def qwen_lab(job, q, args, limits, out_dir, chat, run_case, bases=None):
     """The queries on the served model. `run_case(content, max_new_tokens)` runs the junior as run_qwenputer does and
     answers (ids_stream, generated tokens, stop, usage). Everything else reads the model through torch."""
     import torch
@@ -242,9 +248,22 @@ def qwen_lab(job, q, args, limits, out_dir, chat, run_case):
     saved = {}
     if q == "try":
         q, args = args["inner"], {**args["args"], "_cases": args.get("_cases")}
-        for name in JW.touched(JW.load_set(job["lab"]["set"], chip)[1]):
+        bases = bases or {}
+        candidate = JW.touched(JW.load_set(job["lab"]["set"], chip)[1])
+        # Every module either set touches, kept as it serves now; the package's own edits undone back to the start; the
+        # candidate composed from the start (its genome is whole: it never adds to the package's), checked by its digests.
+        for name in set(candidate) | set(bases):
             saved[name] = params[name + ".weight"].detach().clone()
-        JW.apply_edit_set(chat.model, job["lab"]["set"], chip)
+        with torch.no_grad():
+            for name, w in bases.items():
+                params[name + ".weight"].copy_(w)
+        try:
+            JW.check_digests(job["lab"]["set"], JW.apply_edit_set(chat.model, job["lab"]["set"], chip))
+        except Exception:
+            with torch.no_grad():
+                for name, w in saved.items():
+                    params[name + ".weight"].copy_(w)
+            raise
     try:
         return _qwen_cases(q, args, limits, out_dir, chat, run_case, params, files)
     finally:
@@ -335,7 +354,7 @@ def _positions(spec, total, generated, cap):
     return torch.tensor(idx[:cap])
 
 
-def lab(job, chat=None, run_case=None):
+def lab(job, chat=None, run_case=None, bases=None):
     """One query: its result, what it consumed and the files it wrote."""
     spec = job["lab"]
     q, args, limits = spec["query"], dict(spec.get("args") or {}), spec["limits"]
@@ -351,7 +370,7 @@ def lab(job, chat=None, run_case=None):
         torch.cuda.set_per_process_memory_fraction(min(1.0, limits["max_memory_bytes"] / float(total)))
         try:
             args["_cases"] = spec.get("cases") or []
-            result, usage, files = qwen_lab(job, q, args, limits, out_dir, chat, run_case)
+            result, usage, files = qwen_lab(job, q, args, limits, out_dir, chat, run_case, bases)
         finally:
             torch.cuda.set_per_process_memory_fraction(1.0)
             peak = int(torch.cuda.max_memory_allocated())

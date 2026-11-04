@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
-import { normalizePackage, type BlobStore, type JuniorPackage } from './package.ts';
+import { executionHash, normalizePackage, type BlobStore, type JuniorPackage } from './package.ts';
+import { appendRecord, trimFragment } from './jsonl.ts';
 import {
   baseReader, compose, f32, i64, layerOf, putEdit, readEdit, readSafetensors, seeded, tensorF32, tensorI64,
   type ModuleSummary, type RawTensor, type SetTotals, type WeightEdit
@@ -69,6 +70,9 @@ export function searchConfigProblems(raw: unknown, components: readonly string[]
 /** What the search asks of the world it searches in. Each call charges its own bag (idempotent by what it is asked) and
     throws OutOfBudget when the bag cannot hold it. */
 export interface SearchEvaluator {
+  /** What its measures depend on (the probes' manifest, the stand-in that replaces them): a record measured by another is
+      never served to this one. */
+  readonly identity?: string;
   /** The genome composed from the start within the bounds: the version, or why it is invalid. Charges `edits`. */
   compose(genome: readonly string[]): Promise<{ pkg: JuniorPackage; summaries: Readonly<Record<string, ModuleSummary>>; totals: SetTotals } | { invalid: string }>;
   valid(pkg: JuniorPackage): Promise<true | string>;
@@ -246,6 +250,16 @@ export function controlOf(store: BlobStore, chip: number, strong: string, seed: 
   }, 'control');
 }
 
+/** An edit with each module's tensors scaled by its own factor (a control matched to a composed size): its origin the
+    control it scales. A factor of 0 leaves the module's edit null - the size of a set whose edits cancel. */
+export function scaleModules(store: BlobStore, chip: number, id: string, factors: Readonly<Record<string, number>>, seed: number): string | null {
+  return derive(store, chip, id, 'control', seed, (m, t) => {
+    const k = factors[m.module] ?? 1;
+    if (!Number.isFinite(k) || k < 0) return null;
+    return { tensors: m.encoding === 'lowrank' ? { B: scaled(t.B, k), A: t.A } : { indices: t.indices, values: scaled(t.values, k) } };
+  }, 'control');
+}
+
 /** Whether the strong seeds are distinct hypotheses: no two alike in their modules and their origin (§6.2). */
 export function distinctSeeds(store: BlobStore, ids: readonly string[]): string | null {
   const seen = new Map<string, string>();
@@ -269,7 +283,9 @@ export interface SearchResult {
 
 /** A search from a start (a package without an adapter) and the strong model's seeds (edit ids), recorded in `out`: a
     record there is resumed - every candidate it evaluated is served from it, never evaluated or charged again. */
-export async function runWeightSearch(o: { config: WeightSearchConfig; start: JuniorPackage; seeds: readonly string[]; store: BlobStore; components: readonly string[]; evaluator: SearchEvaluator; out: string; signal?: AbortSignal }): Promise<SearchResult> {
+export async function runWeightSearch(o: { config: WeightSearchConfig; start: JuniorPackage; seeds: readonly string[]; store: BlobStore; components: readonly string[]; evaluator: SearchEvaluator; out: string; signal?: AbortSignal;
+  /** Condition E of the comparison (§8): the seeds serve only as the size of the controls - never evaluated, never parents. */
+  controlsOnly?: boolean }): Promise<SearchResult> {
   const problems = searchConfigProblems(o.config, o.components);
   if (problems.length) throw new Error('the search: ' + problems.join('; '));
   const start = normalizePackage(o.start);
@@ -280,12 +296,28 @@ export async function runWeightSearch(o: { config: WeightSearchConfig; start: Ju
   const chip = Number((start.execution.circuit as Record<string, unknown>).chip_layers);
   const base = baseReader(o.store, start.base);
 
-  const recorded: Record<string, any>[] = fs.existsSync(o.out) ? fs.readFileSync(o.out, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  /* The record: a line cut by a stop is recovered (cut away) before it is read; what it holds is never rewritten - each
+     event with an identity (the start, a candidate, its evaluation, an investigation) is written once, appended. */
+  trimFragment(o.out);
+  const recorded: Record<string, any>[] = fs.existsSync(o.out) ? fs.readFileSync(o.out, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : [];
+  /* Who it is: a record of another search - another start (its whole execution), configuration, components, seeds, mode
+     or evaluator - is never served to this one. */
+  const identity = { start_execution: executionHash(start), config: o.config, components: o.components, seeds: o.seeds, controls_only: Boolean(o.controlsOnly), evaluator: o.evaluator.identity ?? null };
+  const was = recorded.find((e) => e.type === 'search_started');
+  if (was && stableStringify({ start_execution: was.start_execution, config: was.config, components: was.components, seeds: was.seeds, controls_only: Boolean(was.controls_only), evaluator: was.evaluator ?? null }) !== stableStringify(identity))
+    throw new Error('the record at ' + o.out + ' is of another search (another start, configuration, seeds or evaluator): it is not resumed by this one');
   const served = new Map<string, Record<string, any>>(recorded.filter((e) => e.type === 'evaluated').map((e) => [e.id, e]));
+  const keyOf = (e: Record<string, any>) => (['search_started', 'candidate', 'evaluated', 'investigated'].includes(e.type) ? e.type + '|' + (e.id ?? '') : null);
+  const written = new Set(recorded.map(keyOf).filter((k): k is string => k !== null));
   const events: Record<string, any>[] = [];
-  fs.writeFileSync(o.out, '');
-  const log = (e: Record<string, any>) => { events.push(e); fs.appendFileSync(o.out, JSON.stringify(e) + '\n'); };
-  log({ type: 'search_started', config: o.config, start: start.base, seeds: o.seeds, components: o.components });
+  const log = (e: Record<string, any>) => {
+    events.push(e);
+    const k = keyOf(e);
+    if (k && written.has(k)) return;
+    if (k) written.add(k);
+    appendRecord(o.out, e);
+  };
+  log({ type: 'search_started', ...identity, start: start.base, start_package: start });
 
   const candidates = new Map<string, Candidate>();
   const summariesOf = new Map<string, Readonly<Record<string, ModuleSummary>>>();
@@ -294,10 +326,12 @@ export async function runWeightSearch(o: { config: WeightSearchConfig; start: Ju
   const evaluate = async (genome: readonly string[], origin: Candidate['origin']): Promise<Candidate | null> => {
     const id = genomeId(genome);
     if (candidates.has(id)) { log({ type: 'duplicate', id, origin }); return candidates.get(id)!; }
+    const known = served.get(id);
+    /* Cancelled: nothing more is measured (what the record holds is still served: it costs nothing). */
+    if (!known && o.signal?.aborted) { stoppedBy ||= 'cancelled'; return null; }
     const c: Candidate = { id, genome, origin, seq: seq++ };
     candidates.set(id, c);
     log({ type: 'candidate', id, genome, origin, seq: c.seq });
-    const known = served.get(id);
     if (known) {
       Object.assign(c, { state: known.state, reason: known.reason, deficits: known.deficits, totals: known.totals, location: known.location });
       if (known.summaries) summariesOf.set(id, known.summaries);
@@ -337,13 +371,16 @@ export async function runWeightSearch(o: { config: WeightSearchConfig; start: Ju
   /* The population: the start, the strong seeds, the controls. */
   const startC = await evaluate([], { kind: 'start' });
   if (!startC || startC.state !== 'measured') stoppedBy ||= 'the start could not be measured: no niche can be told';
-  for (const s of o.seeds) { if (stoppedBy) break; await evaluate([s], { kind: 'strong' }); }
+  if (!o.controlsOnly) for (const s of o.seeds) { if (stoppedBy) break; await evaluate([s], { kind: 'strong' }); }
+  const measureNorm = (id: string) => Object.fromEntries(Object.entries(compose([{ id, ...load(o.store, id) }], base).summaries).map(([m, s]) => [m, s.relative_norm]));
   for (let i = 0; i < o.config.control_seeds && !stoppedBy; i++) {
     const strong = o.seeds[i % o.seeds.length];
+    /* The size to match: the strong seed's composed norms as measured; with controls only, composed here without being evaluated. */
     const target = summariesOf.get(genomeId([strong]));
-    if (!target) { log({ type: 'control_skipped', strong, why: 'its strong seed has no composed norms (invalid or not composed)' }); continue; }
-    const norms = Object.fromEntries(Object.entries(target).map(([m, s]) => [m, s.relative_norm]));
-    const measureNorm = (id: string) => Object.fromEntries(Object.entries(compose([{ id, ...load(o.store, id) }], base).summaries).map(([m, s]) => [m, s.relative_norm]));
+    let norms: Record<string, number>;
+    if (target) norms = Object.fromEntries(Object.entries(target).map(([m, s]) => [m, s.relative_norm]));
+    else if (o.controlsOnly) { try { norms = measureNorm(strong); } catch (e) { log({ type: 'control_skipped', strong, why: (e as Error).message }); continue; } }
+    else { log({ type: 'control_skipped', strong, why: 'its strong seed has no composed norms (invalid or not composed)' }); continue; }
     const control = controlOf(o.store, chip, strong, o.config.seed * 7919 + i * 2, norms, measureNorm);
     if (!control) { log({ type: 'control_skipped', strong, why: 'no control of its size could be made' }); continue; }
     await evaluate([control], { kind: 'control', parents: [strong], seed: o.config.seed * 7919 + i * 2 });
@@ -388,6 +425,7 @@ export async function runWeightSearch(o: { config: WeightSearchConfig; start: Ju
   if (o.config.investigate_elites && o.evaluator.investigate) for (const c of [...elites.values()].sort((a, b) => a.seq - b.seq)) {
     const served = recorded.find((e) => e.type === 'investigated' && e.id === c.id);
     if (served) { evidence[c.id] = served.evidence; log(served); continue; }
+    if (o.signal?.aborted) { stoppedBy ||= 'cancelled'; break; }
     try {
       const v = c.genome.length ? await o.evaluator.compose(c.genome) : { pkg: start };
       if ('invalid' in v) continue;

@@ -228,3 +228,41 @@ test('evolve in the junior\'s world: within what the manifest authorizes, each c
     assert.equal(again.world.jobs.bags().edits.spent, world.jobs.bags().edits.spent);
   } finally { server.stop(); await h.close(); }
 });
+
+/* --- A review of WE2-WE6 (04/11/2026) ----------------------------------------------------------------------------------- */
+
+test('review: a cancelled search measures nothing more - neither its population nor its elites\' investigations', async () => {
+  const f = fixture();
+  const { ev, calls } = standIn(f);
+  let investigated = 0;
+  const stop = new AbortController();
+  stop.abort();
+  const r = await runWeightSearch({ config: { ...CONFIG, investigate_elites: true }, start: f.pkg, seeds: f.seeds, store: f.store, components: ['a', 'b'],
+    evaluator: { ...ev, investigate: async () => { investigated++; return {}; } }, out: path.join(f.dir, 'cancelled.jsonl'), signal: stop.signal });
+  assert.equal(r.stoppedBy, 'cancelled');
+  assert.deepEqual([calls.probes, calls.compose, investigated], [0, 0, 0]);
+});
+
+test('review: a record of another search - another start - is never served to this one', async () => {
+  const f = fixture();
+  const out = path.join(f.dir, 'other.jsonl');
+  await runWeightSearch({ config: { ...CONFIG, max_candidates: 2 }, start: f.pkg, seeds: f.seeds, store: f.store, components: ['a', 'b'], evaluator: standIn(f).ev, out });
+  const otherPrompt = normalizePackage({ ...f.pkg, prompt: 'Another junior.' });
+  await assert.rejects(runWeightSearch({ config: { ...CONFIG, max_candidates: 2 }, start: otherPrompt, seeds: f.seeds, store: f.store, components: ['a', 'b'], evaluator: standIn(f).ev, out }), /another search/);
+  await assert.rejects(runWeightSearch({ config: { ...CONFIG, max_candidates: 2 }, start: f.pkg, seeds: f.seeds, store: f.store, components: ['a', 'b'], evaluator: { ...standIn(f).ev, identity: 'other probes' }, out }), /another search/);
+});
+
+test('review: a record cut by a stop resumes - its fragment recovered, what it holds never rewritten', async () => {
+  const f = fixture();
+  const out = path.join(f.dir, 'cut.jsonl');
+  await runWeightSearch({ config: CONFIG, start: f.pkg, seeds: f.seeds, store: f.store, components: ['a', 'b'], evaluator: standIn(f, { probesBudget: 3 }).ev, out });
+  const before = fs.readFileSync(out, 'utf8');
+  fs.appendFileSync(out, '{"type":"evaluated","id":"x","sta');
+  const second = standIn(f);
+  const r = await runWeightSearch({ config: CONFIG, start: f.pkg, seeds: f.seeds, store: f.store, components: ['a', 'b'], evaluator: second.ev, out });
+  assert.equal(r.stoppedBy, 'max_candidates');
+  assert.ok(fs.readFileSync(out, 'utf8').startsWith(before), 'appended, never rewritten');
+  const lines = fs.readFileSync(out, 'utf8').split('\n').filter(Boolean);
+  assert.ok(lines.every((l) => { try { JSON.parse(l); return true; } catch { return false; } }), 'every line whole');
+  assert.equal(lines.filter((l) => JSON.parse(l).type === 'search_started').length, 1);
+});
