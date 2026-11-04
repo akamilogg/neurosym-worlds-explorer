@@ -843,7 +843,7 @@ los resultados reales correspondientes. Las pruebas de recuperación y aislamien
 | **MA5 · Entrenamiento** | MA3 y MA4 | `train` recuperable con LoRA, diagnóstico de capacidad, validez del circuito y retención funcional, usando la promoción existente de MA2 |
 | **MA6 · Confirmación externa** | MA2 | Materialización aislada, ejecución reservada y publicación autorizada; se aplica también a mejoras sin LoRA |
 | **MA7 · Método reutilizable** | MA3 | Cargador de `learning-policy@1`, expansión M1, catálogo y comparación de investigaciones de mejora; incorpora las palancas de MA4/MA5 cuando estén disponibles |
-| **WE1–WE6 · Edición de pesos** | MA5 | Propuesta en [SPEC-EDICION-PESOS](SPEC-EDICION-PESOS.md): `weight-edit@1`, laboratorio de pesos, actos `edit` y `evolve`, búsqueda evolutiva con semillas del modelo fuerte y de control |
+| **WE1–WE6 · Edición de pesos** | MA5 | Propuesta en [SPEC-EDICION-PESOS](SPEC-EDICION-PESOS.md): `weight-edit@1` compuesto desde una partida fija, laboratorio de pesos con constructores cerrados, actos `edit` y `evolve`, búsqueda evolutiva con semillas del modelo fuerte y de control |
 | **Fase B · Relevo** | MA5, MA6 y MA7 | Activación mediante `handover`, investigador congelado por generación y nueva generación desde el paquete aprobado |
 
 MA1 y MA2 ya dan algo útil: saber dónde falla el junior en el arnés, medido con el arnés. Los casos reservados están
