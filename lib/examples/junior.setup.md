@@ -141,3 +141,21 @@ compositor en Python puro dan los mismos bits. En la máquina del junior falta c
 3. **La validez del circuito** (`circuit_digest` igual que el de la referencia) con la versión editada.
 4. **Verificarla sin modelo:** `lab junior package <paquete> --blobs <blobs>` vuelve a componer el conjunto desde su árbol
    y comprueba sus constructores.
+
+## 9. El laboratorio de pesos y los programas libres (WE2)
+
+1. **El manifiesto:** `weight_lab` en el manifiesto de competencia, con `diagnosis` (grupo → runs de desarrollo que no
+   corta ninguna sonda) y `limits`. `lab junior manifest` lo valida: un grupo o un run compartido con selección o
+   confirmación se rechaza.
+2. **El laboratorio en el Qwenputer:** lo sirve un trabajador propio en la cola del servidor. Comprobar con una versión
+   real:
+   - `modules` y `weights.stats`, con la lista y las formas que da `chat.model`;
+   - `forward` con `top_logits`, para ver que la pasada con *teacher forcing* sobre el flujo devuelve logits coherentes
+     con lo generado;
+   - `activations` en un módulo de Qwen;
+   - `attention` en una capa de atención completa (una DeltaNet responde `unavailable`);
+   - `try` con un conjunto candidato, comprobando que después `forward` da lo mismo que antes;
+   - el tope de memoria por consulta (`max_memory_bytes`).
+3. **El aislamiento:** `lab junior isolation --python <python>` ejecuta la autoprueba y dice `isolated` sólo si demuestra
+   cada garantía. Si dice `NOT isolated`, las ediciones `program` siguen rechazadas y la palanca usa los constructores
+   cerrados.

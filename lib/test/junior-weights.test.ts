@@ -96,7 +96,7 @@ test('an edit in the circuit, without its hypothesis, or a free program is refus
   assert.ok('problems' in inCircuit && /circuit/.test(inCircuit.problems.join()));
   const noHypothesis = putEdit(store, sparse(DOWN, [2, 2], [0], [1], { hypothesis: { competence: 'x', mechanism: '', effect: 'y' } }), 2);
   assert.ok('problems' in noHypothesis && /hypothesis/.test(noHypothesis.problems.join()));
-  const program = putEdit(store, sparse(DOWN, [2, 2], [0], [1], { origin: { kind: 'program' } }), 2);
+  const program = putEdit(store, sparse(DOWN, [2, 2], [0], [1], { origin: { kind: 'program', backend: 'process-sandbox', base: '0'.repeat(64), inputs: {} } }), 2);
   assert.ok('problems' in program && /isolated backend/.test(program.problems.join()));
   const unsorted = putEdit(store, sparse(DOWN, [2, 2], [2, 1], [1, 1]), 2);
   assert.ok('problems' in unsorted && /increasing/.test(unsorted.problems.join()));

@@ -12,6 +12,7 @@ import { SessionError, type SessionServer } from './sessions.ts';
  *   POST /sessions/:id/cancel               {request_id}
  *   POST /memory                           one memory operation on a copy of a twin {pkg, twin, call} -> {result, twin}
  *   POST /validity                         the circuit's validity suite for a package {pkg} -> {exercised, mismatches, circuit_digest}
+ *   POST /lab                              a query of the weight laboratory {pkg, query, args, cases, set, limits} -> {state, result, usage, files}
  *   POST /render                           a memory read as files {pkg, twin} -> {name: text}
  *   POST /sessions/:id/close
  *   POST /sessions/:id/v1/chat/completions   the next question as an OpenAI chat completion (a laboratory's LLM_URL)
@@ -27,6 +28,7 @@ export async function handleJunior(server: SessionServer, method: string, route:
   try {
     if (parts.length === 1 && parts[0] === 'validity' && method === 'POST') return { status: 200, body: await server.validity(body as Parameters<SessionServer['validity']>[0]) };
     if (parts.length === 1 && parts[0] === 'memory' && method === 'POST') return { status: 200, body: await server.memoryCall(body as Parameters<SessionServer['memoryCall']>[0]) };
+    if (parts.length === 1 && parts[0] === 'lab' && method === 'POST') return { status: 200, body: await server.lab(body as Parameters<SessionServer['lab']>[0]) };
     if (parts.length === 1 && parts[0] === 'render' && method === 'POST') return { status: 200, body: await server.render(body as Parameters<SessionServer['render']>[0]) };
     if (parts[0] !== 'sessions') return { status: 404, body: { error: 'see the routes of /sessions' } };
     if (parts.length === 1 && method === 'POST') return { status: 200, body: server.open(body as Parameters<SessionServer['open']>[0]) };

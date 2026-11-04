@@ -1,7 +1,7 @@
 # SPEC · Edición de pesos: el modelo fuerte escribe en los pesos del junior, y una búsqueda evolutiva los explora
 
-Estado (04/11/2026): **WE1 implementada** (edición, composición, cotas, trabajador, verificación; §12); WE2 a WE6 sin
-implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
+Estado (04/11/2026): **WE1 y WE2 implementadas** (edición y composición; laboratorio de pesos, constructores cerrados y
+backend aislado; §12); WE3 a WE6 sin implementar. Dos revisiones externas del mismo día conciliadas (§14). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -168,6 +168,11 @@ laboratorio sólo ejecuta casos de diagnóstico: cortes de runs de desarrollo de
 propio modelo fuerte. Nunca ejecuta sondas de selección ni casos de confirmación. Las capas del circuito pueden leerse,
 para entender, pero nunca editarse.
 
+Los grupos de diagnóstico van en el campo `weight_lab.diagnosis` del manifiesto de competencia, cada uno con sus runs.
+Al validar el manifiesto se comprueba que esos grupos no son el grupo de ningún caso y que esos runs no los corta
+ninguna sonda. Al consultar, un corte de un run que no sea de diagnóstico se rechaza. También se rechaza un corte cuyo
+hash coincida con el de una sonda.
+
 ### 4.2 Operaciones y sus límites
 
 | Operación | Qué devuelve |
@@ -195,6 +200,23 @@ consultas y tienen sus propios límites de tiempo, memoria y tamaño. **Todas pa
 La unidad del artículo era distinta: una llamada podía procesar cientos de casos. Aquí una consulta también puede llevar
 varios casos de diagnóstico, y por eso el presupuesto se cuenta en consultas **y** en tokens.
 
+Cómo queda en el código:
+
+- **Un trabajo del libro del junior.** Cada consulta es un trabajo del libro de trabajos, con su `operation_id`.
+  - Reserva una unidad de `lab_queries` y, si ejecuta al junior, el máximo de `lab_tokens` que permite el manifiesto.
+  - Liquida lo que consumió. Repetida con el mismo identificador es la misma consulta y no se cobra dos veces.
+- **El tiempo.** Una consulta que agota su tiempo detiene el proceso del laboratorio. Como no puede decir lo que
+  consumió, su reserva queda como incierta.
+- **Los límites que sólo se miden después.** Si una consulta supera los tokens, la memoria pico o el tamaño de
+  respuesta, se cobra igual, pero su respuesta se retiene (`over_limit`). Lo que permiten los argumentos se comprueba
+  antes de enviarla.
+- **El proceso y la cola.** El laboratorio corre en su propio proceso de trabajador, pero en la cola única del servidor:
+  la GPU de inferencia no se reparte fuera de ella.
+- **`try`.** Compone el conjunto candidato sobre los módulos que toca, ejecuta la consulta interior (`forward` o
+  `activations`) y restaura esos módulos.
+- **`activations`.** Guarda, por caso y módulo, la media de la salida en las posiciones pedidas, como un fichero de su
+  recibo. De ahí salen las entradas de `mean_difference`.
+
 ### 4.3 Constructores cerrados
 
 La vía por defecto para producir una edición a partir de lo observado es un **constructor** del arnés: código fijo,
@@ -218,10 +240,20 @@ Sus entradas (casos, activaciones) se toman de consultas al laboratorio, con sus
 entradas da el mismo `ΔW`; el verificador lo comprueba. Cada constructor fija también su aritmética. `project_out@1`,
 por ejemplo, suma cada `A_j = Σ_i d̂_i·W_ij` en orden creciente de `i`, en float64, y redondea una vez.
 
-`project_out@1` existe desde WE1, como primer constructor y para probar la verificación. Los demás llegan con WE2. Dos
-métodos publicados sirven de referencia para ampliarlos, implementando la fórmula y no la librería, que no conoce este
-modelo: la actualización de rango 1 de ROME, construida a partir de claves y valores de activación, y la diferencia de
-medias de los vectores de control.
+Implementados, cada uno con su versión:
+
+- **`project_out@1`**, desde WE1.
+- **`add_direction@1`**: `û` y `v̂` normalizadas, `ΔW = α·û·v̂ᵀ`.
+- **`mean_difference@1`**: la diferencia de medias de las activaciones de dos lados, normalizada, aplicada como
+  `ΔW = α·d̂·(d̂ᵀW)`. Con `α = −1` la quita.
+- **`top_singular@1`**: las `k` primeras direcciones singulares, con `ΔW = α·U_k·(U_kᵀW)`. Las calcula una iteración de
+  subespacio determinista (vectores iniciales sembrados, número fijo de iteraciones, Rayleigh-Ritz). Es una aproximación
+  declarada que da los mismos bits en cualquier máquina.
+- **`scale_rows@1` y `scale_cols@1`**: un cambio `sparse` `α·W` sobre las filas o columnas elegidas.
+
+Todos comprueban sus argumentos y registran sus entradas normalizadas. La actualización de rango 1 de ROME, construida a
+partir de claves y valores de activación, queda como referencia para un constructor futuro, implementando la fórmula y no
+la librería, que no conoce este modelo.
 
 ### 4.4 Programas libres
 
@@ -236,6 +268,21 @@ El origen `program` (código escrito por el modelo fuerte, como en el experiment
 El sandbox de procesos actual (`processSandbox`) **no** sirve: se declara no aislado. WE2 entrega ese backend como
 aislamiento de procesos locales del sistema operativo de la máquina del junior, sin Docker ni servicios que haya que
 instalar aparte. Mientras no exista, una edición `program` se rechaza al pedirse; los constructores cubren la palanca.
+
+El backend es `linux-userns-landlock@1`:
+
+- **Mecanismo.** Un lanzador corre dentro de `unshare --user --map-root-user --net`, lo que deja el programa sin red.
+  Landlock le quita todo derecho de escritura salvo en su carpeta, así que los pesos quedan de solo lectura. Los
+  `rlimit` acotan la memoria, la CPU y el tamaño de lo que escribe, y el arnés lo mata al acabar su tiempo.
+- **Disponibilidad.** **Nunca se supone.** Sólo se declara disponible cuando su autoprueba, ejecutada en el mismo
+  aislamiento, demuestra cada garantía: una conexión rechazada, una escritura fuera de su carpeta y otra en la base
+  rechazadas, una escritura dentro y una lectura de la base hechas. En Windows, o en un núcleo sin Landlock, no está
+  disponible y dice por qué. `lab junior isolation` ejecuta la autoprueba.
+- **Contrato del programa.** Lee sus entradas en `inputs/` y la base en `$JUNIOR_BASE`. Escribe en `out/` un
+  `modules.json` con `{module, encoding, shape, file}` y los ficheros de tensores.
+- **Origen registrado.** El código viaja como la entrada `program.py`.
+- **Verificación.** Vuelve a ejecutar el programa en su backend (`verifyPrograms`). Sin backend, esa edición queda
+  **incompleta**: nunca cuenta como verificada.
 
 ## 5. La palanca en el mundo del junior
 
@@ -451,6 +498,25 @@ necesita la máquina real y la línea base de la fase A.**
 - **Pendiente en la máquina real.**
   - La ruta torch, `apply_edit_set`: comparar sus resúmenes con los de la referencia en un módulo de Qwen.
   - Que los nombres de módulo del checkpoint sean los de `chat.model`. Si no lo son, el resumen del «antes» lo detecta.
+
+**WE2, hecha (04/11/2026):**
+
+- **Dónde está.**
+  - `lib/src/junior/weight-lab.ts` contiene la configuración `weight_lab` del manifiesto, los límites, las consultas
+    con sus recibos y `construct` con entradas tomadas de los recibos.
+  - `lib/src/junior/junior_lab.py` tiene las operaciones: un modelo de imitación para las pruebas y hooks de torch para
+    el Qwenputer.
+  - Hay una ruta `/lab` en el servidor, dentro de su cola, con un trabajador de laboratorio propio.
+  - Los constructores están en `weights.ts`.
+  - El backend aislado está en `lib/src/junior/isolation.ts` y `junior_isolate.py`.
+- **Pruebas.** `lib/test/junior-weight-lab.test.ts` cubre las aceptaciones 5 y 6. La prueba del backend aislado real
+  sólo corre en Linux.
+- **Pendiente en la máquina real.**
+  - El backend Qwenputer del laboratorio: la pasada con *teacher forcing* sobre el flujo (logits, hooks de activación),
+    que `attention` devuelva patrones en las capas de atención completa (las DeltaNet no tienen) y el tope de memoria
+    por consulta.
+  - La autoprueba del aislamiento. Ubuntu 23.10 y posteriores pueden restringir los espacios de nombres de usuario sin
+    privilegios: si la autoprueba falla, `program` sigue rechazado y los constructores cubren la palanca.
 
 ## 13. Aceptación
 

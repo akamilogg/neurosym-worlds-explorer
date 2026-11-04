@@ -127,6 +127,11 @@ def _base_tensor(base_dir, name):
 
 def compose_pure(adapter_dir, base_dir, chip_layers):
     """{module: {"base", "edited"}} digests of the set composed on the base's tensors, in pure Python."""
+    return {name: {"base": w["base"], "edited": w["edited"]} for name, w in compose_pure_weights(adapter_dir, base_dir, chip_layers).items()}
+
+
+def compose_pure_weights(adapter_dir, base_dir, chip_layers):
+    """{module: {"shape", "bits" (array of bf16 bits after), "base", "edited"}}: the set composed in pure Python."""
     _, edits = load_set(adapter_dir, chip_layers)
     out = {}
     for name in touched(edits):
@@ -159,7 +164,7 @@ def compose_pure(adapter_dir, base_dir, chip_layers):
         after = array("H", (_bf16_bits(_f32(_bf16_value(W[x]) + delta[x])) for x in range(dout * din)))
         if not all(math.isfinite(_bf16_value(b)) for b in after) or not all(math.isfinite(d) for d in delta):
             raise RuntimeError(name + ": the composition is not finite")
-        out[name] = {"base": digest(name, shape, W.tobytes()), "edited": digest(name, shape, after.tobytes())}
+        out[name] = {"shape": shape, "bits": after, "base": digest(name, shape, W.tobytes()), "edited": digest(name, shape, after.tobytes())}
     return out
 
 

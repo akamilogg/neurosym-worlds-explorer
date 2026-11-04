@@ -115,6 +115,22 @@ export function identityMismatch(pkg: JuniorPackage, store: BlobStore, loaded: L
   return weightsMismatch(store, pkg, loaded.weights);
 }
 
+/** A query of the weight laboratory as the worker runs it: already checked against the manifest's limits. */
+export interface LabJob {
+  readonly pkg: JuniorPackage;
+  readonly execution: string;
+  readonly store: BlobStore;
+  readonly query: string;
+  readonly args: Readonly<Record<string, unknown>>;
+  /** The diagnosis cases it runs, as the junior's content ({system, user}). */
+  readonly cases: readonly unknown[];
+  /** A candidate set of edits (a weight-edit-set@1 tree), for try. */
+  readonly set: string | null;
+  readonly limits: import('./weight-lab.ts').LabLimits;
+}
+export interface LabUsage { readonly tokens_in: number; readonly tokens_out: number; readonly circuit_steps: number; readonly wall_ms: number; readonly peak_bytes: number }
+export interface LabAnswer { readonly result: unknown; readonly usage: LabUsage; readonly files: Readonly<Record<string, Buffer>> }
+
 export interface ProcessWorkerOptions {
   /** The interpreter and its arguments before the script, e.g. ['python'] or ['/opt/venv/bin/python', '-u']. */
   readonly python: readonly string[];
@@ -204,6 +220,43 @@ export class ProcessWorker implements JuniorWorker {
     /* A set of edits is valid only as the weights it says: what the worker composed is checked against its summaries. */
     const wrong = weightsMismatch(job.store, job.pkg, (a.validity as { weights?: Loaded['weights'] }).weights);
     return wrong ? { error: wrong } : a.validity as import('./sessions.ts').Validity;
+  }
+
+  /** One query of the weight laboratory (SPEC-EDICION-PESOS §4) on the package's model: a `try` with the candidate set's
+      tree materialized for it. Past its time the process is killed (it can never answer late) and the query fails. */
+  async lab(job: LabJob): Promise<LabAnswer | { readonly error: string; readonly timeout?: boolean }> {
+    const files = materialize(job.pkg, job.execution, job.store, path.join(this.o.work, 'packages'));
+    this.use(job.pkg);
+    let set: string | null = null;
+    if (job.set) {
+      set = path.join(this.o.work, 'lab-sets', job.set);
+      if (!fs.existsSync(path.join(set, '.complete'))) {
+        fs.rmSync(set, { recursive: true, force: true });
+        job.store.materialize(job.set, set);
+        fs.writeFileSync(path.join(set, '.complete'), job.set);
+      }
+    }
+    const id = 'l' + (++this.next) + '-' + process.pid;
+    const out = path.join(this.o.work, 'jobs', id);
+    fs.mkdirSync(out, { recursive: true });
+    const child = this.start();
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const a = await Promise.race([
+        new Promise<Record<string, unknown>>((resolve) => {
+          this.waiting.set(id, resolve as never);
+          child.stdin.write(JSON.stringify({ id, op: 'lab', execution: job.execution, backend: this.o.backend, files, circuit: job.pkg.execution.circuit, prompt: job.pkg.prompt,
+            decoding: job.pkg.decoding, limits: { max_tokens: job.limits.max_new_tokens, max_circuit_tokens: job.pkg.decoding.max_circuit_tokens, timeout_ms: job.limits.timeout_ms },
+            lab: { query: job.query, args: job.args, cases: job.cases, limits: job.limits, set }, out }) + NL);
+        }),
+        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), job.limits.timeout_ms); })
+      ]);
+      if (a === null) { this.invalidate(); return { error: 'the query ran past its ' + job.limits.timeout_ms + ' ms: its process was stopped', timeout: true }; }
+      if (!a.result || typeof a.usage !== 'object') return { error: String(a.reason ?? 'no answer') };
+      const written: Record<string, Buffer> = {};
+      for (const [name, file] of Object.entries((a.files ?? {}) as Record<string, string>)) written[name] = fs.readFileSync(file);
+      return { result: a.result, usage: a.usage as LabUsage, files: written };
+    } finally { clearTimeout(timer); fs.rmSync(out, { recursive: true, force: true }); }
   }
 
   /** One memory operation on a copy of a twin, by the package's reference store (§8). */

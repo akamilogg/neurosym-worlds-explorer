@@ -349,6 +349,26 @@ def run_qwenputer(job):
 BACKENDS = {"fake": run_fake, "qwenputer": run_qwenputer}
 
 
+def lab_job(job):
+    """A query of the weight laboratory (SPEC-EDICION-PESOS §4): it only reads; `try` composes on a copy and restores."""
+    import junior_lab as JL
+    if job["backend"] == "fake":
+        return JL.lab(job)
+    chat = qwenputer_chat(job)
+    import tempfile
+
+    def run_case(content, max_new):
+        # A diagnosis case run as the junior runs (no memory loaded): the whole stream kept for the teacher-forced pass.
+        sub = dict(job)
+        sub.update({"content": content, "memory": {"neural": None, "twin": None}, "out": tempfile.mkdtemp(),
+                    "limits": {"max_tokens": max_new, "max_circuit_tokens": job["limits"]["max_circuit_tokens"], "timeout_ms": job["limits"]["timeout_ms"]}})
+        r = run_qwenputer(sub)
+        trace = json.loads(r["trace"])
+        return trace["stream"], trace["tokens"], r["terminal"] if r["terminal"] != "limit_reached" else (r.get("reason") or "limit_reached"), r["usage"]
+
+    return JL.lab(job, chat, run_case)
+
+
 def memory_call(job):
     """One memory operation on a copy of a twin (§8: the teacher's memory tools): the answer the circuit would print, and
     the twin after. fake: the toy's JSON map. qwenputer: the store's reference session started from the twin, the call
@@ -489,6 +509,9 @@ def main():
                 continue
             if job.get("op") == "render":
                 emit({"files": render(job), "id": job["id"]})
+                continue
+            if job.get("op") == "lab":
+                emit({**lab_job(job), "id": job["id"]})
                 continue
             if job.get("op") == "probe":
                 out = {"probe": probe(job)}

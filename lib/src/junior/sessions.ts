@@ -73,8 +73,21 @@ export interface WorkerResult {
   readonly reason?: string;
 }
 
+/** A query of the weight laboratory as served: answered, failed or past its time; its usage null when it cannot say. */
+export interface LabServed {
+  readonly state: 'answered' | 'failed' | 'timeout';
+  readonly reason: string | null;
+  readonly result: unknown;
+  readonly usage: import('./worker.ts').LabUsage | null;
+  readonly files: Readonly<Record<string, BlobId>>;
+  readonly queue_ms: number;
+  readonly run_ms: number;
+}
+
 export interface JuniorWorker {
   run(job: WorkerJob): Promise<WorkerResult>;
+  /** A query of the weight laboratory (SPEC-EDICION-PESOS §4). */
+  lab?(job: import('./worker.ts').LabJob): Promise<import('./worker.ts').LabAnswer | { readonly error: string; readonly timeout?: boolean }>;
   /** What this worker cannot serve of a package, refused when a session opens; null if it can. */
   check?(pkg: JuniorPackage): string | null;
   /** Make sure a worker that may still be running can never answer again (kill its process). */
@@ -149,6 +162,8 @@ export interface SessionServerOptions {
   readonly worker: JuniorWorker;
   /** Grace past a job's own time limit before the server kills it as a failure of the infrastructure. */
   readonly graceMs?: number;
+  /** The weight laboratory's own process (SPEC-EDICION-PESOS §4): its queries share the one queue of the inference GPU. */
+  readonly labWorker?: JuniorWorker;
   /** How long a job may wait in the queue before it is given up (infra, never a failure of the junior). */
   readonly queueTimeoutMs?: number;
   readonly now?: () => number;
@@ -184,6 +199,7 @@ export class SessionServer {
   readonly root: string;
   readonly store: BlobStore;
   private readonly worker: JuniorWorker;
+  private readonly labWorker: JuniorWorker | null;
   private readonly sessions = new Map<string, Session>();
   private readonly graceMs: number;
   private readonly queueTimeoutMs: number;
@@ -202,6 +218,7 @@ export class SessionServer {
     this.root = o.root;
     this.store = o.store;
     this.worker = o.worker;
+    this.labWorker = o.labWorker ?? null;
     this.graceMs = o.graceMs ?? 30_000;
     this.queueTimeoutMs = o.queueTimeoutMs ?? Infinity;
     this.now = o.now ?? Date.now;
@@ -234,6 +251,7 @@ export class SessionServer {
     if (this.stopped) return;
     this.stopped = true;
     this.worker.invalidate?.();
+    this.labWorker?.invalidate?.();
     fs.rmSync(this.lock, { force: true });
   }
 
@@ -355,6 +373,32 @@ export class SessionServer {
     const r = await this.worker.memoryCall({ pkg, execution: executionHash(pkg), twin: o.twin === null ? null : this.store.get(o.twin), store: this.store, call: o.call });
     if ('error' in r) throw new SessionError('memory_failed', r.error);
     return { result: r.result, twin: this.store.put(r.twin) };
+  }
+
+  /** A query of the weight laboratory, in the one queue of the inference GPU, by the lab's own process: its result, what
+      it consumed, its files stored by their hash, and how long it waited and ran. The caller has checked it against the
+      manifest (diagnosis cases only, within the limits) and charged it. */
+  async lab(o: { pkg: unknown; query: string; args: Record<string, unknown>; cases: unknown[]; set: BlobId | null; limits: import('./weight-lab.ts').LabLimits }): Promise<LabServed> {
+    const pkg = normalizePackage(o.pkg);
+    const worker = this.labWorker ?? this.worker;
+    if (!worker.lab) throw new SessionError('unsupported', 'this worker has no weight laboratory');
+    const closed = checkClosed(pkg, this.store);
+    if (!closed.closed) throw new SessionError('package_open', 'the package is not closed in the store');
+    if (o.set !== null && !this.store.tree(o.set)) throw new SessionError('bad_set', 'the candidate set ' + o.set + ' is not a tree in the store');
+    const queued = this.now();
+    const run = async (): Promise<LabServed> => {
+      const queue_ms = this.now() - queued;
+      const started = this.now();
+      const r = await worker.lab!({ pkg, execution: executionHash(pkg), store: this.store, query: o.query, args: o.args, cases: o.cases, set: o.set, limits: o.limits });
+      const run_ms = this.now() - started;
+      if ('error' in r) return { state: r.timeout ? 'timeout' : 'failed', reason: r.error, result: null, usage: null, files: {}, queue_ms, run_ms };
+      const files: Record<string, BlobId> = {};
+      for (const [name, bytes] of Object.entries(r.files)) files[name] = this.store.put(bytes);
+      return { state: 'answered', reason: null, result: r.result, usage: r.usage, files, queue_ms, run_ms };
+    };
+    const p = this.queue.then(run, run);
+    this.queue = p.catch(() => undefined);
+    return p;
   }
 
   /** The circuit's validity suite for a package, by the worker that serves it. */

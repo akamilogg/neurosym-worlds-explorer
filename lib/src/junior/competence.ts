@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
 import { LABS } from '../worlds/labs.ts';
 import { boundsProblems, type WeightBounds } from './weights.ts';
+import { weightLabProblems, type WeightLabConfig } from './weight-lab.ts';
 
 /* ============================================================================
  * The measure of a junior (SPEC-METAPOLITICA-APRENDIZAJE §6.1-§6.5): its manifest, the deficit of each observation, the
@@ -98,6 +99,8 @@ export interface CompetenceManifest {
   };
   /** The bounds of the weight edits this condition authorizes (SPEC-EDICION-PESOS §3.3); without them, edits are refused. */
   readonly weight_edits?: WeightBounds;
+  /** The weight laboratory (SPEC-EDICION-PESOS §4): its diagnosis groups and runs, disjoint from the cases', and its limits. */
+  readonly weight_lab?: WeightLabConfig;
 }
 
 const PROBE_CHECKERS = new Set(['protocol', 'request', 'rules', 'proposal']);
@@ -124,6 +127,7 @@ export function competenceProblems(raw: unknown): string[] {
   }
   if (!m.execution || typeof m.execution !== 'object') e.push('"execution": the harness, checkers, snapshot formats, tools, Judge and teacher as they run');
   if (m.weight_edits !== undefined) e.push(...boundsProblems(m.weight_edits));
+  if (m.weight_lab !== undefined) e.push(...weightLabProblems(m.weight_lab, m));
 
   const comps = new Map<string, Component>();
   for (const [i, c] of (Array.isArray(m.components) ? m.components : []).entries()) {

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { stableStringify } from '../core/hash.ts';
 import { executionHash, normalizePackage, sha256, type BlobId, type BlobStore, type JuniorPackage } from './package.ts';
+import type { IsolatedBackend, ProgramLimits } from './isolation.ts';
 
 /* ============================================================================
  * EDITING THE JUNIOR'S WEIGHTS (SPEC-EDICION-PESOS §3, WE1): an edit is an additive change on Qwen's modules, low-rank or
@@ -134,7 +135,8 @@ export interface Hypothesis { readonly competence: string; readonly mechanism: s
 export type Origin =
   | { readonly kind: 'written' }
   | { readonly kind: 'constructor'; readonly constructor: string; readonly args: Readonly<Record<string, unknown>>; readonly base: BlobId; readonly inputs: Readonly<Record<string, string>> }
-  | { readonly kind: 'program' }
+  /** Code of the strong model, run by an isolated backend (§4.4): its code travels as the input program.py. */
+  | { readonly kind: 'program'; readonly backend: string; readonly base: BlobId; readonly inputs: Readonly<Record<string, string>> }
   | { readonly kind: 'operator'; readonly operator: string; readonly parents: readonly string[]; readonly seed?: number };
 
 export interface ModuleEdit {
@@ -163,7 +165,9 @@ export function layerOf(module: string): number | null {
 }
 
 /** Everything wrong with an edit's manifest, for a starting package whose circuit has `chip` layers. */
-export function editProblems(raw: unknown, chip: number): string[] {
+/** `programs`: whether an edit of origin program may be accepted here - only when an isolated backend just ran it
+    (programEdit), or to check the shape of one already made (composing and verifying it). */
+export function editProblems(raw: unknown, chip: number, opts: { programs?: boolean } = {}): string[] {
   const e = raw as WeightEdit;
   if (!e || e.format !== WEIGHT_EDIT) return ['"format": "' + WEIGHT_EDIT + '"'];
   const p: string[] = [];
@@ -172,7 +176,8 @@ export function editProblems(raw: unknown, chip: number): string[] {
   if (!['strong', 'search', 'control'].includes(e.authorship)) p.push('"authorship": strong, search or control');
   const o = e.origin as Origin;
   if (!o || !['written', 'constructor', 'program', 'operator'].includes(o.kind)) p.push('"origin": written, constructor, program or operator');
-  else if (o.kind === 'program') p.push('origin "program": there is no isolated backend for free programs; the process sandbox does not count as one');
+  else if (o.kind === 'program' && !opts.programs) p.push('origin "program": there is no isolated backend for free programs; the process sandbox does not count as one');
+  else if (o.kind === 'program' && (typeof o.backend !== 'string' || !/^[0-9a-f]{64}$/.test(String(o.base)) || !o.inputs || !o.inputs['program.py'])) p.push('origin "program": its backend, the base it read and its inputs, its code among them');
   else if (o.kind === 'constructor' && (!CONSTRUCTORS[o.constructor] || !/^[0-9a-f]{64}$/.test(String(o.base)) || !o.inputs || typeof o.inputs !== 'object')) p.push('origin "constructor": one of ' + Object.keys(CONSTRUCTORS).join(', ') + ', the base it read and its inputs');
   else if (o.kind === 'operator' && (typeof o.operator !== 'string' || !Array.isArray(o.parents) || !o.parents.length)) p.push('origin "operator": its operator and its parents');
   if (!Array.isArray(e.modules) || !e.modules.length) return [...p, '"modules": at least one'];
@@ -230,7 +235,7 @@ export interface EditDraft {
 
 /** An edit stored by its hash: its tensors and inputs as blobs, its manifest as a blob whose id is the edit's. Refused,
     nothing stored, when it is wrong for the start's circuit. */
-export function putEdit(store: BlobStore, draft: EditDraft, chip: number): { id: string } | { problems: string[] } {
+export function putEdit(store: BlobStore, draft: EditDraft, chip: number, opts: { programs?: boolean } = {}): { id: string } | { problems: string[] } {
   const files: Record<string, Buffer> = {};
   const modules: ModuleEdit[] = draft.modules.map((m, i) => {
     const file = 'm' + i + '.safetensors';
@@ -239,9 +244,9 @@ export function putEdit(store: BlobStore, draft: EditDraft, chip: number): { id:
   });
   const inputs: Record<string, string> = {};
   for (const [name, bytes] of Object.entries(draft.inputs ?? {})) inputs[name] = sha256(bytes);
-  const origin = draft.origin.kind === 'constructor' ? { ...draft.origin, inputs } : draft.origin;
+  const origin = draft.origin.kind === 'constructor' || draft.origin.kind === 'program' ? { ...draft.origin, inputs } : draft.origin;
   const manifest: WeightEdit = { format: WEIGHT_EDIT, modules, hypothesis: draft.hypothesis, origin, authorship: draft.authorship };
-  const shape = editProblems(manifest, chip);
+  const shape = editProblems(manifest, chip, opts);
   const problems = shape.length ? shape : modules.flatMap((m, i) => tensorProblems(m, draft.modules[i].tensors as Record<string, RawTensor>));
   if (problems.length) return { problems };
   for (const b of Object.values(files)) store.put(b);
@@ -523,9 +528,9 @@ export function composeVersion(r: ComposeRequest): ComposeResult {
   for (const id of genome) {
     if (!r.store.has(id)) { problems.push('no edit ' + id); continue; }
     const edit = readEdit(r.store, id);
-    const ep = editProblems(edit, chip);
+    const ep = editProblems(edit, chip, { programs: true });
     if (ep.length) { problems.push(...ep.map((x) => id.slice(0, 12) + ': ' + x)); continue; }
-    if (edit.origin.kind === 'constructor' && edit.origin.base !== parent.base) { problems.push(id.slice(0, 12) + ': its constructor read another base than the start\'s'); continue; }
+    if ((edit.origin.kind === 'constructor' || edit.origin.kind === 'program') && edit.origin.base !== parent.base) { problems.push(id.slice(0, 12) + ': its ' + edit.origin.kind + ' read another base than the start\'s'); continue; }
     const tensors = edit.modules.map((m) => readSafetensors(r.store.get(m.sha256)));
     const tp = edit.modules.flatMap((m, i) => tensorProblems(m, tensors[i]));
     if (tp.length) { problems.push(...tp.map((x) => id.slice(0, 12) + ': ' + x)); continue; }
@@ -544,7 +549,7 @@ export function composeVersion(r: ComposeRequest): ComposeResult {
   for (const e of loaded) {
     files['edits/' + e.id + '/edit.json'] = e.id;
     for (const m of e.edit.modules) files['edits/' + e.id + '/' + m.file] = m.sha256;
-    if (e.edit.origin.kind === 'constructor') for (const [name, h] of Object.entries(e.edit.origin.inputs)) {
+    if (e.edit.origin.kind === 'constructor' || e.edit.origin.kind === 'program') for (const [name, h] of Object.entries(e.edit.origin.inputs)) {
       if (!r.store.has(h)) return { problems: [e.id.slice(0, 12) + ': its input ' + name + ' is not in the store'] };
       files['edits/' + e.id + '/inputs/' + name] = h;
     }
@@ -578,7 +583,7 @@ export function verifyEditSet(store: BlobStore, pkg: JuniorPackage, authorized?:
   let loaded: LoadedEdit[];
   try { loaded = editsInTree(store, p.adapter!); } catch (e) { return [(e as Error).message]; }
   for (const e of loaded) {
-    problems.push(...editProblems(e.edit, set.chip_layers).map((x) => e.id.slice(0, 12) + ': ' + x));
+    problems.push(...editProblems(e.edit, set.chip_layers, { programs: true }).map((x) => e.id.slice(0, 12) + ': ' + x));
     problems.push(...e.edit.modules.flatMap((m, i) => tensorProblems(m, e.tensors[i as number] as Record<string, RawTensor>)).map((x) => e.id.slice(0, 12) + ': ' + x));
   }
   if (problems.length) return problems;
@@ -598,6 +603,14 @@ export function verifyEditSet(store: BlobStore, pkg: JuniorPackage, authorized?:
   } catch (e) { problems.push((e as Error).message); }
   const t = store.tree(p.adapter!)!;
   for (const e of loaded) {
+    const origin = e.edit.origin;
+    if (origin.kind === 'program') {
+      const missing = Object.keys(origin.inputs).filter((n) => t.files['edits/' + e.id + '/inputs/' + n] !== origin.inputs[n]);
+      if (missing.length) problems.push(e.id.slice(0, 12) + ': its inputs ' + missing.join(', ') + ' do not travel in the tree');
+      /* A program runs again only in its isolated backend: verifyPrograms does it; without one it stays incomplete. */
+      else problems.push(INCOMPLETE + e.id.slice(0, 12) + ' is a program: only its isolated backend can run it again');
+      continue;
+    }
     if (e.edit.origin.kind !== 'constructor') continue;
     const o = e.edit.origin;
     const inputs: Record<string, Buffer> = {};
@@ -617,6 +630,67 @@ export function verifyEditSet(store: BlobStore, pkg: JuniorPackage, authorized?:
     } catch (err) { problems.push(e.id.slice(0, 12) + ': ' + (err as Error).message); }
   }
   return problems;
+}
+
+/** A problem of verification that is not a contradiction but a check not done (§10): a program not run again. */
+export const INCOMPLETE = 'incomplete: ';
+
+/** Program edits run again in their isolated backend: each one's code and inputs from the set's tree, the base where the
+    backend reads it; the tensors it writes compared with the edit's. Answers verifyEditSet's problems with those checks
+    done: each program confirmed drops its `incomplete`, each one that differs becomes a contradiction. */
+export async function verifyPrograms(store: BlobStore, pkg: JuniorPackage, backend: IsolatedBackend, baseDir: string, limits: ProgramLimits, authorized?: WeightBounds): Promise<string[]> {
+  const p = normalizePackage(pkg);
+  const problems = verifyEditSet(store, p, authorized);
+  if (adapterKind(store, p) !== 'edits') return problems;
+  const t = store.tree(p.adapter!)!;
+  let loaded: LoadedEdit[];
+  try { loaded = editsInTree(store, p.adapter!); } catch { return problems; }
+  const out = problems.filter((x) => !x.startsWith(INCOMPLETE));
+  for (const e of loaded) {
+    const o = e.edit.origin;
+    if (o.kind !== 'program') continue;
+    if (o.backend !== backend.id) { out.push(INCOMPLETE + e.id.slice(0, 12) + ' was run by ' + o.backend + ', this backend is ' + backend.id); continue; }
+    const inputs: Record<string, Buffer> = {};
+    for (const n of Object.keys(o.inputs)) inputs[n] = store.get(t.files['edits/' + e.id + '/inputs/' + n]);
+    const { 'program.py': code, ...rest } = inputs;
+    const again = await runProgramEdit(backend, code.toString('utf8'), rest, baseDir, limits);
+    if ('problems' in again) { out.push(e.id.slice(0, 12) + ': run again, ' + again.problems.join('; ')); continue; }
+    const same = again.modules.length === e.edit.modules.length && again.modules.every((m, i) => m.module === e.edit.modules[i].module && m.encoding === e.edit.modules[i].encoding
+      && sha256(writeSafetensors(m.tensors)) === e.edit.modules[i].sha256);
+    if (!same) out.push(e.id.slice(0, 12) + ': its program run again does not give its values');
+  }
+  return out;
+}
+
+/** A program's outputs read as an edit's modules: out/modules.json lists them ({module, encoding, shape, file}), each
+    file a safetensors with B and A, or indices and values. */
+async function runProgramEdit(backend: IsolatedBackend, code: string, inputs: Record<string, Buffer>, baseDir: string, limits: ProgramLimits): Promise<{ modules: EditDraft['modules'] } | { problems: string[] }> {
+  const r = await backend.run({ code, inputs, base: baseDir, limits });
+  if (r.state !== 'finished') return { problems: ['the program ' + r.state + ': ' + (r.reason ?? '')] };
+  let list: { module: string; encoding: 'lowrank' | 'sparse'; shape: [number, number]; file: string }[];
+  try { list = JSON.parse(r.outputs['modules.json'].toString('utf8')); } catch { return { problems: ['the program wrote no readable out/modules.json'] }; }
+  if (!Array.isArray(list) || !list.length) return { problems: ['out/modules.json lists no module'] };
+  const modules: EditDraft['modules'][number][] = [];
+  for (const m of list) {
+    const b = r.outputs[m?.file];
+    if (!b) return { problems: ['out/' + m?.file + ' is missing'] };
+    try { modules.push({ module: m.module, encoding: m.encoding, shape: m.shape, tensors: readSafetensors(b) }); } catch (e) { return { problems: ['out/' + m.file + ': ' + (e as Error).message] }; }
+  }
+  return { modules };
+}
+
+/** An edit written by a program of the strong model, run in the isolated backend: refused when there is none (the process
+    sandbox never counts). Its code and inputs recorded as its inputs, its outputs materialized and checked like any edit. */
+export async function programEdit(store: BlobStore, start: JuniorPackage, o: { code: string; inputs: Record<string, Buffer>; backend: IsolatedBackend | null; baseDir: string; limits: ProgramLimits;
+  hypothesis: Hypothesis; authorship: Authorship }): Promise<{ id: string } | { problems: string[] }> {
+  if (!o.backend) return { problems: ['origin "program": there is no isolated backend for free programs; the process sandbox does not count as one'] };
+  if ('program.py' in o.inputs) return { problems: ['an input may not be named program.py: that is the code'] };
+  const p = normalizePackage(start);
+  const chip = Number((p.execution.circuit as Record<string, unknown>).chip_layers);
+  const r = await runProgramEdit(o.backend, o.code, o.inputs, o.baseDir, o.limits);
+  if ('problems' in r) return r;
+  return putEdit(store, { modules: r.modules, hypothesis: o.hypothesis, authorship: o.authorship, inputs: { ...o.inputs, 'program.py': Buffer.from(o.code, 'utf8') },
+    origin: { kind: 'program', backend: o.backend.id, base: p.base, inputs: {} } }, chip, { programs: true });
 }
 
 /* --- Closed constructors (§4.3) -------------------------------------------------------------------------------------- */
@@ -662,7 +736,249 @@ const projectOut: Constructor = {
   }
 };
 
-export const CONSTRUCTORS: Readonly<Record<string, Constructor>> = { 'project_out@1': projectOut };
+/* Shared pieces of the constructors: each fixes its arithmetic (float64 sums in ascending order, one rounding to fp32). */
+
+type Problems = { problems: string[] };
+const fail = (name: string, why: string): Problems => ({ problems: [name + ': ' + why] });
+
+function editableModule(name: string, args: Readonly<Record<string, unknown>>): string | Problems {
+  const m = args.module;
+  if (typeof m !== 'string' || !EDITABLE.has(m.split('.').pop()!)) return fail(name, '"module", an editable module');
+  return m;
+}
+
+function alphaOf(name: string, args: Readonly<Record<string, unknown>>): number | Problems {
+  const a = args.alpha;
+  if (typeof a !== 'number' || !Number.isFinite(a) || a === 0) return fail(name, '"alpha", a finite number other than 0');
+  return a;
+}
+
+/** A vector normalized as a direction: finite, not null, of its dimension; v/‖v‖ with ‖v‖ summed in float64. */
+function direction(name: string, what: string, v: Float32Array | Float64Array, dim: number): Float32Array | Problems {
+  if (v.length !== dim) return fail(name, what + ' has ' + v.length + ' entries, ' + dim + ' expected');
+  if (!v.every((x) => Number.isFinite(x))) return fail(name, what + ' has values that are not finite');
+  let n2 = 0;
+  for (const x of v) n2 += x * x;
+  if (!(n2 > 0) || !Number.isFinite(n2)) return fail(name, what + ' is the null vector (or its norm is not finite): there is no direction');
+  const n = Math.sqrt(n2);
+  return Float32Array.from(v, (x) => x / n);
+}
+
+const valueOf = (W: { bits: Uint16Array }, i: number): number => bf16Value(W.bits[i]);
+
+/** ΔW = α·U·(UᵀW) for orthonormal directions U (k of them, each of d_out): B = α·U (rounded once), A = UᵀW, each A_rj
+    summed over i in ascending order in float64 and rounded once. */
+function scaleSubspace(U: readonly Float32Array[], alpha: number, W: { shape: [number, number]; bits: Uint16Array }): { B: RawTensor; A: RawTensor } {
+  const [dout, din] = W.shape, k = U.length;
+  const B = new Float32Array(dout * k), A = new Float32Array(k * din);
+  for (let r = 0; r < k; r++) {
+    for (let i = 0; i < dout; i++) B[i * k + r] = alpha * U[r][i];
+    const acc = new Float64Array(din);
+    for (let i = 0; i < dout; i++) {
+      const u = U[r][i];
+      if (u === 0) continue;
+      const row = i * din;
+      for (let j = 0; j < din; j++) acc[j] += u * valueOf(W, row + j);
+    }
+    for (let j = 0; j < din; j++) A[r * din + j] = acc[j];
+  }
+  return { B: tensorF32([dout, k], B), A: tensorF32([k, din], A) };
+}
+
+/** add_direction@1: ΔW = α·û·v̂ᵀ, u of the module's output and v of its input, both normalized inside and recorded so. */
+const addDirection: Constructor = {
+  build(args, inputs, base) {
+    const N = 'add_direction';
+    const module = editableModule(N, args);
+    if (typeof module !== 'string') return module;
+    const alpha = alphaOf(N, args);
+    if (typeof alpha !== 'number') return alpha;
+    const file = inputs['uv.safetensors'];
+    if (!file) return fail(N, 'its input uv.safetensors with the tensors u and v');
+    const t = readSafetensors(file);
+    if (!t.u || !t.v || t.u.dtype !== 'F32' || t.v.dtype !== 'F32') return fail(N, 'u and v, F32 vectors');
+    const W = base(module + '.weight');
+    const [dout, din] = W.shape;
+    const u = direction(N, 'u', f32(t.u), dout), v = direction(N, 'v', f32(t.v), din);
+    if (!(u instanceof Float32Array)) return u;
+    if (!(v instanceof Float32Array)) return v;
+    return {
+      modules: [{ module, encoding: 'lowrank', shape: [dout, din], tensors: { B: tensorF32([dout, 1], Array.from(u, (x) => alpha * x)), A: tensorF32([1, din], v) } }],
+      inputs: { 'uv.safetensors': writeSafetensors({ u: t.u, v: t.v, u_hat: tensorF32([dout], u), v_hat: tensorF32([din], v) }) }
+    };
+  }
+};
+
+/** mean_difference@1: the direction from the mean activation of the cases of `b` to that of `a`, in the module's output,
+    taken from activation files the lab recorded (one row per case); ΔW = α·d̂·(d̂ᵀW), α = −1 taking it out. */
+const meanDifference: Constructor = {
+  build(args, inputs, base) {
+    const N = 'mean_difference';
+    const module = editableModule(N, args);
+    if (typeof module !== 'string') return module;
+    const alpha = alphaOf(N, args);
+    if (typeof alpha !== 'number') return alpha;
+    const sides = [args.a, args.b];
+    if (sides.some((x) => !Array.isArray(x) || !x.length || x.some((f) => typeof f !== 'string'))) return fail(N, '"a" and "b", the activation files of each side');
+    const W = base(module + '.weight');
+    const [dout, din] = W.shape;
+    const means: Float64Array[] = [];
+    const kept: Record<string, Buffer> = {};
+    for (const side of sides as string[][]) {
+      const sum = new Float64Array(dout);
+      let rows = 0;
+      for (const f of side) {
+        const b = inputs[f];
+        if (!b) return fail(N, 'no input ' + f);
+        kept[f] = b;
+        const t = readSafetensors(b)[module];
+        if (!t || t.dtype !== 'F32' || t.shape.length !== 2 || t.shape[1] !== dout) return fail(N, f + ' has no F32 activations [cases, ' + dout + '] of ' + module);
+        const x = f32(t);
+        if (!x.every((y) => Number.isFinite(y))) return fail(N, f + ' has values that are not finite');
+        for (let r = 0; r < t.shape[0]; r++) for (let i = 0; i < dout; i++) sum[i] += x[r * dout + i];
+        rows += t.shape[0];
+      }
+      if (!rows) return fail(N, 'a side without cases');
+      means.push(sum.map((x) => x / rows));
+    }
+    if ((sides[0] as string[]).some((f) => (sides[1] as string[]).includes(f))) return fail(N, 'a file on both sides');
+    const d = direction(N, 'the mean difference', means[0].map((x, i) => x - means[1][i]), dout);
+    if (!(d instanceof Float32Array)) return d;
+    const { B, A } = scaleSubspace([d], alpha, W);
+    return { modules: [{ module, encoding: 'lowrank', shape: [dout, din], tensors: { B, A } }], inputs: { ...kept, 'direction.safetensors': writeSafetensors({ d_hat: tensorF32([dout], d) }) } };
+  }
+};
+
+/** A seeded generator (mulberry32): the same start vectors on every machine. */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296 - 0.5;
+  };
+}
+
+/** Modified Gram-Schmidt in float64, in order: a column that vanishes is replaced by the next seeded vector. */
+function orthonormalize(Q: Float64Array[], next: () => number): void {
+  for (let r = 0; r < Q.length; r++) {
+    for (let tries = 0; ; tries++) {
+      for (let p = 0; p < r; p++) {
+        let dot = 0;
+        for (let i = 0; i < Q[r].length; i++) dot += Q[p][i] * Q[r][i];
+        for (let i = 0; i < Q[r].length; i++) Q[r][i] -= dot * Q[p][i];
+      }
+      let n2 = 0;
+      for (const x of Q[r]) n2 += x * x;
+      if (n2 > 1e-24 || tries > 4) { const n = Math.sqrt(n2) || 1; for (let i = 0; i < Q[r].length; i++) Q[r][i] /= n; break; }
+      for (let i = 0; i < Q[r].length; i++) Q[r][i] = next();
+    }
+  }
+}
+
+/** Cyclic Jacobi on a small symmetric matrix, a fixed number of sweeps: its eigenvalues and eigenvectors (columns). */
+function jacobi(T: number[][], sweeps = 60): { values: number[]; vectors: number[][] } {
+  const k = T.length, a = T.map((r) => [...r]), v: number[][] = T.map((_, i) => T.map((__, j) => (i === j ? 1 : 0) as number));
+  for (let s = 0; s < sweeps; s++) for (let p = 0; p < k; p++) for (let q = p + 1; q < k; q++) {
+    if (Math.abs(a[p][q]) < 1e-300) continue;
+    const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+    const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+    const c = 1 / Math.sqrt(t * t + 1), sn = t * c;
+    for (let r = 0; r < k; r++) { const x = a[r][p], y = a[r][q]; a[r][p] = c * x - sn * y; a[r][q] = sn * x + c * y; }
+    for (let r = 0; r < k; r++) { const x = a[p][r], y = a[q][r]; a[p][r] = c * x - sn * y; a[q][r] = sn * x + c * y; }
+    for (let r = 0; r < k; r++) { const x = v[r][p], y = v[r][q]; v[r][p] = c * x - sn * y; v[r][q] = sn * x + c * y; }
+  }
+  return { values: a.map((r, i) => r[i]), vectors: v };
+}
+
+/** The k first left singular directions of W, deterministically: subspace iteration on W·Wᵀ from seeded start vectors
+    (a fixed number of iterations, float64 sums in ascending order), then Rayleigh-Ritz on the k×k projection, sorted by
+    singular value. The same code gives the same bits everywhere; it approximates, it does not claim exactness. */
+export function topSingular(W: { shape: [number, number]; bits: Uint16Array }, k: number, iterations = 48): { U: Float32Array[]; s: number[] } {
+  const [dout, din] = W.shape;
+  const next = seeded(0x5eed + k);
+  const Q: Float64Array[] = Array.from({ length: k }, () => Float64Array.from({ length: dout }, next));
+  const wt = (q: Float64Array): Float64Array => {
+    const y = new Float64Array(din);
+    for (let i = 0; i < dout; i++) { const qi = q[i]; if (qi === 0) continue; const row = i * din; for (let j = 0; j < din; j++) y[j] += qi * valueOf(W, row + j); }
+    return y;
+  };
+  const w = (y: Float64Array): Float64Array => {
+    const z = new Float64Array(dout);
+    for (let i = 0; i < dout; i++) { let s = 0; const row = i * din; for (let j = 0; j < din; j++) s += valueOf(W, row + j) * y[j]; z[i] = s; }
+    return z;
+  };
+  orthonormalize(Q, next);
+  for (let it = 0; it < iterations; it++) {
+    for (let r = 0; r < k; r++) Q[r] = w(wt(Q[r]));
+    orthonormalize(Q, next);
+  }
+  const Y = Q.map(wt);
+  const T = Y.map((a) => Y.map((b) => { let s = 0; for (let j = 0; j < din; j++) s += a[j] * b[j]; return s; }));
+  const { values, vectors } = jacobi(T);
+  const order = values.map((x, i) => [x, i] as const).sort((a, b) => b[0] - a[0] || a[1] - b[1]).map(([, i]) => i);
+  const U = order.map((c) => {
+    const u = new Float64Array(dout);
+    for (let r = 0; r < k; r++) { const f = vectors[r][c]; for (let i = 0; i < dout; i++) u[i] += f * Q[r][i]; }
+    let n2 = 0; for (const x of u) n2 += x * x;
+    const n = Math.sqrt(n2) || 1;
+    return Float32Array.from(u, (x) => x / n);
+  });
+  return { U, s: order.map((c) => Math.sqrt(Math.max(0, values[c]))) };
+}
+
+/** top_singular@1: ΔW = α·U_k·(U_kᵀW) on the module's k first singular directions (α = −1 takes them out); the
+    directions and singular values recorded. */
+const topSingularC: Constructor = {
+  build(args, _inputs, base) {
+    const N = 'top_singular';
+    const module = editableModule(N, args);
+    if (typeof module !== 'string') return module;
+    const alpha = alphaOf(N, args);
+    if (typeof alpha !== 'number') return alpha;
+    const W = base(module + '.weight');
+    const [dout, din] = W.shape;
+    const k = args.k;
+    if (!Number.isInteger(k) || (k as number) < 1 || (k as number) > Math.min(16, dout, din)) return fail(N, '"k", a whole number from 1 to ' + Math.min(16, dout, din));
+    const { U, s } = topSingular(W, k as number);
+    const { B, A } = scaleSubspace(U, alpha, W);
+    const flat = new Float32Array(U.length * dout);
+    U.forEach((u, r) => flat.set(u, r * dout));
+    return { modules: [{ module, encoding: 'lowrank', shape: [dout, din], tensors: { B, A } }],
+      inputs: { 'singular.safetensors': writeSafetensors({ U: tensorF32([U.length, dout], flat), s: tensorF32([s.length], s) }) } };
+  }
+};
+
+/** scale_rows@1 / scale_cols@1: the chosen rows (or columns) scaled by 1 + α, as a sparse change α·W on their entries. */
+function scaleLines(kind: 'rows' | 'cols'): Constructor {
+  return {
+    build(args, _inputs, base) {
+      const N = 'scale_' + kind;
+      const module = editableModule(N, args);
+      if (typeof module !== 'string') return module;
+      const alpha = alphaOf(N, args);
+      if (typeof alpha !== 'number') return alpha;
+      const W = base(module + '.weight');
+      const [dout, din] = W.shape;
+      const lines = args[kind], limit = kind === 'rows' ? dout : din;
+      if (!Array.isArray(lines) || !lines.length || lines.some((x, i) => !Number.isInteger(x) || x < 0 || x >= limit || (i > 0 && x <= lines[i - 1])))
+        return fail(N, '"' + kind + '", strictly increasing indices below ' + limit);
+      const idx: number[] = [], val: number[] = [];
+      const add = (x: number) => { const w = valueOf(W, x); if (w !== 0) { idx.push(x); val.push(alpha * w); } };
+      if (kind === 'rows') for (const i of lines as number[]) for (let j = 0; j < din; j++) add(i * din + j);
+      else for (let i = 0; i < dout; i++) for (const j of lines as number[]) add(i * din + j);
+      if (!idx.length) return fail(N, 'the lines chosen are all zero: nothing to scale');
+      return { modules: [{ module, encoding: 'sparse', shape: [dout, din], tensors: { indices: tensorI64(idx), values: tensorF32([val.length], val) } }], inputs: {} };
+    }
+  };
+}
+
+export const CONSTRUCTORS: Readonly<Record<string, Constructor>> = {
+  'project_out@1': projectOut, 'add_direction@1': addDirection, 'mean_difference@1': meanDifference,
+  'top_singular@1': topSingularC, 'scale_rows@1': scaleLines('rows'), 'scale_cols@1': scaleLines('cols')
+};
 
 /** An edit built by a closed constructor and stored: its values materialized, its inputs recorded as it read them. */
 export function construct(store: BlobStore, start: JuniorPackage, o: { constructor: string; args: Record<string, unknown>; inputs: Record<string, Buffer>; hypothesis: Hypothesis; authorship: Authorship }): { id: string } | { problems: string[] } {
