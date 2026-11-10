@@ -1,6 +1,6 @@
 # SPEC · Gestión del riesgo de modelos: el arnés como evidencia de validación
 
-Estado: propuesta (07/10/2026), revisada con una auditoría externa el mismo día (§13). Nada implementado. Va de la mano
+Estado: propuesta (07/10/2026), revisada con una auditoría externa el mismo día (§13). **Implementado en parte** (§15, con sus pendientes). Cabecera corregida el 10/11/2026. Va de la mano
 de SPEC-CONTROL-ARNES, que describe el arnés como un proceso controlado. Esta spec decide qué evidencia produce cada
 modelo aceptado, cómo se versiona y quién la firma.
 

@@ -28,7 +28,7 @@ Around that core the project has grown into a research platform, in four layers:
 > **Status: research prototype.** The results below come from dozens of runs with several models (Qwen, GPT-6 Luna and
 > Sol), most conditions with few repetitions: read them as strong signals, not established results. The newest layers -
 > living worlds, the research meta-policy's pilot and the learning meta-policy - are implemented and tested with
-> stand-in models (about 770 tests), and are waiting for their first real runs. Design documents and run reports are in
+> stand-in models (about 820 tests), and are waiting for their first real runs. Design documents and run reports are in
 > Spanish (`SPEC-*.md`, `INFORME.md`).
 
 ## Contents
@@ -432,9 +432,10 @@ top of each says how far it was built (some predate their implementation and lag
 | [SPEC-ORQUESTADOR.md](SPEC-ORQUESTADOR.md), [SPEC-INVESTIGACION-PARALELA.md](SPEC-INVESTIGACION-PARALELA.md) | agent operators, the senior, batches, the planner; research in parallel |
 | [SPEC-DELEGACION-INVESTIGACIONES.md](SPEC-DELEGACION-INVESTIGACIONES.md), [SPEC-DELEGACION-EVOLUTIVA.md](SPEC-DELEGACION-EVOLUTIVA.md) | delegating an investigation from another, and evolutionary search as a branch |
 | [SPEC-METAPOLITICA-INVESTIGACION.md](SPEC-METAPOLITICA-INVESTIGACION.md), [CATALOGO-METAPOLITICAS-INVESTIGACION.md](CATALOGO-METAPOLITICAS-INVESTIGACION.md) | learning a research meta-policy, and a catalogue of research methods |
-| [SPEC-METAPOLITICA-APRENDIZAJE.md](SPEC-METAPOLITICA-APRENDIZAJE.md) | the learning meta-policy: a small model that learns to improve itself |
+| [SPEC-METAPOLITICA-APRENDIZAJE.md](SPEC-METAPOLITICA-APRENDIZAJE.md), [SPEC-EDICION-PESOS.md](SPEC-EDICION-PESOS.md) | the learning meta-policy: a small model that learns to improve itself; editing its weights, and an evolutionary search over them |
 | [SPEC-AUDITORIA-METODO.md](SPEC-AUDITORIA-METODO.md), [SPEC-VISTA-ESCALADA.md](SPEC-VISTA-ESCALADA.md), [SPEC-CONSOLA-INVESTIGACION.md](SPEC-CONSOLA-INVESTIGACION.md) | the method audit; the climb view; the research observatory |
 | [SPEC-CONTROL-ARNES.md](SPEC-CONTROL-ARNES.md), [SPEC-RIESGO-MODELOS.md](SPEC-RIESGO-MODELOS.md) | the harness as a controlled process; model risk and validation evidence |
+| [REPASO-2026-11-10.md](REPASO-2026-11-10.md), [SPEC-VALIDEZ-MEDIDA.md](SPEC-VALIDEZ-MEDIDA.md), [SPEC-CONSOLIDACION.md](SPEC-CONSOLIDACION.md), [SPEC-CONTINUIDAD-CONTEXTO.md](SPEC-CONTINUIDAD-CONTEXTO.md), [PLAN-VALIDEZ-MEDIDA.md](PLAN-VALIDEZ-MEDIDA.md) | a review of the whole repository with a guide to continue; what judges a candidate, made sound (proposed); consolidating its contracts (proposed); measuring what is lost between rounds (proposed); the work plan, task by task, to fix the measure |
 | [COMPARACION-LOCAL-AUTORESEARCH.md](COMPARACION-LOCAL-AUTORESEARCH.md) | what this harness shares with local-autoresearch, and what to take from it |
 | [SPEC-RULENET.md](SPEC-RULENET.md), [SPEC-APRENDIZAJE-DIFFS-Y-ACCIONES.md](SPEC-APRENDIZAJE-DIFFS-Y-ACCIONES.md) | earlier work: semantic rule networks; learning from diffs and explicit actions |
 

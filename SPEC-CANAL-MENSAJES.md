@@ -1,6 +1,6 @@
 # SPEC · El canal de mensajes: un único mecanismo para todo lo que llega a System 2 entre sus respuestas
 
-Estado: propuesta (15/10/2026). Sin implementar.
+Estado: propuesta (15/10/2026). **Implementado** (§13). Cabecera corregida el 10/11/2026.
 
 ## 1. De dónde sale
 

@@ -1,6 +1,6 @@
 # SPEC · Delegar una investigación desde otra investigación
 
-Estado (21/10/2026): **propuesto, sin implementar**.
+Estado (21/10/2026): **primera entrega implementada** (§10, con lo pendiente o limitado); cabecera corregida el 10/11/2026.
 Reformula [SPEC-BUSQUEDA-HIPOTESIS.md](SPEC-BUSQUEDA-HIPOTESIS.md). Se apoya en el investigador general,
 [el canal de mensajes](SPEC-CANAL-MENSAJES.md) y [la investigación paralela](SPEC-INVESTIGACION-PARALELA.md).
 

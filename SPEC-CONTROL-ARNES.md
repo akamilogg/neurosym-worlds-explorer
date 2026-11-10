@@ -1,6 +1,6 @@
 # SPEC · El arnés como proceso controlado: resultados, coste, observabilidad y estabilidad
 
-Estado: propuesta (07/10/2026), revisada con una auditoría externa el mismo día (§10). Nada implementado. Mide lo que
+Estado: propuesta (07/10/2026), revisada con una auditoría externa el mismo día (§10). **Implementado en parte** (§12, con sus pendientes). Cabecera corregida el 10/11/2026. Mide lo que
 SPEC-RIESGO-MODELOS necesita para caracterizar la configuración generadora y para las estadísticas de robustez del
 informe de validación.
 

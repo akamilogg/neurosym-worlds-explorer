@@ -1,6 +1,6 @@
 # SPEC · Pruebas diseñadas por el investigador: predicciones prerregistradas y severas
 
-Estado: propuesta (06/10/2026), revisada con una revisión externa el mismo día (§12). Nada implementado.
+Estado: propuesta (06/10/2026), revisada con una revisión externa el mismo día (§12). **T1 a T4 implementados** (§11, 06–07/10/2026); T2, sólo informativo. Cabecera corregida el 10/11/2026.
 
 ## 1. De dónde sale
 
