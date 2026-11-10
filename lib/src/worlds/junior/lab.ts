@@ -692,48 +692,56 @@ export class JuniorWorld {
     return notice;
   }
 
-  /** The operator's weight-search branches that have ended and are not yet delivered (§6.6): each one's elites made
-      versions of this world from the version it started from, and told as a delegated contribution - never an order nor an
-      answer of the world. Each delivered once (kept in branches.jsonl). */
-  deliverBranches(): Record<string, unknown>[] {
+  /** COLLECTING the operator's weight-search branches that have ended (§6.6): each one taken once - a persistent marker in
+      branches.jsonl, with everything its delivery is made of (the version it starts from, each elite's set) - and answered
+      whole. It makes nothing: applying a delivery is apart (applyDelivery), so a run resumed applies what was collected at
+      that act again (its answer recorded by the run) without collecting it twice. */
+  collectBranches(): Delivery[] {
     if (!this.weightBranches || !fs.existsSync(this.weightBranches)) return [];
     const file = path.join(this.dir, 'branches.jsonl');
-    const done = new Set(fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l).id as string]; } catch { return []; } }) : []);
-    const out: Record<string, unknown>[] = [];
+    const taken = new Set(fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l).id as string]; } catch { return []; } }) : []);
+    const out: Delivery[] = [];
     for (const f of fs.readdirSync(this.weightBranches).filter((n) => n.endsWith('.finding.json')).sort()) {
       let finding: { id?: string; from?: string; question?: string; stoppedBy?: string; elites?: { niche: string; record: unknown; deficits: unknown }[] };
       try { finding = JSON.parse(fs.readFileSync(path.join(this.weightBranches, f), 'utf8')); } catch { continue; }
-      if (!finding.id || done.has(finding.id) || typeof finding.from !== 'string' || !this.store.get(finding.from)) continue;
-      const versions: { version: string; niche: string; deficits: unknown }[] = [];
-      for (const e of finding.elites ?? []) {
-        const v = this.store.apply(finding.from, { files: { [EDITS]: JSON.stringify(e.record, null, 2) + '\n' } }, { branch: finding.id, niche: e.niche });
-        if (typeof v !== 'string') versions.push({ version: v.hash, niche: e.niche, deficits: e.deficits });
-      }
-      const notice = { delegated: { branch: finding.id, by: 'the operator', question: finding.question ?? null, stopped_by: finding.stoppedBy ?? null, versions,
-        note: 'a search of juniors the operator ran: its elites are versions you may run, adopt or leave' } };
-      /* Kept whole - what each version is made of - so a run rebuilt makes them again (redeliver). */
-      appendRecord(file, { id: finding.id, from: finding.from, elites: (finding.elites ?? []).map((e) => ({ niche: e.niche, record: e.record })), versions: versions.map((v) => v.version) }, { sync: true });
-      this.redelivered.add(finding.id);
-      out.push(notice);
+      if (!finding.id || taken.has(finding.id) || typeof finding.from !== 'string' || !this.store.get(finding.from)) continue;
+      const d: Delivery = { id: finding.id, from: finding.from, question: finding.question ?? null, stopped_by: finding.stoppedBy ?? null,
+        elites: (finding.elites ?? []).map((e) => ({ niche: e.niche, record: e.record, deficits: e.deficits })) };
+      appendRecord(file, d, { sync: true });
+      out.push(d);
     }
     return out;
   }
 
-  /** Deliveries of this world's record made again (a run rebuilt), each once, as soon as the version it starts from exists:
-      what the researcher built on them is then made again on them. */
+  /** APPLYING a delivery: its elites made versions of this world from the version it started from (content-addressed: the
+      same versions however often it is applied), and its notice - a delegated contribution, never an order nor an answer
+      of the world. Live and when a run is resumed alike. */
+  applyDelivery(d: Delivery): Record<string, unknown> {
+    const versions: { version: string; niche: string; deficits: unknown }[] = [];
+    if (this.store.get(d.from)) for (const e of d.elites) {
+      const v = this.store.apply(d.from, { files: { [EDITS]: JSON.stringify(e.record, null, 2) + '\n' } }, { branch: d.id, niche: e.niche });
+      if (typeof v !== 'string') versions.push({ version: v.hash, niche: e.niche, deficits: e.deficits });
+    }
+    this.redelivered.add(d.id);
+    return { delegated: { branch: d.id, by: 'the operator', question: d.question, stopped_by: d.stopped_by, versions,
+      note: 'a search of juniors the operator ran: its elites are versions you may run, adopt or leave' } };
+  }
+
+  /** Collected and applied at once (where no run records the collection: tools and tests). */
+  deliverBranches(): Record<string, unknown>[] { return this.collectBranches().map((d) => this.applyDelivery(d)); }
+
+  /** Deliveries of this world's record made again when a run is REBUILT from its events (no act is replayed there), each
+      once, as soon as the version it starts from exists: what the researcher built on them is then made again on them. */
   redeliver(): string[] {
     const file = path.join(this.dir, 'branches.jsonl');
     if (!fs.existsSync(file)) return [];
     const made: string[] = [];
     for (const l of fs.readFileSync(file, 'utf8').split('\n')) {
-      let e: { id?: string; from?: string; elites?: { niche: string; record: unknown }[] };
+      let e: Delivery;
       try { e = JSON.parse(l); } catch { continue; }
-      if (!e.id || this.redelivered.has(e.id) || typeof e.from !== 'string' || !this.store.get(e.from) || !Array.isArray(e.elites)) continue;
-      for (const x of e.elites) {
-        const v = this.store.apply(e.from, { files: { [EDITS]: JSON.stringify(x.record, null, 2) + '\n' } }, { branch: e.id, niche: x.niche });
-        if (typeof v !== 'string') made.push(v.hash);
-      }
-      this.redelivered.add(e.id);
+      if (!e?.id || this.redelivered.has(e.id) || typeof e.from !== 'string' || !this.store.get(e.from) || !Array.isArray(e.elites)) continue;
+      const n = this.applyDelivery(e) as { delegated: { versions: { version: string }[] } };
+      made.push(...n.delegated.versions.map((v) => v.version));
     }
     return made;
   }
@@ -760,6 +768,15 @@ export class JuniorWorld {
       return job.products as Evaluation;
     } catch (e) { return e instanceof JobRefused ? e.message : String((e as Error).message ?? e); }
   }
+}
+
+/** What an operator's branch delivered: everything its versions are made of. */
+export interface Delivery {
+  readonly id: string;
+  readonly from: string;
+  readonly question: string | null;
+  readonly stopped_by: string | null;
+  readonly elites: readonly { readonly niche: string; readonly record: unknown; readonly deficits: unknown }[];
 }
 
 /** The edit an act asks for: values written, a closed constructor, or a free program. */
@@ -1268,7 +1285,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       return 'act needs "change", "run", "publish_memory", "distill", "dataset", "train", "inspect_weights", "edit", "evolve" or "confirmations"';
     },
     place: () => undefined,
-    async start(spec, a, _id, ctx?: LabContext) {
+    async start(spec, a, id, ctx?: LabContext) {
       const episode = await (async (): Promise<JuniorEpisode | null> => {
       if ('change' in a) {
         const { from: _f, files: _x, ...reason } = a.change;
@@ -1342,8 +1359,15 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       const e = await spec.world.evaluate(run.version, spec.judge);
       return typeof e === 'string' ? null : evaluationEpisode(spec.world, run.version, e);
       })();
-      /* After the act: what the operator's branches delivered, and a stall if there is one - facts, published as the world. */
-      for (const n of spec.world.deliverBranches()) ctx?.publish?.({ kind: 'notice', body: n });
+      /* After the act: what the operator's branches delivered - collected once, its answer recorded by the run at this act
+         (none is an answer too), applied the same live and when the run is resumed - and a stall if there is one: facts,
+         published as the world. */
+      const collect = async () => spec.world.collectBranches();
+      const deliveries = ctx?.recorded ? await ctx.recorded('/weight-branches', { act: id }, collect) : await collect();
+      for (const d of deliveries) {
+        const n = spec.world.applyDelivery(d);
+        ctx?.publish?.({ kind: 'notice', body: n });
+      }
       const stall = spec.world.stall();
       if (stall) ctx?.publish?.({ kind: 'notice', body: stall });
       return episode;

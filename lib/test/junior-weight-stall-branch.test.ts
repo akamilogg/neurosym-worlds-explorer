@@ -196,3 +196,49 @@ test('review: an explicit 0 is 0 - a condition that may not distill gets no dist
     assert.equal(dflt.world.jobs.bags().distillations.limit, 20, 'absent: the default');
   } finally { await f.close(); }
 });
+
+test('review 2: a run resumed (its acts replayed) applies what was delivered at that act again - the same versions, notices and spending, nothing measured', { skip: !python && 'no Python' }, async () => {
+  const f = await fixture();
+  try {
+    const branches = path.join(f.dir, 'branches');
+    const live = f.make({ weightBranches: branches });
+    const startPkg = await live.packageOf(live.reference);
+    fs.writeFileSync(path.join(f.dir, 'start.json'), JSON.stringify(startPkg));
+    const spec: WeightBranchSpec = { format: 'weight-search-branch@1', id: 'wb4', question: 'q', from: live.reference, start: path.join(f.dir, 'start.json'), manifest: path.join(f.dir, 'manifest.json'),
+      reference: path.join(f.dir, 'reference.json'), blobs: path.join(f.dir, 'blobs'), server: f.h.url,
+      seeds: [{ written: { modules: [{ module: DOWN, encoding: 'sparse', indices: [0], values: [-1.5] }] }, competence: 'protocol', why: 'w', expect: 'e' }],
+      control_seeds: 1, max_candidates: 3, seed: 2, fund: { edits: 20, evaluations: 20 } };
+    fs.writeFileSync(path.join(f.dir, 'wb4.json'), JSON.stringify(spec));
+    await runWeightBranch(path.join(f.dir, 'wb4.json'), branches, { probes: f.probesOf, heartbeatMs: 50 });
+    /* The run's record of what the world computed at each act (LabContext.recorded): kept live, served on resumption. */
+    const record = new Map<string, string>();
+    const ctx = (mode: 'live' | 'resume', published: unknown[]) => ({
+      publish: (m: unknown) => published.push(m),
+      recorded: async <T>(route: string, body: unknown, compute: () => Promise<T>): Promise<T> => {
+        const k = route + JSON.stringify(body);
+        if (mode === 'resume') { assert.ok(record.has(k), 'recorded at ' + k); return JSON.parse(record.get(k)!) as T; }
+        const v = await compute();
+        record.set(k, JSON.stringify(v));
+        return v;
+      }
+    }) as never;
+    const first = { change: { from: live.reference, files: { 'prompt.md': 'y' }, why: 'w', expect: 'e' } };
+    const pubLive: Record<string, any>[] = [];
+    await juniorLab.act!.start({ world: live } as JuniorSpec, first, 'a1', ctx('live', pubLive));
+    const delivered = pubLive.find((m) => m.body?.delegated)!.body.delegated.versions[0].version as string;
+    const second = { change: { from: delivered, files: { 'prompt.md': 'built on it' }, why: 'w', expect: 'e' } };
+    const childLive = await juniorLab.act!.start({ world: live } as JuniorSpec, second, 'a2', ctx('live', pubLive));
+    assert.ok(childLive && childLive.kind === 'version');
+    // Resumed: a new instance of the same world replays the same acts, each served what the run recorded.
+    const resumed = f.make({ weightBranches: branches });
+    const pubResumed: Record<string, any>[] = [];
+    await juniorLab.act!.start({ world: resumed } as JuniorSpec, first, 'a1', ctx('resume', pubResumed));
+    const childResumed = await juniorLab.act!.start({ world: resumed } as JuniorSpec, second, 'a2', ctx('resume', pubResumed));
+    assert.ok(childResumed && childResumed.kind === 'version', 'the act on the delivered version is accepted again');
+    assert.equal(childResumed.version, childLive.version);
+    assert.ok(resumed.store.get(delivered));
+    assert.deepEqual(pubResumed, pubLive, 'the same notices at the same acts');
+    assert.deepEqual(resumed.jobs.bags(), live.jobs.bags(), 'the same spending: nothing measured again');
+    assert.deepEqual(resumed.collectBranches(), [], 'never collected twice');
+  } finally { await f.close(); }
+});

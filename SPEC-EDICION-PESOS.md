@@ -730,3 +730,10 @@ Revisión de WE2–WE6, el mismo día:
 | Cancelar no detenía la población inicial ni la investigación de élites: ahora se comprueba antes de cada trabajo costoso | §6.4 |
 | Reanudar servía medidas de otro junior: el registro guarda la identidad completa de la búsqueda (ejecución de la partida, configuración, componentes, semillas, modo, evaluador) y otra se rechaza | §6, §10 |
 | Un registro cortado impedía reanudar y se reescribía entero: ahora se recupera el fragmento y sólo se anexa | §10 |
+
+Segunda revisión de WE2–WE6, el mismo día:
+
+| Punto | Dónde |
+|---|---|
+| Las entregas de una rama se perdían al reanudar con `--resume`, que repite los actos y no pasa por la reconstrucción: ahora recoger (una vez, con un marcador persistente) y aplicar están separados, y lo recogido en cada acto queda en el registro del run (`ctx.recorded`), también cuando no hay nada, para aplicarse igual en vivo y al reanudar | §6.6, `collectBranches` y `applyDelivery` |
+| C perdía los cambios de prompt, memoria o decodificación hechos entre ediciones de B: ahora cada gemelo sale del paquete que B editó (su padre inmediato), sin su adaptador, con el genoma de controles compuesto desde el checkpoint | §8, `comparison.ts` |

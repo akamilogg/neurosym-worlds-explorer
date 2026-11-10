@@ -129,16 +129,6 @@ export interface StepDeps {
 
 const readJsonl = (f: string): Record<string, any>[] => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } }) : []);
 
-/** The packages a world left (packages/<version>.json), by their execution hash: where a run's starts are found. */
-function packagesByExecution(worldDir: string): Map<string, JuniorPackage> {
-  const out = new Map<string, JuniorPackage>();
-  const dir = path.join(worldDir, 'packages');
-  for (const f of fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.endsWith('.json')) : []) {
-    try { const p = normalizePackage(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); out.set(executionHash(p), p); } catch { /* not a package */ }
-  }
-  return out;
-}
-
 /** The promotion rule of a condition without a researcher: its candidates in order, each evaluated and compared with the
     reference (paired-cases@1); the product the last one promoted, or the reference. Each candidate's package kept in
     <work>/packages/<execution>.json: what the operator exports for its external confirmation. */
@@ -161,8 +151,10 @@ async function productByRule(world: World, work: string, candidates: readonly Ju
   return { product, evaluation, package: pkgFile, checked };
 }
 
-/** C: each of B's edited versions has a twin from THE SAME START (the package B's set composes from, prompt, memory and
-    decoding included): its genome the controls of B's genome - each control random, in the edit's modules, of its rank or
+/** C: each of B's edited versions has a twin made from ITS IMMEDIATE PARENT - the package B edited, its prompt, memory and
+    decoding exactly as they were then (changes made between B's edits included), its adapter taken away so the whole
+    genome composes from the immutable checkpoint - only the intervention on weights replaced: its genome the controls of
+    B's genome - each control random, in the edit's modules, of its rank or
     count - scaled module by module so that the twin's COMPOSED relative norm is B's (edits of B that cancel or reinforce
     each other are matched as they compose), verified by composing it again. Checked in B's order by the rule. Its result
     kept in <work>/result.json; asked again, read from there. */
@@ -172,16 +164,18 @@ export async function runControlEdits(m: WeightComparison, rep: number, deps: St
   fs.mkdirSync(work, { recursive: true });
   const bWorld = path.join(dirOf(m, 'B', rep), 'world');
   const fromB = readJsonl(path.join(bWorld, 'edits.jsonl'));
-  const starts = packagesByExecution(bWorld);
   const world = await deps.world(path.join(work, 'world'));
   const { scaleModules } = await import('./weight-search.ts');
   const twins: JuniorPackage[] = [];
+  const made: { twin_of: string; execution: string; package: string }[] = [];
   const skipped: { version: string; why: string }[] = [];
   const individual = new Map<string, string | null>();
   for (const [i, r] of fromB.entries()) {
     const record = r.record as { adapter: string; start: string; genome: string[] };
-    const start = starts.get(record?.start);
-    if (!start) { skipped.push({ version: r.version, why: 'its start\'s package is not among B\'s' }); continue; }
+    /* The package B edited (packages/<from>.json, kept by B's world when it made the edit): everything but its weights. */
+    const parentFile = path.join(bWorld, 'packages', String(r.from) + '.json');
+    if (!fs.existsSync(parentFile)) { skipped.push({ version: r.version, why: 'the package it was edited from is not among B\'s' }); continue; }
+    const start = normalizePackage({ ...JSON.parse(fs.readFileSync(parentFile, 'utf8')), adapter: null });
     const chip = Number((start.execution.circuit as Record<string, unknown>).chip_layers);
     const base = baseReader(world.blobs, start.base);
     const norms = (id: string) => Object.fromEntries(Object.entries(compose([{ id, edit: readEdit(world.blobs, id), tensors: readEdit(world.blobs, id).modules.map((x) => readSafetensors(world.blobs.get(x.sha256))) }], base).summaries).map(([k, s]) => [k, s.relative_norm]));
@@ -207,10 +201,14 @@ export async function runControlEdits(m: WeightComparison, rep: number, deps: St
     const paid = await world.searchEvaluator(start).compose(scaled as string[]).catch((e: Error) => ({ invalid: e.message }));
     if ('invalid' in paid) { skipped.push({ version: r.version, why: paid.invalid }); continue; }
     twins.push(v.child);
+    const twinFile = path.join(work, 'packages', executionHash(v.child) + '.json');
+    fs.mkdirSync(path.dirname(twinFile), { recursive: true });
+    fs.writeFileSync(twinFile, JSON.stringify(v.child, null, 2));
+    made.push({ twin_of: r.version, execution: executionHash(v.child), package: twinFile });
   }
   const rule = await productByRule(world, work, twins, deps);
   const out = { condition: 'C', state: (rule.evaluation ? 'ended' : 'interrupted') as Improvement['state'], product: rule.product, evaluation: rule.evaluation!, cost: spentOf(path.join(work, 'world', 'jobs.jsonl')),
-    checked: rule.checked, skipped, package: rule.package };
+    checked: rule.checked, skipped, twins: made, package: rule.package };
   fs.writeFileSync(result, JSON.stringify(out, null, 2));
   return out;
 }

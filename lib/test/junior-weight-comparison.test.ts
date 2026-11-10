@@ -124,6 +124,33 @@ test('C: B\'s twins from B\'s exact start, of B\'s COMPOSED size - edits that ca
   assert.deepEqual(await runControlEdits(f.comparison, 0, { world, evaluate: async () => { throw new Error('never again'); } }), r);
 });
 
+test('review 2: each twin is made from the package B edited - prompt and decoding changed between edits kept - only its weights replaced', async () => {
+  const f = fixture();
+  const world = (dir: string) => new JuniorWorld({ manifest: f.manifest, base: f.pkg, blobs: f.comparison.blobs, server: 'http://127.0.0.1:1', dir, evaluations: 20, edits: 20, searches: 0 });
+  const B = world(path.join(f.comparison.work, 'B-0', 'world'));
+  const H = { competence: 'protocol', mechanism: 'm', effect: 'e' };
+  // edit -> change prompt and decoding -> edit again.
+  const e1 = await B.editFrom(B.reference, { written: { modules: [{ module: DOWN, encoding: 'sparse', indices: [0], values: [-1] }] } }, H, undefined, { why: 'w' });
+  const decoding = JSON.stringify({ temperature: 0, max_tokens: 1234, max_circuit_tokens: 60000, forced_format: null });
+  const c = B.change(e1.version!, { 'prompt.md': 'A prompt changed between edits.', 'decoding.json': decoding }, { why: 'w', expect: 'e' });
+  assert.ok(!('error' in c));
+  const e2 = await B.editFrom(c.version, { written: { modules: [{ module: Q, encoding: 'lowrank', B: [[0.5], [-0.5]], A: [[1, 1, 1]] }] } }, H, undefined, { why: 'w' });
+  assert.ok(e1.version && e2.version);
+  const r = await runControlEdits(f.comparison, 0, { world, evaluate: async (_w, pkg) => evaluation(f.manifest, pkg, {}) }) as unknown as { twins: { twin_of: string; package: string }[] };
+  assert.equal(r.twins.length, 2);
+  for (const t of r.twins) {
+    const twin = normalizePackage(JSON.parse(fs.readFileSync(t.package, 'utf8')));
+    const of = await B.packageOf(t.twin_of);
+    assert.ok(typeof of !== 'string');
+    assert.deepEqual([twin.prompt, twin.decoding, twin.memory, twin.base], [of.prompt, of.decoding, of.memory, of.base], 'everything but its weights is the version it twins');
+    const ts = readEditSet(f.store, twin.adapter!)!, bs = readEditSet(f.store, of.adapter!)!;
+    for (const m of Object.keys(bs.summaries)) assert.ok(Math.abs(ts.summaries[m].relative_norm - bs.summaries[m].relative_norm) < 1e-3, m);
+  }
+  const second = normalizePackage(JSON.parse(fs.readFileSync(r.twins.find((t) => t.twin_of === e2.version)!.package, 'utf8')));
+  assert.equal(second.prompt, 'A prompt changed between edits.');
+  assert.equal(second.decoding.max_tokens, 1234);
+});
+
 test('E: D\'s first search again, its seeds only the size of its controls - none of them evaluated', { skip: !python && 'no Python' }, async () => {
   const f = fixture();
   const server = new SessionServer({ root: path.join(f.dir, 'srv'), store: f.store, worker: new ProcessWorker({ python: [python!], backend: 'fake', work: path.join(f.dir, 'work') }) });
