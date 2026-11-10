@@ -9,7 +9,7 @@ import type { World } from '../../core/types.ts';
 import { HOLDING, holdingShare, type LabProgress } from '../../learn/progress.ts';
 import { ArtifactStore } from '../../artifacts/store.ts';
 import { JuniorSessionClient } from '../../junior/client.ts';
-import { competenceHash, competenceProblems, type CompetenceManifest, type Component, type Observation } from '../../junior/competence.ts';
+import { competenceHash, competenceProblems, selectionManifest, type CompetenceManifest, type Component, type Observation } from '../../junior/competence.ts';
 import type { Evaluation } from '../../junior/evaluate.ts';
 import type { Dataset, Example } from '../../junior/distill.ts';
 import type { Validity } from '../../junior/sessions.ts';
@@ -513,7 +513,8 @@ export class JuniorWorld {
   async probesOf(pkg: JuniorPackage): Promise<{ complete: boolean; components: { id: string; quality: number | null }[] }> {
     const { OutOfBudget } = await import('../../junior/weight-search.ts');
     const comps = new Set(this.probeComponents());
-    const manifest: CompetenceManifest = { ...this.manifest, id: this.manifest.id + '-probes', cases: this.manifest.cases.filter((c) => c.kind === 'probe'), components: this.manifest.components.filter((c) => comps.has(c.id)) };
+    /* The probes a search selects on: without the holdout (SPEC-VALIDEZ-MEDIDA §4.3), which promotes its candidates. */
+    const manifest: CompetenceManifest = selectionManifest(this.manifest);
     const { competenceHash: hashOf } = await import('../../junior/competence.ts');
     const manifestHash = hashOf(manifest);
     const operation = 'probes-' + createHash('sha256').update(manifestHash + ':' + executionHash(pkg)).digest('hex').slice(0, 24);
@@ -538,7 +539,7 @@ export class JuniorWorld {
   searchEvaluator(start: JuniorPackage): import('../../junior/weight-search.ts').SearchEvaluator {
     const authorized = this.manifest.weight_edits;
     const comps = new Set(this.probeComponents());
-    const probesManifest = { ...this.manifest, id: this.manifest.id + '-probes', cases: this.manifest.cases.filter((c) => c.kind === 'probe'), components: this.manifest.components.filter((c) => comps.has(c.id)) };
+    const probesManifest = selectionManifest(this.manifest);
     return {
       /* Its measures depend on the probes' manifest and on who measures them (the probes, or a stand-in of the tests). */
       identity: competenceHash(probesManifest) + (this.probesStandIn ? ':stand-in' : ''),

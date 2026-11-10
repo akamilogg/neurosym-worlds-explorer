@@ -48,3 +48,10 @@ console.log('A2 segments:', rec.rounds.map((s: any) => s.id + '[' + s.links.join
 // O1: the same answer read by the senior's signs: a round of a table only.
 const j2 = { events: [{ type: 'investigation', round: 2, requests: [{ table: 'ep1' }], results: [{}] }, { type: 'investigation', round: 2, requests: [{ table: 'ep1', on: 'x' }], results: [{}] }, { type: 'investigation', round: 2, requests: [{ measure: {} }], results: [{}] }] };
 console.log('O1 only_looking (reader says a table is an experiment):', stuckSignals(j2).only_looking, '| audit kind:', linksOf(j2).links.map((l: any) => l.kind).join(','));
+
+// After VM2: the same candidate under paired-cases@2, and what a manifest of few cases is told before it runs.
+const pr2 = promote({ ...m, promotion: { ...m.promotion, procedure: 'paired-cases@2' } } as never, meas(1, 0) as never, meas(0, 1) as never);
+console.log('J1 @2:', pr2.verdict, '-', pr2.why);
+const { competenceWarnings } = await import(root + 'junior/competence.ts');
+const few = { components: [comp('format'), comp('worlds')], cases: ['f0', 'f1', 'f2'].map((id) => ({ id, kind: 'probe', partition: 'development', component: 'format' })).concat(['w0', 'w1', 'w2'].map((id) => ({ id, kind: 'probe', partition: 'development', component: 'worlds' }))), promotion: m.promotion };
+console.log('J2 warned:', competenceWarnings(few as never).join(' | '));

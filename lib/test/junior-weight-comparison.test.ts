@@ -182,6 +182,9 @@ test('E: D\'s first search again, its seeds only the size of its controls - none
     const kinds = events.filter((e) => e.type === 'candidate').map((e) => e.origin.kind);
     assert.ok(!kinds.includes('strong') && kinds.includes('control'), kinds.join());
     assert.equal(r.condition, 'E');
+    /* Its candidates came out of a search and its manifest has no holdout: none is called promoted (SPEC-VALIDEZ-MEDIDA §4.3). */
+    assert.equal((r as { rule?: string }).rule, 'best of N in selection');
+    assert.ok(((r as { checked?: { verdict: string }[] }).checked ?? []).every((c) => c.verdict !== 'promoted'), JSON.stringify((r as { checked?: unknown }).checked));
   } finally { server.stop(); await h.close(); }
 });
 
@@ -207,7 +210,7 @@ test('the report from what the runs left: H1 pair by pair, H2 as transfer from p
   run('D', { a: 1 }, { evaluations: 6, edits: 9, searches: 1 });
   run('F', { b: 1 }, { evaluations: 4, gpu_hours: 1 });
   write(path.join(m.work, 'C-0', 'result.json'), { condition: 'C', state: 'ended', product: reference, evaluation: refEval, cost: { edits: 4, evaluations: 5 } });
-  write(path.join(m.work, 'E-0', 'result.json'), { condition: 'E', state: 'ended', product: reference, evaluation: refEval, cost: { edits: 9, evaluations: 6 } });
+  write(path.join(m.work, 'E-0', 'result.json'), { condition: 'E', state: 'ended', product: reference, evaluation: refEval, cost: { edits: 9, evaluations: 6 }, rule: 'best of N in selection' });
   const config: WeightSearchConfig = { format: 'weight-search@1', seed: 1, control_seeds: 1, max_candidates: 2, operators: { perturb: 1 }, tolerance: { a: 0.01, b: 0.01 }, layer_groups: [[2, 4], [5, 9]], perturb: 0.2, investigate_elites: false };
   const searchEvents = [
     { type: 'search_started', config, components: ['a', 'b'] },
@@ -224,4 +227,7 @@ test('the report from what the runs left: H1 pair by pair, H2 as transfer from p
   assert.deepEqual(r.cost.D, { evaluations: 6, edits: 9, searches: 1 });
   assert.deepEqual(r.diversity.D, { searches: 1, niches: 3, from_new_material: 1 });
   assert.match(reportText(r), /B against C: 1 better/);
+  /* VM2 (SPEC-VALIDEZ-MEDIDA §4.3): E's product, chosen without a holdout, is told as the best of N in selection. */
+  assert.deepEqual(r.rules, { C: ['development'], E: ['best of N in selection'] });
+  assert.match(reportText(r), /E: best of N in selection \(.*not promoted\)/);
 });

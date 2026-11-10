@@ -5,7 +5,7 @@ import type { ApiError } from '../core/net.ts';
 import type { Law } from '../core/predict.ts';
 import { obj, parseReflection } from './explorer.ts';
 import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
-import { RoundConversation } from './system2.ts';
+import { RoundConversation, requestFailure } from './system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
 const MAX_CONSOLIDATIONS = 2;
@@ -277,6 +277,7 @@ export class LawSession<A> {
       h.say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;
       let content = '';
+      const asked = Date.now();
       try {
         content = (await h.llm.complete({ system: h.system, user: payload })).content;
       } catch (error) {
@@ -288,7 +289,7 @@ export class LawSession<A> {
           return end({ kind: 'stopped' });
         }
         refusals++;
-        h.log('proposal_failed', { round, error: String((error as Error)?.message || error) });
+        h.log('proposal_failed', { round, ...requestFailure(error, asked, { system: h.system, user: payload }) });
         continue;
       }
       const turn = parseLawTurn<A>(content, { world: h.world, round, parseAct: h.parseAct, ...(h.extraRequest ? { extraRequest: (q) => h.extraRequest!(q) } : {}), ...(memory ? { archive: true } : {}) });

@@ -20,6 +20,8 @@ import { searchConfigProblems } from './weight-search.ts';
  * ========================================================================== */
 
 export const COMPETENCE_MANIFEST = 'junior-competence-manifest@1';
+export const PROMOTION_PROCEDURES = ['paired-cases@1', 'paired-cases@2'] as const;
+export type PromotionProcedure = typeof PROMOTION_PROCEDURES[number];
 
 export type Partition = 'development' | 'confirmation';
 export type Mode = 'start' | 'cut';
@@ -91,7 +93,12 @@ export interface CompetenceManifest {
   readonly execution: Readonly<Record<string, unknown>>;
   /** The seeds every candidate shares: one base, from which each case and repetition takes its own (§6.5). */
   readonly sampling: { readonly seed: number };
-  readonly promotion: { readonly procedure: 'paired-cases@1'; readonly alpha: number; readonly permutations: number; readonly seed: number };
+  /** paired-cases@1 as it was measured; paired-cases@2 (SPEC-VALIDEZ-MEDIDA §4.1): every component blocks beyond its
+      tolerance or on a significant fall, and the manifest must be able to decide something. */
+  readonly promotion: { readonly procedure: PromotionProcedure; readonly alpha: number; readonly permutations: number; readonly seed: number };
+  /** Probe cases of development a search never selects on: the only ones a candidate that came out of a search is promoted
+      on (SPEC-VALIDEZ-MEDIDA §4.3). */
+  readonly holdout?: readonly string[];
   readonly limits: {
     /** An investigation's junior (its harness's --max-tokens and --max-judge-calls), and its args besides. */
     readonly junior_args: readonly string[];
@@ -134,8 +141,8 @@ export function competenceProblems(raw: unknown): string[] {
   if (!Number.isInteger(m.investigation_repetitions) || m.investigation_repetitions < 1) e.push('"investigation_repetitions": a whole number above 0');
   if (!m.sampling || !Number.isInteger(m.sampling.seed)) e.push('"sampling": {"seed": an integer}');
   const pr = m.promotion;
-  if (!pr || pr.procedure !== 'paired-cases@1' || !(pr.alpha > 0 && pr.alpha < 1) || !(Number.isInteger(pr.permutations) && pr.permutations >= 1000) || !Number.isInteger(pr.seed))
-    e.push('"promotion": {"procedure": "paired-cases@1", "alpha" in (0,1), "permutations" >= 1000, "seed"}');
+  if (!pr || !(PROMOTION_PROCEDURES as readonly string[]).includes(pr.procedure) || !(pr.alpha > 0 && pr.alpha < 1) || !(Number.isInteger(pr.permutations) && pr.permutations >= 1000) || !Number.isInteger(pr.seed))
+    e.push('"promotion": {"procedure": "paired-cases@1" or "paired-cases@2", "alpha" in (0,1), "permutations" >= 1000, "seed"}');
   const l = m.limits;
   if (!l || !Array.isArray(l.junior_args) || !(l.probe_max_tokens > 0) || !(l.timeout_ms > 0)) e.push('"limits": {"junior_args", "probe_max_tokens", "timeout_ms"}');
   else {
@@ -226,7 +233,90 @@ export function competenceProblems(raw: unknown): string[] {
     const counts = new Set(q.values());
     if (counts.size > 1) e.push('component ' + id + ': every world gives it as many probes (' + [...q].map(([lab, n]) => lab + ' ' + n).join(', ') + ')');
   }
+  if (m.holdout !== undefined) e.push(...holdoutProblems(m));
+  /* Under paired-cases@2 a manifest that can promote nothing on development is refused (SPEC-VALIDEZ-MEDIDA §4.2): its
+     evaluations would be spent on a verdict fixed before they ran. Under @1 the same lack is only told (competenceWarnings). */
+  if (!e.length && m.promotion.procedure === 'paired-cases@2') {
+    const power = powerOf(m, 'development');
+    if (power.length && !power.some((p) => p.can)) e.push('no component can be promoted with its cases (the least p of the sign-flip test is 2^-n, against alpha / ' + power.length + '): '
+      + power.map((p) => p.id + ': ' + p.n + ' cases, it needs ' + p.needs).join('; '));
+  }
   return e;
+}
+
+/** The holdout's problems: probe cases of development, each once; every probe component keeps cases to select on, and
+    each part gives every world as many probes. */
+function holdoutProblems(m: CompetenceManifest): string[] {
+  const e: string[] = [];
+  const h = m.holdout;
+  if (!Array.isArray(h)) return ['"holdout": the ids of probe cases a search never selects on'];
+  const probes = new Map(m.cases.filter((c): c is ProbeCase => c?.kind === 'probe').map((c) => [c.id, c]));
+  if (new Set(h).size !== h.length) e.push('"holdout": each case once');
+  for (const id of h) if (!probes.has(id)) e.push('"holdout": ' + id + ' is not a probe case of development');
+  if (e.length) return e;
+  const held = new Set(h);
+  for (const comp of m.components) {
+    const mine = [...probes.values()].filter((c) => c.component === comp.id);
+    if (!mine.length) continue;
+    const labs = new Set(mine.map((c) => c.lab)).size;
+    const parts = [['selection', mine.filter((c) => !held.has(c.id))], ['holdout', mine.filter((c) => held.has(c.id))]] as const;
+    if (!parts[0][1].length) e.push('"holdout": component ' + comp.id + ' keeps no probe case to select on');
+    for (const [name, part] of parts) {
+      const q = new Map<string, number>();
+      for (const c of part) q.set(c.lab, (q.get(c.lab) ?? 0) + 1);
+      if (part.length && (new Set(q.values()).size > 1 || q.size !== labs))
+        e.push('"holdout": component ' + comp.id + ': its ' + name + ' gives every world as many probes (' + [...q].map(([lab, n]) => lab + ' ' + n).join(', ') + ')');
+    }
+  }
+  return e;
+}
+
+/** Whether each component measured on a partition can ever be promoted (SPEC-VALIDEZ-MEDIDA §4.2): with n cases the
+    sign-flip test reaches at best p = 2^-n (exact up to 20 cases, 1 / (permutations + 1) beyond), and Holm asks the best
+    of K components for alpha / K. `needs`: the cases it would need. */
+export function powerOf(m: CompetenceManifest, partition: Partition): { id: string; n: number; min_p: number; threshold: number; can: boolean; needs: number }[] {
+  const counts = m.components.map((comp) => ({ id: comp.id, n: m.cases.filter((c) => c.partition === partition && (c.kind === 'investigation' ? c.components.includes(comp.id) : c.component === comp.id)).length }));
+  const measured = counts.filter((c) => c.n > 0);
+  const threshold = m.promotion.alpha / Math.max(1, measured.length);
+  const needs = Math.ceil(Math.log2(1 / threshold) - 1e-9);
+  return measured.map((c) => {
+    const min_p = minP(c.n, m.promotion.permutations);
+    return { id: c.id, n: c.n, min_p, threshold, can: min_p <= threshold, needs };
+  });
+}
+
+/** The least p the sign-flip test can give with n cases. */
+const minP = (n: number, permutations: number): number => (n <= 20 ? Math.pow(2, -n) : 1 / (permutations + 1));
+
+/** What does not stop a manifest from running but bounds what it can decide: the components that can never be promoted
+    with their cases, on development and on confirmation, and how many more each needs. */
+export function competenceWarnings(m: CompetenceManifest): string[] {
+  const out: string[] = [];
+  for (const partition of ['development', 'confirmation'] as const) {
+    for (const p of powerOf(m, partition)) if (!p.can)
+      out.push('component ' + p.id + ' (' + partition + '): with ' + p.n + ' cases it can never be promoted (least p ' + p.min_p + ' > ' + Math.round(p.threshold * 1e6) / 1e6 + '): it needs ' + p.needs + ', ' + (p.needs - p.n) + ' more');
+  }
+  return out;
+}
+
+/** The manifest a search selects on: its probes without the holdout, and the probe components they score. */
+export function selectionManifest(m: CompetenceManifest): CompetenceManifest {
+  const held = new Set(m.holdout ?? []);
+  const cases = m.cases.filter((c) => c.kind === 'probe' && !held.has(c.id));
+  const comps = new Set(cases.map((c) => (c as ProbeCase).component));
+  const { holdout: _held, ...rest } = m;
+  return { ...rest, id: m.id + '-probes', cases, components: m.components.filter((c) => c.rung <= 4 && comps.has(c.id)) };
+}
+
+/** The manifest a candidate of a search is promoted on: the holdout's cases alone and the components they score; null
+    without a holdout. */
+export function holdoutManifest(m: CompetenceManifest): CompetenceManifest | null {
+  if (!m.holdout?.length) return null;
+  const held = new Set(m.holdout);
+  const cases = m.cases.filter((c) => held.has(c.id));
+  const comps = new Set(cases.map((c) => (c as ProbeCase).component));
+  const { holdout: _held, ...rest } = m;
+  return { ...rest, id: m.id + '-holdout', cases, components: m.components.filter((c) => comps.has(c.id)) };
 }
 
 export const competenceHash = (m: CompetenceManifest): string => createHash('sha256').update(stableStringify(m)).digest('hex');
@@ -365,6 +455,9 @@ export interface PromotionComponent {
   readonly p: number | null;
   readonly improves: boolean;
   readonly regresses: boolean;
+  /** paired-cases@2: its cases, and the least p they can give - the best the verdict could have said. */
+  readonly n?: number;
+  readonly min_p?: number;
 }
 
 export interface Promotion {
@@ -373,12 +466,13 @@ export interface Promotion {
   readonly components: readonly PromotionComponent[];
 }
 
-/** paired-cases@1 (§6.5): per component the paired difference of deficits per case. A protected component worse beyond its
+/** paired-cases@1 and @2 (§6.5, SPEC-VALIDEZ-MEDIDA §4.1): per component the paired difference of deficits per case. A protected component worse beyond its
     tolerance: not_promoted. Otherwise, a component whose improvement holds under the sign-flip test with Holm's correction:
     promoted. Neither: inconclusive. Any evidence missing, on either side: inconclusive. It asks no model. */
 export function promote(m: CompetenceManifest, reference: Measure, candidate: Measure): Promotion {
   if (!reference.complete || !candidate.complete) return { verdict: 'inconclusive', why: 'the evidence is incomplete: ' + (!reference.complete ? 'the reference' : 'the candidate') + ' lacks measures', components: [] };
-  const rows: { id: string; delta: number; p: number; regresses: boolean }[] = [];
+  const v2 = m.promotion.procedure === 'paired-cases@2';
+  const rows: { id: string; delta: number; p: number; regresses: boolean; n: number }[] = [];
   for (const comp of m.components) {
     const r = reference.components.find((c) => c.id === comp.id)!, c = candidate.components.find((x) => x.id === comp.id)!;
     const ids = Object.keys(r.cases).sort();
@@ -386,7 +480,10 @@ export function promote(m: CompetenceManifest, reference: Measure, candidate: Me
     const d = ids.map((k) => (r.cases[k].deficit as number) - (c.cases[k].deficit as number));
     const delta = d.reduce((a, b) => a + b, 0) / d.length;
     const tol = comp.tolerance / Math.abs(comp.target - comp.bad);
-    rows.push({ id: comp.id, delta, p: signFlipP(d, m.promotion.permutations, m.promotion.seed), regresses: !!comp.protected && delta < -tol - 1e-12 });
+    /* @1: only a protected component blocks, by its mean. @2: every component blocks, by its mean beyond its tolerance or by
+       a fall the same test finds significant at the manifest's level (SPEC-VALIDEZ-MEDIDA §4.1). */
+    const regresses = v2 ? delta < -tol - 1e-12 || signFlipP(d.map((x) => -x), m.promotion.permutations, m.promotion.seed) <= m.promotion.alpha : !!comp.protected && delta < -tol - 1e-12;
+    rows.push({ id: comp.id, delta, p: signFlipP(d, m.promotion.permutations, m.promotion.seed), regresses, n: d.length });
   }
   /* Holm over the components: the smallest p first, each against alpha over the ones left. */
   const order = rows.map((r, i) => ({ i, p: r.delta > 0 ? r.p : 1 })).sort((a, b) => a.p - b.p);
@@ -394,10 +491,10 @@ export function promote(m: CompetenceManifest, reference: Measure, candidate: Me
   for (let k = 0; k < order.length; k++) {
     if (order[k].p <= m.promotion.alpha / (order.length - k)) improves.add(order[k].i); else break;
   }
-  const components = rows.map((r, i) => ({ id: r.id, mean_delta: r.delta, p: r.p, improves: improves.has(i), regresses: r.regresses }));
+  const components = rows.map((r, i) => ({ id: r.id, mean_delta: r.delta, p: r.p, improves: improves.has(i), regresses: r.regresses, ...(v2 ? { n: r.n, min_p: minP(r.n, m.promotion.permutations) } : {}) }));
   const regressed = components.filter((c) => c.regresses);
-  if (regressed.length) return { verdict: 'not_promoted', why: 'a protected component regresses beyond its tolerance: ' + regressed.map((c) => c.id).join(', '), components };
+  if (regressed.length) return { verdict: 'not_promoted', why: (v2 ? 'a component regresses beyond its tolerance or significantly: ' : 'a protected component regresses beyond its tolerance: ') + regressed.map((c) => c.id).join(', '), components };
   const better = components.filter((c) => c.improves);
-  if (better.length) return { verdict: 'promoted', why: 'it improves ' + better.map((c) => c.id).join(', ') + ' and no protected component regresses', components };
+  if (better.length) return { verdict: 'promoted', why: 'it improves ' + better.map((c) => c.id).join(', ') + (v2 ? ' and no component regresses' : ' and no protected component regresses'), components };
   return { verdict: 'inconclusive', why: 'no regression and no improvement that holds', components };
 }

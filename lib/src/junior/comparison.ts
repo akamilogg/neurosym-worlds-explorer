@@ -33,6 +33,9 @@ import { baseReader, compose, composeVersion, readEdit, readEditSet, readSafeten
  * ========================================================================== */
 
 export const CONDITIONS = ['A', 'B', 'C', 'D', 'E', 'F'] as const;
+/** How a rule's product was chosen: promoted on development (C's twins), on the holdout (a search's candidates), or the
+    best of N in selection (a search's candidates without a holdout: never called promoted). */
+export type Rule = 'development' | 'holdout' | 'best of N in selection';
 export type Condition = typeof CONDITIONS[number];
 
 export interface WeightComparison {
@@ -132,23 +135,26 @@ const readJsonl = (f: string): Record<string, any>[] => (fs.existsSync(f) ? fs.r
 /** The promotion rule of a condition without a researcher: its candidates in order, each evaluated and compared with the
     reference (paired-cases@1); the product the last one promoted, or the reference. Each candidate's package kept in
     <work>/packages/<execution>.json: what the operator exports for its external confirmation. */
-async function productByRule(world: World, work: string, candidates: readonly JuniorPackage[], deps: StepDeps): Promise<{ product: string; evaluation: Evaluation | null; package: string; checked: { candidate: string; verdict: string }[] }> {
+async function productByRule(world: World, work: string, candidates: readonly JuniorPackage[], deps: StepDeps, fromSearch = false): Promise<{ product: string; evaluation: Evaluation | null; package: string; checked: { candidate: string; verdict: string }[]; rule: Rule }> {
   const ev = deps.evaluate ?? ((w: World, p: JuniorPackage) => w.evaluatePackage(p));
-  const { promoteEvaluations } = await import('./evaluate.ts');
+  const { promoteEvaluations, promoteOnHoldout } = await import('./evaluate.ts');
+  /* Candidates that came out of a search were selected on the probes: promoted only on the holdout the search never saw;
+     without one the rule's product is the best of N in selection, and is called so - never promoted (SPEC-VALIDEZ-MEDIDA §4.3). */
+  const rule: Rule = !fromSearch ? 'development' : world.manifest.holdout?.length ? 'holdout' : 'best of N in selection';
   const keep = (p: JuniorPackage) => { const f = path.join(work, 'packages', executionHash(p) + '.json'); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(p, null, 2)); return f; };
   const ref = await ev(world, world.base);
   let product = executionHash(world.base), evaluation: Evaluation | null = typeof ref === 'string' ? null : ref, pkgFile = keep(world.base);
   const checked: { candidate: string; verdict: string }[] = [];
-  if (typeof ref === 'string') return { product, evaluation: null, package: pkgFile, checked };
+  if (typeof ref === 'string') return { product, evaluation: null, package: pkgFile, checked, rule };
   for (const p of candidates) {
     const id = executionHash(p);
     const e = await ev(world, p);
     if (typeof e === 'string') { checked.push({ candidate: id, verdict: 'not evaluated: ' + e }); if (/bags cannot hold/.test(e)) break; continue; }
-    const v = promoteEvaluations(world.manifest, world.manifestHash, ref, e);
-    checked.push({ candidate: id, verdict: v.verdict });
+    const v = rule === 'holdout' ? promoteOnHoldout(world.manifest, world.manifestHash, ref, e)! : promoteEvaluations(world.manifest, world.manifestHash, ref, e);
+    checked.push({ candidate: id, verdict: rule === 'best of N in selection' && v.verdict === 'promoted' ? 'best of N in selection' : v.verdict });
     if (v.verdict === 'promoted') { product = id; evaluation = e; pkgFile = keep(p); }
   }
-  return { product, evaluation, package: pkgFile, checked };
+  return { product, evaluation, package: pkgFile, checked, rule };
 }
 
 /** C: each of B's edited versions has a twin made from ITS IMMEDIATE PARENT - the package B edited, its prompt, memory and
@@ -242,9 +248,9 @@ export async function runControlSearch(m: WeightComparison, rep: number, deps: S
     if (!('problems' in v)) candidates.push(v.child);
   }
   /* In the order of their quality, the best last: the rule keeps the last promoted, so the best one promoted wins. */
-  const rule = await productByRule(world, work, candidates.reverse(), deps);
+  const rule = await productByRule(world, work, candidates.reverse(), deps, true);
   const out = { condition: 'E', state: (rule.evaluation ? 'ended' : 'interrupted') as Improvement['state'], product: rule.product, evaluation: rule.evaluation!, cost: spentOf(path.join(work, 'world', 'jobs.jsonl')),
-    checked: rule.checked, niches: r.elites.length, package: rule.package };
+    checked: rule.checked, niches: r.elites.length, package: rule.package, rule: rule.rule, candidates: candidates.length };
   fs.writeFileSync(result, JSON.stringify(out, null, 2));
   return out;
 }
@@ -286,6 +292,9 @@ export interface ComparisonReport {
   readonly h2: Readonly<Record<string, { runs: number; measured: number; probes_improved: number; worlds_improved: number; transferred: number; confirmed: number; confirmed_worlds: number }>>;
   readonly cost: Readonly<Record<string, Record<string, number>>>;
   readonly diversity: Readonly<Record<string, { searches: number; niches: number; from_new_material: number }>>;
+  /** C's and E's products, run by run: how the rule chose each - on development, on the holdout, or the best of N in
+      selection (E without a holdout: a product never to be read as promoted). */
+  readonly rules: Readonly<Record<string, readonly (Rule | null)[]>>;
 }
 
 /** The report from what the runs and steps left, without a model: every comparison computed again from the observations. */
@@ -331,7 +340,9 @@ export function comparisonReport(m: WeightComparison, o: { manifest: CompetenceM
     }
     diversity[c] = row;
   }
-  return { format: 'weight-comparison-report@1', id: m.id, h1: { B_vs_C: pairs('C', 'B'), D_vs_E: pairs('E', 'D') }, h2, cost, diversity };
+  const rules: Record<string, (Rule | null)[]> = {};
+  for (const c of conds.filter((x) => x === 'C' || x === 'E')) rules[c] = (runs.get(c) ?? []).map((r) => ((r as { rule?: Rule }).rule ?? (c === 'C' ? 'development' : null)));
+  return { format: 'weight-comparison-report@1', id: m.id, h1: { B_vs_C: pairs('C', 'B'), D_vs_E: pairs('E', 'D') }, h2, cost, diversity, rules };
 }
 
 function searchesOf(m: WeightComparison, c: Condition, rep: number): Record<string, any>[][] {
@@ -361,7 +372,9 @@ export function reportText(r: ComparisonReport): string {
     '| condition | runs | measured | probes improved | worlds improved | both | confirmed | confirmed in worlds |', '|---|---|---|---|---|---|---|---|',
     ...Object.entries(r.h2).map(([c, x]) => '| ' + [c, x.runs, x.measured, x.probes_improved, x.worlds_improved, x.transferred, x.confirmed, x.confirmed_worlds].join(' | ') + ' |'),
     '', '## Cost', ...Object.entries(r.cost).map(([c, x]) => '- ' + c + ': ' + (Object.entries(x).map(([k, v]) => k + ' ' + v).join(', ') || 'nothing')),
-    '', '## Diversity', ...Object.entries(r.diversity).map(([c, x]) => '- ' + c + ': ' + x.searches + ' searches, ' + x.niches + ' niches, ' + x.from_new_material + ' of their elites from perturb or reinit')];
+    '', '## Diversity', ...Object.entries(r.diversity).map(([c, x]) => '- ' + c + ': ' + x.searches + ' searches, ' + x.niches + ' niches, ' + x.from_new_material + ' of their elites from perturb or reinit'),
+    '', '## How the rule chose the products of C and E', ...Object.entries(r.rules ?? {}).map(([c, x]) => '- ' + c + ': ' + x.map((k) => k ?? 'not recorded').join(', ')
+      + (x.includes('best of N in selection') ? ' (a candidate chosen on the probes it was selected on: not promoted)' : ''))];
   return lines.join('\n') + '\n';
 }
 

@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { TrialLauncher } from '../meta/lab.ts';
 import type { LabConnection } from '../runtime/lab-runner.ts';
 import type { JuniorSessionClient } from './client.ts';
-import { competenceHash, competenceProblems, measure, promote, type CompetenceManifest, type Measure, type Observation, type Partition, type Promotion } from './competence.ts';
+import { competenceHash, competenceProblems, holdoutManifest, measure, promote, type CompetenceManifest, type Measure, type Observation, type Partition, type Promotion } from './competence.ts';
 import { executionHash, normalizePackage, type JuniorPackage } from './package.ts';
 import { captureCut, runProbes } from './probes.ts';
 import { juniorCandidate, juniorTrials } from './trials.ts';
@@ -68,12 +68,24 @@ export async function evaluate(o: {
   return e;
 }
 
-/** paired-cases@1 between two evaluations of the same manifest and partition; anything else is refused. */
-export function promoteEvaluations(m: CompetenceManifest, manifestHash: string, reference: Evaluation, candidate: Evaluation): Promotion {
+/** The promotion of a candidate that came out of a search (SPEC-VALIDEZ-MEDIDA §4.3): the same procedure between the same
+    evaluations, measured on the manifest's holdout alone - the cases the search never selected on. Null without a
+    holdout: such a candidate is the best of N in selection, never promoted. */
+export function promoteOnHoldout(m: CompetenceManifest, manifestHash: string, reference: Evaluation, candidate: Evaluation): Promotion | null {
+  const held = holdoutManifest(m);
+  if (!held) return null;
+  const checked = promoteEvaluations(m, manifestHash, reference, candidate, held);
+  return checked;
+}
+
+/** paired-cases between two evaluations of the same manifest and partition; anything else is refused. `on`: a part of the
+    manifest to measure them on (its holdout), the evaluations still those of `m`. */
+export function promoteEvaluations(m: CompetenceManifest, manifestHash: string, reference: Evaluation, candidate: Evaluation, on?: CompetenceManifest): Promotion {
   for (const [w, e] of [['reference', reference], ['candidate', candidate]] as const)
     if (e.manifest !== manifestHash) return { verdict: 'inconclusive', why: 'the ' + w + ' was measured under another manifest', components: [] };
   if (reference.partition !== candidate.partition) return { verdict: 'inconclusive', why: 'measured on different partitions', components: [] };
   if (reference.execution !== m.reference) return { verdict: 'inconclusive', why: 'the reference evaluated is not the manifest\'s reference junior', components: [] };
   /* The measure is rebuilt from the observations: what was recorded, not what an evaluation file says it computed. */
-  return promote(m, measure(m, reference.partition, reference.temperature, reference.observations), measure(m, candidate.partition, candidate.temperature, candidate.observations));
+  const by = on ?? m;
+  return promote(by, measure(by, reference.partition, reference.temperature, reference.observations), measure(by, candidate.partition, candidate.temperature, candidate.observations));
 }

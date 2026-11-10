@@ -100,3 +100,106 @@ test('paired-cases@1: a clear improvement, a protected regression another improv
   assert.equal(promote(m, ref, of([1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0])).verdict, 'inconclusive');
   assert.equal(promote(m, ref, measure(m, 'development', 0, [])).verdict, 'inconclusive');
 });
+
+/* ===== SPEC-VALIDEZ-MEDIDA, VM2: a promotion that lets nothing get worse, and a manifest that says whether it can decide ===== */
+
+/** Two probe components, `n` cases each, all of one world; paired-cases@2 unless said. */
+function powered(n: number, over: Partial<CompetenceManifest> = {}, procedure: 'paired-cases@1' | 'paired-cases@2' = 'paired-cases@2'): CompetenceManifest {
+  const probe = (id: string, component: string, checker: string) => ({ id, kind: 'probe' as const, partition: 'development' as const, group: 'g-' + id, component, lab: 'cells', mode: 'start' as const,
+    cut: { run: 'runs/cells.json', question: 1, hash: H }, competence: 'c', instruction: 'Do it.', checker: { id: checker, version: 1 } });
+  return {
+    format: 'junior-competence-manifest@1', id: 'vm2', reference: H,
+    components: [
+      { id: 'format', rung: 1, mode: 'start', extractor: { id: 'probe', version: 1 }, unit: 'share', direction: 'up', target: 1, bad: 0, tolerance: 0 },
+      { id: 'rules', rung: 3, mode: 'start', extractor: { id: 'probe', version: 1 }, unit: 'share', direction: 'up', target: 1, bad: 0, tolerance: 0 }
+    ],
+    cases: [...Array.from({ length: n }, (_, i) => probe('f' + i, 'format', 'protocol')), ...Array.from({ length: n }, (_, i) => probe('r' + i, 'rules', 'rules'))],
+    investigation_repetitions: 1, execution: { harness: 'test' }, sampling: { seed: 7 },
+    promotion: { procedure, alpha: 0.05, permutations: 10000, seed: 1 },
+    limits: { junior_args: ['--max-tokens', '100000', '--max-judge-calls', '50'], probe_max_tokens: 2000, timeout_ms: 600000 },
+    ...over
+  } as CompetenceManifest;
+}
+/** A measure of `powered`: each case of a component at the deficit given. */
+const at = (m: CompetenceManifest, f: number | number[], r: number | number[]) => measure(m, 'development', 0, m.cases.map((c, i) => {
+  const k = c as { component: string };
+  const v = k.component === 'format' ? f : r;
+  const d = Array.isArray(v) ? v[i % v.length] : v;
+  return obs(k.component, c.id, 1 - d);
+}));
+
+test('VM2: paired-cases@2 - a component that is not protected and gets worse beyond its tolerance is not_promoted; @1 keeps its verdict', () => {
+  const m2 = powered(8);
+  const p = promote(m2, at(m2, 1, 0), at(m2, 0, 1));
+  assert.equal(p.verdict, 'not_promoted', p.why);
+  assert.match(p.why, /rules/);
+  const m1 = powered(8, {}, 'paired-cases@1');
+  assert.equal(promote(m1, at(m1, 1, 0), at(m1, 0, 1)).verdict, 'promoted', '@1 reads as it read: only protected components block');
+});
+
+test('VM2: paired-cases@2 - a fall within the tolerance that the test finds significant also blocks; each component carries its power', () => {
+  const m = powered(8, { components: powered(8).components.map((c) => (c.id === 'rules' ? { ...c, tolerance: 0.5 } : c)) });
+  const p = promote(m, at(m, 1, 0), at(m, 0, 0.3));
+  assert.equal(p.verdict, 'not_promoted', 'eight cases of eight 0.3 worse: within its tolerance on the mean, significant by the test');
+  const rules = p.components.find((c) => c.id === 'rules')!;
+  assert.equal(rules.regresses, true);
+  assert.deepEqual([rules.n, rules.min_p], [8, 1 / 256]);
+  assert.equal(promote(m, at(m, 1, 0), at(m, 0, [0.3, 0, 0, 0])).verdict, 'promoted', 'two cases of eight worse: neither beyond its tolerance nor significant');
+});
+
+test('VM2: a manifest says whether it can decide - none of its components can improve: refused, saying how many cases each lacks; some cannot: accepted, warned', async () => {
+  const { competenceWarnings } = await import('../src/junior/competence.ts');
+  const weak = powered(3);
+  assert.ok(competenceProblems(weak).some((p) => /no component can be promoted/.test(p) && /format: 3 cases.*6/.test(p)), competenceProblems(weak).join('; '));
+  assert.deepEqual(competenceProblems(powered(6)), [], 'six cases: 2^-6 is under 0.05 / 2');
+  const mixed = powered(6, { cases: [...powered(6).cases.filter((c) => (c as { component: string }).component === 'format'), ...powered(2).cases.filter((c) => (c as { component: string }).component === 'rules')] });
+  assert.deepEqual(competenceProblems(mixed), []);
+  assert.ok(competenceWarnings(mixed).some((w) => /rules/.test(w) && /2 cases/.test(w) && /4 more/.test(w)), competenceWarnings(mixed).join('; '));
+  assert.ok(competenceWarnings(powered(3, {}, 'paired-cases@1')).length, 'under @1 the same lack is told, never refused');
+  assert.deepEqual(competenceProblems(powered(3, {}, 'paired-cases@1')), []);
+});
+
+test('VM2: the confirmation service refuses a paired-cases@2 manifest whose reserved cases can decide nothing', async () => {
+  const { ConfirmationService } = await import('../src/junior/confirm.ts');
+  const os = await import('node:os'), fs = await import('node:fs'), path = await import('node:path');
+  const inv = (id: string, partition: 'development' | 'confirmation') => ({ id, kind: 'investigation' as const, lab: 'cells', args: ['--seed', id], partition, group: 'g-' + id, components: ['cells-L1'] });
+  const base = manifest({ promotion: { procedure: 'paired-cases@2' as never, alpha: 0.05, permutations: 10000, seed: 1 } });
+  const confirming = { ...base, components: [base.components[1]], cases: [...Array.from({ length: 6 }, (_, i) => inv('d' + i, 'development')), inv('c1', 'confirmation'), inv('c2', 'confirmation')] };
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vm2-confirm-'));
+  assert.throws(() => new ConfirmationService({ root, manifest: confirming, client: {} as never, launcher: {} as never }), /confirmation.*cannot be promoted|can decide nothing/);
+  const enough = { ...confirming, cases: [...confirming.cases, ...Array.from({ length: 4 }, (_, i) => inv('c' + (i + 3), 'confirmation'))] };
+  assert.doesNotThrow(() => new ConfirmationService({ root, manifest: enough, client: {} as never, launcher: {} as never }));
+});
+
+test('VM2: the holdout - probe cases a search never selects on, and the only ones a candidate of a search is promoted on', async () => {
+  const { selectionManifest, holdoutManifest } = await import('../src/junior/competence.ts');
+  const m = powered(8, { holdout: ['f6', 'f7', 'r6', 'r7'] });
+  assert.deepEqual(competenceProblems(m), []);
+  assert.ok(competenceProblems(powered(8, { holdout: ['nowhere'] })).some((p) => /holdout/.test(p)));
+  assert.ok(competenceProblems(powered(8, { holdout: ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7'] })).some((p) => /holdout/.test(p) && /format/.test(p)), 'a component keeps cases to select on');
+  const sel = selectionManifest(m);
+  assert.deepEqual(sel.cases.map((c) => c.id).filter((id) => /[67]$/.test(id)), [], 'a search selects on none of them');
+  const hold = holdoutManifest(m)!;
+  assert.deepEqual(hold.cases.map((c) => c.id).sort(), ['f6', 'f7', 'r6', 'r7']);
+  assert.equal(holdoutManifest(powered(8)), null, 'without a holdout there is none');
+});
+
+test('VM2: a candidate of a search is promoted on the holdout alone - a gain on the cases it was selected on is not one', async () => {
+  const { promoteEvaluations, promoteOnHoldout } = await import('../src/junior/evaluate.ts');
+  const { competenceHash } = await import('../src/junior/competence.ts');
+  const m = powered(8, { holdout: ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'r6', 'r7'] });
+  const hash = competenceHash(m);
+  const ev = (execution: string, better: (id: string) => boolean) => ({ format: 'junior-evaluation@1' as const, manifest: hash, execution, partition: 'development' as const, temperature: 0,
+    observations: m.cases.map((c) => obs((c as { component: string }).component, c.id, better(c.id) ? 1 : 0)), measure: null as never });
+  const reference = ev(H, () => false);
+  /* Better on format's cases f6 and f7 - the ones a search selected on - and nowhere else. */
+  const selected = ev('b'.repeat(64), (id) => id === 'f6' || id === 'f7');
+  assert.equal(promoteOnHoldout(powered(8), hash, reference, selected), null, 'without a holdout there is no promotion of a search\'s candidate');
+  assert.notEqual(promoteOnHoldout(m, hash, reference, selected)!.verdict, 'promoted', 'nothing gained on the holdout');
+  /* Better on every format case, the holdout's among them. */
+  const real = ev('c'.repeat(64), (id) => id.startsWith('f'));
+  const p = promoteOnHoldout(m, hash, reference, real)!;
+  assert.equal(p.verdict, 'promoted', p.why);
+  assert.deepEqual(p.components.map((c) => [c.id, c.n]), [['format', 6], ['rules', 2]], 'measured on the holdout\'s cases');
+  assert.equal(promoteEvaluations(m, hash, reference, real).components.find((c) => c.id === 'format')!.n, 8, 'the same evaluations on all of development');
+});

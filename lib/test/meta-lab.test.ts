@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { indexCorpus, independent, partition } from '../src/meta/corpus.ts';
 import { Trials, inProcessLauncher, manifestProblems, measureOf, policyEvaluator, qualityOf, trialResult, verifyTrials, type MetaManifest, type TrialLauncher } from '../src/meta/lab.ts';
 import { inspectHistory } from '../src/meta/inspect.ts';
@@ -145,7 +146,7 @@ test('M2: trials recorded before dispatch, finished once, never run twice; a cra
 
 test('M2: the fixed evaluator - per kind of world, the share not solved; a policy\'s own error is its; infrastructure measures nothing', () => {
   const r = (kind: string, solved: boolean | null, state: 'ended' | 'infra' | 'cancelled' = 'ended', errors = 0) => ({ kind, result: { state, solved, stopped_by: null, policy_errors: errors, advice: 0, tokens: null } });
-  assert.deepEqual(qualityOf([r('cells', true), r('cells', false), r('orbit', true)]), { kinds: ['cells', 'orbit'], quality: [0.5, 0], correct: true, infra: 0, trials: 3 });
+  assert.deepEqual(qualityOf([r('cells', true), r('cells', false), r('orbit', true)]), { kinds: ['cells', 'orbit'], quality: [0.5, 0], correct: true, infra: 0, infra_indeterminate: 0, trials: 3 });
   assert.deepEqual(qualityOf([r('cells', null, 'infra'), r('orbit', true)]).quality, [null, 0], 'a kind with nothing that could say has no component');
   assert.equal(qualityOf([r('cells', true, 'ended', 1)]).correct, false);
 });
@@ -444,7 +445,7 @@ test('M2 pilot: a trial its providers failed measures nothing - the Judge unansw
   assert.deepEqual([judge.state, judge.solved], ['infra', null], 'a check without the Judge\'s answers is no verdict');
   assert.match(String(judge.why), /3 call\(s\) of the Judge failed/);
   const llm = trialResult(at('llm', [{ type: 'proposal_failed', round: 1, error: 'HTTP 429 Too Many Requests' }, check, { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 0 } }]), 'model_accepted');
-  assert.match(String(llm.why), /1 proposal\(s\) System 2 never answered/);
+  assert.match(String(llm.why), /1 proposal\(s\) the service failed to answer/);
   assert.equal(trialResult(at('fatal', [{ type: 'end', stoppedBy: 'llm_error' }]), 'model_accepted').state, 'infra');
 });
 
@@ -454,4 +455,161 @@ test('M2 pilot: the situated policy does not take its first question for one in 
   const r = await inspectHistory({ policy: p }, { experiment: 'cells@1', started: 'x', events: [{ type: 'exploration_episode', episode: 'ep1' }, { type: 'investigation', round: 0, requests: [{ view: 'ep1' }] }] }, never, runner);
   assert.ok(r.decisions.length > 0);
   assert.ok(r.decisions.every((d) => !/advised already/.test(JSON.stringify(d.guidance ?? ''))), JSON.stringify(r.decisions.map((d) => d.guidance)));
+});
+
+/* ===== SPEC-VALIDEZ-MEDIDA, VM1: the trial evaluator rewards nothing that fell ===== */
+
+test('VM1: a candidate whose trials fell has no quality - one solved and nine infra is not a measure', () => {
+  const t = (state: 'ended' | 'infra', solved: boolean | null) => ({ kind: 'grid', result: { state, solved, stopped_by: null, policy_errors: 0, advice: 0, tokens: null } });
+  const survivor = measureOf([t('ended', true), ...Array.from({ length: 9 }, () => t('infra', null))], 10);
+  assert.deepEqual([survivor.complete, survivor.correct, survivor.quality], [false, 'unchecked', null], 'the trials that fell are not left out of the denominator');
+  const honest = measureOf([...Array.from({ length: 5 }, () => t('ended', true)), ...Array.from({ length: 5 }, () => t('ended', false))], 10);
+  assert.deepEqual([honest.complete, honest.quality], [true, [0.5]]);
+});
+
+test('VM1: three causes - a timeout while the service answered is the candidate\'s; a provider\'s failure is infra; what cannot be told is infra apart', () => {
+  const dir = tmp('meta-causes-');
+  const at = (name: string, events: unknown[]) => { const f = path.join(dir, name + '.json'); write(f, { experiment: 'cells@1', config: {}, events }); return f; };
+  const check = { type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false }] };
+  const end = (answers: number) => ({ type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 0 }, console_usage: { llm_tokens_live: 10, llm_answers: answers } });
+  const timeout = { type: 'proposal_failed', round: 2, error: 'Request aborted after 180000 ms.', kind: 'timeout', waited_ms: 180000, request_chars: 90000 };
+  const own = trialResult(at('own', [check, timeout, end(4)]), 'model_accepted');
+  assert.deepEqual([own.state, own.solved], ['ended', false], 'the junior did not answer in its time while the service answered it: a trial ended and not solved');
+  const unknown = trialResult(at('unknown', [timeout, end(0)]), 'model_accepted');
+  assert.deepEqual([unknown.state, unknown.cause], ['infra', 'indeterminate'], 'a timeout with no answer at all cannot be told: infra, counted apart');
+  const provider = trialResult(at('provider', [check, { type: 'proposal_failed', round: 2, error: 'HTTP 503', kind: 'http', status: 503, waited_ms: 20, request_chars: 900 }, end(4)]), 'model_accepted');
+  assert.deepEqual([provider.state, provider.cause], ['infra', 'provider']);
+  const both = trialResult(at('both', [check, timeout, { type: 'proposal_failed', round: 3, error: 'HTTP 429', kind: 'http', status: 429 }, end(4)]), 'model_accepted');
+  assert.deepEqual([both.state, both.cause], ['infra', 'provider'], 'a provider\'s failure in it: it measures nothing, whatever else failed');
+  const judge = trialResult(at('judge', [check, { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 3 } }]), 'model_accepted');
+  assert.deepEqual([judge.state, judge.cause], ['infra', 'provider']);
+  /* A record written before these fields: its error's words alone. */
+  const old429 = trialResult(at('old429', [{ type: 'proposal_failed', round: 1, error: 'HTTP 429 Too Many Requests' }, check, { type: 'end', stoppedBy: 'budget' }]), 'model_accepted');
+  assert.deepEqual([old429.state, old429.cause], ['infra', 'provider']);
+  const oldTimeout = trialResult(at('oldtimeout', [{ type: 'proposal_failed', round: 1, error: 'Request aborted after 180000 ms.' }, check, { type: 'end', stoppedBy: 'budget' }]), 'model_accepted');
+  assert.deepEqual([oldTimeout.state, oldTimeout.cause], ['infra', 'indeterminate']);
+  const q = qualityOf([{ kind: 'k', result: unknown }, { kind: 'k', result: provider }, { kind: 'k', result: own }]);
+  assert.deepEqual([q.infra, q.infra_indeterminate], [2, 1]);
+});
+
+test('VM1: the runner records what attributes a failure of System 2 - its kind, status, wait and size - and the answers it had', async () => {
+  const { runLaboratory } = await import('../src/runtime/lab-runner.ts');
+  const { cellsLab } = await import('../src/worlds/cells/lab.ts');
+  const dir = tmp('meta-attribute-');
+  let failing = 2;
+  const flaky: FetchLike = async (url, init) => {
+    if (url.startsWith('http://system2.test') && failing > 0) { failing--; return { ok: false, status: 503, statusText: 'Unavailable', text: async () => 'busy', headers: { get: () => null } }; }
+    return judged(url, init);
+  };
+  const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '1', '--researcher', 'assisted', '--out', path.join(dir, 'a.json')],
+    root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: flaky, print: () => {} });
+  const j = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  const failed = j.events.find((e: any) => e.type === 'proposal_failed');
+  assert.ok(failed, 'the first request failed');
+  assert.deepEqual([failed.kind, failed.status], ['http', 503]);
+  assert.ok(Number.isFinite(failed.waited_ms) && failed.request_chars > 0, JSON.stringify(failed));
+  const end = j.events.filter((e: any) => e.type === 'end').at(-1);
+  assert.ok(end.console_usage.llm_answers >= 1, JSON.stringify(end.console_usage));
+});
+
+/** Trials standing in whose first `providerFails` launches end with the Judge failing; later ones end well. */
+function providerLauncher(calls: any[], providerFails: number): TrialLauncher {
+  return { identity: { llm_model: 'stand-in' }, async run(t) {
+    calls.push(t);
+    const failing = calls.length <= providerFails;
+    write(t.out, { experiment: 'cells@1', started: 'x', config: { llm_model: 'stand-in' }, events: [{ type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: true }] },
+      { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: failing ? 2 : 0 }, replay: { live: { jev: 9 } }, console_usage: { llm_tokens_live: 50 } }] });
+    if (!failing) write(t.out.replace(/\.json$/, '.finding.json'), { outcome: { status: 'accepted' } });
+    return { journal: t.out };
+  } };
+}
+
+test('VM1: a trial whose run ended under a provider\'s failure is tried again under another record, each attempt reserved; never resumed', async () => {
+  const one = manifest({ cases: [manifest().cases[0]] });
+  const dir = tmp('meta-retry-'), calls: any[] = [];
+  const trials = new Trials(dir, one, providerLauncher(calls, 1));
+  const [r] = await trials.run(policy('plain'), 'development');
+  assert.deepEqual([r.result.state, r.result.solved], ['ended', true], 'its second attempt measured it');
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((c) => !c.resume), 'a run that ended is not resumed: there is nothing to resume');
+  assert.match(calls[1].out, /\.a1\.json$/);
+  assert.ok(fs.existsSync(calls[0].out), 'the attempt that fell is kept');
+  const ledger = trials.ledger();
+  assert.equal(ledger.filter((e) => e.type === 'research_trial_reserved').length, 2, 'each attempt reserved');
+  assert.equal(ledger.filter((e) => e.type === 'research_trial_settled').length, 2, 'and settled');
+  assert.equal((await verifyTrials(dir, one, runner)).holds, true);
+  /* Retries spent: the trial stays infra, and asking again launches nothing. */
+  const spent = tmp('meta-retry-spent-'), sc: any[] = [];
+  const t2 = new Trials(spent, { ...one, infra_retries: 1 }, providerLauncher(sc, 9));
+  const [s] = await t2.run(policy('plain'), 'development');
+  assert.equal(s.result.state, 'infra');
+  assert.equal(sc.length, 2, 'its first launch and one retry');
+  await t2.run(policy('plain'), 'development');
+  assert.equal(sc.length, 2, 'retries spent: nothing launched, nothing reserved again');
+  assert.equal(t2.ledger().filter((e) => e.type === 'research_trial_reserved').length, 2);
+  assert.ok(manifestProblems({ ...one, infra_retries: -1 }).length);
+});
+
+test('VM1: identities by SHA-256 - a trial\'s id and a policy\'s file; a file of other content under a policy\'s name is an error, never served', async () => {
+  const dir = tmp('meta-identity-'), calls: any[] = [];
+  const trials = new Trials(dir, manifest(), fakeLauncher(dir, calls));
+  const ran = await trials.run(policy('contrast'), 'development');
+  assert.match(ran[0].trial, /^t-[0-9a-f]{24}$/);
+  const files = fs.readdirSync(path.join(dir, 'policies'));
+  assert.equal(files.length, 1);
+  assert.match(files[0], /^[0-9a-f]{24}\.json$/);
+  fs.writeFileSync(path.join(dir, 'policies', files[0]), JSON.stringify({ policy: policy('another') }));
+  await assert.rejects(() => trials.run(policy('contrast'), 'development'), /other content/);
+});
+
+test('VM1: one world and realization in two partitions is refused; the corpus joins runs that read another\'s experience and a team\'s members', () => {
+  const twice = manifest({ cases: [...manifest().cases, { id: 'cells-again', lab: 'cells', args: ['--seed', '1'], partition: 'confirmation', criterion: 'model_accepted' }] });
+  assert.ok(manifestProblems(twice).some((p) => /cells-a.*cells-again|cells-again.*cells-a/.test(p)), manifestProblems(twice).join('; '));
+  const root = tmp('meta-lineages-');
+  const runs = path.join(root, 'runs');
+  const end = { type: 'end', stoppedBy: 'budget' };
+  write(path.join(runs, 'a.json'), { experiment: 'cells@1', started: '1', config: { seed: 1 }, events: [end] });
+  const aSha = createHash('sha256').update(fs.readFileSync(path.join(runs, 'a.json'), 'utf8')).digest('hex');
+  write(path.join(runs, 'b.json'), { experiment: 'orbit@1', started: '2', config: { seed: 1 }, events: [{ type: 'experience', mode: 'transfer', runs: [{ label: 'exp1', file: 'runs/a.json', sha256: aSha }] }, end] });
+  write(path.join(runs, 'm1.json'), { experiment: 'cells@1', started: '3', config: { seed: 2 }, events: [{ type: 'team', id: 'team-x', member: 'm1' }, end] });
+  write(path.join(runs, 'm2.json'), { experiment: 'cells@1', started: '4', config: { seed: 2 }, events: [{ type: 'team', id: 'team-x', member: 'm2' }, end] });
+  write(path.join(runs, 'c.json'), { experiment: 'cells@1', started: '5', config: { seed: 3 }, events: [end] });
+  const index = indexCorpus(runs);
+  assert.throws(() => partition(index, { a: 'experience', b: 'development' }), /one lineage/, 'a run that read another\'s experience is not independent of it');
+  assert.throws(() => partition(index, { m1: 'development', m2: 'confirmation' }), /one lineage/, 'nor are a team\'s members');
+  assert.equal(independent(index, ['a', 'b', 'm1', 'm2', 'c']), 3);
+});
+
+test('VM1: the share of infra goes with the evaluation; verify reads a ledger whose last line was cut', async () => {
+  const dir = tmp('meta-infra-rate-'), calls: any[] = [];
+  const one = manifest({ cases: [manifest().cases[0]], infra_retries: 0 });
+  const trials = new Trials(dir, one, providerLauncher(calls, 9));
+  const e = await policyEvaluator(trials, policy('plain')).evaluate(policyHash(policy('plain')));
+  assert.equal(e.quality, null);
+  assert.deepEqual([(e.feedback as any).infra, (e.feedback as any).infra_rate], [1, 1]);
+  fs.appendFileSync(path.join(dir, 'trials.jsonl'), '{"type":"research_trial_req');
+  const v = await verifyTrials(dir, one, runner);
+  assert.equal(v.trials, 1, v.problems.join('; '));
+});
+
+test('VM1: a ledger begun before SHA-256 keeps its trials under their ids - continued, never begun again; verified by the rule it was made under', async () => {
+  const { hashString, stableStringify } = await import('../src/core/hash.ts');
+  const one = manifest({ cases: [manifest().cases[0]] });
+  const dir = tmp('meta-legacy-'), calls: any[] = [];
+  const identity = { llm_model: 'stand-in' };
+  const legacyConfig = hashString(stableStringify({ policy: policy('contrast') }));
+  const legacy = 't-' + hashString(stableStringify([hashString(stableStringify(one)), 'cells-a', 0, legacyConfig, identity]));
+  fs.mkdirSync(path.join(dir, 'trials'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'trials.jsonl'), JSON.stringify({ type: 'research_trial_requested', trial: legacy, case: 'cells-a', rep: 0, policy: 'p', config: legacyConfig,
+    manifest: hashString(stableStringify(one)), identity, lab: 'cells', args: [...one.cases[0].args, ...one.junior.args], out: 'trials/' + legacy + '.json' }) + '\n');
+  write(path.join(dir, 'trials', legacy + '.json'), { experiment: 'cells@1', started: 'x', config: { llm_model: 'stand-in' },
+    events: [{ type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: true }] }, { type: 'end', stoppedBy: 'budget' }] });
+  write(path.join(dir, 'trials', legacy + '.finding.json'), { outcome: { status: 'accepted' } });
+  const trials = new Trials(dir, one, fakeLauncher(dir, calls, { identity }));
+  const [r] = await trials.run(policy('contrast'), 'development');
+  assert.equal(r.trial, legacy, 'the trial it began, under its id');
+  assert.equal(calls.length, 0, 'its record had ended: read, never run again');
+  assert.deepEqual([r.result.state, r.result.solved], ['ended', true]);
+  const v = await verifyTrials(dir, one, runner);
+  assert.equal(v.holds, true, v.problems.join('; '));
 });

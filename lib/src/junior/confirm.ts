@@ -5,7 +5,7 @@ import { stableStringify } from '../core/hash.ts';
 import type { TrialLauncher } from '../meta/lab.ts';
 import type { LabConnection } from '../runtime/lab-runner.ts';
 import type { JuniorSessionClient } from './client.ts';
-import { competenceHash, competenceProblems, type CompetenceManifest } from './competence.ts';
+import { competenceHash, competenceProblems, powerOf, type CompetenceManifest } from './competence.ts';
 import { evaluate, promoteEvaluations, type Evaluation } from './evaluate.ts';
 import { appendRecord } from './jsonl.ts';
 import { BlobStore, checkClosed, executionHash, normalizePackage, treesOf, type JuniorPackage } from './package.ts';
@@ -90,6 +90,13 @@ export class ConfirmationService {
     if (!o.manifest.cases.some((c) => c.partition === 'confirmation')) throw new Error('the confirmation manifest has no confirmation case');
     for (const comp of o.manifest.components) if (!o.manifest.cases.some((c) => c.partition === 'confirmation' && c.kind === 'investigation' && c.components.includes(comp.id)))
       throw new Error('component ' + comp.id + ' has no confirmation case: a confirmation measures only what it can measure');
+    /* Its reserved cases must be able to decide something (SPEC-VALIDEZ-MEDIDA §4.2): under paired-cases@2 a confirmation
+       whose every component lacks the cases to be promoted is refused before any case is exposed. */
+    if (o.manifest.promotion.procedure === 'paired-cases@2') {
+      const power = powerOf(o.manifest, 'confirmation');
+      if (!power.some((p) => p.can)) throw new Error('the confirmation manifest can decide nothing: no component can be promoted with its reserved cases ('
+        + power.map((p) => p.id + ': ' + p.n + ' cases, it needs ' + p.needs).join('; ') + ')');
+    }
     this.root = o.root;
     this.manifest = o.manifest;
     this.manifestHash = competenceHash(o.manifest);

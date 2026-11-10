@@ -712,6 +712,7 @@ var Neurosym = (() => {
     recordTurn: () => recordTurn,
     reflectionWindow: () => reflectionWindow,
     replayOnEvidence: () => replayOnEvidence,
+    requestFailure: () => requestFailure,
     reviseBelief: () => reviseBelief,
     revisionsByState: () => revisionsByState,
     round: () => round,
@@ -2901,6 +2902,17 @@ var Neurosym = (() => {
       delete body.max_tokens;
     }
     return body;
+  }
+  function requestFailure(error, startedMs, request) {
+    const e = error;
+    const status = e?.details?.status;
+    return {
+      error: String(error?.message || error),
+      ...typeof e?.kind === "string" ? { kind: e.kind } : {},
+      ...typeof status === "number" ? { status } : {},
+      waited_ms: Math.max(0, Date.now() - startedMs),
+      request_chars: (request.system?.length ?? 0) + JSON.stringify(request.user ?? "").length
+    };
   }
   function openAiChatClient(options) {
     const read = typeof options === "function" ? options : () => options;

@@ -11,9 +11,10 @@ import { runResults } from '../orchestra/results.ts';
  * budget, where it came from and what it reached, and whether its record is enough to read it, rebuild it or run it
  * again. Records are experience, not labels of the right decision nor counterfactual experiments.
  *
- * A LINEAGE is a run with everything derived from it - its continuations, its branches, runs given its experience are
- * not: they read it, they are not it. A lineage is never split between experience and evaluation as if its pieces were
- * independent investigations: `partition` assigns whole lineages, and refuses a split.
+ * A LINEAGE is a run with everything derived from it or bound to it - its continuations, its branches, the runs that read
+ * its experience, and the members of a team that shared a board (SPEC-VALIDEZ-MEDIDA §3.4): none of them is an
+ * investigation independent of the others. A lineage is never split between experience and evaluation as if its pieces
+ * were: `partition` assigns whole lineages, and refuses a split.
  * ========================================================================== */
 
 type J = Record<string, any>;
@@ -92,12 +93,27 @@ export function indexCorpus(runsDir: string): CorpusIndex {
   };
   const parent = new Map<string, string | null>();
   for (const [id, { file, j }] of read) parent.set(id, continuesOf(id, file, j) ?? branchOf(file));
-  const rootOf = (id: string, seen = new Set<string>()): string => {
+  const derivedRoot = (id: string, seen = new Set<string>()): string => {
     const p = parent.get(id);
     if (!p || seen.has(p)) return id;
     seen.add(id);
-    return rootOf(p, seen);
+    return derivedRoot(p, seen);
   };
+  /* Bound runs join their lineages: a run that read another's experience (named by the hash of the file it read), and the
+     members of one team. The lineage is named by the first of its roots. */
+  const joined = new Map<string, string>();
+  const find = (x: string): string => { const p = joined.get(x); if (!p || p === x) return x; const r = find(p); joined.set(x, r); return r; };
+  const join = (a: string, b: string): void => { const [x, y] = [find(a), find(b)].sort(); if (x !== y) joined.set(y, x); };
+  const bySha = new Map<string, string>();
+  for (const [id, { text }] of read) bySha.set(createHash('sha256').update(text).digest('hex'), id);
+  const teams = new Map<string, string>();
+  for (const [id, { j }] of read) {
+    for (const e of j.events as J[]) {
+      if (e.type === 'experience') for (const r of (e.runs ?? []) as J[]) { const other = bySha.get(String(r.sha256)); if (other && other !== id) join(derivedRoot(id), derivedRoot(other)); }
+      if (e.type === 'team' && typeof e.id === 'string') { const first = teams.get(e.id); if (first) join(derivedRoot(id), derivedRoot(first)); else teams.set(e.id, id); }
+    }
+  }
+  const rootOf = (id: string): string => find(derivedRoot(id));
   const entries: CorpusEntry[] = [];
   for (const [id, { file, text, j }] of read) {
     const c = (j.config ?? {}) as J;

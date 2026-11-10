@@ -76,3 +76,14 @@ test('a junior package runs a real laboratory as System 2 through its session; i
     assert.equal(calls.n, asked);
   } finally { server.stop(); await h.close(); }
 });
+
+test('VM1: a junior\'s new attempt starts with no state of the one that fell; only a resumption continues its session', async () => {
+  const opened: any[] = [];
+  const client = { url: 'http://junior.test', info: async (sid: string) => { if (!opened.some((o) => o.session_id === sid)) throw new Error('none'); return {}; }, open: async (o: any) => { opened.push(o); return {}; } };
+  const candidate = juniorCandidate({ pkg: { decoding: { temperature: 0 } } as any, execution: 'e1', client: client as any });
+  await candidate.connect!({ trial: 't-x', launch: 't-x#0' });
+  await candidate.connect!({ trial: 't-x', launch: 't-x#1' });
+  assert.equal(opened[1].continues, undefined, 'a new attempt, or a launch after one that made no record: a session of its own');
+  await candidate.connect!({ trial: 't-x', launch: 't-x#2', resume: 'trials/t-x.a1.json' });
+  assert.deepEqual(opened[2].continues, { session_id: 't-x.L1' }, 'a resumption continues the session before it');
+});

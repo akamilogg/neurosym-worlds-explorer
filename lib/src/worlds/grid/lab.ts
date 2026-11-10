@@ -47,7 +47,7 @@ import { OwnTests, ownTestsSection, type OwnTestsWords } from '../../learn/assis
 import { capabilityAt, roundsAt } from '../../learn/lab.ts';
 import { Instruments, instrumentsSection, parseInstruments } from '../../learn/assisted/instruments.ts';
 import { PINS_SECTION, applyPins, parsePins } from '../../learn/assisted/channel.ts';
-import { RoundConversation } from '../../learn/system2.ts';
+import { RoundConversation, requestFailure } from '../../learn/system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
 const MAX_CONSOLIDATIONS = 2;
@@ -1041,6 +1041,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       say('round ' + round + (steps ? ' step ' + steps : '') + ': consulting System 2 (' + Math.round(JSON.stringify(payload).length / 1024) + ' KB)');
       steps++;
       let content = '';
+      const asked = Date.now();
       try {
         content = (await llm.complete({ system: systemPrompt(), user: payload })).content;
       } catch (error) {
@@ -1052,7 +1053,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
           return null;
         }
         refusals++;
-        log('proposal_failed', { round, error: String((error as Error)?.message || error) });
+        log('proposal_failed', { round, ...requestFailure(error, asked, { system: systemPrompt(), user: payload }) });
         continue;
       }
       const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience || peers || (ownTests && reviewing) ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });

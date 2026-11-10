@@ -1,6 +1,7 @@
 # SPEC · Validez de la medida: lo que juzga a un candidato no puede dejarse engañar
 
-Estado (10/11/2026): **propuesta, sin implementar**. Sale de la lectura a fondo del código del
+Estado (10/11/2026): **VM1 y VM2 implementadas** (el evaluador de ensayos y la promoción, §11); VM3 a VM6 propuestas,
+sin implementar. Sale de la lectura a fondo del código del
 [repaso del repositorio](REPASO-2026-11-10.md) (§4.3, hallazgos V1 a V19). Corrige el evaluador del
 [metalaboratorio](SPEC-METAPOLITICA-INVESTIGACION.md), la promoción y la confirmación del junior
 ([SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) §6.5, §9, y [SPEC-EDICION-PESOS](SPEC-EDICION-PESOS.md)
@@ -231,6 +232,64 @@ declarado. Con menos de 3 pares sigue sin concluir. La regla escrita en el infor
 **Orden.** VM1 antes del piloto de la metapolítica. VM2 y VM4 antes de la línea base de la fase A. VM3 antes de
 etiquetar la muestra de la auditoría, porque cambia lo que se juzga. VM5 antes de repetir los hallazgos del README.
 VM6 cuando toque.
+
+**VM1, hecha (10/11/2026):**
+
+- **Dónde está.** `lib/src/meta/lab.ts`: `measureOf` da una evaluación completa sólo si todos sus ensayos acabaron
+  `ended`; `trialResult` dice la causa de un `infra` (`cause`: `provider`, `harness` o `indeterminate`); los reintentos
+  (`infra_retries` en el manifiesto, 2 por defecto) lanzan un intento nuevo `<id>.a<k>.json` con su reserva y su evento
+  `research_trial_retried`, conservando el que cayó; ids, hash del manifiesto y ficheros de política por SHA-256 (24
+  hexadecimales en nombres); `manifestProblems` rechaza el mismo mundo y realización en dos particiones; la evaluación
+  lleva `infra`, `infra_indeterminate` e `infra_rate`; `verifyTrials` lee un libro con la última línea cortada.
+  `lib/src/meta/corpus.ts`: un run que leyó la experiencia de otro (por el SHA-256 del fichero leído) y los miembros de
+  un equipo son un linaje.
+- **Lo que registra el runner.** `requestFailure` (`lib/src/learn/system2.ts`) da a cada `proposal_failed` su `kind`,
+  `status`, `waited_ms` y `request_chars`, en `law-session.ts` y en el mundo `grid`. `console_usage.llm_answers` del
+  evento `end` cuenta las respuestas de System 2 del run: un timeout con respuestas en el run es del candidato; sin
+  ninguna, indeterminado.
+- **El junior de un intento nuevo empieza sin estado.** `juniorCandidate` (`lib/src/junior/trials.ts`) continuaba la
+  sesión del lanzamiento anterior siempre que existiera; ahora sólo cuando se reanuda un registro. Sin eso, un reintento
+  heredaba la memoria del junior del intento que cayó.
+- **Una causa más que en §3.1.** `harness`: el hijo cayó, divergió o corrió con otra configuración. Es `infra` y no es
+  del proveedor; se reintenta igual.
+- **Lo anterior se sigue leyendo.** Las evaluaciones con identidad `meta:` se verifican con la regla de entonces
+  (`legacyMeasureOf`); las nuevas llevan `meta@2:`. Un libro empezado con ids FNV continúa sus ensayos con esos ids; un
+  `proposal_failed` sin campos se clasifica por las palabras de su error.
+- **Pruebas.** Las siete `VM1:` de `lib/test/meta-lab.test.ts`, la de compatibilidad con libros antiguos y la de la
+  sesión del junior en `lib/test/junior-trials.test.ts`. Cubren las
+  aceptaciones 1 a 4. El bloque `M1` de `lib/scripts/validity-repro.ts` da ahora `quality: null`.
+- **Sin comprobar.** El piloto a medias de `runs/meta/meta-pilot` no se ha reanudado con este código: la prueba de
+  compatibilidad lo simula, no lo lee. La aceptación 2 se probó con registros escritos a mano y con un runner que falla
+  por HTTP, no con un junior real que agote su tiempo. Falta el aviso de §3.2 cuando las tasas de `infra` difieren entre
+  candidatos de una búsqueda más que una tolerancia declarada: hoy la tasa va con cada evaluación, pero nadie la compara.
+
+**VM2, hecha (10/11/2026):**
+
+- **Dónde está.** `lib/src/junior/competence.ts`: `promotion.procedure` admite `paired-cases@2`; en él todo componente
+  bloquea si su media cae más que su tolerancia o si la caída es significativa con el mismo test al nivel del manifiesto,
+  y cada componente del veredicto lleva `n` y `min_p`. `@1` no cambia: ni sus veredictos ni su salida. `powerOf` dice por
+  componente y partición si puede llegar a promoverse (2⁻ⁿ frente a `alpha / K`) y cuántos casos necesita;
+  `competenceWarnings` lo avisa.
+- **Rechazo sólo en `@2`.** Un manifiesto `@2` en el que ningún componente puede promoverse en desarrollo se rechaza
+  diciendo cuántos casos necesita cada uno. Con `@1` la misma falta sólo se avisa: rechazarla habría cambiado qué
+  manifiestos `@1` son válidos, y los actuales (también los de las pruebas) tienen dos o tres casos por componente. La
+  confirmación (`lib/src/junior/confirm.ts`) aplica lo mismo a sus casos reservados al construirse.
+- **`protected` en `@2`.** No añade nada: la tolerancia es obligatoria en todo componente desde `@1`, así que no hay
+  «tolerancia cero salvo la que declare» que aplicar. Se conserva como atributo.
+- **La parte apartada.** `holdout` en el manifiesto: casos de sonda que una búsqueda no usa para seleccionar, validados
+  (sondas de desarrollo, cada componente conserva casos para seleccionar, cuotas iguales por mundo en cada parte).
+  `selectionManifest` es lo que mide la búsqueda (`probesOf`, `searchEvaluator` en `lib/src/worlds/junior/lab.ts`; sin
+  `holdout` da el mismo manifiesto y el mismo hash que antes); `holdoutManifest` y `promoteOnHoldout`
+  (`lib/src/junior/evaluate.ts`) promueven un candidato de una búsqueda sólo con esos casos.
+- **La comparación A–F.** E (`lib/src/junior/comparison.ts`) promueve sus candidatos sobre el `holdout`; sin él, su
+  producto se registra como `best of N in selection` y ningún candidato se anota como `promoted`. El informe lleva
+  `rules` (cómo se eligió el producto de cada repetición de C y E) y lo dice en su texto.
+- **Pruebas.** Las seis `VM2:` de `lib/test/junior-competence.test.ts` (aceptaciones 5 y 6, la confirmación, el
+  `holdout` y la promoción sobre él) y las aserciones nuevas de E y del informe en
+  `lib/test/junior-weight-comparison.test.ts`. El guion de reproducción añade `J1 @2` (`not_promoted`) y `J2 warned`.
+- **Sin comprobar.** Que los candidatos que el investigador adopta de una búsqueda (condición D) se promuevan sobre el
+  `holdout`: el investigador ve todas las sondas y adopta por su cuenta; esto sólo cubre la regla del operador (E). La
+  corrección por número de candidatos medidos (la alternativa de §4.3 al `holdout`) no está hecha.
 
 ## 12. Aceptación
 

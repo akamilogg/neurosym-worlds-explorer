@@ -103,6 +103,17 @@ export function chatRequestBody(options: Pick<ChatClientOptions, 'model' | 'temp
   return body;
 }
 
+/** What a failed request to System 2 is, as facts that let it be attributed later (SPEC-VALIDEZ-MEDIDA §3.1): its kind
+    (timeout, http, parse, network, aborted), its HTTP status where one came, how long it was waited for and how large the
+    request was. A timeout while the same service answered other requests of the run is the candidate's; a provider's
+    status is not - who reads the record decides, from these facts, never from the error's words. */
+export function requestFailure(error: unknown, startedMs: number, request: { readonly system?: string; readonly user: unknown }): Record<string, unknown> {
+  const e = error as ApiError;
+  const status = e?.details?.status;
+  return { error: String((error as Error)?.message || error), ...(typeof e?.kind === 'string' ? { kind: e.kind } : {}), ...(typeof status === 'number' ? { status } : {}),
+    waited_ms: Math.max(0, Date.now() - startedMs), request_chars: (request.system?.length ?? 0) + JSON.stringify(request.user ?? '').length };
+}
+
 export function openAiChatClient(options: ChatClientOptions | (() => ChatClientOptions)): ChatClient {
   const read = typeof options === 'function' ? options : () => options;
   return {

@@ -811,14 +811,14 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     ? { url: JEV_DEFAULT_URL, apiKey: 'flat', fetch: flatFetch as never }
     : { url: options.judge?.url || JEV_DEFAULT_URL, apiKey: options.judge?.key, model: options.judge?.model, timeoutMs: 90000, retries: 4, retryNetwork: true, concurrency: 8, fetch: replay.wrap('jev', network) });
   const llmUse = { calls: 0, tokens: 0 };
-  const consoleUsage = { llm_tokens_live: 0, llm_tokens_replayed: 0, usage_unknown: false };
+  const consoleUsage = { llm_tokens_live: 0, llm_tokens_replayed: 0, usage_unknown: false, llm_answers: 0 };
   let replayedAnswers = 0;
   const llm = openAiChatClient({ url: options.llm.url!, apiKey: options.llm.key, model: options.llm.model!, jsonMode: options.llm.jsonMode ?? true, temperature: options.llm.temperature ?? 0.4,
     timeoutMs: options.llm.timeoutMs ?? 180000, retries: 1, ...(options.llm.maxTokens ? { maxTokens: options.llm.maxTokens } : {}),
     ...(options.llm.extraBody ? { extraBody: options.llm.extraBody } : {}), fetch: replay.wrap('llm', network),
     ...(options.llm.reasoningEffort !== undefined ? { reasoningEffort: options.llm.reasoningEffort } : {}),
     onRequest: () => { llmUse.calls++; }, onAnswer: (a) => {
-      const n = tokensOf(a.raw); llmUse.tokens += n;
+      const n = tokensOf(a.raw); llmUse.tokens += n; consoleUsage.llm_answers++;
       const replayed = replay.stats().replayed.llm ?? 0;
       if (replayed > replayedAnswers) consoleUsage.llm_tokens_replayed += n;
       else consoleUsage.llm_tokens_live += n;

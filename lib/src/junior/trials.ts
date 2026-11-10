@@ -40,10 +40,12 @@ export function juniorCandidate(o: { pkg: JuniorPackage; execution: string; clie
     config: 'junior:' + o.execution,
     label: o.execution,
     args: [],
-    async connect({ trial, launch }) {
+    async connect({ trial, launch, resume }) {
       const n = Number(launch.split('#').pop());
       const sid = sessionOf(launch);
-      const previous = n > 0 ? sessionOf(trial + '#' + (n - 1)) : null;
+      /* Only a launch that resumes a record continues the session before it: a new attempt (SPEC-VALIDEZ-MEDIDA §3.2) or a
+         launch whose predecessor made no record starts the run anew, and its junior with no state of the one that fell. */
+      const previous = n > 0 && resume ? sessionOf(trial + '#' + (n - 1)) : null;
       try { await o.client.info(sid); } catch {
         let continues = false;
         if (previous) { try { await o.client.info(previous); continues = true; } catch { /* its launch never opened one */ } }
