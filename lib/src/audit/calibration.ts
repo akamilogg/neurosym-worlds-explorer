@@ -5,6 +5,7 @@ import { linksOf } from './links.ts';
 import { LINK_QUESTIONS, OBSERVATION_QUESTIONS, ROUND_QUESTIONS, linkTexts, roundTexts } from './judge.ts';
 import { FACT_QUESTION, factTexts, recordedPoints } from './facts.ts';
 import { auditFile, type MethodAudit } from './audit.ts';
+import { requestTableFor } from '../worlds/labs.ts';
 
 /* ============================================================================
  * THE METHOD AUDIT, calibrated against a person (SPEC-AUDITORIA-METODO §7, MA4). Before the
@@ -52,7 +53,8 @@ export function judgedItems(journalFile: string): LabelItem[] {
   const audit = JSON.parse(fs.readFileSync(auditFile(journalFile), 'utf8')) as MethodAudit;
   if (!audit.judged && !audit.extracted) throw new Error(path.basename(journalFile) + ': its audit has no judgements (audit it without --flat)');
   const run = path.basename(journalFile, '.json');
-  const record = linksOf(journal);
+  /* The links as its audit read them: @1 by its own lists, @2 by the vocabulary's table. */
+  const record = audit.format === 'method_audit@2' ? linksOf(journal, { classes: requestTableFor(journal.experiment) }) : linksOf(journal, { version: 1 });
   const item = (unit: Unit, ref: string, texts: Record<string, string>, rules: Readonly<Record<string, Rule>>): LabelItem =>
     ({ id: run + '#' + ref, run, unit, ref, audited: audit.audited, texts, questions: asQuestions(rules), operator: {} });
   const out: LabelItem[] = [];
@@ -68,9 +70,18 @@ export function judgedItems(journalFile: string): LabelItem[] {
   return out;
 }
 
+/** The one format of the audits a calibration reads (SPEC-VALIDEZ-MEDIDA §6.3): audits of method_audit@1 and @2 class and
+    cut the same record differently, so their judgements are never pooled. */
+export function calibrationFormats(formats: readonly string[]): string {
+  const distinct = [...new Set(formats)];
+  if (distinct.length > 1) throw new Error('a calibration does not mix audits of ' + distinct.join(' and ') + ': audit them again under one');
+  return distinct[0] ?? 'method_audit@2';
+}
+
 /** A stratified sample: the reference cases named, then the units in turn (experiments, observations, stretches, facts), each
     drawn at random with the seed; the same seed draws the same sample. */
 export function sample(journalFiles: readonly string[], options: { n?: number; seed?: number; references?: readonly string[] } = {}): LabelFile {
+  calibrationFormats(journalFiles.map((f) => (JSON.parse(fs.readFileSync(auditFile(f), 'utf8')) as MethodAudit).format));
   const all = journalFiles.flatMap(judgedItems);
   const refs = new Set(options.references ?? []);
   const chosen: LabelItem[] = all.filter((i) => refs.has(i.id) || refs.has(i.ref)).map((i) => ({ ...i, reference: true }));
@@ -138,6 +149,7 @@ export function agreement(labels: LabelFile, journalOf: (run: string) => string)
     labelled++;
     if (!audits.has(item.run)) audits.set(item.run, JSON.parse(fs.readFileSync(auditFile(journalOf(item.run)), 'utf8')));
     const audit = audits.get(item.run)!;
+    calibrationFormats([...audits.values()].map((a) => a.format));
     if (audit.audited !== item.audited) { stale.push(item.id); continue; }
     for (const [q, mine] of Object.entries(item.operator)) {
       if (!mine || mine === 'skip') continue;

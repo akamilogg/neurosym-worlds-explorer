@@ -1178,6 +1178,11 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       rows: e.observations.slice(from, Math.min(to, from + 59) + 1).map((o, i) => ({ step: from + i, case: o.case, component: o.component, rung: e.points[from + i].rung, rep: o.rep, measured: o.value, state: o.state, ...(o.why ? { why: o.why } : {}) })) }),
   shown: (c) => ({ measured: c.came.value }),
 
+  /* Its acts' kinds (SPEC-VALIDEZ-MEDIDA §6.1): each makes a version, an evaluation, a dataset or a search - an experiment -
+     but a query of the weight laboratory reads the weights, and the confirmations are summaries it reads. */
+  requests: { change: 'experiment', run: 'experiment', publish_memory: 'experiment', distill: 'experiment', dataset: 'experiment', train: 'experiment',
+    edit: 'experiment', evolve: 'experiment', inspect_weights: 'observation', confirmations: 'recall' },
+
   act: {
     parse: (raw) => {
       const unknown = unknownFields(raw, ['change', 'run', 'publish_memory', 'distill', 'dataset', 'train', 'confirmations', 'inspect_weights', 'edit', 'evolve']);

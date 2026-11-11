@@ -1,4 +1,6 @@
 import type { AnyLab } from '../learn/lab.ts';
+import { COMMON_REQUESTS, type RequestClass } from '../learn/requests.ts';
+import { LivingBridge } from '../living/bridge.ts';
 import { cellsLab } from './cells/lab.ts';
 import { messagesLab } from './messages/lab.ts';
 import { orbitLab } from './orbit/lab.ts';
@@ -16,4 +18,31 @@ import { juniorLab } from './junior/lab.ts';
 export const LABS: Readonly<Record<string, AnyLab>> = { cells: cellsLab, messages: messagesLab, orbit: orbitLab, grid: gridLab, tank: tankLab, particles3d: particles3dLab, c302nav: c302NavLab, c302closed: closedLab, artifacts: artifactsLab, plates: platesLab,
   /* Read when it is asked for, not when this registry is made: the junior's world imports the competence manifest, which
      reads this registry - a cycle that loading the junior's world first would otherwise break. */
-  get junior() { return juniorLab; } };
+  get junior() { const problems = labRequestProblems(juniorLab); if (problems.length) throw new Error('laboratory junior: ' + problems.join('; ')); return juniorLab; } };
+
+/** The classes of every request a laboratory's researcher may make (SPEC-VALIDEZ-MEDIDA §6.1): the common ones, a living
+    world's own (its bridge's), and those the laboratory declares. */
+export function requestTableOf(lab: AnyLab): Readonly<Record<string, RequestClass>> {
+  const own = (lab as { requests?: Readonly<Record<string, RequestClass>> }).requests ?? {};
+  return { ...COMMON_REQUESTS, ...((lab as { living?: unknown }).living ? LivingBridge.REQUESTS : {}), ...own };
+}
+
+/** What is wrong with a laboratory's own requests: one declared with no class is an error, never a recall by default. */
+export function labRequestProblems(lab: AnyLab): string[] {
+  const own = (lab as { requests?: Readonly<Record<string, unknown>> }).requests ?? {};
+  const classes = ['experiment', 'observation', 'recall', 'exchange'];
+  return Object.entries(own).filter(([, c]) => !classes.includes(String(c))).map(([k]) => 'requests: "' + k + '" has no class (experiment, observation, recall or exchange)');
+}
+
+/* Loading the registry checks every laboratory's (the junior's when it is first read: see its getter). */
+for (const name of Object.keys(LABS)) {
+  if (name === 'junior') continue;
+  const problems = labRequestProblems(LABS[name]);
+  if (problems.length) throw new Error('laboratory ' + name + ': ' + problems.join('; '));
+}
+
+/** The same, for a run's record: by its experiment's id ("cells@1"); the common table when no laboratory here is it. */
+export function requestTableFor(experiment: unknown): Readonly<Record<string, RequestClass>> {
+  const lab = Object.values(LABS).find((l) => l.id === experiment);
+  return lab ? requestTableOf(lab) : COMMON_REQUESTS;
+}

@@ -238,6 +238,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   /** How `inspect` shows a model's answer and its rules' answers (default: as they are). */
   readonly present?: { answer?(answer: unknown): unknown; rules?(rules: Readonly<Record<string, number>>): unknown };
 
+  /** The classes of its own requests beyond the common ones (SPEC-VALIDEZ-MEDIDA §6.1): its acts' kinds where they differ
+      (a junior's `edit` is an experiment, its `inspect_weights` an observation), and requests only it answers. */
+  readonly requests?: Readonly<Record<string, import('./requests.ts').RequestClass>>;
+
   /* --- The actions (optional) ----------------------------------------------------------- */
   readonly act?: {
     parse(raw: Record<string, unknown>): A | string;

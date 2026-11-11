@@ -84,7 +84,7 @@ test('the audit: J1-J4 for each experiment, J5-J6 for each round; measures besid
   fs.writeFileSync(file, JSON.stringify(journal()));
   const shown: JudgeRequest[] = [];
   const a = await auditMethod(file, standIn(shown));
-  assert.equal(a.format, 'method_audit@1');
+  assert.equal(a.format, 'method_audit@2');
   assert.equal(a.judged!.calls, 6, 'three experiment links, the observation cited after, and two stretches');
   assert.deepEqual(Object.keys(a.judged!.observations), ['r1.s1']);
   assert.deepEqual(Object.keys(a.judged!.rounds).sort(), ['r1', 'r2']);
@@ -169,3 +169,85 @@ test('a stretch is judged in the order it was lived: the verdict of the check it
   assert.ok(!/SECRET/.test(t), 'the verdict as it was given, never the measures of the operator');
 });
 
+
+/* ===== SPEC-VALIDEZ-MEDIDA, VM3: one vocabulary of requests, and the audit that reads it ===== */
+
+test('VM3: an own test, a living world\'s wait and a junior\'s edit are experiments; a query of the weights an observation', async () => {
+  const { requestTableFor } = await import('../src/worlds/labs.ts');
+  const own = linksOf({ experiment: 'cells@1', events: [
+    { type: 'investigation', round: 1, requests: [{ register_test: { protocol: {}, claim: 'c' } }], results: [{ registered: 't1' }] },
+    { type: 'proposal', round: 2, rationale: 'r', beliefs: [] }] }, { classes: requestTableFor('cells@1') });
+  assert.equal(own.links[0].kind, 'experiment');
+  const living = linksOf({ experiment: 'plates@1', events: [
+    { type: 'investigation', round: 1, requests: [{ wait: 3 }], results: [{ name: 'ep1', accepted: true }] },
+    { type: 'investigation', round: 1, requests: [{ observe: true }], results: [{}] },
+    { type: 'proposal', round: 2, rationale: 'r', beliefs: [] }] }, { classes: requestTableFor('plates@1') });
+  assert.deepEqual(living.links.map((l) => l.kind), ['experiment', 'observation']);
+  const junior = linksOf({ experiment: 'junior-competence@1', events: [
+    { type: 'investigation', round: 1, requests: [{ act: { edit: { from: 'v0' } } }], results: [{ name: 'v1', accepted: true }] },
+    { type: 'investigation', round: 1, requests: [{ act: { inspect_weights: { version: 'v0', query: 'modules' } } }], results: [{}] },
+    { type: 'proposal', round: 2, rationale: 'r', beliefs: [] }] }, { classes: requestTableFor('junior-competence@1') });
+  assert.deepEqual(junior.links.map((l) => l.kind), ['experiment', 'observation']);
+});
+
+test('VM3: the steps of a round closed without a model stay in that round\'s stretch; a closer cites only what came before it', () => {
+  const r = linksOf({ events: [
+    { type: 'investigation', round: 1, requests: [{ act: { x: 1 } }], results: [{ name: 'ep1', accepted: true }] },
+    { type: 'round_closed', round: 1, why: 'nothing new in ep1' },
+    { type: 'investigation', round: 2, requests: [{ act: { x: 2 } }], results: [{ name: 'ep2', accepted: true }] },
+    { type: 'reflection', round: 2, rationale: 'see round 2 step 2', beliefs: [] },
+    { type: 'investigation', round: 2, requests: [{ act: { x: 3 } }], results: [{ name: 'ep3', accepted: true }] },
+    { type: 'proposal', round: 3, rationale: 'see ep2', beliefs: [] }] });
+  assert.deepEqual(r.rounds.map((s) => [s.id, s.links]), [['r1.closed', ['r1.s1']], ['r2.reflection', ['r2.s1']], ['r3', ['r2.s2']]]);
+  assert.equal(r.rounds[0].closed_by!.type, 'round_closed');
+  assert.ok(r.orphans.includes('r2.s2'), 'a reflection written before a step does not cite it, though it names its number');
+  assert.ok(!r.orphans.includes('r1.s1'), 'a round closed by its words citing ep1 cites the step that made it');
+});
+
+test('VM3: the audit and the senior\'s signs, with the vocabulary of the table, give one request one class', async () => {
+  const { stuckSignals } = await import('../src/orchestra/reader.ts');
+  const j = { events: [2, 2, 2].map((round, i) => ({ type: 'investigation', round, requests: [i === 2 ? { measure: {}, on: [] } : { table: { source: 'x' } }], results: [{}] })) };
+  assert.deepEqual(linksOf(j).links.map((l) => l.kind), ['observation', 'observation', 'observation']);
+  assert.equal(stuckSignals(j, 3, 3, 2, 2).only_looking, 3, 'with the vocabulary of the table a table only looks');
+  assert.equal(stuckSignals(j).only_looking, 0, 'by default the senior reads as it read: a table was an experiment');
+});
+
+test('VM3: every request a laboratory accepts has a class; a laboratory that declares one without a class is refused', async () => {
+  const { LABS, requestTableOf, labRequestProblems } = await import('../src/worlds/labs.ts');
+  const { classOf } = await import('../src/learn/requests.ts');
+  const { LivingBridge } = await import('../src/living/bridge.ts');
+  const recognizers = await Promise.all([
+    import('../src/learn/assisted/sources.ts').then((m) => m.Sources.accepts), import('../src/learn/assisted/memory.ts').then((m) => m.JournalMemory.accepts),
+    import('../src/learn/assisted/experience.ts').then((m) => m.Experience.accepts), import('../src/learn/assisted/instruments.ts').then((m) => m.Instruments.accepts),
+    import('../src/learn/assisted/own-tests.ts').then((m) => m.OwnTests.accepts), import('../src/learn/assisted/delegation.ts').then((m) => m.Delegations.accepts),
+    import('../src/learn/assisted/board.ts').then((m) => m.PeerChannel.acceptsRead), import('../src/learn/assisted/board.ts').then((m) => m.PeerChannel.acceptsPublish)]);
+  /* The words a recognizer or a parser could accept, read from their sources: every key they name. */
+  const src = ['learn/law-explorer.ts', 'learn/explorer.ts', 'learn/assisted/sources.ts', 'learn/assisted/memory.ts', 'learn/assisted/experience.ts', 'learn/assisted/instruments.ts',
+    'learn/assisted/own-tests.ts', 'learn/assisted/delegation.ts', 'learn/assisted/board.ts', 'living/bridge.ts'].map((f) => fs.readFileSync(path.join(import.meta.dirname, '..', 'src', f), 'utf8')).join('\n');
+  const words = new Set([...src.matchAll(/\bq\.([a-z_]+)|'([a-z_]+)' in q|typeof q\.([a-z_]+)/g)].map((m) => m[1] ?? m[2] ?? m[3]));
+  const accepted = [...words].filter((k) => recognizers.some((r) => r({ [k]: 'x' }) || r({ [k]: {} })));
+  for (const [name, lab] of Object.entries(LABS)) {
+    const table = requestTableOf(lab);
+    for (const k of ['view', 'act', 'launch', 'try', 'inspect', 'simulate', 'measure', 'table', 'replay', 'play', ...accepted]) assert.notEqual(classOf({ [k]: {} }, table), null, name + ': ' + k);
+    if ((lab as { living?: unknown }).living) for (const k of Object.keys(LivingBridge.REQUESTS)) assert.notEqual(classOf({ [k]: {} }, table), null, name + ': ' + k);
+  }
+  /* The junior's acts: every kind its parser takes. */
+  const junior = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'worlds', 'junior', 'lab.ts'), 'utf8');
+  const kinds = JSON.parse('[' + /act: \{\s*parse: \(raw\) => \{\s*const unknown = unknownFields\(raw, \[([^\]]*)\]\)/.exec(junior)![1].replace(/'/g, '"') + ']') as string[];
+  for (const k of kinds) assert.ok(Object.hasOwn(requestTableOf(LABS.junior), k), 'junior: ' + k);
+  assert.deepEqual(labRequestProblems({ requests: { mine: 'something' } } as never), ['requests: "mine" has no class (experiment, observation, recall or exchange)']);
+});
+
+test('VM3: method_audit@2 says each share\'s denominator and what was left unjudged; a calibration never mixes @1 and @2', async () => {
+  const { measuresOf } = await import('../src/audit/audit.ts');
+  const { calibrationFormats } = await import('../src/audit/calibration.ts');
+  const record = linksOf({ events: [
+    { type: 'investigation', round: 1, requests: [{ act: { x: 1 } }], results: [{ name: 'ep1', accepted: true }] },
+    { type: 'investigation', round: 1, requests: [{ act: { x: 2 } }], results: [{ name: 'ep2', accepted: true }] },
+    { type: 'proposal', round: 2, rationale: 'ep1', beliefs: [] }] });
+  const judged = { links: { 'r1.s1': { purpose: { answer: 'own' }, discrimination: { answer: 'yes' }, reading: { answer: 'correct' }, scope: { answer: 'fitting' } } }, observations: {}, rounds: {}, calls: 3, errors: ['r1.s2: down'] };
+  const m = measuresOf(record, judged as never);
+  assert.deepEqual([m.judged!.complete_chains, m.judged!.of, m.judged!.unjudged], [1, { links: 1, observations: 0, rounds: 0 }, { links: 1, observations: 0, rounds: 1 }]);
+  assert.throws(() => calibrationFormats(['method_audit@1', 'method_audit@2']), /mix/);
+  assert.equal(calibrationFormats(['method_audit@2', 'method_audit@2']), 'method_audit@2');
+});

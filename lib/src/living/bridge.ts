@@ -84,7 +84,14 @@ export class LivingBridge<A> {
   static readonly AFTER_ACT = 'not answered: it comes after an act or a wait in the same answer, whose results do not exist yet - ask it in your next answer';
 
   /** The requests of its own a living world answers: the world now, a wait, the members and their messages. */
-  static accepts(q: Record<string, unknown>): boolean { return ['observe', 'wait', 'send', 'share', 'read', 'members', 'watch', 'progress', 'perturb'].some((k) => k in q); }
+  static accepts(q: Record<string, unknown>): boolean { return Object.keys(LivingBridge.REQUESTS).some((k) => k in q); }
+
+  /** Their classes (SPEC-VALIDEZ-MEDIDA §6.1): a wait and a perturbation make what did not exist (a stretch of the world);
+      the world now and a watcher's readings read it; the members, their messages and its own progress told are an exchange. */
+  static readonly REQUESTS: Readonly<Record<string, import('../learn/requests.ts').RequestClass>> = {
+    wait: 'experiment', perturb: 'experiment', observe: 'observation', watch: 'observation', progress: 'exchange',
+    send: 'exchange', share: 'exchange', read: 'exchange', members: 'exchange'
+  };
 
   /** Its round, as its run reaches it (what an operator's "round" trigger reads). */
   round(n: number): void { this.h.session.round(this.h.actor, n); }

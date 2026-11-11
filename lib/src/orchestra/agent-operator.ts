@@ -160,6 +160,9 @@ export interface AgentOperatorOptions {
       rounds to leave the junior after a message before it may be called again (default 2); answers of a round only looking
       (no experiment) before it is a sign (default 3). */
   readonly patience?: number;
+  /** How the senior reads which requests are experiments (reader.ts): 1, as it always has (the default); 2, by the table
+      every reader shares (SPEC-VALIDEZ-MEDIDA §6.1). */
+  readonly stuckVocabulary?: 1 | 2;
   readonly looking?: number;
   readonly readSteps?: number;
   readonly cooldown?: number;
@@ -204,7 +207,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     delegation_log?: Record<string, unknown>[]; delegation?: Record<string, unknown> } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
   if (o.llm.configuration) record.llm_config = o.llm.configuration;
   /* The settings of its role, as given: they make it the agent it is (a characterization tells one from another). */
-  record.settings = Object.fromEntries(Object.entries({ maxOrders: o.maxOrders, patience: o.patience, looking: o.looking, readSteps: o.readSteps, cooldown: o.cooldown,
+  record.settings = Object.fromEntries(Object.entries({ maxOrders: o.maxOrders, patience: o.patience, stuckVocabulary: o.stuckVocabulary, looking: o.looking, readSteps: o.readSteps, cooldown: o.cooldown,
     digestRounds: o.digestRounds, openLimit: o.openLimit, activation: o.activation }).filter(([, v]) => v !== undefined));
   /* Its provider, as an identity (never its address): whether a validator shares it (SPEC-RIESGO-MODELOS §7.2). */
   if (providerOf(o.llm.endpoint)) record.llm_provider = providerOf(o.llm.endpoint)!;
@@ -292,10 +295,10 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     const ended = status?.state === 'ended' || status?.state === 'interrupted';
     const over = ended || lastCompleted?.type === 'reflection';
     /* The senior, during a round: a sign about the round in course (it only looks, or insists with no steps left). */
-    const now = role === 'senior' && journal ? stuckSignals(journal, o.patience ?? 3, o.looking ?? 3) : null;
+    const now = role === 'senior' && journal ? stuckSignals(journal, o.patience ?? 3, o.looking ?? 3, 2, o.stuckVocabulary ?? 1) : null;
     const duringRound = Boolean(now?.in_round && !calledInRound.has(now.current_round));
     /* The senior, following up its message: the junior got it and has run an experiment since. */
-    const due = role === 'senior' && journal ? followUpDue(journal, o.id) : null;
+    const due = role === 'senior' && journal ? followUpDue(journal, o.id, o.stuckVocabulary ?? 1) : null;
     const followUp = due && !followedUp.has(due.message) ? due : null;
     /* The senior's opening (§3.3.4): the run waits for its first hypothesis before the junior's first question. */
     const opening = role === 'senior' && journal && !opened && awaitsOpening(journal, o.id);
@@ -381,7 +384,7 @@ function noteOf(state: SeniorState, id: string): { text: string; versions: numbe
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
   duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel(),
   branches: Delegations | null = null, branchDue = false, woken: string[] | null = null): Promise<AgentDecision | null> {
-  const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3);
+  const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3, 2, o.stuckVocabulary ?? 1);
   /* A follow-up is called for by the junior's experiment, not by a sign; a wake by what reached the junior, as declared;
      anything else waits for a sign and for the junior to have had time with its last message. */
   if (!isOpening && !followUp && !branchDue && !woken && (!signals.signs.length || waitingOnMessage(journal, o.id, o.cooldown ?? 2))) return null;

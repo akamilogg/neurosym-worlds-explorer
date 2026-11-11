@@ -1,7 +1,7 @@
 # SPEC · Validez de la medida: lo que juzga a un candidato no puede dejarse engañar
 
-Estado (10/11/2026): **VM1 y VM2 implementadas** (el evaluador de ensayos y la promoción, §11); VM3 a VM6 propuestas,
-sin implementar. Sale de la lectura a fondo del código del
+Estado (10/11/2026): **VM1, VM2 y VM3 implementadas** (el evaluador de ensayos, la promoción, el vocabulario y la
+auditoría, §11); VM4 a VM6 propuestas, sin implementar. Sale de la lectura a fondo del código del
 [repaso del repositorio](REPASO-2026-11-10.md) (§4.3, hallazgos V1 a V19). Corrige el evaluador del
 [metalaboratorio](SPEC-METAPOLITICA-INVESTIGACION.md), la promoción y la confirmación del junior
 ([SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) §6.5, §9, y [SPEC-EDICION-PESOS](SPEC-EDICION-PESOS.md)
@@ -290,6 +290,36 @@ VM6 cuando toque.
 - **Sin comprobar.** Que los candidatos que el investigador adopta de una búsqueda (condición D) se promuevan sobre el
   `holdout`: el investigador ve todas las sondas y adopta por su cuenta; esto sólo cubre la regla del operador (E). La
   corrección por número de candidatos medidos (la alternativa de §4.3 al `holdout`) no está hecha.
+
+**VM3, hecha (10/11/2026):**
+
+- **La tabla.** `lib/src/learn/requests.ts`: las clases (`experiment`, `observation`, `recall`, `exchange`), las
+  peticiones comunes, `requestKey` (la única forma de sacar la clave: la primera que no la califica) y `classOf`, que
+  clasifica un acto por su tipo cuando el laboratorio lo declara. `Lab.requests` (`lib/src/learn/lab.ts`) lleva las de
+  cada laboratorio: los actos del junior (`edit`, `evolve`… experimentos; `inspect_weights` observación; `confirmations`
+  recuerdo). `LivingBridge.REQUESTS` (`lib/src/living/bridge.ts`) las del mundo vivo, y `accepts` lee de ella.
+  `requestTableOf` y `requestTableFor` (`lib/src/worlds/labs.ts`) las juntan. Un laboratorio que declara una petición sin
+  clase impide cargar el registro (`labRequestProblems`).
+- **Diferencias con la tabla de §6.1.** La prueba propia se pide como `register_test`, no `test`. `progress` del mundo
+  vivo (el investigador informa de su progreso) es `exchange`. `peers` y `publish` del tablón de un equipo, `exchange`.
+- **La auditoría.** `linksOf(journal, { classes })` (`lib/src/audit/links.ts`) clasifica con la tabla; `round_closed`
+  cierra tramo (`r<n>.closed`, sus palabras pueden citar pasos); `consolidated` se anota en el tramo; un cierre sólo cita
+  pasos anteriores a él en el orden de los eventos. Una petición que ninguna tabla conoce queda `unclassed`, nunca
+  `recall`. `{ version: 1 }` lee como antes, para las auditorías hechas.
+- **`method_audit@2`.** `lib/src/audit/audit.ts`: las cuentas incluyen `exchange` y `unclassed`; los repartos juzgados
+  llevan `of` (de cuántos son) y `unjudged` (cuántos se pidieron y quedaron sin juzgar). `calibrationFormats`
+  (`lib/src/audit/calibration.ts`) impide mezclar `@1` y `@2` en una muestra o un acuerdo, y cada auditoría se reconstruye
+  con la versión con que se hizo.
+- **El senior.** `stuckSignals` y `followUpDue` (`lib/src/orchestra/reader.ts`) aceptan `vocabulary`: 1 por defecto, como
+  siempre (una tabla es un experimento); 2 lee de la tabla común. `lab agent … --stuck-vocabulary 2` y la opción
+  `stuckVocabulary` del operador agente. Los lotes, los equipos y el mundo vivo no la pasan todavía: usan la 1.
+- **La memoria selectiva no cambia.** Su encabezado de cada paso (`memory.ts`) usa su propia lista auxiliar y es texto
+  que el investigador ve al listar su memoria; unificarlo cambiaría ese texto para algunas peticiones.
+- **Pruebas.** Las cinco `VM3:` de `lib/test/audit.test.ts` (aceptaciones 9 a 11, el recorrido de todos los
+  laboratorios y los denominadores). El guion de reproducción añade A1, A2 y O1 leídos con `@2`.
+- **Sin comprobar.** El recorrido de laboratorios saca las claves aceptadas leyendo el código de los reconocedores y del
+  intérprete de actos del junior; una clave que se acepte de otra forma se le escaparía. Los actos de los demás mundos
+  (`act` con sus campos) son experimentos sin distinguir tipos.
 
 ## 12. Aceptación
 

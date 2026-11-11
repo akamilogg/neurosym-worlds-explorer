@@ -6,11 +6,13 @@ import { judgeMethod, type Judgements, type Verdict } from './judge.ts';
 import { findingOf, ownTestsOf, type OwnTestsMeasures } from '../learn/finding.ts';
 import type { ChatClient } from '../learn/system2.ts';
 import { extractClaims, factMeasures, type Source } from './extract.ts';
+import { requestTableFor } from '../worlds/labs.ts';
 
 /* ============================================================================
  * THE METHOD AUDIT of a finished run (SPEC-AUDITORIA-METODO, MA1 + MA3): its links and what code
  * observes of them, the Judge's closed answers about them (none in --flat), and the measures
- * derived from both - written as `method_audit@1` next to the journal (`<run>.method.json`).
+ * derived from both - written as `method_audit@2` next to the journal (`<run>.method.json`; `@1` before
+ * SPEC-VALIDEZ-MEDIDA §6, read still).
  *
  * One more metric, beside the outcome (check, validation and, where a truth exists, rule
  * recovery), never combined with it into one mark. The journal is left as it was; the
@@ -20,7 +22,9 @@ import { extractClaims, factMeasures, type Source } from './extract.ts';
 type J = Record<string, any>;
 
 export interface MethodAudit {
-  readonly format: 'method_audit@1';
+  /** @1: its links classed by the audit's own lists; @2 (SPEC-VALIDEZ-MEDIDA §6): by the vocabulary's table, its stretches
+      closed by rounds closed without a model too, each share with its denominator. A calibration never mixes the two. */
+  readonly format: 'method_audit@1' | 'method_audit@2';
   readonly run: string;
   readonly audited: string;
   readonly researcher: string;
@@ -40,7 +44,7 @@ export interface MethodAudit {
 }
 
 export interface Measures {
-  readonly links: { readonly experiment: number; readonly observation: number; readonly recall: number };
+  readonly links: { readonly experiment: number; readonly observation: number; readonly recall: number; readonly exchange?: number; readonly unclassed?: number };
   readonly refused_experiments: { readonly count: number; readonly cited_after: number };
   readonly citations: { readonly total: number; readonly seen: number; readonly unseen: number; readonly missing: number; readonly accuracy: number | null };
   readonly orphan_steps: { readonly count: number; readonly share: number | null };
@@ -53,6 +57,10 @@ export interface Measures {
   /** From the Judge (null without it): shares of the experiment links (or rounds) by answer. */
   readonly judged?: {
     readonly complete_chains: number | null;
+    /** @2: how many of each the shares are of (the ones judged), and how many the Judge was asked about and left unjudged
+        (its call failed): a share over what was judged says nothing of what was not. */
+    readonly of?: { readonly links: number; readonly observations: number; readonly rounds: number };
+    readonly unjudged?: { readonly links: number; readonly observations: number; readonly rounds: number };
     readonly purpose: Readonly<Record<string, number>>;
     readonly discrimination: Readonly<Record<string, number>>;
     readonly reading: Readonly<Record<string, number>>;
@@ -88,8 +96,12 @@ export function measuresOf(record: LinkRecord, judged: Judgements | null): Measu
   const looks = judged ? Object.values(judged.observations) : [];
   const rounds = judged ? Object.values(judged.rounds) : [];
   const complete = links.filter((v) => ['own', 'operator'].includes(v.purpose?.answer ?? '') && v.discrimination?.answer === 'yes' && v.reading?.answer === 'correct' && v.scope?.answer === 'fitting').length;
+  /* What the Judge was to judge: every experiment link, every observation a later text cites, every stretch something closed. */
+  const toJudge = { links: record.links.filter((l) => l.kind === 'experiment').length, observations: record.links.filter((l) => l.kind === 'observation' && (l.after?.cites_this.length ?? 0) > 0).length,
+    rounds: record.rounds.filter((r) => r.closed_by).length };
+  const of = { links: links.length, observations: looks.length, rounds: rounds.length };
   return {
-    links: { experiment: count('experiment'), observation: count('observation'), recall: count('recall') },
+    links: { experiment: count('experiment'), observation: count('observation'), recall: count('recall'), exchange: count('exchange'), unclassed: count('unclassed') },
     refused_experiments: { count: record.refused.length, cited_after: record.refused.filter((r) => r.cited_after.length).length },
     citations: { total: record.citations.length, seen: c('seen'), unseen: c('unseen'), missing: c('missing'), accuracy: share(c('seen'), record.citations.length) },
     orphan_steps: { count: record.orphans.length, share: share(record.orphans.length, looked) },
@@ -98,7 +110,8 @@ export function measuresOf(record: LinkRecord, judged: Judgements | null): Measu
       against_recorded: record.controls.filter((g) => g.kind === 'against_recorded').length },
     beliefs: { count: record.beliefs.length, revised, dropped },
     ...(judged ? { judged: {
-      complete_chains: share(complete, links.length),
+      complete_chains: share(complete, links.length), of,
+      unjudged: { links: toJudge.links - of.links, observations: toJudge.observations - of.observations, rounds: toJudge.rounds - of.rounds },
       purpose: split(links, 'purpose'), discrimination: split(links, 'discrimination'), reading: split(links, 'reading'), scope: split(links, 'scope'),
       observation_reading: split(looks, 'reading'), observation_scope: split(looks, 'scope'),
       refutation: split(rounds, 'refutation'), control: split(rounds, 'control'),
@@ -125,14 +138,14 @@ export async function auditMethod(journalFile: string, judge: (Judge & { readonl
   extractor: { readonly llm: ChatClient; readonly model: string } | null = null): Promise<MethodAudit> {
   const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')) as J;
   if (!(journal.events ?? []).some((e: J) => e.type === 'end')) throw new Error('audit: the run has not ended (M1: the audit is of a finished run)');
-  const record = linksOf(journal);
+  const record = linksOf(journal, { classes: requestTableFor(journal.experiment) });
   const events: J[] = journal.events ?? [];
   const judged = judge ? await judgeMethod(record, judge, events.filter((e) => e.type === 'test_registered')) : null;
   const ownTests = ownTestsOf(events, [...events].reverse().find((e) => e.type === 'end') ?? {});
   const sources = extractor ? await extractClaims(journal, record, extractor.llm, judge) : null;
   const { links, rounds: _rounds, ...rest } = record;
   const audit: MethodAudit = {
-    format: 'method_audit@1', run: path.basename(journalFile), audited: new Date().toISOString(),
+    format: 'method_audit@2', run: path.basename(journalFile), audited: new Date().toISOString(),
     researcher: String(journal.researcher ?? 'unknown-world'), model: journal.config?.llm_model ?? null,
     judge: judge ? judge.id : null,
     /* What the Judge was given (SPEC-RIESGO-MODELOS §7.2): to judge a method, the researcher's record - its reasoning included. */

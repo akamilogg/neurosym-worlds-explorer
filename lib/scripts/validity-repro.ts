@@ -42,12 +42,12 @@ const journal = { events: [
   { type: 'investigation', round: 2, requests: [{ act: { x: 1 } }], results: [{ name: 'ep2', accepted: true }] },
   { type: 'proposal', round: 2, rationale: 'see ep2', beliefs: [] }
 ] };
-const rec = linksOf(journal);
-console.log('A1 kinds:', rec.links.map((l: any) => l.id + ':' + l.instruments[0] + '=' + l.kind).join('  '));
-console.log('A2 segments:', rec.rounds.map((s: any) => s.id + '[' + s.links.join(',') + ']').join('  '));
+const rec = linksOf(journal, { version: 1 });
+console.log('A1 kinds (@1):', rec.links.map((l: any) => l.id + ':' + l.instruments[0] + '=' + l.kind).join('  '));
+console.log('A2 segments (@1):', rec.rounds.map((s: any) => s.id + '[' + s.links.join(',') + ']').join('  '));
 // O1: the same answer read by the senior's signs: a round of a table only.
 const j2 = { events: [{ type: 'investigation', round: 2, requests: [{ table: 'ep1' }], results: [{}] }, { type: 'investigation', round: 2, requests: [{ table: 'ep1', on: 'x' }], results: [{}] }, { type: 'investigation', round: 2, requests: [{ measure: {} }], results: [{}] }] };
-console.log('O1 only_looking (reader says a table is an experiment):', stuckSignals(j2).only_looking, '| audit kind:', linksOf(j2).links.map((l: any) => l.kind).join(','));
+console.log('O1 only_looking (reader says a table is an experiment):', stuckSignals(j2).only_looking, '| audit kind:', linksOf(j2, { version: 1 }).links.map((l: any) => l.kind).join(','));
 
 // After VM2: the same candidate under paired-cases@2, and what a manifest of few cases is told before it runs.
 const pr2 = promote({ ...m, promotion: { ...m.promotion, procedure: 'paired-cases@2' } } as never, meas(1, 0) as never, meas(0, 1) as never);
@@ -55,3 +55,12 @@ console.log('J1 @2:', pr2.verdict, '-', pr2.why);
 const { competenceWarnings } = await import(root + 'junior/competence.ts');
 const few = { components: [comp('format'), comp('worlds')], cases: ['f0', 'f1', 'f2'].map((id) => ({ id, kind: 'probe', partition: 'development', component: 'format' })).concat(['w0', 'w1', 'w2'].map((id) => ({ id, kind: 'probe', partition: 'development', component: 'worlds' }))), promotion: m.promotion };
 console.log('J2 warned:', competenceWarnings(few as never).join(' | '));
+
+// After VM3: the same records read by method_audit@2 - the own test as it is really asked (register_test), the wait by a
+// living world's table - and the senior's signs with the vocabulary of the table.
+const { requestTableFor } = await import(root + 'worlds/labs.ts');
+const living = { experiment: 'plates@1', events: journal.events.map((e: any) => (e.requests?.[0]?.test ? { ...e, requests: [{ register_test: e.requests[0].test }] } : e)) };
+const rec2 = linksOf(living, { classes: requestTableFor('plates@1') });
+console.log('A1 kinds (@2):', rec2.links.map((l: any) => l.id + ':' + l.instruments[0] + '=' + l.kind).join('  '));
+console.log('A2 segments (@2):', rec2.rounds.map((s: any) => s.id + '[' + s.links.join(',') + ']').join('  '));
+console.log('O1 only_looking (vocabulary 2):', stuckSignals(j2, 3, 3, 2, 2).only_looking, '| audit kind:', linksOf(j2).links.map((l: any) => l.kind).join(','));

@@ -4,7 +4,8 @@ import { journalReader } from '../learn/assisted/record.ts';
 import { explorerSystem } from '../learn/explorer.ts';
 import { system2Prompt, type Tool } from '../learn/prompt.ts';
 import { isGameLab } from '../learn/lab.ts';
-import { LABS } from '../worlds/labs.ts';
+import { LABS, requestTableFor } from '../worlds/labs.ts';
+import { classOf } from '../learn/requests.ts';
 import { GRID_PERCEPT_DOC } from '../worlds/grid/sense.ts';
 import { ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { SOURCES_SECTION } from '../learn/assisted/session.ts';
@@ -55,12 +56,22 @@ export interface StuckSignals {
   readonly signs: readonly string[];
 }
 
-/** Instruments that put an idea to the test (the rest only look at what was recorded or read). */
+/** Vocabulary 1, how the senior has always read a request: its first key, a table and a measure experiments. */
 const EXPERIMENTS = new Set(['act', 'replay', 'table', 'measure', 'simulate', 'launch', 'play', 'try']);
+
+/** Whether a request puts an idea to the test. Vocabulary 1 (the default): as the senior has always read it. Vocabulary 2:
+    by the table every reader shares (learn/requests.ts, SPEC-VALIDEZ-MEDIDA §6.1) - a table and a measure only look, as
+    the method audit reads them; an own test, a wait and a junior's edit are experiments. The default stays until a run says
+    which serves the senior better: changing it would change every condition already measured with a senior. */
+export function experiments(q: unknown, vocabulary: StuckVocabulary = 1, experiment?: unknown): boolean {
+  if (vocabulary === 1) return EXPERIMENTS.has(Object.keys((q ?? {}) as object)[0] ?? '');
+  return classOf(q, requestTableFor(experiment)) === 'experiment';
+}
+export type StuckVocabulary = 1 | 2;
 
 /** `patience`: checks in a row holding nowhere before it is a sign; `looking`: answers of a round only looking; `window`:
     the latest checks where regressions are counted, and the checks without matching its best before that is a sign. */
-export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2): StuckSignals {
+export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2, vocabulary: StuckVocabulary = 1): StuckSignals {
   const events = (Array.isArray(journal?.events) ? journal.events : []) as J[];
   const checks = events.filter((e) => e.type === 'check');
   let nowhere = 0;
@@ -70,7 +81,7 @@ export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2):
   const repeated = asked.length - new Set(asked).size;
   const insisted = events.filter((e) => e.type === 'investigation_refused' && e.round === last).length;
   const answers = events.filter((e) => e.type === 'investigation' && e.round === last);
-  const experimented = answers.some((e) => (e.requests ?? []).some((q: J) => EXPERIMENTS.has(Object.keys(q ?? {})[0] ?? '')));
+  const experimented = answers.some((e) => (e.requests ?? []).some((q: J) => experiments(q, vocabulary, journal?.experiment)));
   /* Round 1 is for looking: there is no model yet. From the next one, a round of only looking is a sign. */
   const onlyLooking = experimented || last <= 1 ? 0 : answers.length;
   /* Its checks, as it was given them: how many episodes scored 1 of how many, and how many run again scored lower. */
@@ -100,7 +111,7 @@ export function stuckSignals(journal: J, patience = 3, looking = 3, window = 2):
     ...(closedInARow >= 2 ? ['it closed its latest ' + closedInARow + ' rounds without a new model'] : []),
     ...(repeated >= 2 ? [repeated + ' requests repeated in its latest round'] : []),
     ...(insisted >= 2 ? ['it asked to investigate ' + insisted + ' times with no steps left in its latest round'] : []),
-    ...(onlyLooking >= looking ? ['it spent ' + onlyLooking + ' investigation answers of its latest round only looking, with no experiment (no act, replay, table or measure)'] : []),
+    ...(onlyLooking >= looking ? ['it spent ' + onlyLooking + ' investigation answers of its latest round only looking, with no experiment ' + (vocabulary === 1 ? '(no act, replay, table or measure)' : '(nothing that made what did not exist: no act, replay, wait or test of its own)')] : []),
     ...(regressions >= 2 ? [regressions + ' episodes of its earlier checks scored lower when run again with its newer models (its last ' + Math.min(window, scored.length) + ' checks): its changes undo what worked'] : []),
     ...(sinceBest >= window && best >= 0 ? ['its best check (' + scored[best].wins + ' of ' + scored[best].total + ' scored 1, round ' + scored[best].round + ') has not been matched in the ' + sinceBest + ' checks since'] : [])
   ];
@@ -175,7 +186,7 @@ export function juniorPercept(journal: J): string | null {
 /** A follow-up the senior owes (SPEC-ORQUESTADOR §3.3): the junior got its latest message and then ran an experiment.
     `message` is that message's place among the junior's messages from it (each is followed up once); `experiment` the
     item of the junior's record that holds the experiment and what it was answered. Null when none is due. */
-export function followUpDue(journal: J, id: string): { message: number; text: string; experiment: string; round: number; requests: unknown } | null {
+export function followUpDue(journal: J, id: string, vocabulary: StuckVocabulary = 1): { message: number; text: string; experiment: string; round: number; requests: unknown } | null {
   const events = (Array.isArray(journal?.events) ? journal.events : []) as J[];
   const by = 'agent:' + id;
   let delivered = -1, at = -1, text = '';
@@ -193,7 +204,7 @@ export function followUpDue(journal: J, id: string): { message: number; text: st
     const round = typeof e.round === 'number' ? e.round : 0;
     const step = (steps.get(round) ?? 0) + 1;
     steps.set(round, step);
-    if (i > at && e.type === 'investigation' && (e.requests ?? []).some((q: J) => EXPERIMENTS.has(Object.keys(q ?? {})[0] ?? '')))
+    if (i > at && e.type === 'investigation' && (e.requests ?? []).some((q: J) => experiments(q, vocabulary, journal?.experiment)))
       return { message: delivered, text, experiment: 'investigation:r' + round + '.' + step, round, requests: e.requests };
   }
   return null;
