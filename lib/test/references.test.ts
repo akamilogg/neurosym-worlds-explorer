@@ -90,3 +90,18 @@ test('a reference frozen, a new version compared with it as declared, and a new 
   assert.equal(opened.holds, false);
   assert.match(comparisonProblems(root, compare).join(' '), /does not hold/);
 });
+
+test('VM6: a paired comparison concludes where the separation is perfect - the exact sign test on the discordant pairs', () => {
+  const seeds = (n: number, v: number) => new Map(Array.from({ length: n }, (_, i) => ['s' + i, v] as [string, number]));
+  const all = pairedComparison(seeds(8, 0), seeds(8, 1), { margin: 0.2, binary: true });
+  assert.equal(all.conclusion, 'improves', 'eight of eight against none: p = 2 x 2^-8');
+  assert.equal(all.p, 0.0078125);
+  assert.equal(pairedComparison(seeds(8, 1), seeds(8, 0), { margin: 0.2, binary: true }).conclusion, 'worsens');
+  assert.equal(pairedComparison(seeds(2, 0), seeds(2, 1), { margin: 0.2, binary: true }).conclusion, 'insufficient evidence', 'two of two: fewer than 3 pairs');
+  assert.equal(pairedComparison(seeds(5, 0), seeds(5, 1), { margin: 0.2, binary: true }).conclusion, 'insufficient evidence', 'five of five: p = 0.0625, not below 0.05');
+  assert.equal(pairedComparison(seeds(8, 0), seeds(8, 1), { margin: 1, binary: true }).conclusion, 'insufficient evidence', 'an effect of 1 is not above a margin of 1');
+  const mixed = new Map(Array.from({ length: 8 }, (_, i) => ['s' + i, i < 4 ? 1 : 0] as [string, number]));
+  const flipped = new Map([...mixed].map(([k, v]) => [k, 1 - v] as [string, number]));
+  assert.equal(pairedComparison(flipped, mixed, { margin: 0.2, binary: true }).conclusion, 'insufficient evidence', 'four better and four worse');
+  assert.match(all.rule, /sign test/);
+});

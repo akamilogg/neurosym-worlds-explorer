@@ -114,6 +114,19 @@ export function requestFailure(error: unknown, startedMs: number, request: { rea
     waited_ms: Math.max(0, Date.now() - startedMs), request_chars: (request.system?.length ?? 0) + JSON.stringify(request.user ?? '').length };
 }
 
+/** How many times a round asks System 2 again after a transient failure before it counts as a refusal (SPEC-VALIDEZ-MEDIDA
+    §7): a provider's hiccup is not the researcher declining to answer. */
+export const TRANSIENT_RETRIES = 2;
+
+/** Whether a failed request to System 2 may pass if asked again: a timeout, the network, a body that could not be read, or a
+    status the provider gives when it is busy or failing (408, 429, 5xx, an empty 200). Never an account refused. */
+export function transientFailure(error: unknown): boolean {
+  const e = error as ApiError;
+  const status = e?.details?.status;
+  if (e?.kind === 'timeout' || e?.kind === 'network' || e?.kind === 'parse') return true;
+  return e?.kind === 'http' && typeof status === 'number' && (status === 408 || status === 429 || status >= 500 || status < 400);
+}
+
 export function openAiChatClient(options: ChatClientOptions | (() => ChatClientOptions)): ChatClient {
   const read = typeof options === 'function' ? options : () => options;
   return {

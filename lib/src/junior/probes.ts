@@ -132,7 +132,7 @@ export async function captureCut(run: string, question: number, o: { timeoutMs?:
 }
 
 /** What a run logs when it is stopped at a question (its failed call, its halt, its end): not part of what came before it. */
-const STOP_TAIL = new Set(['end', 'halted', 'proposal_failed', 'reflection_failed']);
+const STOP_TAIL = new Set(['end', 'halted', 'proposal_failed', 'proposal_retried', 'reflection_failed']);
 const beforeTail = (events: readonly J[]): number => { let n = events.length; while (n > 0 && STOP_TAIL.has(events[n - 1].type)) n--; return n; };
 
 export const ACCEPTED = new Set(['investigation', 'proposal', 'reflection', 'round_closed', 'consolidated']);

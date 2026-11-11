@@ -263,6 +263,9 @@ test('6, 9 and the exchange: two researchers in one world - a copy shared keeps 
 test('the order of answers within the window\'s time changes nothing: the same world, the same exchange', async () => {
   const one = await pair(tmp('h2-order-1'), { a: 25, b: 0 });
   const two = await pair(tmp('h2-order-2'), { a: 0, b: 25 });
-  assert.deepEqual(strip(lines(one.r.world)), strip(lines(two.r.world)));
+  /* When each decision came (`a.<actor>.<n>`, SPEC-VALIDEZ-MEDIDA §9) is the calendar of the answers, not the world: it is what
+     a reconstruction replays them by, and it is what differs here by construction. */
+  const world = (file: string) => strip(lines(file)).filter((e) => !String(e.key).startsWith('a.'));
+  assert.deepEqual(world(one.r.world), world(two.r.world));
   assert.deepEqual(one.asked.b.map((u) => u.investigation?.length ?? 0), two.asked.b.map((u) => u.investigation?.length ?? 0));
 });

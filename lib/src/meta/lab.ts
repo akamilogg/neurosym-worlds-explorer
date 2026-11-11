@@ -38,7 +38,8 @@ export interface MetaCase {
   readonly args: readonly string[];
   /** The kind of world it stands for: one component of the quality. Default: its laboratory. */
   readonly kind?: string;
-  readonly partition: 'development' | 'confirmation';
+  /** training: run only to be learned from (a junior's distillation), never measured. */
+  readonly partition: 'development' | 'confirmation' | 'training';
   readonly criterion: Criterion;
 }
 export interface MetaManifest {
@@ -80,7 +81,7 @@ export function manifestProblems(m: unknown): string[] {
     ids.add(c?.id);
     if (!LABS[c?.lab]) errors.push(at + ': no laboratory "' + c?.lab + '" (' + Object.keys(LABS).join(', ') + ')');
     if (!Array.isArray(c?.args)) errors.push(at + ': "args" of its world');
-    if (!['development', 'confirmation'].includes(c?.partition)) errors.push(at + ': "partition" is "development" or "confirmation"');
+    if (!['development', 'confirmation', 'training'].includes(c?.partition)) errors.push(at + ': "partition" is "development", "confirmation" or "training"');
     if (!['model_accepted', 'artifact_accepted'].includes(c?.criterion)) errors.push(at + ': "criterion" is "model_accepted" or "artifact_accepted"');
   }
   /* One world in one realization is one case: the same laboratory with the same arguments in development and in
@@ -167,6 +168,7 @@ export function trialResult(journalFile: string, criterion: Criterion): TrialRes
   const stoppedBy = String(end.stoppedBy ?? '');
   if (stoppedBy === 'cancelled') return { state: 'cancelled', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens };
   if (stoppedBy === 'llm_error') return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens, cause: 'provider', why: 'the service refused the account' };
+  if (stoppedBy === 'judge_unavailable') return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens, cause: 'provider', why: 'its Judge did not answer: its checks were void' };
   if (stoppedBy === 'diverged' || stoppedBy.startsWith('error')) return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens, cause: 'harness' };
   /* A trial measures the candidate under the configuration it is named by. Where a provider failed it, it measures nothing:
      a check computed without the Judge's answers is no verdict, and a proposal the service never answered is a round lost
@@ -182,6 +184,8 @@ export function trialResult(journalFile: string, criterion: Criterion): TrialRes
   if (unknown) return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens, cause: 'indeterminate',
     why: unknown + ' proposal(s) unanswered whose cause cannot be told (no answer of the service in this run to tell a slow candidate from a slow service): no measure' };
   const o1 = runResults(journalFile).o1_predictive_acceptance;
+  /* A run that ended and left no finding cannot say what it reached: the harness's failure, no measure. */
+  if (o1.model === null) return { state: 'infra', solved: null, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens, cause: 'harness', why: 'it ended without its finding' };
   const solved = criterion === 'model_accepted' ? o1.model : o1.artifact ?? false;
   return { state: 'ended', solved, stopped_by: stoppedBy, policy_errors: policyErrors, advice, tokens,
     ...(causes.length ? { why: causes.length + ' proposal(s) not answered within the candidate\'s time while the service answered it: its own' } : {}) };
@@ -302,7 +306,7 @@ export class Trials {
 
   /** Every trial of a candidate on the cases of a partition, in order (`only`: those cases alone); the same reservations,
       ledger and reconciliation whatever the candidate is. */
-  async runCandidate(candidate: TrialCandidate, partition: 'development' | 'confirmation', signal?: AbortSignal, only?: ReadonlySet<string>): Promise<{ trial: string; case: string; rep: number; kind: string; result: TrialResult }[]> {
+  async runCandidate(candidate: TrialCandidate, partition: 'development' | 'confirmation' | 'training', signal?: AbortSignal, only?: ReadonlySet<string>): Promise<{ trial: string; case: string; rep: number; kind: string; result: TrialResult }[]> {
     const out: { trial: string; case: string; rep: number; kind: string; result: TrialResult }[] = [];
     const ledger = this.ledger();
     for (const c of this.manifest.cases.filter((x) => x.partition === partition && (!only || only.has(x.id)))) {

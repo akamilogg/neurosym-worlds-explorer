@@ -4,7 +4,7 @@ import path from 'node:path';
 import { findingText } from '../learn/finding.ts';
 import { finding, listRuns, orderOutcome, resumeRun, runStatus, send, startRun, stop, type RunInfo, type RunOrder } from './control.ts';
 import { describeEvent } from './cli.ts';
-import { LABS } from '../worlds/labs.ts';
+import { LABS, livingNaming } from '../worlds/labs.ts';
 import { isGameLab } from '../learn/lab.ts';
 import { listProjects, projectStatus, projectText, sendProject } from '../orchestra/project.ts';
 import { readProjectFile, startProject } from '../orchestra/launch.ts';
@@ -106,7 +106,7 @@ export function livingOf(journalFile: string, j: Json, view: 'auditor' | 'actor'
   const last = commits[commits.length - 1];
   const manifest = entries.find((e) => e.key === 'manifest');
   return { session: j.world?.session ?? null, actor, view, tick: last?.to ?? 0, window: last?.window ?? 0, members: (manifest?.actors ?? []).map((a: Json) => ({ id: a.id, kind: a.kind })),
-    timeline: livingTimeline(entries, view === 'auditor' ? 'auditor' : { actor }).slice(-200) };
+    timeline: livingTimeline(entries, view === 'auditor' ? 'auditor' : { actor }, livingNaming((entries as Record<string, any>[]).find((e) => e.key === 'manifest')?.adapter).where ?? (() => null)).slice(-200) };
 }
 
 /** The laboratories one can start, with their options (for the page's form). */

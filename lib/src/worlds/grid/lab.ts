@@ -47,7 +47,7 @@ import { OwnTests, ownTestsSection, type OwnTestsWords } from '../../learn/assis
 import { capabilityAt, roundsAt } from '../../learn/lab.ts';
 import { Instruments, instrumentsSection, parseInstruments } from '../../learn/assisted/instruments.ts';
 import { PINS_SECTION, applyPins, parsePins } from '../../learn/assisted/channel.ts';
-import { RoundConversation, requestFailure } from '../../learn/system2.ts';
+import { RoundConversation, TRANSIENT_RETRIES, requestFailure, transientFailure } from '../../learn/system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
 const MAX_CONSOLIDATIONS = 2;
@@ -594,6 +594,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
      own history, so a resumed run is given what it was given. */
   let confirmations = 0;
   const protocol = new Protocol(objective, {
+    /* The Judge's failed calls: a check during which it failed is no verdict (SPEC-VALIDEZ-MEDIDA §7). A rule it left without
+       an answer composes as 0.5 here - the game's decision, kept for the search that plays - and is not a failure. */
+    instrumentFailures: () => judge.stats.errors,
     places: () => [...places.values()],
     blindPlaces: (set) => team
       ? team.board.blindBoards(team.member, 'c' + confirmations + '.s' + set, cfg.confirmBoards).map((index) => makePlace('blind' + (++confirmCounter), index, 'confirmation'))
@@ -1010,7 +1013,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     team?.board.reach(team.member, round);
     let refused: string[] = [];
     const investigation: unknown[] = [];
-    let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0;
+    let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0, retried = 0;
     /* The round's conversation only grows (see RoundConversation): what changes from one answer to the next goes in the
        part added for that answer. */
     let talk = new RoundConversation();
@@ -1051,6 +1054,13 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
           log('llm_fatal', { round, status, error: llmFatal });
           say('the LLM service refused the account (HTTP ' + status + '): stopping');
           return null;
+        }
+        /* A transient failure of the provider is asked again apart (SPEC-VALIDEZ-MEDIDA §7): no step, no refusal spent. */
+        if (transientFailure(error) && retried < TRANSIENT_RETRIES) {
+          retried++;
+          steps--;
+          log('proposal_retried', { round, ...requestFailure(error, asked, { system: systemPrompt(), user: payload }) });
+          continue;
         }
         refusals++;
         log('proposal_failed', { round, ...requestFailure(error, asked, { system: systemPrompt(), user: payload }) });
@@ -1236,6 +1246,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   let satisfied: Formula | null = null;
   let best: { formula: Formula; wins: number; total: number } | null = null;
   let stoppedBy = 'budget';
+  /* Void checks in a row (SPEC-VALIDEZ-MEDIDA §7). */
+  let voidInARow = 0;
   let escalations = 0;
   const endings = s.endings ?? [];
   if (endings.length) s.journal.continuations = [...endings];
@@ -1269,6 +1281,15 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const round = roundOf.get(candidate) ?? currentRound;
     say('attempt ' + attempt + ' (round ' + round + ') against opponent level ' + cfg.levels[level] + (cfg.epsilon ? ' (errs ' + cfg.epsilon + ')' : '') + '; laboratories: ' + labs().map((l) => l.id).join(', '));
     const outcome = await protocol.round(candidate, { round, attempt, validate: asksToValidate.has(candidate) });
+    if (outcome.void) {
+      /* No verdict: nothing of it kept, the attempt given back, the same model measured again; three in a row and it stops. */
+      voidInARow++;
+      log('check_void', { round, attempt, ...outcome.void, in_a_row: voidInARow, jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+      if (voidInARow >= 3) { stoppedBy = 'judge_unavailable'; say('  stopping: ' + voidInARow + ' checks in a row void: the Judge did not answer'); break; }
+      attempt--;
+      continue;
+    }
+    voidInARow = 0;
     const measured = outcome.laboratories.map((o) => o.detail as Measured);
     const reused = outcome.reused !== null;
     const stored = reused ? [] : measured.flatMap((m) => m.stored);

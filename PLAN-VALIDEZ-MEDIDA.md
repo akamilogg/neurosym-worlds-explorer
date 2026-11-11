@@ -1,6 +1,6 @@
 # PLAN · Arreglar la medida: trabajo para un modelo que empieza de cero
 
-Estado (10/11/2026): **plan de trabajo, sin empezar**. Desarrolla [SPEC-VALIDEZ-MEDIDA.md](SPEC-VALIDEZ-MEDIDA.md) y, al
+Estado (11/11/2026): **T0 a T8 hechas** (lo que quedó de cada una, en las notas «hecho» de SPEC-VALIDEZ-MEDIDA §11 y SPEC-CONSOLIDACION §8). Desarrolla [SPEC-VALIDEZ-MEDIDA.md](SPEC-VALIDEZ-MEDIDA.md) y, al
 final, la primera entrega de [SPEC-CONSOLIDACION.md](SPEC-CONSOLIDACION.md). Los hallazgos que corrige (V1 a V19) están
 en [REPASO-2026-11-10.md](REPASO-2026-11-10.md) §4.3. Está escrito para que un modelo sin contexto previo pueda tomar una
 tarea, hacerla entera y dejarla comprobada.

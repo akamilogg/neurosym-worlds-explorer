@@ -27,6 +27,18 @@ export function requestTableOf(lab: AnyLab): Readonly<Record<string, RequestClas
   return { ...COMMON_REQUESTS, ...((lab as { living?: unknown }).living ? LivingBridge.REQUESTS : {}), ...own };
 }
 
+/** How a living world's adapter names what the generic layer shows (SPEC-VALIDEZ-MEDIDA §9), by the adapter's id as a
+    world's record names it; none when no laboratory here has that adapter. */
+export function livingNaming(adapter: unknown): NonNullable<import('../living/world.ts').LivingWorldAdapter<unknown, unknown>['naming']> {
+  for (const name of Object.keys(LABS)) {
+    if (name === 'junior') continue;
+    const living = (LABS[name] as { living?: { adapter?: { id?: string; naming?: unknown } } }).living;
+    const a = living?.adapter;
+    if (a && a.id === adapter) return (a.naming ?? {}) as never;
+  }
+  return {};
+}
+
 /** What is wrong with a laboratory's own requests: one declared with no class is an error, never a recall by default. */
 export function labRequestProblems(lab: AnyLab): string[] {
   const own = (lab as { requests?: Readonly<Record<string, unknown>> }).requests ?? {};

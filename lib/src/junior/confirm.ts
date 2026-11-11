@@ -6,6 +6,7 @@ import type { TrialLauncher } from '../meta/lab.ts';
 import type { LabConnection } from '../runtime/lab-runner.ts';
 import type { JuniorSessionClient } from './client.ts';
 import { competenceHash, competenceProblems, powerOf, type CompetenceManifest } from './competence.ts';
+import { realizationOf } from './groups.ts';
 import { evaluate, promoteEvaluations, type Evaluation } from './evaluate.ts';
 import { appendRecord } from './jsonl.ts';
 import { BlobStore, checkClosed, executionHash, normalizePackage, treesOf, type JuniorPackage } from './package.ts';
@@ -109,6 +110,22 @@ export class ConfirmationService {
 
   private ledger(): string { return path.join(this.root, 'confirmations.jsonl'); }
 
+  /** Why a candidate is not confirmed here, before anything of it is evaluated, or null (SPEC-VALIDEZ-MEDIDA §5.2): a package
+      that learned (distilled, trained or edited) must declare the realizations of the runs it learned from, and none may
+      be one of the reserved cases'. The reserved cases never leave the service: the refusal says there is an overlap,
+      never with which. */
+  refusalOf(pkg: JuniorPackage): string | null {
+    const o = owes(pkg);
+    const declared = pkg.provenance.realizations;
+    if (declared === undefined) return o.distilled || o.trained || o.edited
+      ? 'the candidate learned (' + [o.distilled ? 'distilled' : '', o.trained ? 'trained' : '', o.edited ? 'edited' : ''].filter(Boolean).join(', ') + ') and declares no realizations of what it learned from: the world that made it writes them'
+      : null;
+    /* A reserved case's world as its trial makes it: its own arguments and the junior's. */
+    const reserved = new Set(this.manifest.cases.filter((c) => c.partition === 'confirmation' && c.kind === 'investigation')
+      .map((c) => realizationOf(c.lab, [...(c.kind === 'investigation' ? c.args : []), ...this.manifest.limits.junior_args])));
+    return declared.some((r) => reserved.has(r)) ? 'what the candidate learned from overlaps the reserved cases of this confirmation: it cannot be confirmed on them' : null;
+  }
+
   /** How many published summaries each reserved case was measured for. */
   exposures(): Record<string, number> {
     const out: Record<string, number> = {};
@@ -129,7 +146,9 @@ export class ConfirmationService {
     const candidate = importPackage(candidateExport, this.store);
     const reference = importPackage(referenceExport, this.store);
     if (executionHash(reference) !== this.manifest.reference) throw new Error('the reference given is not the manifest\'s reference junior');
-    const run = (pkg: JuniorPackage) => evaluate({ dir: path.join(this.root, 'evaluation'), manifest: this.manifest, manifestHash: this.manifestHash, pkg, client: this.client,
+    const refused = this.refusalOf(candidate);
+    if (refused) throw new Error(refused);
+    const run =(pkg: JuniorPackage) => evaluate({ dir: path.join(this.root, 'evaluation'), manifest: this.manifest, manifestHash: this.manifestHash, pkg, client: this.client,
       launcher: this.launcher, partition: 'confirmation', ...(this.judge ? { judge: this.judge } : {}), ...(signal ? { signal } : {}) });
     const ref = await run(reference);
     const cand = await run(candidate);

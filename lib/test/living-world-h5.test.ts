@@ -8,6 +8,7 @@ import { platesLab } from '../src/worlds/plates/lab.ts';
 import { platesAdapter } from '../src/worlds/plates/world.ts';
 import { LivingSession, WorldJournal, type ActorDecl } from '../src/living/world.ts';
 import { livingIdentity, livingTimeline, readWorld, verifyWorld } from '../src/living/record.ts';
+import { livingNaming } from '../src/worlds/labs.ts';
 import { runLivingSession, type SessionPlan } from '../src/living/run-session.ts';
 import { packRun, packSession, verifyPackage, verifySessionPackage } from '../src/runtime/package.ts';
 import { groupResults, runResults, sessionResults } from '../src/orchestra/results.ts';
@@ -108,7 +109,8 @@ test('§15.1: the identity of a living condition - the same in any folder, chang
       limits: { calls_per_window: 2, intents_per_window: 2 }, journal: new WorldJournal(file), programs: o.programs ?? programs, signals: ss.map((x) => ({ ...x, actor: as[0].id })) });
     if (o.control) { s.control({ id: 'o', op: 'disable', target: 'p', by: 'operator' }); s.seal(as[0].id, []); s.settle(); }
     s.close('end');
-    return livingIdentity(readWorld(file));
+    /* The realization's keys as the world's adapter names them (SPEC-VALIDEZ-MEDIDA §9), as every caller passes them. */
+    return livingIdentity(readWorld(file), { realization: livingNaming('plates@1').realization });
   };
   const base = identity();
   /* The same condition in another folder, its researcher named otherwise: the same hashes. */

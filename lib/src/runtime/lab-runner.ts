@@ -1,3 +1,4 @@
+import { appendEvent, readJournalFile, startEvents, writeAtomic } from './journal-files.ts';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -372,7 +373,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   const resumeFrom = r >= 0 ? given[r + 1] : undefined;
   let previous: Record<string, any> | null = null;
   if (resumeFrom) {
-    try { previous = JSON.parse(fs.readFileSync(resumeFrom, 'utf8')); } catch (e) { throw new LabError('--resume: cannot read ' + resumeFrom + ': ' + String((e as Error).message ?? e)); }
+    /* Its events from its record of lines where that holds more (SPEC-CONSOLIDACION §3.2). */
+    try { previous = readJournalFile(resumeFrom); } catch (e) { throw new LabError('--resume: cannot read ' + resumeFrom + ': ' + String((e as Error).message ?? e)); }
     if (previous!.experiment !== lab.id || !Array.isArray(previous!.argv)) throw new LabError('--resume: ' + resumeFrom + ' is not a resumable journal of ' + lab.id);
     /* Without its log, a resumed run would ask everything again: costs and acts repeated. */
     const log = resumeFrom.replace(/\.json$/, '') + '.replay.jsonl';
@@ -844,14 +846,19 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     hidden_from_the_learner: {},
     events: [] as unknown[]
   };
+  startEvents(outFile);
   /* Once a divergence has ended the run where it was, the loop left behind writes nothing more. */
   let closed = false;
   let helpDelivered = 0;
   const log = (type: string, data: Record<string, unknown> = {}): void => {
     if (closed) return;
     if (type === 'operator_message' && Array.isArray(data.messages)) helpDelivered += data.messages.filter((m: Record<string, unknown>) => !m.research_result).length;
-    journal.events.push({ t: Math.round((Date.now() - started.getTime()) / 1000), type, ...data });
-    fs.writeFileSync(outFile, JSON.stringify(journal, null, 2));
+    const event = { t: Math.round((Date.now() - started.getTime()) / 1000), type, ...data };
+    journal.events.push(event);
+    /* Each event a line of its record, then the whole journal written to a temporary and renamed: never read half written
+       (SPEC-CONSOLIDACION §3.2). */
+    appendEvent(outFile, event);
+    writeAtomic(outFile, JSON.stringify(journal, null, 2));
     writeStatus();
   };
 
@@ -885,7 +892,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   const lastRound = (): number | null => { for (let i = journal.events.length - 1; i >= 0; i--) if (typeof journal.events[i].round === 'number') return journal.events[i].round; return null; };
   function writeStatus(): void {
     try {
-      fs.writeFileSync(files.status, JSON.stringify({ run: path.basename(outFile, '.json'), journal: outFile, lab: lab.id, researcher, state, pid: process.pid,
+      writeAtomic(files.status, JSON.stringify({ run: path.basename(outFile, '.json'), journal: outFile, lab: lab.id, researcher, state, pid: process.pid,
         started: started.toISOString(), heartbeat: new Date().toISOString(), round: lastRound(), events: journal.events.length,
         cost: { llm_calls: llmUse.calls, llm_tokens: llmUse.tokens, jev_calls: judge.stats.calls, ...consoleUsage }, ...(stoppedBy ? { stoppedBy } : {}) }, null, 2));
     } catch { /* the state is a convenience: a run never stops for it */ }
@@ -1346,6 +1353,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
      against the reference, and how much better one is than another is the researcher's to measure). */
   const artifactAccepted: { version: string; round: number }[] = [];
   const protocol = new Protocol(objective, {
+    /* The Judge's failed calls and the rules it left unanswered: a check during which either grew is no verdict (VM5). */
+    instrumentFailures: () => judge.stats.errors + evaluator.stats.fallbacks,
     places: () => [...places.values()],
     blindPlaces: (set: number, round: number) => (team
       ? team.board.blindBoards(team.member, 'c' + confirmations + '.s' + set, cfg.confirmPlaces)
@@ -2092,7 +2101,12 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     ?? [...(journal.events as Record<string, any>[])].reverse().find((e) => e.type === 'artifact_check' && typeof e.version === 'string')?.version ?? null;
   const goesOn = Boolean(lab.goesOnAfterAcceptance) && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.goes_on === 0;
   const modelsAccepted: { law: Law; round: number }[] = [];
-  for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted; attempt++) {
+  /* Void checks in a row (SPEC-VALIDEZ-MEDIDA §7): each gives its round back; this many in a row and the run stops - the
+     Judge is down, and a run that waits on it measures nothing. */
+  const VOID_IN_A_ROW = 3;
+  let voidInARow = 0;
+  let instrumentDown: string | null = null;
+  for (let attempt = 1; attempt <= cfg.attempts && !session.fatal && !session.halted && !instrumentDown; attempt++) {
     /* Where the run's history had an ending (it used up its rounds and was given more): that ending, as it was. */
     if (endings.includes(attempt - 1)) {
       if (cfg.reflection) { say('the ending of the run it continues (round ' + (attempt - 1) + '): its reflection'); await session.consult('reflect', endingTask()); }
@@ -2145,6 +2159,15 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       continue;
     }
     const outcome = await protocol.round(record.law, { round: record.round, attempt, validate: record.validate });
+    if (outcome.void) {
+      /* No verdict: nothing of the check is kept, its round is given back, and the researcher is told (protocol.lastView). */
+      voidInARow++;
+      log('check_void', { round: record.round, attempt, ...outcome.void, in_a_row: voidInARow, jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+      if (voidInARow >= VOID_IN_A_ROW) { instrumentDown = voidInARow + ' checks in a row void: the Judge did not answer'; say('  stopping: ' + instrumentDown); break; }
+      attempt--;
+      continue;
+    }
+    voidInARow = 0;
     checkSample(record.round, (outcome.journal as { laboratories?: Record<string, any>[] }).laboratories ?? []);
     await judgeSample(record.round, (outcome.journal as { laboratories?: Record<string, any>[] }).laboratories ?? []);
     record.accepted = outcome.accepted;
@@ -2236,7 +2259,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* Of the final model, its tests: what it predicted (as registered with it) and what it holds on again (SPEC-PRUEBAS-PROPIAS §7). */
   const finalTests = ownTests && final && (ownTests.summary().registered as number) > 0 ? await ownTests.standing(final, session.currentRound) : null;
   if (cfg.grade && !session.fatal && (!session.halted || session.halted === budgetStop)) await gradeRecovery(final);
-  const stoppedBy = session.fatal ? 'llm_error' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget';
+  const stoppedBy = session.fatal ? 'llm_error' : instrumentDown ? 'judge_unavailable' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget';
   /* Its branches asked to stop; in a living world it leaves it first - a shared branch never waits for it - and the world is
      closed only once they have stopped (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12, §13). */
   const delegationEnd = delegations ? delegations.close() : null;

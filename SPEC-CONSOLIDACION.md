@@ -1,6 +1,6 @@
 # SPEC · Consolidación: un diario con esquema, piezas comunes y evidencia comprobable
 
-Estado (10/11/2026): **propuesta, sin implementar**. Sale del [repaso del repositorio](REPASO-2026-11-10.md) (§4.2 y
+Estado (11/11/2026): **CC1 empezada** (su escritura, §8); el resto, propuesta sin implementar. Sale del [repaso del repositorio](REPASO-2026-11-10.md) (§4.2 y
 §5.2). No añade ninguna capacidad: reduce a una las piezas que el arnés tiene repetidas, da tipo al diario y deja los
 hallazgos comprobables desde fuera. Toca el runner ([SPEC-OBJETIVO](SPEC-OBJETIVO.md) O9), los registros de
 [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), del [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), del
@@ -177,6 +177,21 @@ capacidad `artifact`). Una prueba recorre los `import` y falla si aparece otro.
 
 **CC1 y CC6 van antes de la campaña de ejecuciones reales.** CC2 a CC5 se intercalan con ella. Las costuras del mundo
 vivo y del junior (parte de CC3 y CC5) esperan a su primera ejecución real.
+
+**CC1, la escritura (§3.2), hecha (11/11/2026):**
+
+- **Dónde está.** `lib/src/runtime/journal-files.ts`: `appendEvent` añade cada evento como una línea a
+  `<run>.events.jsonl`; `writeAtomic` escribe `<run>.json` y `<run>.status.json` a un temporal y lo renombra (con
+  reintento breve cuando Windows niega el renombrado a un fichero abierto, y escritura directa como último recurso);
+  `readJournalFile` da al reanudar los eventos del registro de líneas cuando `<run>.json` tiene menos; una última línea
+  cortada no cuenta. El runner (`lab-runner.ts`) y `regrade.ts` escriben así.
+- **Diferencia con §3.2.** `<run>.json` se sigue escribiendo con cada evento, no cada N eventos o segundos: lo leen en
+  vivo los agentes, las herramientas del operador y varias pruebas. Con el renombrado ya nunca se lee a medias; espaciar
+  la escritura es una mejora de rendimiento aparte.
+- **Pruebas.** `lib/test/journal-files.test.ts`: el registro de líneas y el diario tienen los mismos eventos, no queda
+  ningún temporal, y una reanudación toma los eventos del registro de líneas cuando el diario se quedó corto.
+- **Pendiente de CC1.** El esquema de eventos (§3.1, `journal@2`, `eventsOf` tipado) y que los lectores lean del registro
+  de líneas.
 
 ## 9. Aceptación
 

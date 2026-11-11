@@ -50,7 +50,7 @@ export interface SessionRun {
   /** The session's journal. */
   readonly world: string;
   /** Each researcher's run: its journal and how it ended, or why it failed. */
-  readonly runs: Readonly<Record<string, { journal: string | null; stoppedBy?: string; error?: string }>>;
+  readonly runs: Readonly<Record<string, { journal: string | null; stoppedBy?: string; error?: string; senior_error?: string }>>;
   readonly summary: Record<string, unknown>;
 }
 
@@ -138,7 +138,7 @@ export async function runLivingSession(lab: LawLab, o: { plan: SessionPlan; dir:
   const worldFile = path.join(o.dir, o.name + '.world.jsonl');
   const session = openShared(lab, plan, new WorldJournal(worldFile));
   const researchers = plan.actors.filter((a): a is ResearcherDecl => a.kind === 'researcher');
-  const runs: Record<string, { journal: string | null; stoppedBy?: string; error?: string }> = {};
+  const runs: Record<string, { journal: string | null; stoppedBy?: string; error?: string; senior_error?: string }> = {};
   /* Its record from the start - its plan, its world, where each researcher's run will be: a session cut short can be
      continued from it. Completed at its end. */
   const record = (state: 'running' | 'ended', summary?: Record<string, unknown>) => fs.writeFileSync(path.join(o.dir, o.name + '.session.json'), JSON.stringify({ format: 'living-session@1', adapter: lab.id, state, plan,
@@ -176,21 +176,29 @@ export async function runLivingSession(lab: LawLab, o: { plan: SessionPlan; dir:
       ...(r.senior ? ['--agents', 'senior=message'] : []), ...(o.args ?? []), '--out', out];
     /* Its senior follows its run from beside it, in this process, as `lab agent` would: it leaves when its run ends. */
     const stopSenior = new AbortController();
-    const senior = r.senior ? runAgentOperator({ id: 'senior', role: 'senior', journal: out, root: o.root, llm: o.seniorLlm!(r.id), signal: stopSenior.signal, pollMs: 500,
+    /* A senior that fails is kept in the session's record beside its researcher's run (SPEC-VALIDEZ-MEDIDA §9): a run whose
+       senior fell had no senior from then on, and who reads the session must know it. */
+    let seniorError: string | null = null;
+    /* A senior that cannot even be set up (its LLM) leaves its researcher without one, never the session waiting for it. */
+    let seniorLlm: ChatClient | null = null;
+    if (r.senior) { try { seniorLlm = o.seniorLlm!(r.id); } catch (e) { seniorError = String((e as Error)?.message ?? e).slice(0, 500); } }
+    const senior = r.senior && seniorLlm ? runAgentOperator({ id: 'senior', role: 'senior', journal: out, root: o.root, llm: seniorLlm, signal: stopSenior.signal, pollMs: 500,
       ...(r.senior.max_orders !== undefined ? { maxOrders: r.senior.max_orders } : {}), ...(r.senior.patience !== undefined ? { patience: r.senior.patience } : {}),
-      ...(r.senior.activation ? { activation: r.senior.activation } : {}) }).catch(() => null) : null;
+      ...(r.senior.activation ? { activation: r.senior.activation } : {}) }).catch((e) => { seniorError = String((e as Error)?.message ?? e).slice(0, 500); return null; }) : null;
     try {
       const result: LabResult = await runLaboratory(lab, { args, root: o.root, llm: c.llm, ...(c.judge ? { judge: c.judge } : {}), ...(c.fetch ? { fetch: c.fetch } : {}),
         ...(o.signal ? { signal: o.signal } : {}), living: { session, actor: r.id } });
       runs[r.id] = { journal: result.journal, stoppedBy: result.stoppedBy };
       stopSenior.abort();
       await senior;
+      if (seniorError) runs[r.id] = { ...runs[r.id], senior_error: seniorError };
     } catch (e) {
       /* A run that failed leaves the session all the same: the others are never left waiting for it. */
       session.retire(r.id, 'failed');
       runs[r.id] = { journal: fs.existsSync(out) ? out : null, error: String((e as Error).message ?? e) };
       stopSenior.abort();
       await senior;
+      if (seniorError) runs[r.id] = { ...runs[r.id], senior_error: seniorError };
     }
   }));
   clearInterval(poller);

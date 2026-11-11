@@ -101,7 +101,7 @@ test('a training: capacity first, refused when it does not fit or shares selecti
     assert.deepEqual([big.state, big.adapter], ['refused', null]);
     assert.match(big.reason!, /more than the 24 GB/);
     const shared = await train({ ...common, manifest: { cases: [{ kind: 'probe', partition: 'development', group: 'g-train' }] } as unknown as CompetenceManifest, recipe: recipe() });
-    assert.match(shared.reason!, /shares groups with the probes that select juniors \(g-train\)/);
+    assert.match(shared.reason!, /shares groups with the cases that select or confirm juniors \(g-train\)/);
     // Stopped at step 1 of 2: no adapter; asked again it goes on from its checkpoint and finishes.
     const { createHash } = await import('node:crypto');
     const { stableStringify } = await import('../src/core/hash.ts');
@@ -119,6 +119,9 @@ test('a training: capacity first, refused when it does not fit or shares selecti
     assert.equal(done.child!.adapter, done.adapter);
     assert.deepEqual(done.child!.provenance.parents, [executionHash(f.pkg)]);
     assert.ok(done.child!.provenance.sources.includes('dataset:' + ds.id));
+    /* VM4: the realizations of the runs its examples were cut from, written by the training. */
+    const { realizationOfRun } = await import('../src/junior/groups.ts');
+    assert.deepEqual(done.child!.provenance.realizations, [realizationOfRun(path.resolve(f.src))]);
   } finally { f.server.stop(); await f.h.close(); }
 });
 
@@ -135,7 +138,10 @@ test('junior-competence@1: distill, dataset, train, a child valid to run, evalua
         { id: 'protocol-start', rung: 1, mode: 'start', extractor: { id: 'probe', version: 1 }, unit: 'share', direction: 'up', target: 1, bad: 0, tolerance: 0, protected: true },
         { id: 'cells-L1', rung: 6, lab: 'cells', level: 'L1', extractor: { id: 'model_accepted', version: 1 }, unit: 'solved', direction: 'up', target: 1, bad: 0, tolerance: 0 }
       ],
-      cases: [...probes, { id: 'i1', kind: 'investigation', lab: 'cells', args: ['--seed', '2'], partition: 'development', group: 'g-i1', components: ['cells-L1'] }],
+      /* VM4: what it trains on comes from a case of the training partition - run only to be distilled at - never from one that
+         selects (i1) or confirms. */
+      cases: [...probes, { id: 'i1', kind: 'investigation', lab: 'cells', args: ['--seed', '2'], partition: 'development', group: 'g-i1', components: ['cells-L1'] },
+        { id: 't1', kind: 'investigation', lab: 'cells', args: ['--seed', '3'], partition: 'training', group: 'g-t1', components: ['cells-L1'] }],
       investigation_repetitions: 1, execution: {}, sampling: { seed: 1 },
       promotion: { procedure: 'paired-cases@1', alpha: 0.05, permutations: 1000, seed: 1 },
       limits: { junior_args: ['--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '2', '--max-tokens', '100000', '--max-judge-calls', '100000'], probe_max_tokens: 500, timeout_ms: 60000 }
@@ -146,15 +152,22 @@ test('junior-competence@1: distill, dataset, train, a child valid to run, evalua
       evaluations: '4', distillations: '3', 'gpu-hours': '2', 'train-python': python!, 'train-backend': 'fake' } as never);
     const spec = { ...made, teacher: { client: teacher(LOOK), identity: { model: 'strong' } } };
     await juniorLab.explore!([{ id: 'development', spec }], Math.random, 1, {} as never);
-    const ex = await juniorLab.act!.start(spec, { distill: { version: spec.world.reference, case: 'i1', question: 0, mode: 'start', checker: 'protocol', instruction: 'Answer in the protocol.' } }, 'a1', {} as never);
+    const ex = await juniorLab.act!.start(spec, { distill: { version: spec.world.reference, case: 't1', question: 0, mode: 'start', checker: 'protocol', instruction: 'Answer in the protocol.' } }, 'a1', {} as never);
     assert.ok(ex && ex.kind === 'records' && ex.summary.state === 'verified', JSON.stringify(ex));
+    assert.equal(ex.summary.group, 'g-t1', 'the training case was run here, then distilled at');
     const ds = await juniorLab.act!.start(spec, { dataset: { examples: [String(ex.summary.example)], admits: ['verified'] } }, 'a2', {} as never);
     assert.ok(ds && ds.kind === 'records');
+    assert.deepEqual(ds.summary.shares_selection_groups, []);
     const reaching = await juniorLab.act!.start(spec, { train: { from: spec.world.reference, dataset: String(ds.summary.dataset), recipe: recipe({ layers: [2] }) as never, why: 'w', expect: 'e' } }, 'a3', {} as never);
     assert.ok(reaching && reaching.kind === 'records' && reaching.summary.state === 'refused' && /circuit/.test(String(reaching.summary.reason)));
     const t = await juniorLab.act!.start(spec, { train: { from: spec.world.reference, dataset: String(ds.summary.dataset), recipe: recipe() as never, why: 'the teacher\'s protocol', expect: 'answers accepted' } }, 'a4', {} as never);
     assert.ok(t && t.kind === 'records' && t.summary.state === 'finished', JSON.stringify(t));
     const child = String(t.summary.version);
+    /* VM4: the version's package declares where it learned: the realization of the training case's run. */
+    const { realizationOf } = await import('../src/junior/groups.ts');
+    const trained = await spec.world.packageOf(child);
+    assert.ok(typeof trained !== 'string');
+    assert.deepEqual(trained.provenance.realizations, [realizationOf('cells', ['--seed', '3', '--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '2'])]);
     const run = await juniorLab.act!.start(spec, { run: { version: child } }, 'a5', {} as never);
     assert.ok(run && run.kind === 'evaluation' && run.components[0].deficit === 0, 'the trained junior keeps to the protocol');
     assert.equal((await juniorLab.artifact!.check(spec, child, { round: 1, purpose: 'check', index: 0 }, {} as never)).holds, true);

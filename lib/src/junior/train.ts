@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { stableStringify } from '../core/hash.ts';
 import type { CompetenceManifest } from './competence.ts';
 import { selectionOverlap, type Dataset, type Example } from './distill.ts';
+import { realizationOfRun } from './groups.ts';
 import { executionHash, normalizePackage, type BlobStore, type JuniorPackage } from './package.ts';
 import { materialize } from './worker.ts';
 
@@ -121,6 +122,20 @@ function runTrainer(python: readonly string[], args: Record<string, unknown>, si
   });
 }
 
+/** The realizations of the runs a dataset's examples were cut from, or null when one cannot be read. */
+export function datasetRealizations(examplesDir: string, dataset: Pick<Dataset, 'examples'>): string[] | null {
+  const out = new Set<string>();
+  const files = fs.existsSync(examplesDir) ? fs.readdirSync(examplesDir).map((n) => path.join(examplesDir, n)) : [];
+  for (const id of dataset.examples) {
+    const f = files.find((p) => { try { return (JSON.parse(fs.readFileSync(p, 'utf8')) as Example).id === id; } catch { return false; } });
+    if (!f) return null;
+    const r = realizationOfRun(path.resolve((JSON.parse(fs.readFileSync(f, 'utf8')) as Example).cut.run));
+    if (r === null) return null;
+    out.add(r);
+  }
+  return [...out].sort();
+}
+
 /** A training from a parent package and a dataset: capacity first, then the run (going on from its last checkpoint), then
     the adapter stored as a tree blob and the child package. Refused before anything runs when the recipe reaches the
     circuit or the dataset shares a group with the selection probes. */
@@ -131,7 +146,7 @@ export async function train(o: { python: readonly string[]; backend: 'fake' | 'q
   const problems = recipeProblems(o.recipe, parent);
   if (problems.length) return { state: 'refused', reason: 'the recipe: ' + problems.join('; '), ...none };
   const shared = selectionOverlap(o.dataset, o.manifest);
-  if (shared.length) return { state: 'refused', reason: 'the dataset shares groups with the probes that select juniors (' + shared.join(', ') + '): publish another condition that withdraws them from selection first', ...none };
+  if (shared.length) return { state: 'refused', reason: 'the dataset shares groups with the cases that select or confirm juniors (' + shared.join(', ') + '): publish another condition that withdraws them from selection first', ...none };
   const rows = trainingRows(o.examplesDir, o.dataset, o.recipe);
   if ('error' in rows) return { state: 'refused', reason: rows.error, ...none };
   const key = createHash('sha256').update(stableStringify({ parent: executionHash(parent), dataset: o.dataset.id, recipe: o.recipe })).digest('hex');
@@ -145,7 +160,11 @@ export async function train(o: { python: readonly string[]; backend: 'fake' | 'q
   const r = await runTrainer(o.python, { op: 'train', ...common }, o.signal);
   if (r.state !== 'finished') return { state: o.signal?.aborted ? 'stopped' : r.state === 'stopped' ? 'stopped' : 'failed', reason: r.reason ?? null, ...none, capacity, gpu_hours: r.gpu_hours ?? null, steps: r.steps ?? null, checkpoint: r.checkpoint ?? null };
   const adapter = o.store.putTree(path.join(dir, 'adapter'));
+  /* The realizations of what it learned from (SPEC-VALIDEZ-MEDIDA §5.2): the runs its examples were cut from; none declared
+     when one of them cannot be read - the confirmation refuses what does not say where it learned. */
+  const learned = datasetRealizations(o.examplesDir, o.dataset);
   const child = normalizePackage({ ...parent, adapter, provenance: { parents: [executionHash(parent)], reason: 'trained on dataset ' + o.dataset.id + ' with ' + o.recipe.method,
-    sources: ['dataset:' + o.dataset.id, 'recipe:' + createHash('sha256').update(stableStringify(o.recipe)).digest('hex'), 'training:' + key] } });
+    sources: ['dataset:' + o.dataset.id, 'recipe:' + createHash('sha256').update(stableStringify(o.recipe)).digest('hex'), 'training:' + key],
+    ...(learned ? { realizations: learned } : {}) } });
   return { state: 'finished', adapter, child, reason: null, capacity, gpu_hours: r.gpu_hours ?? null, steps: r.steps ?? null, checkpoint: r.checkpoint ?? null };
 }

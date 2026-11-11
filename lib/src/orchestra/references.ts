@@ -84,7 +84,7 @@ function keyed(entries: readonly { key: string; value: number | null | undefined
 /** What a run's results are, as numbers to compare. */
 export function valuesOf(journalFile: string): Record<string, number | null> {
   const r = runResults(journalFile);
-  return { o1: r.o1_predictive_acceptance.model ? 1 : 0, artifact: r.o1_predictive_acceptance.artifact === undefined ? null : r.o1_predictive_acceptance.artifact ? 1 : 0,
+  return { o1: r.o1_predictive_acceptance.model === null ? null : r.o1_predictive_acceptance.model ? 1 : 0, artifact: r.o1_predictive_acceptance.artifact === undefined ? null : r.o1_predictive_acceptance.artifact ? 1 : 0,
     o4: typeof r.o4_mechanistic_recovery === 'object' ? r.o4_mechanistic_recovery.score : null, severe: r.o2_discriminating_evidence.severe_passed_as_preregistered,
     tokens: r.cost.tokens.total_at_least, seconds: r.cost.seconds };
 }

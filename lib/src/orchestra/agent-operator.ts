@@ -185,6 +185,19 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) 
 
 const readJson = (file: string): any => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
+/** A run's journal read while its run may be writing it whole (SPEC-VALIDEZ-MEDIDA §9): a read that does not parse is the
+    file caught mid-write, read again (`tries` times, `ms` apart) before it is taken for no journal - one read cut short
+    must not look to an agent like a run that has nothing yet. Null when it does not exist, or never parses. */
+export async function readJournal(file: string, tries = 3, ms = 50): Promise<any> {
+  for (let k = 0; k <= tries; k++) {
+    if (!fs.existsSync(file)) return null;
+    const j = readJson(file);
+    if (j !== null) return j;
+    if (k < tries) await new Promise((r) => setTimeout(r, ms));
+  }
+  return null;
+}
+
 /** The runs a junior reads as experience, from its configuration: their files (resolved against the repository its run was
     started from, as the junior resolved them) and, by the labels it reads them under, their journals - what the senior's
     branches read and its evolutionary branches may take seeds from. */
@@ -257,7 +270,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   };
   while (!o.signal?.aborted) {
     const status = fs.existsSync(o.journal) ? runStatus(o.journal) : null;
-    const journal = readJson(o.journal);
+    const journal = await readJournal(o.journal);
     /* A run resumed from another: the senior goes on where it was, with the state its record of that run keeps. */
     if (role === 'senior' && !loaded && journal) {
       const start = (journal.events ?? []).find((e: Record<string, unknown>) => e.type === 'start');

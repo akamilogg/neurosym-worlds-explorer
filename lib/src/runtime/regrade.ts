@@ -1,3 +1,4 @@
+import { appendEvent, eventsOf, writeAtomic } from './journal-files.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseJsonLoose } from '../core/net.ts';
@@ -130,7 +131,9 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   const last = events.length ? Number(events[events.length - 1].t ?? 0) : 0;
   const stamped = { t: last, ...event, regraded: new Date().toISOString() };
   journal.events = [...events, stamped];
-  fs.writeFileSync(journalFile, JSON.stringify(journal, null, 2));
+  /* Its record of lines too, where the run kept one (SPEC-CONSOLIDACION §3.2). */
+  if (eventsOf(journalFile) !== null) appendEvent(journalFile, stamped);
+  writeAtomic(journalFile, JSON.stringify(journal, null, 2));
   const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(journalFile), ...methodOf(journalFile) });
   fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.json', JSON.stringify(finding, null, 2));
   fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.researcher.json', JSON.stringify(findingView(finding, 'researcher'), null, 2));

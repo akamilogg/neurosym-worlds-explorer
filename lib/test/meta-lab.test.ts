@@ -93,7 +93,8 @@ function fakeLauncher(dir: string, calls: any[], o: { partialOn?: (t: any) => bo
       ...(o.policyError ? [{ type: 'research_policy_decided', failure: 'invalid_output' }] : []),
       { type: 'research_policy_delivered', message: 'm1' }, ...(partial ? [] : [{ type: 'end', stoppedBy: 'budget', replay: { live: { jev: 7 } }, console_usage: { llm_tokens_live: 100 } }])];
     write(t.out, { experiment: 'cells@1', started: 'x', config: { llm_model: o.ran ?? identity.llm_model }, events, policy_words: words });
-    if (solved && !partial) write(t.out.replace(/\.json$/, '.finding.json'), { outcome: { status: 'accepted' } });
+    /* Its finding, as a run that ended writes it (VM5: a run without one has no datum). */
+    if (!partial) write(t.out.replace(/\.json$/, '.finding.json'), { outcome: { status: solved ? 'accepted' : 'rejected' } });
     if (t.signal?.aborted) return { journal: t.out };
     if (partial) throw new Error('the child died');
     return { journal: t.out };
@@ -438,7 +439,8 @@ test('M2 review 2: --max-judge-calls bounds a run - it stops before asking Syste
 
 test('M2 pilot: a trial its providers failed measures nothing - the Judge unanswered, System 2 unanswered, or its run stopped by them', () => {
   const dir = tmp('meta-providers-');
-  const at = (name: string, events: unknown[]) => { const f = path.join(dir, name + '.json'); write(f, { experiment: 'cells@1', config: {}, events }); return f; };
+  /* A record and the finding a run that ended writes beside it (VM5). */
+  const at = (name: string, events: unknown[]) => { const f = path.join(dir, name + '.json'); write(f, { experiment: 'cells@1', config: {}, events }); write(f.replace(/\.json$/, '.finding.json'), { outcome: { status: 'rejected' } }); return f; };
   const check = { type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false }] };
   assert.equal(trialResult(at('fine', [check, { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 0 } }]), 'model_accepted').state, 'ended');
   const judge = trialResult(at('judge', [check, { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 3 } }]), 'model_accepted');
@@ -469,7 +471,8 @@ test('VM1: a candidate whose trials fell has no quality - one solved and nine in
 
 test('VM1: three causes - a timeout while the service answered is the candidate\'s; a provider\'s failure is infra; what cannot be told is infra apart', () => {
   const dir = tmp('meta-causes-');
-  const at = (name: string, events: unknown[]) => { const f = path.join(dir, name + '.json'); write(f, { experiment: 'cells@1', config: {}, events }); return f; };
+  /* A record and the finding a run that ended writes beside it (VM5). */
+  const at = (name: string, events: unknown[]) => { const f = path.join(dir, name + '.json'); write(f, { experiment: 'cells@1', config: {}, events }); write(f.replace(/\.json$/, '.finding.json'), { outcome: { status: 'rejected' } }); return f; };
   const check = { type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false }] };
   const end = (answers: number) => ({ type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 0 }, console_usage: { llm_tokens_live: 10, llm_answers: answers } });
   const timeout = { type: 'proposal_failed', round: 2, error: 'Request aborted after 180000 ms.', kind: 'timeout', waited_ms: 180000, request_chars: 90000 };
@@ -504,8 +507,11 @@ test('VM1: the runner records what attributes a failure of System 2 - its kind, 
   const r = await runLaboratory(cellsLab, { args: ['--seed', '1', '--level', '1', '--flat', '--no-grade', '--tools', 'view', '--attempts', '1', '--researcher', 'assisted', '--out', path.join(dir, 'a.json')],
     root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch: flaky, print: () => {} });
   const j = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
-  const failed = j.events.find((e: any) => e.type === 'proposal_failed');
-  assert.ok(failed, 'the first request failed');
+  /* VM5: a transient failure is asked again apart - logged with its facts, no refusal of the round spent on it. */
+  const failed = j.events.find((e: any) => e.type === 'proposal_retried');
+  assert.ok(failed, 'the first request failed, and was asked again');
+  assert.equal(j.events.filter((e: any) => e.type === 'proposal_failed').length, 0, 'no refusal');
+  assert.ok(j.events.some((e: any) => e.type === 'proposal'), 'the round went on to its proposal');
   assert.deepEqual([failed.kind, failed.status], ['http', 503]);
   assert.ok(Number.isFinite(failed.waited_ms) && failed.request_chars > 0, JSON.stringify(failed));
   const end = j.events.filter((e: any) => e.type === 'end').at(-1);
@@ -519,7 +525,7 @@ function providerLauncher(calls: any[], providerFails: number): TrialLauncher {
     const failing = calls.length <= providerFails;
     write(t.out, { experiment: 'cells@1', started: 'x', config: { llm_model: 'stand-in' }, events: [{ type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: true }] },
       { type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: failing ? 2 : 0 }, replay: { live: { jev: 9 } }, console_usage: { llm_tokens_live: 50 } }] });
-    if (!failing) write(t.out.replace(/\.json$/, '.finding.json'), { outcome: { status: 'accepted' } });
+    write(t.out.replace(/\.json$/, '.finding.json'), { outcome: { status: failing ? 'rejected' : 'accepted' } });
     return { journal: t.out };
   } };
 }

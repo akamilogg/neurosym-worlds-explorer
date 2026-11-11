@@ -2,6 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
 import type { CompetenceManifest } from './competence.ts';
+import { measuringGroups } from './groups.ts';
 import { JobLedger, JobRefused, type Job } from './jobs.ts';
 import { executionHash, normalizePackage, type BlobId, type BlobStore, type JuniorPackage } from './package.ts';
 import type { LabServed } from './sessions.ts';
@@ -62,7 +63,8 @@ export function weightLabProblems(raw: unknown, m: Pick<CompetenceManifest, 'cas
   if (!w || typeof w !== 'object' || !w.diagnosis || typeof w.diagnosis !== 'object' || !w.limits) return ['"weight_lab": {"diagnosis": {group: [runs]}, "limits": {' + LIMITS.join(', ') + '}}'];
   for (const k of LIMITS) if (!Number.isInteger(w.limits[k]) || w.limits[k] <= 0) p.push('"weight_lab.limits.' + k + '": a whole number above 0');
   if (w.program) for (const k of PROGRAM) if (!Number.isInteger(w.program[k]) || w.program[k] <= 0) p.push('"weight_lab.program.' + k + '": a whole number above 0');
-  const caseGroups = new Set((m.cases ?? []).map((c) => c.group));
+  /* The one rule of groups.ts: a diagnosis group is none that selects or confirms. */
+  const caseGroups = measuringGroups({ cases: m.cases ?? [] });
   const probeRuns = new Set((m.cases ?? []).flatMap((c) => c.kind === 'probe' ? [path.resolve(c.cut.run)] : []));
   if (!Object.keys(w.diagnosis).length) p.push('"weight_lab.diagnosis": at least one group');
   for (const [g, runs] of Object.entries(w.diagnosis)) {

@@ -137,6 +137,10 @@ test('a constructor fed by the lab\'s activations, tried on a copy before it is 
     const made = await f.act(edit);
     assert.ok(made && made.kind === 'records' && made.summary.state === 'finished', JSON.stringify(made));
     const version = String(made.summary.version);
+    /* VM4: an edited version declares where it learned - here texts written by the strong model, no run: none. */
+    const edited = await f.world.packageOf(version);
+    assert.ok(typeof edited !== 'string');
+    assert.deepEqual(edited.provenance.realizations, []);
     const tried = await f.act({ inspect_weights: { version: f.world.reference, query: 'try', candidate: version, args: { inner: 'forward', args: {} }, cases: [{ text: { user: 'hello' } }] } });
     assert.ok(tried && tried.kind === 'records' && tried.summary.state === 'answered', JSON.stringify(tried));
     // Rebuilt from the run's events: the same version, from the world's record, never charged again.

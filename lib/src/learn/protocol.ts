@@ -22,6 +22,9 @@ import type { Objective, Place, Rerun, RunOutput } from './objective.ts';
  * ========================================================================== */
 
 export interface ProtocolOptions<M, P extends Place> {
+  /** How many times the instrument that measures a model has failed so far (the Judge's failed calls, the rules it left
+      without an answer): read around each check (SPEC-VALIDEZ-MEDIDA §7). A check during which it failed is no verdict. */
+  readonly instrumentFailures?: () => number;
   /** Every place known: laboratories and the family. The protocol changes roles and marks places seen. */
   readonly places: () => readonly P[];
   /** The places of one blind confirmation set, never shown. */
@@ -105,6 +108,21 @@ export interface RoundOutcome<P, R> {
   readonly view: Record<string, unknown>;
   /** For the journal's check event: the same facts with the operator's measures. */
   readonly journal: Record<string, unknown>;
+  /** A round whose check the instrument failed twice on the same cases (SPEC-VALIDEZ-MEDIDA §7): no verdict, nothing of it
+      kept - no round counted, no role changed, no validation spent. */
+  readonly void?: { readonly purpose: string; readonly failures: number };
+}
+
+/** The instrument that measures a model failed during a check, and again when it was measured once more on the same cases. */
+export class InstrumentFailed extends Error {
+  readonly failures: number;
+  readonly purpose: string;
+  constructor(failures: number, purpose: string) {
+    super('the instrument failed ' + failures + ' time(s) during the ' + purpose + ', and again on the same cases');
+    this.name = 'InstrumentFailed';
+    this.failures = failures;
+    this.purpose = purpose;
+  }
 }
 
 /** Operator only: milestones and cost of the run, for the journal (SPEC-OBJETIVO O4). */
@@ -138,6 +156,8 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     accepted: ProtocolSummary['accepted']; costAtAcceptance: Record<string, number> | null; trivialChecks: number[]; acceptedTrivially: boolean | null } =
     { rounds: 0, checks: 0, firstHeld: null, validations: [], accepted: null, costAtAcceptance: null, trivialChecks: [], acceptedTrivially: null };
   private readonly costAtStart: Readonly<Record<string, number>>;
+  /** Checks of the round in course measured again because the instrument failed in their first measure. */
+  private measuredAgain = 0;
   /** Per fingerprint: the round it was first proposed, and its verdicts in each place it was checked or validated in. */
   private readonly byModel = new Map<string, { first: number; places: Map<string, { held: number; failed: number }> }>();
 
@@ -177,7 +197,29 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     /* In order, one place after another: drawing cases may act on an environment outside (SPEC-OBJETIVO O12). */
     const drawn: { place: P; cases: K }[] = [];
     for (const [index, place] of places.entries()) drawn.push({ place, cases: await this.objective.casesIn(place, { ...context, index }) });
-    const out: RunOutput<R> = await this.objective.run(model, drawn, { round: context.round, attempt: context.attempt, purpose: context.purpose });
+    /* Measured on the drawn cases - its paired regression included - while the instrument answers. A failure of the instrument
+       (the Judge) is no verdict on the model: measured once more on the same cases; failing again, the check is void
+       (SPEC-VALIDEZ-MEDIDA §7). Nothing is kept of a measure the instrument failed. */
+    const failures = (): number => this.options.instrumentFailures?.() ?? 0;
+    let measured: { out: RunOutput<R>; reruns: (Rerun<R> | null)[] } | null = null;
+    for (let tries = 0; !measured; tries++) {
+      const before = failures();
+      const out: RunOutput<R> = await this.objective.run(model, drawn, { round: context.round, attempt: context.attempt, purpose: context.purpose });
+      const reruns: (Rerun<R> | null)[] = [];
+      for (const { place } of drawn) {
+        const prev = this.previous.get(place.id);
+        if (context.purpose === 'check' && this.options.pairedRegression && prev && place.role === 'laboratory') {
+          const again = await this.objective.run(model, [{ place, cases: prev.cases }], { round: context.round, attempt: context.attempt, purpose: 'rerun' });
+          reruns.push({ before: prev.results, now: again.byPlace[0] ?? [] });
+        } else reruns.push(null);
+      }
+      const failed = failures() - before;
+      if (!failed) { measured = { out, reruns }; break; }
+      if (tries >= 1) throw new InstrumentFailed(failed, context.purpose);
+      this.measuredAgain++;
+      this.say('  the instrument failed ' + failed + ' time(s) in the ' + context.purpose + ': measured again on the same cases');
+    }
+    const out = measured.out;
     /* Operator only: which baselines hold on the very same cases, per place. */
     let baselines: string[][] | null = null;
     if (this.options.baselines?.length) {
@@ -190,12 +232,7 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
     const outcomes: PlaceOutcome<P, R>[] = [];
     for (const [i, { place, cases }] of drawn.entries()) {
       const results = out.byPlace[i] ?? [];
-      let rerun: Rerun<R> | null = null;
-      const prev = this.previous.get(place.id);
-      if (context.purpose === 'check' && this.options.pairedRegression && prev && place.role === 'laboratory') {
-        const again = await this.objective.run(model, [{ place, cases: prev.cases }], { round: context.round, attempt: context.attempt, purpose: 'rerun' });
-        rerun = { before: prev.results, now: again.byPlace[0] ?? [] };
-      }
+      const rerun = measured.reruns[i];
       if (context.purpose === 'check' && place.role === 'laboratory') this.previous.set(place.id, { cases, results });
       const holds = this.objective.holds(results, { place, ...(rerun ? { rerun } : {}) });
       outcomes.push({ place, results, holds, rerun, ...(out.detail ? { detail: out.detail[i] } : {}), ...(baselines ? { baselinesHolding: baselines[i] } : {}) });
@@ -220,8 +257,40 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
       ...(o.rerun ? { rerun: this.objective.rerunView ? this.objective.rerunView(o.rerun, o.place) : { cases: o.rerun.now.length } } : {}) };
   }
 
-  /** One round of the protocol for a model System 2 proposed. */
+  /** One round of the protocol for a model System 2 proposed. A round whose instrument failed twice in one of its checks is
+      void (SPEC-VALIDEZ-MEDIDA §7): the protocol is left as it was before it - its rounds and checks counted, the places'
+      roles and what was seen, the validations left, the paired regression's cases - and the researcher is told the fact. */
   async round(model: M, context: { round: number; attempt: number; validate: boolean }): Promise<RoundOutcome<P, R>> {
+    const places = this.options.places();
+    const before = { validationsLeft: this.validationsLeft, heldAt: this.heldAt, previous: new Map(this.previous), waiting: this.waiting,
+      byModel: new Map([...this.byModel].map(([k, v]) => [k, { first: v.first, places: new Map([...v.places].map(([id, x]) => [id, { ...x }])) }])),
+      milestones: JSON.parse(JSON.stringify(this.milestones)) as typeof this.milestones, places: places.map((p) => ({ p, role: p.role, seen: p.seen })) };
+    const costBefore = this.cost();
+    this.measuredAgain = 0;
+    try { return await this.roundOnce(model, context); } catch (e) {
+      if (!(e instanceof InstrumentFailed)) throw e;
+      this.validationsLeft = before.validationsLeft;
+      this.heldAt = before.heldAt;
+      this.waiting = before.waiting;
+      this.previous.clear();
+      for (const [k, v] of before.previous) this.previous.set(k, v);
+      this.byModel.clear();
+      for (const [k, v] of before.byModel) this.byModel.set(k, v);
+      Object.assign(this.milestones, before.milestones);
+      for (const { p, role, seen } of before.places) { (p as { role: string }).role = role; (p as { seen: boolean }).seen = seen; }
+      this.say('  the ' + e.purpose + ' is void: the instrument failed again on the same cases; this round is not counted');
+      const view: Record<string, unknown> = { round: context.round,
+        not_counted: 'the instrument that measures your model failed: the Judge did not answer at ' + e.failures + ' point(s) of the ' + e.purpose + ', twice on the same cases. Nothing of this '
+          + e.purpose + ' counts, and this round was not spent.', validations_left: this.validationsLeft };
+      this.lastView = view;
+      const cost = diff(this.cost(), costBefore);
+      return { round: context.round, attempt: context.attempt, laboratories: [], reused: null, held: false, askedToValidate: context.validate, validation: null, refused: null,
+        accepted: false, quickStop: false, cost, view, journal: { round: context.round, attempt: context.attempt, void: { purpose: e.purpose, failures: e.failures }, cost },
+        void: { purpose: e.purpose, failures: e.failures } };
+    }
+  }
+
+  private async roundOnce(model: M, context: { round: number; attempt: number; validate: boolean }): Promise<RoundOutcome<P, R>> {
     const { round, attempt } = context;
     const costBefore = this.cost();
     this.milestones.rounds++;
@@ -345,7 +414,8 @@ export class Protocol<M, P extends Place, K, R extends { readonly place: string 
         ...(validation.confirmationRefused !== undefined ? { confirmation_refused: validation.confirmationRefused } : {}),
         ...(validation.blind ? { blind_confirmation: { confirmed: accepted, sets: validation.blind.map((b) => ({ ok: b.ok, places: b.places.map((o) => this.placeJournal(o)), ...(b.operator ? { operator: b.operator } : {}) })) } } : {})
       } } : refused ? { validation: { refused } } : {}),
-      accepted, ...(heldFor.length ? { acceptance_held_for: heldFor } : {}), validations_left: this.validationsLeft, cost
+      accepted, ...(heldFor.length ? { acceptance_held_for: heldFor } : {}), validations_left: this.validationsLeft, cost,
+      ...(this.measuredAgain ? { instrument: { measured_again: this.measuredAgain } } : {})
     };
     return { round, attempt, laboratories, reused: reused ? reused.round : null, held, askedToValidate: context.validate, validation, refused, accepted, quickStop,
       ...(operator ? { operator } : {}), cost, view, journal };

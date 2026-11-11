@@ -1,3 +1,4 @@
+import { livingNaming } from '../worlds/labs.ts';
 import fs from 'node:fs';
 import { adoptedOf } from './traces.ts';
 import path from 'node:path';
@@ -49,7 +50,8 @@ export function criteriaProblems(criteria: unknown): string[] {
 }
 
 export interface RunResults {
-  readonly o1_predictive_acceptance: { readonly model: boolean; readonly artifact?: boolean };
+  /** model: null where the run left no finding to read it from - no datum, never "not accepted" (SPEC-VALIDEZ-MEDIDA §7). */
+  readonly o1_predictive_acceptance: { readonly model: boolean | null; readonly artifact?: boolean };
   readonly o2_discriminating_evidence: { readonly severe_passed_as_preregistered: number | null; readonly tests: readonly { readonly test: string; readonly rival: string }[] };
   readonly o3_adequacy: Readonly<Record<string, 'yes' | 'no' | 'not evaluable'>> | 'no criteria declared';
   readonly o4_mechanistic_recovery: { readonly score: number; readonly grader_version: number | null } | 'no truth to grade against, or not graded';
@@ -77,7 +79,7 @@ export interface RunCost {
   readonly world?: Record<string, unknown>;
 }
 
-const evaluate = (c: Condition, r: { model: boolean; artifact?: boolean; severe: number | null; recovery: number | null }): boolean | null =>
+const evaluate = (c: Condition, r: { model: boolean | null; artifact?: boolean; severe: number | null; recovery: number | null }): boolean | null =>
   c === 'model_accepted' ? r.model
   : c === 'artifact_accepted' ? (r.artifact === undefined ? null : r.artifact)
   : 'severe_tests_at_least' in c ? (r.severe === null ? null : r.severe >= c.severe_tests_at_least)
@@ -87,11 +89,12 @@ const evaluate = (c: Condition, r: { model: boolean; artifact?: boolean; severe:
 export function runResults(journalFile: string, criteria?: Criteria): RunResults & { readonly started: string | null; readonly ended_at_seconds: number | null } {
   const journal = readJson(journalFile) ?? {};
   const base = journalFile.replace(/\.json$/, '');
-  const finding = readJson(base + '.finding.json') ?? {};
+  const found = readJson(base + '.finding.json');
+  const finding = found ?? {};
   const audit = readJson(base + '.method.json');
   const events = (journal.events ?? []) as J[];
   const end = [...events].reverse().find((e) => e.type === 'end') ?? {};
-  const model = finding.outcome?.status === 'accepted';
+  const model = found === null ? null : finding.outcome?.status === 'accepted';
   const artifact = finding.artifact ? finding.artifact.status === 'accepted' : undefined;
   /* O2: the severe ones among the tests its final model passed as preregistered, with the Judge's reading of each rival. */
   const severe = new Set(events.filter((e) => e.type === 'test_result' && e.severe).map((e) => String(e.test)));
@@ -177,7 +180,7 @@ export function groupResults(rows: readonly { readonly condition: string; readon
     const gen = generatorOf(journal, path.dirname(row.journal), path.basename(row.journal, '.json'));
     const wf = worldFileOf(row.journal, journal);
     const entries = wf ? readWorld(wf) : [];
-    const living = entries.length ? livingIdentity(entries) : null;
+    const living = entries.length ? livingIdentity(entries, { realization: livingNaming((entries as Record<string, any>[]).find((e) => e.key === 'manifest')?.adapter).realization }) : null;
     const key = { condition: row.condition, world: String(journal.experiment), code_version: journal.commit ?? null, generator: gen.id, criteria: Object.keys(criteria ?? {}),
       ...(living ? { world_condition: living.condition, adapted: living.adapted, interventions: interventionLabels(entries) } : {}) };
     const id = JSON.stringify(key);
@@ -189,6 +192,8 @@ export function groupResults(rows: readonly { readonly condition: string; readon
   return [...groups.values()].map(({ key, runs, traces }) => {
     const artifacts = runs.filter((r) => r.o1_predictive_acceptance.artifact !== undefined);
     const meets: Record<string, number> = { O1_model_accepted: runs.filter((r) => r.o1_predictive_acceptance.model).length };
+    /* O1 over the runs that can say: a run with no finding is no datum, never a run that did not accept. */
+    const told = runs.filter((r) => r.o1_predictive_acceptance.model !== null).length;
     const o3: GroupResults['o3_adequacy'] = criteria && Object.keys(criteria).length ? Object.fromEntries(Object.keys(criteria).map((id) => {
       const v = runs.map((r) => (r.o3_adequacy as Record<string, string>)[id]);
       const evaluable = v.filter((x) => x === 'yes' || x === 'no').length, yes = v.filter((x) => x === 'yes').length;
@@ -199,7 +204,7 @@ export function groupResults(rows: readonly { readonly condition: string; readon
     const tokensSum = tokens.reduce((a, b) => a + b, 0);
     return {
       group: key, runs: runs.length,
-      o1_predictive_acceptance: { model: rate(meets.O1_model_accepted, runs.length), ...(artifacts.length ? { artifact: rate(artifacts.filter((r) => r.o1_predictive_acceptance.artifact).length, artifacts.length) } : {}) },
+      o1_predictive_acceptance: { model: rate(meets.O1_model_accepted, told), ...(artifacts.length ? { artifact: rate(artifacts.filter((r) => r.o1_predictive_acceptance.artifact).length, artifacts.length) } : {}) },
       o2_severe_passed_as_preregistered: describe(runs.map((r) => r.o2_discriminating_evidence.severe_passed_as_preregistered)),
       o3_adequacy: o3,
       o4_mechanistic_recovery: describe(runs.map((r) => (typeof r.o4_mechanistic_recovery === 'object' ? r.o4_mechanistic_recovery.score : null))),
@@ -232,7 +237,7 @@ export function batchTimes(started: string, ended: string | undefined, rows: rea
   const first = (meets: (r: RunResults) => boolean) => { const ms = runs.filter((x) => meets(x.r)).map(at).sort((a, b) => a - b)[0]; return ms === undefined ? 'none met it' : Math.round(ms / 1000); };
   return {
     duration_seconds: ended ? Math.round((Date.parse(ended) - t0) / 1000) : 'not ended',
-    seconds_to_first: { O1_model_accepted: first((r) => r.o1_predictive_acceptance.model),
+    seconds_to_first: { O1_model_accepted: first((r) => r.o1_predictive_acceptance.model === true),
       ...Object.fromEntries(Object.keys(criteria ?? {}).map((id) => [id, first((r) => (r.o3_adequacy as Record<string, string>)[id] === 'yes')])) },
     accumulated_run_seconds: runs.reduce((a, x) => a + (x.r.ended_at_seconds ?? 0), 0)
   };
@@ -254,7 +259,7 @@ export function sessionResults(sessionFile: string, criteria?: Criteria): Record
   const members = Object.entries((s.runs ?? {}) as Record<string, J>).filter(([, r]) => typeof r.journal === 'string')
     .map(([id, r]) => ({ id, ...runResults(path.resolve(dir, r.journal), criteria) }));
   const entries = readWorld(path.join(dir, String(s.world)));
-  const identity = entries.length ? livingIdentity(entries) : null;
+  const identity = entries.length ? livingIdentity(entries, { realization: livingNaming((entries as Record<string, any>[]).find((e) => e.key === 'manifest')?.adapter).realization }) : null;
   const tokens = members.reduce((n, m) => n + (m.cost.tokens.junior ?? 0) + (m.cost.tokens.agents ?? 0) + (m.cost.tokens.delegated ?? 0), 0);
   return { unit: 'the session: one realization, whatever its members', members: members.map(({ id, cost: { world: _w, ...cost }, ...m }) => ({ id, ...m, cost })),
     ...(identity ? { identity: { generator: identity.generator, condition: identity.condition, realization: identity.realization, adapted: identity.adapted, interventions: interventionLabels(entries) } } : {}),

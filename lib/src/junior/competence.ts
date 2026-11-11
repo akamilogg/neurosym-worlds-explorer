@@ -52,7 +52,9 @@ export interface InvestigationCase {
   readonly kind: 'investigation';
   readonly lab: string;
   readonly args: readonly string[];
-  readonly partition: Partition;
+  /** training: a case the world runs only to be distilled at (SPEC-VALIDEZ-MEDIDA §5.1) - it never selects nor confirms,
+      and its group is the only kind a dataset trained on may come from. */
+  readonly partition: Partition | 'training';
   /** The lineage it belongs to: cases of one group stay in one partition and one use (§6.4). */
   readonly group: string;
   readonly components: readonly string[];
@@ -197,14 +199,15 @@ export function competenceProblems(raw: unknown): string[] {
     }
     if (!LABS[c.lab]) e.push(at + ': no laboratory "' + c.lab + '"');
     if (c.kind === 'investigation') {
-      if (c.partition !== 'development' && c.partition !== 'confirmation') e.push(at + ': "partition" development or confirmation');
+      if (c.partition !== 'development' && c.partition !== 'confirmation' && c.partition !== 'training') e.push(at + ': "partition" development, confirmation or training');
       if (!Array.isArray(c.args)) e.push(at + ': the "args" of its world');
       for (const k of c.components ?? []) {
         const comp = comps.get(k);
         if (!comp) e.push(at + ': no component ' + k);
         else if (comp.rung !== 6) e.push(at + ': an investigation scores rung 6, not ' + k);
         else if (comp.lab !== c.lab) e.push(at + ': component ' + k + ' is of ' + comp.lab);
-        uses.set(k, (uses.get(k) ?? 0) + 1);
+        /* A training case is never measured: it scores no component. */
+        if (c.partition !== 'training') uses.set(k, (uses.get(k) ?? 0) + 1);
       }
     } else if (c.kind === 'probe') {
       if (c.partition !== 'development') e.push(at + ': a probe comes from development only');

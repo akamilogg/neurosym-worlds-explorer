@@ -77,6 +77,10 @@ export interface LivingWorldAdapter<St, F> {
   /** The adapter and its version (e.g. "plates@1"). */
   readonly id: string;
   readonly actions: readonly LivingAction[];
+  /** How it names what the generic layer shows of it (SPEC-VALIDEZ-MEDIDA §9: no world's words in that layer): the key a
+      researcher's observation is given under (default "view"), the keys of its configuration that make its realization
+      rather than its regime (default none), and where an occurrence of the restricted record happened (default none). */
+  readonly naming?: { readonly view?: string; readonly realization?: readonly string[]; readonly where?: (occurred: Readonly<Record<string, unknown>>) => string | null };
   /** What it guarantees: replayed from the same seed and intents it is the same world; a realization of its own is possible. */
   readonly guarantees: { readonly replay: 'deterministic'; readonly fork: boolean };
   /** The policies its non-researcher actors may follow, by name (§4). */
@@ -699,7 +703,8 @@ export class LivingSession<St, F> {
   settle(): void {
     /* In real time, only the clock applies a window. */
     if (this.realtime) return;
-    while (this.ready()) this.runWindow();
+    this.imposeRecorded();
+    while (this.ready()) { this.runWindow(); this.imposeRecorded(); }
     this.arm();
   }
 
@@ -1010,6 +1015,9 @@ export class LivingSession<St, F> {
     if (this.realtime) return;
     const ms = this.limits.window_ms;
     if (!ms || this.status !== 'running' || this.ended || this.timer?.window === this.window) return;
+    /* A window the record continued already holds is derived again, never timed: who missed it is the record's to say
+       (imposeRecorded), not the wall clock of a replay whose answers come at once (SPEC-VALIDEZ-MEDIDA §9). */
+    if (this.journal.previous('w' + (this.window + 1) + '.').length) return;
     const researchers = [...this.actors.values()].filter((s) => s.decl.kind === 'researcher' && DECIDING.includes(s.state));
     /* One sealed - acting, yielding or asleep: the others have so long. */
     const sealed = researchers.some((s) => s.batch !== null);
@@ -1025,6 +1033,40 @@ export class LivingSession<St, F> {
       this.settle();
     }, ms);
     this.timer = { window, handle };
+  }
+
+  /** A researcher's decisions in order (its seals, waits and calls of queries), each written with the window in course
+      (`a.<actor>.<n>`): what a session derived from its record needs to place them where they came then (§9, V15). */
+  private readonly decisions = new Map<string, number>();
+
+  /** Before a researcher decides: its decision written with the window in course. In a session derived from its record (a
+      reconstruction, a continuation) it first waits for the window it came in then - its answer replayed comes at once,
+      and the windows it missed meanwhile are applied without it, as the record says (imposeRecorded). */
+  async beforeDecision(actor: string): Promise<void> {
+    const n = (this.decisions.get(actor) ?? 0) + 1;
+    const recorded = this.journal.previous('a.' + actor + '.' + n)[0];
+    while (recorded && Number(recorded.window) > this.window && this.status === 'running' && !this.ended) {
+      const window = this.window;
+      this.settle();
+      if (this.window === window && (await this.commit(actor)) === null) break;
+      if (this.window === window) break;
+    }
+    this.decisions.set(actor, n);
+    this.journal.write({ key: 'a.' + actor + '.' + n, window: this.window, revision: this.revision });
+  }
+
+  /** In a session derived from its record: the members the record says missed the window in course are sealed empty - their
+      timeout, as it was recorded - once every other member that decides in it has sealed. The wall clock never decides
+      it again (arm), and a member's answer replayed at once does not come in time where it did not then. */
+  private imposeRecorded(): void {
+    const recorded = this.journal.previous('w' + (this.window + 1) + '.timeout')[0];
+    if (!recorded || this.status !== 'running' || this.ended) return;
+    const late = new Set((recorded.actors ?? []) as string[]);
+    const deciding = [...this.actors.values()].filter((s) => DECIDING.includes(s.state));
+    if (!deciding.some((s) => s.decl.kind === 'researcher')) return;
+    if (!deciding.every((s) => late.has(s.decl.id) || s.batch !== null || (s.until !== null && s.until > this.tick))) return;
+    for (const s of deciding) if (late.has(s.decl.id) && s.batch === null) { s.batch = []; s.timedOut = true; s.use.timeouts++; this.use.timeouts++; }
+    this.journal.write({ key: 'w' + (this.window + 1) + '.timeout', window: this.window + 1, after_ms: recorded.after_ms, actors: [...late] });
   }
 
   /** The non-researchers decide at the opening of each window, on the same revision as everyone, from their own view and

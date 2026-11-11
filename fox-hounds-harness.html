@@ -623,6 +623,7 @@ var Neurosym = (() => {
     REVISION_MIN_DELTA: () => REVISION_MIN_DELTA,
     RoundConversation: () => RoundConversation,
     STANCES: () => STANCES,
+    TRANSIENT_RETRIES: () => TRANSIENT_RETRIES,
     TRIGGER_CLASSES: () => TRIGGER_CLASSES,
     TT_EXACT: () => TT_EXACT,
     TT_LOWER: () => TT_LOWER,
@@ -734,6 +735,7 @@ var Neurosym = (() => {
     substitute: () => substitute,
     surprises: () => surprises,
     toFormulaDiff: () => toFormulaDiff,
+    transientFailure: () => transientFailure,
     trigger: () => trigger,
     truthLabelCounts: () => truthLabelCounts,
     usableCases: () => usableCases,
@@ -2913,6 +2915,13 @@ var Neurosym = (() => {
       waited_ms: Math.max(0, Date.now() - startedMs),
       request_chars: (request.system?.length ?? 0) + JSON.stringify(request.user ?? "").length
     };
+  }
+  var TRANSIENT_RETRIES = 2;
+  function transientFailure(error) {
+    const e = error;
+    const status = e?.details?.status;
+    if (e?.kind === "timeout" || e?.kind === "network" || e?.kind === "parse") return true;
+    return e?.kind === "http" && typeof status === "number" && (status === 408 || status === 429 || status >= 500 || status < 400);
   }
   function openAiChatClient(options) {
     const read = typeof options === "function" ? options : () => options;

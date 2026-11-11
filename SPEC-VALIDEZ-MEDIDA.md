@@ -1,7 +1,7 @@
 # SPEC · Validez de la medida: lo que juzga a un candidato no puede dejarse engañar
 
-Estado (10/11/2026): **VM1, VM2 y VM3 implementadas** (el evaluador de ensayos, la promoción, el vocabulario y la
-auditoría, §11); VM4 a VM6 propuestas, sin implementar. Sale de la lectura a fondo del código del
+Estado (11/11/2026): **VM1 a VM6 implementadas** (el evaluador de ensayos, la promoción, el vocabulario y la auditoría,
+la separación de los datos, el check y el juez, la comparación pareada y lo operativo, §11). Sale de la lectura a fondo del código del
 [repaso del repositorio](REPASO-2026-11-10.md) (§4.3, hallazgos V1 a V19). Corrige el evaluador del
 [metalaboratorio](SPEC-METAPOLITICA-INVESTIGACION.md), la promoción y la confirmación del junior
 ([SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) §6.5, §9, y [SPEC-EDICION-PESOS](SPEC-EDICION-PESOS.md)
@@ -317,6 +317,115 @@ VM6 cuando toque.
   que el investigador ve al listar su memoria; unificarlo cambiaría ese texto para algunas peticiones.
 - **Pruebas.** Las cinco `VM3:` de `lib/test/audit.test.ts` (aceptaciones 9 a 11, el recorrido de todos los
   laboratorios y los denominadores). El guion de reproducción añade A1, A2 y O1 leídos con `@2`.
+
+**VM4, hecha (11/11/2026):**
+
+- **Una regla.** `lib/src/junior/groups.ts`: `usesOf` da los usos de cada grupo (diagnóstico, entrenamiento, selección
+  por sonda, selección por investigación, confirmación); `measuringGroups`, los que seleccionan o confirman.
+  `selectionOverlap` (`distill.ts`) la usa y se endurece: un dataset que comparta grupo con cualquier caso de selección o
+  de confirmación no se entrena. `weightLabProblems` la usa sin cambiar lo que rechaza.
+- **La partición `training`** (decisión del usuario, 11/11/2026). El mundo del junior sólo destilaba en cortes de
+  investigaciones de desarrollo, que seleccionan: con la regla nueva no podría entrenar nunca. Un caso de investigación
+  puede declarar `partition: "training"`: no puntúa ningún componente, no se mide, su grupo no comparte partición con
+  otro, y el mundo lo ejecuta (un trabajo de `evaluations`) la primera vez que se pide destilar en él. Destilar en un caso
+  de desarrollo sigue permitido, pero su dataset no se entrena. El texto de `distill` del mundo dice ahora «an
+  investigation of development or training»: cambia el prompt sólo de los runs que pueden destilar (condición F), y el
+  hash congelado del mundo del junior en `lib/test/control.test.ts` se actualizó con su motivo.
+- **La realización.** `realizationOf(lab, args)`: el laboratorio y su mundo (la semilla y las opciones del laboratorio,
+  con sus valores por defecto: la noción del corpus), por hash; `realizationOfRun(journal)` la saca del `argv` de un
+  registro, igual que de los argumentos de un caso.
+- **El linaje en el paquete.** `provenance.realizations` (`lib/src/junior/package.ts`), opcional y fuera del hash de
+  ejecución; sin ella, la edición de un paquete no cambia. La escribe el mundo: `train` con los runs de los ejemplos del
+  dataset (nada si uno no se puede leer); una versión editada, desde su genoma, con las realizaciones de los runs de
+  diagnóstico que leyeron los recibos de cada edición construida (`realizations.jsonl` del mundo) y las de los padres de
+  una edición derivada por un operador.
+- **La confirmación.** `ConfirmationService.refusalOf` (`lib/src/junior/confirm.ts`), antes de evaluar: un paquete
+  destilado, entrenado o editado sin realizaciones se rechaza; uno que solapa las de sus casos reservados también, sin
+  decir con cuál. Un paquete que no aprendió nada se confirma como antes.
+- **Pruebas.** `lib/test/junior-groups.test.ts` (aceptaciones 7 y 8, la realización, el paquete, la partición
+  `training`), y en las del mundo: el entrenamiento declara la realización de su caso de entrenamiento
+  (`junior-train.test.ts`), una versión editada con textos declara ninguna (`junior-weight-edit-world.test.ts`), un
+  dataset destilado en desarrollo comparte su grupo (`junior-distill.test.ts`). La prueba de confirmación declara las
+  realizaciones de su candidato destilado.
+- **Sin comprobar.** Una edición construida desde recibos de cortes de un run de diagnóstico (las pruebas usan textos):
+  el camino que lee `cases[].run` del recibo no tiene prueba propia. Las versiones que una rama del operador entrega
+  traen ediciones construidas en el mundo de la rama, cuyo `realizations.jsonl` no viaja: su procedencia se declara por
+  defecto vacía. La realización ignora las opciones del mundo que el laboratorio no declara en `options`.
+
+**VM5, hecha (11/11/2026):**
+
+- **El alcance, medido.** Todos los mundos convertían un fallo del juez en un fallo del modelo: `cells`, `plates`,
+  `tank`, `messages`, `c302nav`, `particles3d` y el mundo de artefactos capturan el error en su objetivo; `orbit`, en
+  `testPredictions` (`core/predict.ts`). Ninguno lo trataba bien. En lugar de tocar cada mundo, se arregla donde se decide
+  el veredicto.
+- **El check nulo.** `lib/src/learn/protocol.ts`: `instrumentFailures` (las llamadas fallidas del juez y las reglas sin
+  respuesta, que hoy componen como 0,5) se lee alrededor de cada medida de un check, su regresión pareada incluida. Si
+  creció, se mide otra vez con los mismos casos (`instrument.measured_again` en el evento `check`); si vuelve a crecer,
+  `InstrumentFailed`. La ronda deja el protocolo como estaba: rondas y checks contados, papeles y lugares vistos,
+  validaciones, los casos de la regresión pareada. El runner registra `check_void`, no gasta el intento y, tras tres
+  seguidos, para con `stoppedBy: "judge_unavailable"`, que el meta-laboratorio lee como fallo del proveedor.
+- **Lo que recibe el investigador** (en `last_check`, en lugar del veredicto):
+  `{"round": n, "not_counted": "the instrument that measures your model failed: the Judge did not answer at N point(s)
+  of the check, twice on the same cases. Nothing of this check counts, and this round was not spent.",
+  "validations_left": n}`.
+- **La cuadrícula.** Mismo protocolo, pero sólo cuenta las llamadas fallidas: allí el 0,5 de una regla sin respuesta es la
+  decisión de la búsqueda que juega, que §7 conserva. Un check nulo vuelve a medir el mismo modelo sin gastar el intento.
+- **El LLM.** `transientFailure` y `TRANSIENT_RETRIES` (2 por ronda) en `lib/src/learn/system2.ts`: un timeout, la red, un
+  cuerpo ilegible, 408, 429 o 5xx se pregunta otra vez sin gastar paso ni negativa, registrado como `proposal_retried`;
+  pasado el máximo, es una negativa como antes. En `law-session.ts` y en la cuadrícula. Las sondas del junior cortan un
+  run en una pregunta haciendo fallar la siguiente: `proposal_retried` se añade a lo que quitan del final del registro
+  (`STOP_TAIL` en `lib/src/junior/probes.ts`), como ya hacían con `proposal_failed`.
+- **`runResults`.** `model` es `boolean | null`: `null` sin hallazgo. El grupo calcula O1 sobre los runs con dato; un
+  ensayo del meta-laboratorio sin hallazgo es `infra` del arnés; las referencias dan `null`.
+- **Pruebas.** `lib/test/check-void.test.ts`: un fallo medido otra vez; el juez caído (nulo, el investigador avisado, tres
+  seguidos paran el run, el ensayo es del proveedor); la reanudación a través de un check nulo, sin divergir; un run sin
+  hallazgo. La prueba de T1 sobre lo que registra el runner comprueba ahora el reintento. Los montajes de
+  `meta-lab.test.ts` escriben el hallazgo que un run terminado siempre escribe.
+- **Sin comprobar.** La cuadrícula no tiene prueba propia del check nulo. Un ensayo cuyo check se midió otra vez con
+  éxito sigue contando sus errores del juez en `end.jev.errors` y el meta-laboratorio lo lee como `infra`: es
+  conservador. Un mundo vivo con varios investigadores en el mismo proceso comparte el contador del juez; un fallo de
+  otro investigador durante un check lo anularía.
+
+**VM6, primera parte (la comparación pareada), hecha (11/11/2026):**
+
+- **Dónde está.** `pairedComparison` (`lib/src/runtime/statistics.ts`): con resultados binarios, al menos 3 pares y todas
+  las diferencias iguales y distintas de cero, el test de signos exacto sobre los pares discordantes (p bilateral
+  2 × 2⁻ⁿ, en `p`) frente a 0,05, y el efecto frente al margen declarado. Con 5 pares todavía no concluye (p = 0,0625); con
+  6 o más, sí. Los continuos y las diferencias mezcladas siguen con el bootstrap. El texto de `rule` lo dice.
+- **Pruebas.** La `VM6:` de `lib/test/references.test.ts` (aceptación 13: 8 de 8 frente a 0 de 8 concluye «improves» con
+  margen 0,2; 2 de 2 no concluye; 4 mejores y 4 peores, «insufficient evidence»). El bloque `O4` del guion de
+  reproducción da ahora `improves`.
+
+**VM6, segunda parte (lo operativo, §9), hecha (11/11/2026):**
+
+- **V15, confirmado y arreglado.** La prueba mostró la divergencia: al reconstruir, la respuesta de un miembro que llegó
+  tarde a una ventana se reproduce al instante. Imponer sólo los timeouts registrados no basta: el miembro también había
+  intentado actuar en una ventana posterior y se le rechazó por tardío, y el registro del mundo no decía cuándo. Ahora
+  `LivingSession.beforeDecision` escribe cada decisión de un investigador con la ventana en curso (`a.<actor>.<n>`) y,
+  en una sesión derivada de su registro, espera a esa ventana antes de decidir; `imposeRecorded` sella vacíos a los que el
+  registro da por ausentes en cuanto los demás han sellado, y el reloj no arma timeouts en ventanas que el registro ya
+  tiene (`lib/src/living/world.ts`, llamado desde `bridge.ts`). Los registros anteriores, sin esas entradas, se
+  reconstruyen como antes.
+- **V17.** `lib/src/living/run-session.ts`: el fallo de un senior queda en el registro de la sesión (`senior_error` junto
+  al run de su investigador). Además, un senior que ni siquiera se podía configurar (su LLM) dejaba a su investigador
+  fuera de la sesión y al resto esperándolo para siempre: ahora su investigador sigue sin senior.
+- **V16.** `readJournal` (`lib/src/orchestra/agent-operator.ts`): una lectura del diario que no parsea se reintenta (3
+  veces, 50 ms) antes de tomarse por «sin diario».
+- **V19.** El adaptador declara `naming` (la clave de la vista, las claves de la realización, dónde ocurre algo);
+  `plates@1` declara `plate`, `layout` y `well`, y su investigador sigue recibiendo `plate`. `livingNaming`
+  (`lib/src/worlds/labs.ts`) lo da a quien construye identidades y líneas de tiempo (resultados, escalada, consola).
+- **`living/external.ts`** se queda como está (decisión del usuario, 11/11/2026): pieza preparada para un mundo externo,
+  sin cablear.
+- **Pruebas.** `lib/test/living-operational.test.ts`: V15 (la reconstrucción de una sesión con un miembro tardío, sin
+  divergir, con los mismos timeouts), V17, V16 y V19. La prueba que compara el mundo con respuestas en distinto orden
+  (`living-world-h2.test.ts`) excluye las entradas `a.`: son el calendario de las respuestas, que ahí cambia por
+  construcción. La prueba de identidad (`living-world-h5.test.ts`) pasa las claves de realización como los llamadores.
+- **El guion de reproducción, retirado (aceptación 15).** Cada bloque de `lib/scripts/validity-repro.ts` quedó como prueba
+  de la suite, fallando antes de su entrega y pasando después: M1 en `meta-lab.test.ts` (VM1), J1 y J2 en
+  `junior-competence.test.ts` (VM2), A1, A2 y O1 en `audit.test.ts` (VM3), O4 en `references.test.ts` (VM6). El guion
+  se borró el 11/11/2026.
+- **Sin comprobar.** V15 se probó con un miembro lento en un mundo de dos; no con un miembro que duerme (`wait`) a través
+  de ventanas registradas ni con sesiones continuadas más allá de su registro con ausencias.
 - **Sin comprobar.** El recorrido de laboratorios saca las claves aceptadas leyendo el código de los reconocedores y del
   intérprete de actos del junior; una clave que se acepte de otra forma se le escaparía. Los actos de los demás mundos
   (`act` con sus campos) son experimentos sin distinguir tipos.

@@ -7,6 +7,7 @@ import type { LabConnection } from '../runtime/lab-runner.ts';
 import type { JuniorSessionClient } from './client.ts';
 import type { CompetenceManifest, Mode } from './competence.ts';
 import { executionHash, type JuniorPackage } from './package.ts';
+import { measuringGroups } from './groups.ts';
 import { captureCut, checkAtCut, type CheckOutcome, type Cut } from './probes.ts';
 import type { MemoryState } from './sessions.ts';
 
@@ -181,9 +182,10 @@ export function makeDataset(dir: string, ids: readonly string[], admits: readonl
   return ds;
 }
 
-/** The groups a dataset shares with the probes of selection of a manifest (§6.4): a training on it is refused while any is
-    shared; the examples are kept, never deleted. */
+/** The groups a dataset shares with the cases that select or confirm juniors (§6.4, SPEC-VALIDEZ-MEDIDA §5.1): the probes,
+    the investigations of development and of confirmation alike - the one rule of groups.ts. A training on it is refused
+    while any is shared; the examples are kept, never deleted. */
 export function selectionOverlap(ds: Pick<Dataset, 'groups'>, m: CompetenceManifest): string[] {
-  const selection = new Set(m.cases.filter((c) => c.kind === 'probe' && c.partition === 'development').map((c) => c.group));
-  return ds.groups.filter((g) => selection.has(g));
+  const measuring = measuringGroups(m);
+  return ds.groups.filter((g) => measuring.has(g));
 }

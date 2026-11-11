@@ -5,7 +5,7 @@ import type { ApiError } from '../core/net.ts';
 import type { Law } from '../core/predict.ts';
 import { obj, parseReflection } from './explorer.ts';
 import { lawExplorerPayload, ownLaw, parseLawTurn, type LawRequest } from './law-explorer.ts';
-import { RoundConversation, requestFailure } from './system2.ts';
+import { RoundConversation, TRANSIENT_RETRIES, requestFailure, transientFailure } from './system2.ts';
 
 /** How many times a round a researcher may consolidate its round's conversation. */
 const MAX_CONSOLIDATIONS = 2;
@@ -248,7 +248,7 @@ export class LawSession<A> {
     const b = this.latest();
     let refused: string[] = [];
     const investigation: unknown[] = [];
-    let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0, vetted = false;
+    let steps = 0, refusals = 0, free = 0, overreach = 0, consolidated = 0, vetted = false, retried = 0;
     const budget = { acts: h.acts ?? 0 };
     const memory = this.memory;
     /* The verdicts it was given on its latest model, kept in its memory by that model's round. */
@@ -287,6 +287,14 @@ export class LawSession<A> {
           h.log('llm_fatal', { round, status, error: this.fatal });
           h.say('the LLM service refused the account (HTTP ' + status + '): stopping');
           return end({ kind: 'stopped' });
+        }
+        /* A transient failure of the provider is asked again apart (SPEC-VALIDEZ-MEDIDA §7): the same question, no step and
+           no refusal of the round spent on it. Past its own limit it is a refusal, as any answer that never came. */
+        if (transientFailure(error) && retried < TRANSIENT_RETRIES) {
+          retried++;
+          steps--;
+          h.log('proposal_retried', { round, ...requestFailure(error, asked, { system: h.system, user: payload }) });
+          continue;
         }
         refusals++;
         h.log('proposal_failed', { round, ...requestFailure(error, asked, { system: h.system, user: payload }) });

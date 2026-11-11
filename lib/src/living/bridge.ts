@@ -128,7 +128,7 @@ export class LivingBridge<A> {
   /** The world as it is now, for the researcher (a query). */
   observe(): Record<string, unknown> {
     const o = this.h.session.observe(this.h.actor);
-    return { observe: true, tick: o.tick, revision: o.revision, plate: o.view, ...(this.h.session.ended ? { the_world_has_ended: true } : {}) };
+    return { observe: true, tick: o.tick, revision: o.revision, [this.h.session.adapter.naming?.view ?? 'view']: o.view, ...(this.h.session.ended ? { the_world_has_ended: true } : {}) };
   }
 
   /** The members of the session: who, of what kind, how they stand (§8: `channel.list`). */
@@ -201,6 +201,8 @@ export class LivingBridge<A> {
   /** The step's requests were all taken: its batch sealed and applied, each act's result in place of what it was answered;
       or, with queries only, the call counted - at its limit, it waits for the window like everyone. Then what reached it. */
   async endStep(round: number, results: readonly unknown[]): Promise<unknown[]> {
+    /* Its decision placed in the window it came in (§9): written, and - derived from its record - waited for. */
+    await this.h.session.beforeDecision(this.h.actor);
     const asked = this.asked;
     this.asked = [];
     const slots = new Map(this.placeholders.splice(0).map((p) => [p, p.n]));
@@ -220,6 +222,7 @@ export class LivingBridge<A> {
   async endRound(round: number, how: string): Promise<void> {
     const s = this.h.session;
     if (s.status !== 'running' || s.ended) return;
+    await s.beforeDecision(this.h.actor);
     if (s.actorState(this.h.actor) === 'ready') s.seal(this.h.actor, []);
     await this.cross(round, how);
     this.pull(round);
@@ -230,6 +233,7 @@ export class LivingBridge<A> {
   async explore(): Promise<{ name: string; segment: Segment<unknown> } | null> {
     const s = this.h.session, actor = this.h.actor;
     s.take(actor);
+    await s.beforeDecision(actor);
     if (!s.wait(actor, s.clock.decision_interval).accepted) return null;
     const segment = await this.watch(0, 'exploration');
     this.pull(0);

@@ -56,6 +56,11 @@ export interface JuniorProvenance {
   readonly reason: string;
   /** Datasets, trainings, runs whose memory was published into it: ids of the records that produced it. */
   readonly sources: readonly string[];
+  /** The realizations (groups.ts: a world and its arguments, by hash) of the runs what it learned came from - its
+      datasets' examples, the diagnosis runs its constructed edits read - written by the world that made it, never by its
+      researcher (SPEC-VALIDEZ-MEDIDA §5.2). Absent where it learned nothing; an empty list declares that nothing it
+      learned came from a run. */
+  readonly realizations?: readonly string[];
 }
 
 export interface JuniorPackage {
@@ -91,7 +96,7 @@ const KEYS = {
   memory: ['neural', 'twin'],
   decoding: ['temperature', 'max_tokens', 'max_circuit_tokens', 'forced_format'],
   execution: ['firmware', 'tokenizer', 'chat_template', 'driver', 'verifier', 'circuit', 'precision', 'quantization'],
-  provenance: ['parents', 'reason', 'sources']
+  provenance: ['parents', 'reason', 'sources', 'realizations']
 } as const;
 
 const DEFAULTS = { decoding: { temperature: 0, max_tokens: 4000, max_circuit_tokens: 60000, forced_format: null }, quantization: null, adapter: null } as const;
@@ -146,7 +151,8 @@ export function normalizePackage(raw: unknown): JuniorPackage {
     memory: { neural: neural as BlobId | null, twin: twin as BlobId | null }, decoding,
     execution: { firmware: e.firmware as BlobId, tokenizer: e.tokenizer as BlobId, chat_template: e.chat_template as BlobId, driver: e.driver as BlobId,
       verifier: e.verifier as BlobId, circuit: e.circuit as Record<string, unknown>, precision: e.precision, quantization: quantization as string | null },
-    provenance: { parents: strings(pr.parents, 'provenance.parents'), reason: typeof pr.reason === 'string' ? pr.reason : '', sources: strings(pr.sources, 'provenance.sources') }
+    provenance: { parents: strings(pr.parents, 'provenance.parents'), reason: typeof pr.reason === 'string' ? pr.reason : '', sources: strings(pr.sources, 'provenance.sources'),
+      ...(pr.realizations !== undefined ? { realizations: [...new Set(strings(pr.realizations, 'provenance.realizations'))].sort() } : {}) }
   };
 }
 

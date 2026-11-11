@@ -40,7 +40,7 @@ function packages(store: BlobStore) {
   const b = (s: string) => store.put(s);
   const reference = normalizePackage({ format: 'junior-package@1', name: 'ref', base: store.putTree(base), prompt: 'Be brief.',
     execution: { firmware: b('f'), tokenizer: b('t'), chat_template: b('c'), driver: b('d'), verifier: b('v'), circuit: {}, precision: 'bf16' } });
-  const candidate = normalizePackage({ ...reference, name: 'cand', prompt: 'Answer only with the JSON the protocol asks for.', provenance: { parents: [executionHash(reference)], reason: 'trained', sources: ['dataset:abc'] } });
+  const candidate = normalizePackage({ ...reference, name: 'cand', prompt: 'Answer only with the JSON the protocol asks for.', provenance: { parents: [executionHash(reference)], reason: 'trained', sources: ['dataset:abc'], realizations: [] } });
   return { reference, candidate };
 }
 

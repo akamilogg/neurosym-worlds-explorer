@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { LABS } from '../worlds/labs.ts';
+import { LABS, livingNaming } from '../worlds/labs.ts';
 import { generatorOf } from '../runtime/generators.ts';
 import { adoptedOf } from '../orchestra/traces.ts';
 import { interventionLabels, livingIdentity, readWorld, worldFileOf } from '../living/record.ts';
@@ -213,7 +213,7 @@ export function climb(store: ResearchStore, ids: readonly string[], profile: Pro
     const batch = read(path.join(folder, 'batch.json'));
     const condition = (batch?.definition?.runs ?? []).find((r: Json) => r.id === base)?.condition ?? null;
     const wf = worldFileOf(s.file, j), entries = wf ? readWorld(wf) : [];
-    const living = entries.length ? livingIdentity(entries) : null;
+    const living = entries.length ? livingIdentity(entries, { realization: livingNaming((entries as Record<string, any>[]).find((e) => e.key === 'manifest')?.adapter).realization }) : null;
     return { condition, world: String(j.experiment), code_version: j.commit ?? null, generator: generatorOf(j, folder, base).id,
       ...(living ? { world_condition: living.condition, adapted: living.adapted, interventions: interventionLabels(entries) } : {}) };
   };

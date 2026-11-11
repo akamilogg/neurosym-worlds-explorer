@@ -56,7 +56,7 @@ function roles(actors: readonly J[]): { generator: J[]; condition: J[]; names: M
 const renamed = (x: unknown, names: Map<string, string>): unknown => JSON.parse(JSON.stringify(x ?? null), (_k, v) => (typeof v === 'string' && names.has(v) ? names.get(v) : v));
 
 /** A session's identity, from its journal (§15.1). */
-export function livingIdentity(entries: readonly J[], extra: { evaluator?: J; delegation?: J } = {}): { generator: string; condition: string; realization: string; adapted: boolean;
+export function livingIdentity(entries: readonly J[], extra: { evaluator?: J; delegation?: J; realization?: readonly string[] } = {}): { generator: string; condition: string; realization: string; adapted: boolean;
   parts: { generator: J; condition: J; realization: J } } {
   const m = entries.find((e) => e.key === 'manifest') ?? {};
   const ev = entries.find((e) => e.key === 'events') ?? {};
@@ -64,8 +64,10 @@ export function livingIdentity(entries: readonly J[], extra: { evaluator?: J; de
   const programs = (ev.programs ?? []) as J[];
   const agenda = programs.filter((p) => AGENDA.has(p.trigger?.kind));
   const reactive = programs.filter((p) => !AGENDA.has(p.trigger?.kind));
-  /* The realization: its seed and the plate it was given, never part of the condition. */
-  const { layout: _layout, ...regime } = (m.config ?? {}) as J;
+  /* The realization: its seed and what of its configuration its adapter names as the realization's (`naming.realization`),
+     never part of the condition. */
+  const realizationKeys = new Set(extra.realization ?? []);
+  const regime = Object.fromEntries(Object.entries((m.config ?? {}) as J).filter(([k]) => !realizationKeys.has(k)));
   const generator = { clock: m.clock ?? null, limits: m.limits ?? null, researchers, signals: renamed(ev.signals ?? [], names), reactions: renamed(reactive, names),
     delegation: extra.delegation ?? null };
   const condition = { adapter: m.adapter ?? null, regime, guarantees: m.guarantees ?? null, actions: m.actions ?? null, others, sensors: renamed(ev.sensors ?? [], names),
@@ -141,7 +143,7 @@ export function compareWorlds(recorded: readonly J[], rebuilt: readonly J[]): { 
 
 /** What happened, line by line: as the auditor sees it (everything, what happened unperceived included), or as one member
     perceived it (its own acts and their outcomes, what reached it, its wakes) - never the one for the other. */
-export function livingTimeline(entries: readonly J[], view: 'auditor' | { actor: string }): { at: number; window?: number; line: string }[] {
+export function livingTimeline(entries: readonly J[], view: 'auditor' | { actor: string }, where: (occurred: J) => string | null = () => null): { at: number; window?: number; line: string }[] {
   const auditor = view === 'auditor';
   const me = auditor ? null : view.actor;
   const out: { at: number; window?: number; line: string }[] = [];
@@ -152,7 +154,7 @@ export function livingTimeline(entries: readonly J[], view: 'auditor' | { actor:
       const outcomes = ((e.outcomes ?? []) as J[]).filter((o) => auditor || mine(o.intent));
       const acts = outcomes.map((o) => o.intent + ' ' + o.outcome + (o.reason ? ' (' + o.reason + ')' : '')).join('; ');
       if (auditor || outcomes.length) out.push({ at: Number(e.to), window: e.window, line: 'window ' + e.window + ' ticks ' + e.from + '-' + e.to + (acts ? ': ' + acts : '') });
-      if (auditor) for (const o of (e.occurred ?? []) as J[]) out.push({ at: Number(o.tick), window: e.window, line: 'happened (restricted record): ' + o.kind + (o.well ? ' at ' + o.well : '') });
+      if (auditor) for (const o of (e.occurred ?? []) as J[]) out.push({ at: Number(o.tick), window: e.window, line: 'happened (restricted record): ' + o.kind + (where(o) ? ' at ' + where(o) : '') });
       if (auditor) for (const x of (e.effects ?? []) as J[]) out.push({ at: Number(x.tick), window: e.window, line: 'the operator\'s ' + x.firing + (x.refused ? ' refused: ' + x.refused : ' applied') });
       if (auditor && e.timeouts?.length) out.push({ at: Number(e.from), window: e.window, line: 'timed out: ' + e.timeouts.join(', ') });
     } else if (k.startsWith('fire.') && auditor) out.push({ at: Number(e.decided_at ?? e.at), line: 'fired ' + e.program + ' (' + e.mode + ', ' + e.label + ') for tick ' + e.at });

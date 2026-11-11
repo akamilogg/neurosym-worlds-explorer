@@ -156,6 +156,8 @@ const wellAt = (s: PlatesState, p: Readonly<Record<string, unknown>>): number | 
 
 /** The adapter (§3): its actions, its laws by tick, and every actor perceiving the same projection (the plate as seen). */
 export const platesAdapter: LivingWorldAdapter<PlatesState, PlatesFrame> = {
+  /* Its words: a researcher sees its plate; the layout it was given is its realization; things happen at a well. */
+  naming: { view: 'plate', realization: ['layout'], where: (o) => (typeof o.well === 'string' ? o.well : null) },
   id: 'plates@1',
   actions: PLATES_ACTIONS,
   guarantees: { replay: 'deterministic', fork: true },

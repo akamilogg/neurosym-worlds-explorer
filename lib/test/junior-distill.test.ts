@@ -174,7 +174,8 @@ test('junior-competence@1: distill at a cut of a development investigation the w
     assert.equal(ex.summary.group, 'g-i1');
     const ds = await juniorLab.act!.start(spec, { dataset: { examples: [String(ex.summary.example)], admits: ['verified'] } }, 'a2', {} as never);
     assert.ok(ds && ds.kind === 'records' && ds.what === 'dataset');
-    assert.deepEqual(ds.summary.shares_selection_groups, []);
+    /* VM4: distilled at a case that selects - its dataset is never trained on (a training case is: junior-train.test.ts). */
+    assert.deepEqual(ds.summary.shares_selection_groups, ['g-i1']);
     assert.equal(await juniorLab.act!.start(spec, { distill: { version: spec.world.reference, case: 'nope', question: 0, mode: 'start', checker: 'protocol' } }, 'a3', {} as never), null);
   } finally { f.server.stop(); await f.h.close(); }
 });

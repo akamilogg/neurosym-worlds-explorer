@@ -68,6 +68,8 @@ export interface PairedComparison {
   readonly margin: number;
   readonly conclusion: 'improves' | 'worsens' | 'indistinguishable' | 'insufficient evidence';
   readonly rule: string;
+  /** Binary results whose every pair moved the same way: the two-sided p of the exact sign test on the discordant pairs. */
+  readonly p?: number;
 }
 
 /** Compares `now` with `before`, paired by key (a seed and its world). `binary`: values 1 or 0 (the effect is the mean of the
@@ -81,11 +83,22 @@ export function pairedComparison(before: ReadonlyMap<string, number>, now: Reado
     if (o.relative && !b) return [];
     return [{ key, difference: r3(sign * (o.relative ? (n - b) / Math.abs(b) : n - b)) }];
   });
-  const rule = 'improves if its interval is wholly above the margin; worsens if wholly below zero; indistinguishable if it crosses zero and is narrower than the margin; otherwise, or with fewer than 3 paired seeds or all differences alike, insufficient evidence';
+  const rule = 'improves if its interval is wholly above the margin; worsens if wholly below zero; indistinguishable if it crosses zero and is narrower than the margin; '
+    + 'binary results whose every pair moved the same way (no interval to resample) by the exact sign test on the discordant pairs: improves if its two-sided p is at most 0.05 and the effect above the margin, worsens if at most 0.05 and the effect below zero; '
+    + 'otherwise, or with fewer than 3 paired seeds or every difference zero, insufficient evidence';
   const discordant = o.binary ? { better_now: differences.filter((d) => d.difference > 0).length, worse_now: differences.filter((d) => d.difference < 0).length } : undefined;
   const xs = differences.map((d) => d.difference);
   const stat = (v: readonly number[]) => (o.binary ? v.reduce((a, b) => a + b, 0) / v.length : quantile([...v].sort((a, b) => a - b), 0.5));
   const base = { pairs: xs.length, differences, ...(discordant ? { discordant } : {}), margin: o.margin, rule, effect_is: (o.binary ? 'the mean' : 'the median') + ' of the paired differences' + (o.relative ? ', each relative to the value before' : '') + (o.lower ? ', lower being better' : '') };
+  /* A perfect separation of binary results (every pair moved, the same way) has no spread for a bootstrap to resample: before
+     (SPEC-VALIDEZ-MEDIDA §8) eight of eight against none could never conclude. The exact sign test reads it: its two-sided p
+     on the n discordant pairs is 2 x 2^-n, and the effect is still held to the margin. */
+  if (o.binary && xs.length >= 3 && xs[0] !== 0 && xs.every((x) => x === xs[0])) {
+    const p = Math.min(1, 2 * Math.pow(0.5, xs.length));
+    const effect = r3(stat(xs));
+    const conclusion = p <= 0.05 && effect > o.margin ? 'improves' : p <= 0.05 && effect < 0 ? 'worsens' : 'insufficient evidence';
+    return { ...base, effect, interval95: null, p, conclusion };
+  }
   if (xs.length < 3 || xs.every((x) => x === xs[0])) return { ...base, effect: xs.length ? r3(stat(xs)) : null, interval95: null, conclusion: 'insufficient evidence' };
   const B = o.resamples ?? 2000, rnd = mulberry32(o.seed ?? 20261016);
   const stats: number[] = [];
