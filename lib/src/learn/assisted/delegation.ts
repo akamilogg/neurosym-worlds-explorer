@@ -110,7 +110,8 @@ const spendingOf = (b: Branch): { spent_tokens: number | null; spent_not_known?:
   b.uncertain ? { spent_tokens: null, spent_not_known: { observed_at_least: b.uncertain.at_least, held_in_the_fund: b.uncertain.held } } : { spent_tokens: b.spent };
 
 /** A branch's result as delivered: its spending as observed, and when not known, said so. */
-type Result = { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: Uncertain };
+type Result = { id: string; text: string; research_result: string; result_state: string; result_spent: number | null; result_spent_uncertain?: Uncertain;
+  contribution?: Record<string, unknown>; external_exposure?: import('./exposure.ts').ExternalExposure };
 
 /** A run's heartbeat older than this: its process is no longer alive (as control.ts reads it). */
 const STALE_MS = 15000;
@@ -118,14 +119,18 @@ const STALE_MS = 15000;
 const START_GRACE_MS = 60000;
 
 /** What the senior is told of the tool: the same delegation, from its own reading; the result comes to it. */
-export const SENIOR_DELEGATION_SECTION = (c: DelegationConfig): string => 'DELEGATING AN INVESTIGATION. Among your readings you may open a BRANCH: another researcher, with the junior\'s record readable as it stands when you ask, its own laboratory in this same world and its own budget, investigates a question of yours: {"delegate": {"question": "...", "refs": ["optional: items of the junior\'s record"], "expected": "optional", "budget": {"rounds": <n>, "tokens": <n>}}}; {"delegation": {"id": "<id>", "status": true}}, {"delegation": {"id": "<id>", "read": {"experience": "list" | "open" | "find", ...}}} or {"delegation": {"id": "<id>", "cancel": true}}. Its result comes to YOU, at a later call (`branch_results`): a contribution, never evidence until it is tested; what reaches the junior is what you make of it, in your own message. One branch of yours at a time; the fund is ' + c.fund + ' tokens, at most ' + c.tokens + ' tokens and ' + c.maxRounds + ' rounds a branch; each request costs one of your readings.';
+export const SENIOR_DELEGATION_SECTION = (c: DelegationConfig, documentary = false): string => 'DELEGATING AN INVESTIGATION. Among your readings you may open a BRANCH: another researcher, with the junior\'s record readable as it stands when you ask, its own laboratory in this same world and its own budget, investigates a question of yours: {"delegate": {"question": "...", "refs": ["optional: items of the junior\'s record"], "expected": "optional", "budget": {"rounds": <n>, "tokens": <n>}}}; {"delegation": {"id": "<id>", "status": true}}, {"delegation": {"id": "<id>", "read": {"experience": "list" | "open" | "find", ...}}} or {"delegation": {"id": "<id>", "cancel": true}}. Its result comes to YOU, at a later call (`branch_results`): a contribution, never evidence until it is tested; what reaches the junior is what you make of it, in your own message. One branch of yours at a time; the fund is ' + c.fund + ' tokens, at most ' + c.tokens + ' tokens and ' + c.maxRounds + ' rounds a branch; each request costs one of your readings.' + (documentary ? ' ' + DOCUMENTARY_ACCESS : '');
+
+/** What a requester with external sources is told of a documentary branch (SPEC-INVESTIGACION-EXTERNA §6.2). */
+const DOCUMENTARY_ACCESS = 'A branch may also be DOCUMENTARY - no laboratory of its own: the records it may read, your sources and its notes, ending with its report. Add "access": {"world": "none", "sources": true} to "delegate", and to its "budget" the bags you grant it from yours ("search_calls", "fetch_calls", "download_bytes"); the pages you have read go with it, read offline. "access": {"world": "assigned"} is the branch with a laboratory (the default); "sources": false gives it none of yours.';
 
 /** What the researcher is told of the tool, in its system (from its first question, under the capability `delegation`). */
-export const DELEGATION_SECTION = (c: DelegationConfig): string => [
+export const DELEGATION_SECTION = (c: DelegationConfig, documentary = false): string => [
   'DELEGATING AN INVESTIGATION. You may open a BRANCH: another researcher, with your record readable as it stands when you ask, its own laboratory in this same world, and its own budget, investigates a question of yours while you go on. Generating or questioning hypotheses, exploring an anomaly, testing an assumption or a rival explanation: any question you can investigate. Inside "investigate":',
   '  {"delegate": {"question": "what to investigate - the branch knows nothing else of your intent", "refs": ["optional: items of your record to start from, e.g. model:r4, note:<id>"], "expected": "optional: what you want back", "budget": {"rounds": <n>, "tokens": <n>}}}',
   '  It answers at once whether it was accepted, with its id and what it was given; its result comes to you later as a message (`research_result`) with its findings, the directions it proposes and what tells them apart, its evidence and its uncertainties - a contribution, never an order: take what serves you, test it with your instruments. {"delegation": {"id": "<id>", "status": true}} says how it goes; {"delegation": {"id": "<id>", "read": {"experience": "list" | "open" | "find", ...}}} reads its record as you read experience; {"delegation": {"id": "<id>", "cancel": true}} stops it.',
   '  One branch at a time. The fund for branches is ' + c.fund + ' tokens in all, at most ' + c.tokens + ' tokens and ' + c.maxRounds + ' rounds a branch (' + c.rounds + ' when you ask none); each request costs a step of yours, the branch\'s work is counted apart.',
+  ...(documentary ? ['  ' + DOCUMENTARY_ACCESS] : []),
   ...(c.evolve ? ['  A branch may also be an EVOLUTIONARY SEARCH: {"delegate": {"mode": "evolve", "question": "...", "start": "optional: a version of yours (default: your latest)", "budget": {"evaluations": <at most ' + c.evolve.evaluations + '>, "tokens": <n>, "rounds": <n>}' + (c.evolve.seeds ? ', "seeds": ["optional, at most ' + c.evolve.seeds.max + ': ' + c.evolve.seeds.sources.map((x) => x === 'own' ? 'artifact:<a version of yours>' : x === 'searches' ? 'search:<a sealed search of yours>#candidate:<program>' : 'exp:<label>#artifact:<a version of a run you read>').join(' | ') + '"]' : '') + '}}. It tries many transformations of programs, runs each on exploration workloads, keeps alternatives and goes on from them; then a researcher consolidates what it found. Its result: candidates whole (adopt one with a change of yours, then your checks), what was measured of each, why to look at each again, and a sealed search you may continue: {"delegate": {"mode": "evolve", "continue_from": "<its hash>", "question": "..."}}.'] : [])
 ].join('\n');
 
@@ -537,19 +542,31 @@ export class Delegations {
        its bags granted from its requester's, never a copy of its balance. A world that refuses them refuses them to its
        branches too: the branch is of the same world. */
     const ext = this.o.external?.() ?? null;
-    let sources: { granted: Record<string, number>; file: string } | null = null;
+    let sources: { granted: Record<string, number>; file: string; inherited: { file: string; sha256: string; snapshots: string[] } | null } | null = null;
     if (ext && (access?.sources ?? ext.config.branches.inherit_sources)) {
       const asked = (r!.budget ?? {}) as J;
       const granted: Record<string, number> = { ...ext.grant(Object.fromEntries(SOURCE_BUDGET.filter((k) => asked[k] !== undefined).map((k) => [k, Number(asked[k])]))) };
-      if (SOURCE_BUDGET.some((k) => granted[k] > 0)) {
+      /* What its requester read, given whole: read again offline, under the label of its cut - with no bags too (§4, §6.2). */
+      const readable = ext.readable();
+      if (SOURCE_BUDGET.some((k) => granted[k] > 0) || readable.length) {
         const file = path.join(base + '.branches', name + '.external.json');
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, JSON.stringify({ ...ext.config, budget: granted, branches: { inherit_sources: false, budget: null } }, null, 2));
-        sources = { granted, file };
+        let inherited: { file: string; sha256: string; snapshots: string[] } | null = null;
+        if (readable.length) {
+          const from = cutLabel(this.o.experience);
+          const text = JSON.stringify({ format: 'inherited-sources@1', from, snapshots: readable });
+          const ifile = path.join(base + '.branches', name + '.sources.json');
+          fs.writeFileSync(ifile, text);
+          inherited = { file: ifile, sha256: createHash('sha256').update(text).digest('hex'), snapshots: readable.map((x) => from + '.' + x.id) };
+        }
+        sources = { granted, file, inherited };
       }
     }
-    const args = [...worldArgs, '--researcher', 'assisted', '--attempts', String(rounds), '--max-tokens', String(tokens), '--task', task,
-      ...(documentary ? ['--documentary'] : []), ...(sources ? ['--external-research', sources.file] : []),
+    /* The pages its requester read: named to it, to be read by those ids. */
+    const told = sources?.inherited ? task + '\nThe pages it read from external sources are yours to read again, offline and with no fetch spent, as it read them: ' + sources.inherited.snapshots.join(', ') + ' ("open", "links", "find" by these ids; cite them as src:<id>#L<from>-<to>).' : task;
+    const args = [...worldArgs, '--researcher', 'assisted', '--attempts', String(rounds), '--max-tokens', String(tokens), '--task', told,
+      ...(documentary ? ['--documentary'] : []), ...(sources ? ['--external-research', sources.file] : []), ...(sources?.inherited ? ['--inherited-sources', sources.inherited.file] : []),
       '--experience', [...(this.o.experience ?? []), cutFile].join(','), '--experience-mode', 'meta', '--experience-scope', 'all', '--no-grade', '--no-ablation'];
     const granted = { rounds, tokens, ...(evolve ? { evaluations: evolve.evaluations } : {}) };
     /* Its supervisor's request: the search's part of the grant and the consolidation's, protected (§12). */
@@ -572,7 +589,8 @@ export class Delegations {
       journal: path.relative(path.dirname(this.o.journalFile), journal).split(path.sep).join('/'),
       cut: { file: path.relative(path.dirname(this.o.journalFile), cutFile).split(path.sep).join('/'), sha256: createHash('sha256').update(cutText).digest('hex'), events: (snap.events ?? []).length },
       ...(access ? { access: { world: documentary ? 'none' : 'assigned', sources: Boolean(sources) } } : {}),
-      ...(sources ? { sources: { granted: sources.granted, config: path.relative(path.dirname(this.o.journalFile), sources.file).split(path.sep).join('/') } } : {}),
+      ...(sources ? { sources: { granted: sources.granted, config: path.relative(path.dirname(this.o.journalFile), sources.file).split(path.sep).join('/'),
+        ...(sources.inherited ? { inherited: { file: path.relative(path.dirname(this.o.journalFile), sources.inherited.file).split(path.sep).join('/'), sha256: sources.inherited.sha256, snapshots: sources.inherited.snapshots } } : {}) } } : {}),
       laboratory: documentary ? 'none: a documentary investigation - its records, sources and notes, no simulator' : worldOf?.mode === 'shared' ? 'this very world, as a member of it: what it does there is done in yours' : worldOf ? 'a realization of its own of this world, as it is now: what it does there is not done in yours'
         : 'the same world (its seed and options), in an instance of its own: what it does there is not done in yours', args, ...(worldOf ? { world: worldOf } : {}) });
     const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false, ...(evolve ? { mode: 'evolve' as const } : {}), ...(documentary ? { documentary: true } : {}),
@@ -659,7 +677,8 @@ export class Delegations {
 
   /** Records that a result was given (a requester whose deliveries are not messages of its run: a senior). */
   given(r: Result): void {
-    this.o.log('branch_result_given', { id: r.research_result, state: r.result_state, spent: r.result_spent, ...(r.result_spent_uncertain ? { uncertain: r.result_spent_uncertain } : {}) });
+    this.o.log('branch_result_given', { id: r.research_result, state: r.result_state, spent: r.result_spent, ...(r.result_spent_uncertain ? { uncertain: r.result_spent_uncertain } : {}),
+      ...(r.external_exposure ? { from: 'branch:' + r.research_result, external_exposure: r.external_exposure } : {}) });
   }
 
   /** At the requester's end: its branches still running asked to stop (their partial results kept in their records). */
@@ -701,6 +720,8 @@ export function rebaseDelegationEvent<T extends Record<string, any>>(e: T, fromD
   if (typeof out.journal === 'string') out.journal = re(out.journal);
   if (typeof out.evolve === 'string') out.evolve = re(out.evolve);
   if (out.cut && typeof out.cut === 'object' && typeof out.cut.file === 'string') out.cut = { ...out.cut, file: re(out.cut.file) };
+  if (out.sources && typeof out.sources === 'object') out.sources = { ...out.sources, ...(typeof out.sources.config === 'string' ? { config: re(out.sources.config) } : {}),
+    ...(out.sources.inherited && typeof out.sources.inherited.file === 'string' ? { inherited: { ...out.sources.inherited, file: re(out.sources.inherited.file) } } : {}) };
   return out as T;
 }
 

@@ -85,7 +85,7 @@ test('IE5: method-program@1 - its identity is its content; its inputs exactly th
   assert.match(String(lies.reason), /listed and not written/, 'a program that says it made what it did not');
 });
 
-test('IE5: its product imported as an edit, checked like any (the circuit refused); a format not verifiable yet is not imported', { skip: !python && 'no Python' }, async () => {
+test('IE5: its product imported as an edit, checked like any (the circuit refused); a mask is not an edit - it has its own import', { skip: !python && 'no Python' }, async () => {
   const dir = tmp();
   const { store, pkg, baseDir } = base(dir);
   const job = await runMethodProgram({ program: program(), profiles: [PROFILE], inputs: { 'dataset.jsonl': rows }, start: executionHash(pkg), startDir: baseDir, availability: available });
@@ -96,7 +96,7 @@ test('IE5: its product imported as an edit, checked like any (the circuit refuse
   const refused = importProduct(store, pkg, bad, { program: circuit, backend: standIn.id, hypothesis: { competence: 'c', mechanism: 'm', effect: 'e' } });
   assert.ok('problems' in refused && /circuit|chip/.test(refused.problems.join()), JSON.stringify(refused));
   const mask = importProduct(store, pkg, { ...job, format: 'mask@1' }, { program: program(), backend: 'x', hypothesis: { competence: 'c', mechanism: 'm', effect: 'e' } });
-  assert.ok('problems' in mask && /not importable here yet/.test(mask.problems[0]));
+  assert.ok('problems' in mask && /not an edit: it is imported as the adapter of a child \(importMask\)/.test(mask.problems[0]), JSON.stringify(mask));
 });
 
 test('IE5: what a package learned is the host\'s word - a set of edits learned from data is a training for the confirmation, whatever its format', () => {

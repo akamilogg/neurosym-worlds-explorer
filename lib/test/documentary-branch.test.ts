@@ -104,3 +104,95 @@ test('IE3: without its requester\'s sources a documentary branch gets none; fini
   await assert.rejects(runLaboratory(cellsLab, { args: ['--seed', '1', '--documentary', '--out', path.join(dir, 'x.json')], root: dir, llm, fetch: parentFetch([]) }),
     (e) => e instanceof LabError && /documentary/.test(e.message));
 });
+
+test('IE3: a branch reads the pages its requester read, offline - no fetch spent, with no bags of its own - under the label of its cut, kept in its record', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'documentary-'));
+  /* Its requester's bags for branches: none - the pages read are given anyway. */
+  fs.writeFileSync(path.join(dir, 'external.json'), JSON.stringify({ format: 'external-research@1', search: { provider: 'fake', max_results: 5 }, web: { allow: ['papers.example.org'] },
+    budget: { search_calls: 5, fetch_calls: 10, download_bytes: 100000 }, branches: { inherit_sources: true } }));
+  const child: { user: any; system: string }[] = [];
+  let childDone: Promise<{ journal: string; stoppedBy: string }> | null = null;
+  let childArgs: string[] = [];
+  const offline: WebTransport = async () => { throw new Error('never the network'); };
+  const launch: Launcher = (l) => {
+    childArgs = [...l.args];
+    let step = 0;
+    const f: FetchLike = async (_url, init) => {
+      const b = JSON.parse(String(init.body));
+      child.push({ system: b.messages[0].content, user: JSON.parse(userOf(b)) });
+      step++;
+      return reply(step === 1 ? { investigate: [{ open: 'exp1.S1', from: 1, to: 1 }, { find: 'neighbour', in: 'exp1.S1' }, { open: 'S1' }] }
+        : { finish: { report: 'Its page says edge cells copy their neighbour (src:exp1.S1#L1-1).', state: 'complete', refs: ['src:exp1.S1#L1-1'] } });
+    };
+    childDone = runLaboratory(cellsLab, { args: [...l.args, '--out', l.journal], root: dir, llm, fetch: f, external: { provider, transport: offline } });
+  };
+  const asks = [{ search: { query: 'edge cells automata' } }, { open: 'Q1.1' }, DOC];
+  let system = '';
+  const parent: FetchLike = async (u, init) => { system ||= JSON.parse(String(init.body)).messages[0].content; return parentFetch(asks)(u, init); };
+  const r = await runLaboratory(cellsLab, { args: args(dir, ['--attempts', '5', '--external-research', 'external.json']), root: dir, llm, fetch: parent, delegate: launch, external: { provider, transport: web } });
+  const c = await childDone!;
+  assert.match(system, /A branch may also be DOCUMENTARY/, 'a requester with sources is told of documentary branches');
+  const requested = eventsOf(r.journal).find((e) => e.type === 'delegation_requested')!;
+  assert.deepEqual(requested.sources.granted, { search_calls: 0, fetch_calls: 0, download_bytes: 0 }, 'no bag for branches');
+  assert.deepEqual(requested.sources.inherited.snapshots, ['exp1.S1']);
+  assert.ok(childArgs.includes('--inherited-sources'));
+  assert.match(childArgs[childArgs.indexOf('--task') + 1], /exp1\.S1/, 'named to it');
+  /* Read offline, the version its requester read; its own S1 is not one. */
+  const step = cev(c.journal).find((e) => e.type === 'investigation')!;
+  assert.match(step.results[0].text, /edge cells copy their neighbour/i);
+  assert.equal(step.results[0].cite, 'src:exp1.S1#L1-1');
+  assert.equal(step.results[1].matches, 1);
+  assert.equal(step.results[2].state, 'refused');
+  assert.equal(c.stoppedBy, 'task_completed');
+  /* Kept in its record, its texts beside it: a resumed branch reads them from there, never from the file it was given. */
+  const cfg = JSON.parse(fs.readFileSync(c.journal, 'utf8')).config.external_research;
+  assert.equal(cfg.inherited.from, 'exp1');
+  assert.ok(fs.existsSync(path.join(path.dirname(c.journal), 'blobs', cfg.inherited.snapshots[0].text_sha256)));
+  assert.equal(child[0].user.external_sources?.inherited?.snapshots?.[0] ?? cev(c.journal).find((e) => e.type === 'external_research_inventory')!.inherited.snapshots[0], 'exp1.S1');
+});
+
+const cev = (f: string) => eventsOf(f);
+
+test('IE3: the senior opens a documentary branch - its bags granted from its own, the pages it read given to it - and is told it may', async () => {
+  const { runAgentOperator } = await import('../src/orchestra/agent-operator.ts');
+  const { normalizeExternalConfig } = await import('../src/learn/assisted/external.ts');
+  const { inheritedFrom, inheritedRecordOf, readInheritedFile } = await import('../src/learn/assisted/external-sources.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'documentary-senior-'));
+  const out = path.join(dir, 'run.json');
+  const check = (round: number) => ({ type: 'check', round, laboratories: [{ place: 'lab1', holds: false }] });
+  fs.writeFileSync(out, JSON.stringify({ experiment: cellsLab.id, researcher: 'assisted', config: { seed: 1, level: 1, delegation: { fund: 1000, tokens: 500, rounds: 2, max_rounds: 3 }, capabilities_from: { delegation: 1 } },
+    events: [check(1), check(2), check(3)] }));
+  fs.writeFileSync(out.replace(/\.json$/, '.status.json'), JSON.stringify({ state: 'running', heartbeat: new Date().toISOString(), pid: process.pid }));
+  const config = normalizeExternalConfig({ format: 'external-research@1', search: { provider: 'fake', max_results: 5 }, web: { allow: ['papers.example.org'] },
+    budget: { search_calls: 3, fetch_calls: 4, download_bytes: 100000 }, branches: { inherit_sources: false, budget: { search_calls: 1, fetch_calls: 1, download_bytes: 10000 } } });
+  const systems: string[] = [];
+  const launched: { args: string[] }[] = [];
+  const llm = { complete: async (r: { system: string; user: unknown }) => {
+    systems.push(r.system);
+    const n = systems.length;
+    return { content: JSON.stringify(n === 1 ? { investigate: [{ search: { query: 'edge cells automata', limit: 1 } }] }
+      : n === 2 ? { investigate: [{ open: 'senior.Q1.1' }] }
+      : n === 3 ? { investigate: [{ delegate: { question: 'What do other automata do at their edges?', access: { world: 'none', sources: true }, budget: { rounds: 2, search_calls: 1 } } }] }
+      : { decision: 'wait', why: 'its branch works' }), latencyMs: 0, raw: null };
+  } };
+  const controller = new AbortController();
+  const agent = runAgentOperator({ id: 'senior', role: 'senior', journal: out, llm: llm as never, pollMs: 10, signal: controller.signal, external: { config, provider, transport: web },
+    delegate: (l) => { launched.push({ args: [...l.args] }); } });
+  const t = Date.now();
+  while (!launched.length && Date.now() - t < 4000) await sleep(10);
+  controller.abort();
+  await agent;
+  assert.match(systems[0], /A branch may also be DOCUMENTARY/);
+  assert.equal(launched.length, 1);
+  const a = launched[0].args;
+  assert.ok(a.includes('--documentary') && a.includes('--external-research') && a.includes('--inherited-sources'));
+  const ext = JSON.parse(fs.readFileSync(a[a.indexOf('--external-research') + 1], 'utf8'));
+  assert.deepEqual(ext.budget, { search_calls: 1, fetch_calls: 1, download_bytes: 10000 }, 'granted from its bags');
+  const text = fs.readFileSync(a[a.indexOf('--inherited-sources') + 1], 'utf8');
+  const given = readInheritedFile(text);
+  assert.deepEqual(given.snapshots.map((s) => s.id), ['senior.S1'], 'the page it read');
+  /* Its record and the snapshots made again from it, offline. */
+  const kept = new Map<string, string>();
+  const rec = inheritedRecordOf(given, 'x', (s) => { const k = String(kept.size); kept.set(k, s); return k; });
+  assert.deepEqual(inheritedFrom(rec, (k) => kept.get(k) ?? null), given);
+});

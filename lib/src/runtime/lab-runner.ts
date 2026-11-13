@@ -43,8 +43,8 @@ import { evolveConfigOf } from './evolve-branch.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { environmentPdfExtractor, externalConfigHash, normalizeExternalConfig, readExternalConfig, type PdfExtractor, type WebTransport } from '../learn/assisted/external.ts';
-import { ExternalSources } from '../learn/assisted/external-sources.ts';
-import { exposed, type ExternalExposure } from '../learn/assisted/exposure.ts';
+import { ExternalSources, inheritedFrom, inheritedRecordOf, readInheritedFile, type Inherited, type InheritedRecord } from '../learn/assisted/external-sources.ts';
+import { exposed, exposureOf, type ExternalExposure } from '../learn/assisted/exposure.ts';
 import { braveProvider, type SearchProvider } from '../learn/assisted/source-search.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
 import { mulberry32 } from '../core/random.ts';
@@ -96,6 +96,7 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
   { name: 'task', default: '', help: 'what the operator wants understood, in words (the assisted researcher only)' },
   { name: 'sources-allow', default: '', help: 'origins the assisted researcher may read sources from: directories, URL prefixes or domains, a,b,...' },
+  { name: 'inherited-sources', default: '', help: 'an inherited-sources@1 file: the snapshots of the requester of a branch, read again offline under the label of its cut (SPEC-INVESTIGACION-EXTERNA §6.2; written by the delegation)' },
   { name: 'external-research', default: '', help: 'an external-research@1 file: searching the web and reading it as snapshots, within its access (allowlist by default) and its bags (SPEC-INVESTIGACION-EXTERNA)' },
   { name: 'experience', default: '', help: 'journals of earlier runs the assisted researcher may read (list/open/find over what each researcher saw): a,b,...' },
   { name: 'experience-mode', default: '', help: '"transfer" (the default: runs of other worlds only) or "meta" (runs of this same world too: a researcher of researchers)' },
@@ -478,6 +479,18 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   else if (arg('external-research')) {
     try { externalConfig = readExternalConfig(path.resolve(options.root, arg('external-research'))); } catch (e) { throw new LabError(String((e as Error).message ?? e)); }
   }
+  /* Its requester's snapshots (a branch, SPEC-INVESTIGACION-EXTERNA §6.2): given by the file the delegation wrote, kept in its
+     record (their texts beside the run) - a resumed branch reads them from there, never from that file again. */
+  let inherited: { given: Inherited | null; record: InheritedRecord } | null = null;
+  if (previous?.config?.external_research?.inherited) inherited = { given: null, record: previous.config.external_research.inherited as InheritedRecord };
+  else if (arg('inherited-sources')) {
+    if (!externalConfig) throw new LabError('--inherited-sources: a branch reads the snapshots of its requester among its external sources (--external-research)');
+    try {
+      const text = fs.readFileSync(path.resolve(options.root, arg('inherited-sources')), 'utf8');
+      const given = readInheritedFile(text);
+      inherited = { given, record: inheritedRecordOf(given, createHash('sha256').update(text).digest('hex'), (t) => createHash('sha256').update(t).digest('hex')) };
+    } catch (e) { throw new LabError('--inherited-sources: ' + String((e as Error).message ?? e)); }
+  }
   const cfg = {
     seed: Number(arg('seed')),
     ...Object.fromEntries(Object.entries(worldOptions).map(([k, v]) => [camel(k), v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v])),
@@ -529,7 +542,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(arg('task') ? { task: arg('task') } : {}),
     ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {}),
     ...(externalConfig ? { external_research: { format: externalConfig.format, hash: externalConfigHash(externalConfig), access: externalConfig.web.access, search: externalConfig.search?.provider ?? null, config: externalConfig,
-      ...(lab.externalSources?.admitted === false ? { refused_by_the_world: lab.externalSources.why } : {}) } } : {}),
+      ...(lab.externalSources?.admitted === false ? { refused_by_the_world: lab.externalSources.why } : {}), ...(inherited ? { inherited: inherited.record } : {}) } } : {}),
     ...(arg('memory') ? { memory: arg('memory') } : {}),
     ...(arg('team') ? { team: arg('team'), member: arg('member') } : {}),
     ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all', ...(flag('experience-guidance') ? { experience_guidance: true } : {}) } : {}),
@@ -540,6 +553,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   Object.defineProperty(worldOptions, '__task', { value: arg('task') || '', enumerable: false });
   Object.defineProperty(worldOptions, '__sources_allow', { value: originsOf(arg('sources-allow'), options.root), enumerable: false });
   Object.defineProperty(worldOptions, '__external', { value: externalConfig, enumerable: false });
+  Object.defineProperty(worldOptions, '__inherited', { value: inherited, enumerable: false });
   /* The researcher: as the run it resumes had it, or as asked; then the operator's policy decides. */
   /* A continuation may hand the run to the ASSISTED researcher (`--researcher assisted` with `--attempts`): its history stays
      the unknown-world researcher's, word for word, ending included; from its new rounds on the operator may help. Never
@@ -739,7 +753,9 @@ function loadExperience(lab: AnyLab, cfg: Record<string, any>, list: string, mod
     runs.push({ label, journal, sameWorld });
     given.push({ label, file: path.relative(root, at).split(path.sep).join('/'), sha256: createHash('sha256').update(text).digest('hex'), experiment: journal.experiment,
       seed: journal.config?.seed ?? null, ...(journal.config?.level !== undefined ? { level: journal.config.level } : {}), same_world: sameWorld, knows_this_world: knows, worlds,
-      researcher: journal.researcher ?? 'unknown-world', model: journal.config?.llm_model ?? null });
+      researcher: journal.researcher ?? 'unknown-world', model: journal.config?.llm_model ?? null,
+      /* What reached it from outside (SPEC-INVESTIGACION-EXTERNA §4.1.1): given to this run, it is exposed through it. */
+      ...(() => { const x = exposureOf(journal); return exposed(x) ? { run: 'run:' + path.basename(at), external_exposure: x } : {}; })() });
   }
   if (!runs.length) throw new LabError('--experience: no runs given');
   /* Resuming: the same files as the run it resumes read, unchanged; otherwise its recorded answers would not be the ones now. */
@@ -1191,7 +1207,12 @@ function externalSourcesOf(lab: AnyLab, worldOptions: LabOptions, run: OpenRun, 
   const refusedBy = (config || allowed) && lab.externalSources?.admitted === false ? lab.externalSources.why : undefined;
   if (!config || refusedBy) return refusedBy ? { refusedBy } : {};
   const pdf = injected?.pdf ?? environmentPdfExtractor();
-  return { external: new ExternalSources({ config, actor: 'researcher', recorded: run.recordedExternal, keep, log: run.log,
+  /* Its requester's snapshots: kept beside the run when given, read from there when it goes on. */
+  const inh = (worldOptions.__inherited as unknown as { given: Inherited | null; record: InheritedRecord } | null | undefined) ?? null;
+  if (inh?.given) inheritedRecordOf(inh.given, inh.record.sha256, keep);
+  const blobs = path.join(path.dirname(run.outFile), 'blobs');
+  const inherited = inh ? inh.given ?? inheritedFrom(inh.record, (sha) => { try { return fs.readFileSync(path.join(blobs, sha), 'utf8'); } catch { return null; } }) : null;
+  return { external: new ExternalSources({ config, actor: 'researcher', recorded: run.recordedExternal, keep, log: run.log, ...(inherited ? { inherited } : {}),
     provider: injected?.provider !== undefined ? injected.provider : config.search?.provider === 'brave' ? braveProvider({ fetch: run.network, key: process.env.WEB_SEARCH_KEY }) : null,
     ...(injected?.transport ? { transport: injected.transport } : {}), ...(pdf ? { pdf } : {}) }) };
 }
@@ -1776,7 +1797,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       system: () => (helping ? assistedSystem(assistedPromptFor(focus), statedTask && channelOn) + (withMemory ? '\n\n' + MEMORY_SECTION : '') + (experience ? '\n\n' + experienceSection(experience.mode, experience.scope, experience.guidance) : '')
         + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '')
         + (closesRounds() ? '\n\n' + CLOSE_ROUND_SECTION : '')
-        + (delegating() && delegationCfg ? '\n\n' + DELEGATION_SECTION({ fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds }) : '')
+        + (delegating() && delegationCfg ? '\n\n' + DELEGATION_SECTION({ fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds }, Boolean(external)) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
         + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '')

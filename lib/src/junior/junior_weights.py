@@ -10,6 +10,9 @@ Two ways, the same bits:
   apply_edit_set torch, on the served model, in place.
 
 Only the set's own files are read: its manifest, each edit's manifest and tensors.
+
+A mask (mask@1, SPEC-EDICION-PESOS 15.3) deletes weights: each listed entry of a module set to zero, exact in any
+precision. Its manifest records the digests of the sparse change of -W it is, which applying it gives bit for bit.
 """
 import hashlib
 import json
@@ -19,11 +22,21 @@ import struct
 from array import array
 
 SET_MANIFEST = "set.json"
+MASK_MANIFEST = "mask.json"
 _WIDTH = {"F32": 4, "BF16": 2, "I64": 8}
 
 
 def is_edit_set(adapter_dir):
     return bool(adapter_dir) and os.path.exists(os.path.join(adapter_dir, SET_MANIFEST))
+
+
+def is_mask(adapter_dir):
+    return bool(adapter_dir) and os.path.exists(os.path.join(adapter_dir, MASK_MANIFEST))
+
+
+def changes_weights(adapter_dir):
+    """An adapter served as the weights it gives (a set of edits or a mask), whose digests the worker reports."""
+    return is_edit_set(adapter_dir) or is_mask(adapter_dir)
 
 
 def read_safetensors(data):
@@ -171,8 +184,9 @@ def compose_pure_weights(adapter_dir, base_dir, chip_layers):
 # --- torch ------------------------------------------------------------------------------------------------------------
 
 def check_digests(adapter_dir, composed):
-    """The digests composed against the set's own summaries: the start and the result of every module, or an error."""
-    summaries = json.loads(_read(os.path.join(adapter_dir, SET_MANIFEST)).decode("utf8"))["summaries"]
+    """The digests composed against the set's (or the mask's) own summaries: the start and the result of every module."""
+    manifest = SET_MANIFEST if is_edit_set(adapter_dir) else MASK_MANIFEST
+    summaries = json.loads(_read(os.path.join(adapter_dir, manifest)).decode("utf8"))["summaries"]
     for name, s in summaries.items():
         c = composed.get(name)
         if c is None or c["base"] != s["base_digest"] or c["edited"] != s["digest"]:
@@ -229,3 +243,79 @@ def apply_edit_set(model, adapter_dir, chip_layers, bases=None):
             W.copy_(new)
         out[name] = {"base": before, "edited": digest(name, shape, bits(W))}
     return out
+
+
+# --- mask@1 -----------------------------------------------------------------------------------------------------------
+
+def load_mask(adapter_dir, chip_layers):
+    """The mask's manifest and each module's indices, checked against their hashes; refused if one reaches the circuit."""
+    m = json.loads(_read(os.path.join(adapter_dir, MASK_MANIFEST)).decode("utf8"))
+    if m.get("format") != "mask@1":
+        raise RuntimeError("the adapter is not a mask@1")
+    out = []
+    for mod in m["modules"]:
+        data = _read(os.path.join(adapter_dir, mod["file"]))
+        if hashlib.sha256(data).hexdigest() != mod["sha256"]:
+            raise RuntimeError("the mask: " + mod["file"] + " does not match its hash")
+        if layer_of(mod["module"]) is None or layer_of(mod["module"]) < chip_layers:
+            raise RuntimeError("the mask reaches the circuit: " + mod["module"])
+        dtype, _, raw = read_safetensors(data)["indices"]
+        if dtype != "I64":
+            raise RuntimeError("the mask: " + mod["file"] + " holds no I64 indices")
+        idx = array("q")
+        idx.frombytes(raw)
+        out.append((mod["module"], idx))
+    return m, out
+
+
+def mask_pure_weights(adapter_dir, base_dir, chip_layers):
+    """{module: {"shape", "bits", "base", "edited"}}: the base's modules with the mask's entries set to zero, in pure Python."""
+    _, mods = load_mask(adapter_dir, chip_layers)
+    out = {}
+    for name, idx in mods:
+        shape, W = _base_tensor(base_dir, name + ".weight")
+        # As any module the composition touches: -0 comes out +0 (fp32: -0 + 0 is +0).
+        after = array("H", (0 if b == 0x8000 else b for b in W))
+        for i in idx:
+            after[i] = 0
+        out[name] = {"shape": shape, "bits": after, "base": digest(name, shape, W.tobytes()), "edited": digest(name, shape, after.tobytes())}
+    return out
+
+
+def apply_mask(model, adapter_dir, chip_layers, bases=None):
+    """The mask applied to the served model's weights in place (its entries set to zero); the digests of what it serves."""
+    import torch
+    _, mods = load_mask(adapter_dir, chip_layers)
+    params = dict(model.named_parameters())
+    out = {}
+    for name, idx in mods:
+        W = params.get(name + ".weight")
+        if W is None:
+            raise RuntimeError("the served model has no " + name + ".weight")
+        if W.dtype != torch.bfloat16:
+            raise RuntimeError(name + " is served in " + str(W.dtype) + ": a mask applies to bf16")
+        shape = list(W.shape)
+        raw = lambda T: T.detach().contiguous().view(torch.int16).cpu().numpy().tobytes()
+        before = digest(name, shape, raw(W))
+        if bases is not None:
+            bases[name] = W.detach().clone()
+        with torch.no_grad():
+            new = W.float() + 0.0  # as any module the composition touches: -0 comes out +0
+            new.view(-1)[torch.frombuffer(bytearray(idx.tobytes()), dtype=torch.int64).to(W.device)] = 0
+            W.copy_(new.to(torch.bfloat16))
+        out[name] = {"base": before, "edited": digest(name, shape, raw(W))}
+    return out
+
+
+def pure_digests(adapter_dir, base_dir, chip_layers):
+    """{module: {"base", "edited"}} of a set of edits or a mask, in pure Python."""
+    w = compose_pure_weights(adapter_dir, base_dir, chip_layers) if is_edit_set(adapter_dir) else mask_pure_weights(adapter_dir, base_dir, chip_layers)
+    return {name: {"base": x["base"], "edited": x["edited"]} for name, x in w.items()}
+
+
+def pure_weights(adapter_dir, base_dir, chip_layers):
+    return compose_pure_weights(adapter_dir, base_dir, chip_layers) if is_edit_set(adapter_dir) else mask_pure_weights(adapter_dir, base_dir, chip_layers)
+
+
+def apply_weights(model, adapter_dir, chip_layers, bases=None):
+    return apply_edit_set(model, adapter_dir, chip_layers, bases) if is_edit_set(adapter_dir) else apply_mask(model, adapter_dir, chip_layers, bases)

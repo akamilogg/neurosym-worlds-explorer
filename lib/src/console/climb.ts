@@ -116,7 +116,8 @@ export function verdictsOf(type: string, data: Json): { kind: SampleKind; event:
 
 const STATE: Readonly<Record<string, string>> = {
   exploration_episode: 'observa', proposal: 'propone', reflection: 'propone', check: 'comprueba', artifact_check: 'comprueba',
-  round_closed: 'cierra ronda', delegation_requested: 'delega', awaiting_opening: 'espera', awaiting_approval: 'espera', end: 'parado', halted: 'parado'
+  round_closed: 'cierra ronda', delegation_requested: 'delega', awaiting_opening: 'espera', awaiting_approval: 'espera', end: 'parado', halted: 'parado',
+  source_search: 'busca', source_acquired: 'lee', task_finished: 'informa', research_activation: 'investiga', research_contribution: 'contribuye'
 };
 /* What a step asked: acting on its world (or its artifact), or only looking at it. */
 const ACTS = new Set(['act', 'try', 'replay', 'register_test', 'simulate', 'launch', 'play', 'change', 'run', 'perturb']);

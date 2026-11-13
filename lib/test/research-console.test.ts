@@ -153,3 +153,44 @@ test('a report of the instrument is shown on its run with its state, and the con
   assert.ok(researcherView.events.some((e) => e.type === 'instrument_report'), 'its own report is the researcher\'s to read');
   analysts.close();
 });
+
+test('IE6: the console shows a researching operator - its activations, searches, readings and contributions, with their costs - linked to the message that delivered each; a run shows its own searches and a documentary end', () => {
+  const dir = root();
+  const run = path.join(dir, 'runs', 'r.json');
+  write(run, { experiment: 'cells@1', researcher: 'assisted', started: '2026-11-13T10:00:00.000Z', config: { llm_model: 'stub', attempts: 3 },
+    events: [
+      { type: 'source_search', round: 1, actor: 'researcher', id: 'Q1', request: { query: 'edges' }, state: 'answered', results: 1, retrieved: 't', raw: { sha256: 'RAW-PROVIDER' } },
+      { type: 'source_acquired', round: 1, actor: 'researcher', snapshot: 'S1', requested: 'https://x.org/a', final: 'https://x.org/a', state: 'acquired', attempts: [{ status: 200 }] },
+      { type: 'delegation_requested', round: 1, id: 'delegation:r1.1', question: 'q', access: { world: 'none', sources: true }, granted: { rounds: 2 } },
+      { type: 'operator_message', round: 2, messages: [{ id: 'o-1', text: 'A contribution', by: 'agent:op', contribution: { id: 'C1-op', report: 'abc', state: 'partial' } }] },
+      { type: 'task_finished', round: 2, state: 'complete', report: { sha256: 'r', chars: 10 }, refs: ['src:S1#L1-1'] }
+    ] });
+  write(path.join(dir, 'runs', 'r.research-op.json'), { format: 'operator-research-record@1', agent: 'agent:op', spec: { id: 'op', task: 'look for mechanisms', targets: ['runs/r.json'] },
+    started: '2026-11-13T10:00:01.000Z', spent: { tokens: 120, calls: 2, activations: 1 }, state: 'ended',
+    activations: [{ n: 1, at: '2026-11-13T10:00:02.000Z', woken_by: [{ target: 'r.json', fact: 'stuck' }], readings: [{}], decision: { decision: 'contribute', contribution: 'C1-op' } }],
+    sources_log: [{ at: '2026-11-13T10:00:02.500Z', type: 'source_search', actor: 'op-op', id: 'op-op.Q1', state: 'answered', results: 2 }],
+    contributions: [{ format: 'research-contribution@1', id: 'C1-op', from: 'agent:op', to: ['r.json'], report: { sha256: 'abc', kept: true, chars: 40 }, refs: ['src:op-op.S1#L1-2'], state: 'partial', activation: 1,
+      external_exposure: { direct: true, via: [], since: null } }],
+    deliveries: [{ contribution: 'C1-op', to: 'r.json', order: 'o-1', at: '2026-11-13T10:00:03.000Z' }] });
+  const store = new ResearchStore(dir);
+  const cat = store.catalogue();
+  const op = cat.find((e) => e.id === 'r.research-op')!;
+  assert.ok(op, 'a researching operator is an entity of the console');
+  assert.equal(op.kind, 'agent');
+  assert.equal(op.parent, 'r', 'it accompanies its target');
+  assert.equal(op.task, 'look for mechanisms');
+  assert.deepEqual(op.cost, { tokens: 120, calls: 2, activations: 1 });
+  const s = store.capture(['r', 'r.research-op'], 'operator');
+  const types = s.events.filter((e) => e.entity === 'r.research-op').map((e) => e.type);
+  assert.deepEqual(types, ['research_activation', 'source_search', 'research_contribution', 'contribution_delivered']);
+  /* From the contribution's delivery to the message that carried it, and on to its report. */
+  const delivered = s.events.find((e) => e.type === 'contribution_delivered')!;
+  const message = s.events.find((e) => e.type === 'operator_message')!;
+  assert.ok(s.relations.some((r) => r.kind === 'delivered' && r.from === delivered.id && r.to === message.id));
+  /* The researcher's view: its own searches and readings as it was answered, never the provider's raw answer; its report. */
+  const mine = store.capture(['r'], 'researcher');
+  assert.deepEqual(mine.events.map((e) => e.type), ['source_search', 'source_acquired', 'delegation_requested', 'operator_message', 'task_finished']);
+  assert.ok(!JSON.stringify(mine).includes('RAW-PROVIDER'));
+  assert.deepEqual(mine.events[2].data.access, { world: 'none', sources: true });
+  assert.equal(mine.events[3].data.messages[0].contribution.id, 'C1-op');
+});

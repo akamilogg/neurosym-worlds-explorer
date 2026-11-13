@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 export const ISOLATE_PY = path.join(path.dirname(fileURLToPath(import.meta.url)), 'junior_isolate.py');
 export const ISOLATION_ID = 'linux-userns-landlock@1';
 
-export interface ProgramLimits { readonly timeout_ms: number; readonly memory_bytes: number; readonly cpu_seconds: number; readonly output_bytes: number }
+export interface ProgramLimits { readonly timeout_ms: number; readonly memory_bytes: number; readonly cpu_seconds: number; readonly output_bytes: number;
+  /** What its checkpoint/ may hold between runs (default: output_bytes). */
+  readonly checkpoint_bytes?: number }
 
 export interface ProgramRun {
   readonly state: 'finished' | 'failed' | 'timeout';
@@ -31,8 +33,43 @@ export interface ProgramRun {
 
 export interface IsolatedBackend {
   readonly id: string;
-  /** The program's code run on its inputs (written into inputs/), the base checkpoint readable at `base`. */
-  run(o: { code: string; inputs: Readonly<Record<string, Buffer>>; base: string; limits: ProgramLimits }): Promise<ProgramRun>;
+  /** The program's code run on its inputs (written into inputs/), the base checkpoint readable at `base`; its checkpoint/
+      given from `checkpoint` (a folder of the host's, one per job identity) and kept there again when it stops - finished,
+      failed or out of time - so the same job goes on from it (SPEC-INVESTIGACION-EXTERNA §8.1). */
+  run(o: { code: string; inputs: Readonly<Record<string, Buffer>>; base: string; limits: ProgramLimits; checkpoint?: string }): Promise<ProgramRun>;
+}
+
+/** A job's checkpoint/ given to its folder: what it kept last time, copied in (the program writes only in its folder). */
+export function checkpointIn(host: string | undefined, work: string): void {
+  const inside = path.join(work, 'checkpoint');
+  fs.mkdirSync(inside, { recursive: true });
+  if (host && fs.existsSync(host)) fs.cpSync(host, inside, { recursive: true });
+}
+
+/** Its checkpoint/ kept again for the job, whatever its end: the host's copy replaced whole, or left as it was - and why -
+    when it holds more than its bound or anything that is not a file or a folder. */
+export function checkpointOut(work: string, host: string | undefined, bound: number): string | null {
+  if (!host) return null;
+  const inside = path.join(work, 'checkpoint');
+  if (!fs.existsSync(inside)) return null;
+  let total = 0;
+  const walk = (d: string): string | null => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { const w = walk(full); if (w) return w; }
+      else if (e.isFile()) { total += fs.statSync(full).size; if (total > bound) return 'its checkpoint/ holds more than ' + bound + ' bytes: the one before is kept'; }
+      else return 'its checkpoint/ holds ' + e.name + ', neither a file nor a folder: the one before is kept';
+    }
+    return null;
+  };
+  const why = walk(inside);
+  if (why) return why;
+  const next = host + '.next';
+  fs.rmSync(next, { recursive: true, force: true });
+  fs.cpSync(inside, next, { recursive: true });
+  fs.rmSync(host, { recursive: true, force: true });
+  fs.renameSync(next, host);
+  return null;
 }
 
 export type Availability = { readonly available: true; readonly backend: IsolatedBackend; readonly proof: Record<string, unknown> } | { readonly available: false; readonly reason: string; readonly proof?: Record<string, unknown> };
@@ -86,11 +123,12 @@ export async function isolatedBackend(o: { python: readonly string[]; platform?:
   } finally { fs.rmSync(work, { recursive: true, force: true }); }
 }
 
-async function runProgram(python: readonly string[], o: { code: string; inputs: Readonly<Record<string, Buffer>>; base: string; limits: ProgramLimits }): Promise<ProgramRun> {
+async function runProgram(python: readonly string[], o: { code: string; inputs: Readonly<Record<string, Buffer>>; base: string; limits: ProgramLimits; checkpoint?: string }): Promise<ProgramRun> {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'junior-program-'));
   try {
     fs.mkdirSync(path.join(work, 'inputs'));
     fs.mkdirSync(path.join(work, 'out'));
+    checkpointIn(o.checkpoint, work);
     fs.writeFileSync(path.join(work, 'program.py'), o.code);
     for (const [name, bytes] of Object.entries(o.inputs)) {
       if (!/^[\w.-]+$/.test(name)) return { state: 'failed', outputs: {}, reason: 'an input named ' + name, wall_ms: 0 };
@@ -99,6 +137,9 @@ async function runProgram(python: readonly string[], o: { code: string; inputs: 
     const limits = path.join(work, 'limits.json');
     fs.writeFileSync(limits, JSON.stringify({ memory_bytes: o.limits.memory_bytes, cpu_seconds: o.limits.cpu_seconds, output_bytes: o.limits.output_bytes }));
     const r = await launch([...PREFIX, ...python, '-I', ISOLATE_PY, 'run', work, o.base, limits], o.limits.timeout_ms);
+    /* Whatever its end, what it checkpointed is kept for the same job. */
+    const kept = checkpointOut(work, o.checkpoint, o.limits.checkpoint_bytes ?? o.limits.output_bytes);
+    if (kept && r.timedOut) return { state: 'timeout', outputs: {}, reason: 'its time ran out (' + o.limits.timeout_ms + ' ms); ' + kept, wall_ms: r.wall_ms };
     if (r.timedOut) return { state: 'timeout', outputs: {}, reason: 'its time ran out (' + o.limits.timeout_ms + ' ms)', wall_ms: r.wall_ms };
     if (r.code !== 0) return { state: 'failed', outputs: {}, reason: 'it exited ' + r.code + ': ' + r.err.trim().slice(-400), wall_ms: r.wall_ms };
     const outputs: Record<string, Buffer> = {};

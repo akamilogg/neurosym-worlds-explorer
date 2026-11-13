@@ -110,6 +110,19 @@ export interface ResearchOperatorOptions {
   readonly now?: () => number;
   /** Its external research, already read (else from the spec's file); its provider, transport, extractor (tests). */
   readonly external?: { readonly config?: ExternalResearchConfig; readonly provider?: SearchProvider | null; readonly transport?: WebTransport; readonly pdf?: PdfExtractor };
+  /** Within a project (§6.3): its targets as the project knows them now (run ids resolved to their journals, "*" every run of
+      the project), whether every target it names is known yet, whether the project is closed, and its tray, where a result
+      that reaches a recipient already ended is kept. Its record and its texts then live in the project's folder. */
+  readonly project?: ProjectSide;
+  /** Where the texts it keeps go (default: beside its first target). */
+  readonly blobs?: string;
+}
+
+export interface ProjectSide {
+  targets(): readonly string[];
+  all(): boolean;
+  closed(): boolean;
+  keep(c: ResearchContribution, to: string, why: string): void;
 }
 
 type J = Record<string, any>;
@@ -125,8 +138,12 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
   const problems = researchSpecProblems(spec);
   if (problems.length) throw new Error('operator-research: ' + problems.join('; '));
   const root = o.root ?? process.cwd();
-  const targets = spec.targets.map((t) => path.resolve(root, t));
-  const file = o.record ?? researchRecordOf(targets[0], spec.id);
+  if (!o.project && spec.targets.includes('*')) throw new Error('operator-research: "*" (every run of a project) belongs to a project: give the journals of its targets');
+  if (o.project && !o.record) throw new Error('operator-research: within a project its record goes in the folder of the project');
+  const fixed = spec.targets.map((t) => path.resolve(root, t));
+  /* Its targets now: fixed, or as its project knows them (runs added as the project plans them). */
+  const targetsNow = (): string[] => (o.project ? [...o.project.targets()] : fixed);
+  const file = o.record ?? researchRecordOf(fixed[0], spec.id);
   const now = o.now ?? Date.now;
   const say = o.say ?? (() => {});
   /* Its record, resumed where it was: its activations, its spending, its contributions and where each was delivered. */
@@ -139,7 +156,7 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
   /* Its sources: its own bags, kept in its record; refused for a target whose world admits none - it may then read there
      only if it is not exposed (a contribution of an exposed actor is never delivered to such a world). */
   const config = o.external?.config ?? (spec.external_research ? readExternalConfig(path.resolve(root, spec.external_research)) : null);
-  const blobs = path.join(path.dirname(targets[0]), 'blobs');
+  const blobs = o.blobs ?? path.join(path.dirname(o.project ? file : fixed[0]), 'blobs');
   const keep = (text: string): string => {
     const sha = createHash('sha256').update(text).digest('hex');
     if (!fs.existsSync(path.join(blobs, sha))) { fs.mkdirSync(blobs, { recursive: true }); fs.writeFileSync(path.join(blobs, sha), text); }
@@ -153,7 +170,7 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
   const ownExposure = (): ExternalExposure => {
     const direct = (record.sources_log as J[]).some((e) => (e.type === 'source_search' && e.state === 'answered') || (e.type === 'source_acquired' && e.state === 'acquired'));
     const via = new Set<string>();
-    for (const t of targets) { const x = exposureOf(readJson(t)); if (exposed(x)) { via.add('run:' + path.basename(t)); for (const v of x.via) via.add(v); } }
+    for (const t of targetsNow()) { const x = exposureOf(readJson(t)); if (exposed(x)) { via.add('run:' + path.basename(t)); for (const v of x.via) via.add(v); } }
     return { direct, via: [...via].sort(), since: null };
   };
   const ended = (t: string): boolean => { const s = fs.existsSync(t) ? runStatus(t) : null; return s?.state === 'ended' || s?.state === 'interrupted'; };
@@ -166,7 +183,7 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
   /** The facts that wake it now, coalesced into one pending activation (never a copy of the same session). */
   const facts = (): J[] => {
     const out: J[] = [];
-    for (const t of targets) {
+    for (const t of targetsNow()) {
       const j = readJson(t);
       if (!j || ended(t)) continue;
       const key = path.basename(t);
@@ -202,6 +219,7 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
     record.spent.activations++;
     save();
     const system = OPERATOR_RESEARCH_SYSTEM + '\n\nTHE OPERATOR\'S TASK: ' + spec.task + (sources?.external ? '\n\n' + EXTERNAL_SOURCES_SECTION + '\nYour inventory: ' + JSON.stringify(sources.external.inventory(false)) : '');
+    const targets = targetsNow();
     const parts: J[] = [{ you_are: 'agent:' + spec.id, targets: targets.map((t) => ({ target: path.basename(t), ended: ended(t), digest: (() => { const j = readJson(t); return j ? runDigest(j, { rounds: 2 }) : null; })() })),
       woken_by: woken, messages_left: Object.fromEntries(targets.map((t) => [path.basename(t), spec.max_messages - record.deliveries.filter((d: J) => d.to === path.basename(t)).length])), steps_left: steps,
       your_earlier_contributions: record.contributions.map((c: J) => ({ id: c.id, to: c.to, state: c.state })) }];
@@ -245,6 +263,7 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
 
   /** A contribution made and delivered: kept by its content, then given to each recipient once (`(contribution, recipient)`). */
   const contribute = (p: J, activation: number): ResearchContribution | null => {
+    const targets = targetsNow();
     const all = targets.map((t) => path.basename(t));
     const to = p.to === 'all' ? all : (Array.isArray(p.to) ? p.to.map(String) : []).map((t: string) => (t.endsWith('.json') ? t : t + '.json')).filter((t: string) => all.includes(t));
     if (!to.length) return null;
@@ -261,10 +280,11 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
   const deliver = (c: ResearchContribution, summary: string, report: string): void => {
     for (const to of c.to) {
       if (record.deliveries.some((d: J) => d.contribution === c.id && d.to === to)) continue;
-      const t = targets.find((x) => path.basename(x) === to)!;
+      const t = targetsNow().find((x) => path.basename(x) === to);
       const sent = record.deliveries.filter((d: J) => d.to === to && d.order).length;
-      /* A recipient that ended is never reopened: the result stays in the record. Its quota of messages is kept. */
-      if (ended(t)) { record.deliveries.push({ contribution: c.id, to, state: 'kept_recipient_ended' }); continue; }
+      /* A recipient that ended is never reopened: the result stays in the record - and in its project's tray. Its quota of
+         messages is kept. */
+      if (!t || ended(t)) { record.deliveries.push({ contribution: c.id, to, state: 'kept_recipient_ended' }); o.project?.keep(c, to, 'its recipient had ended'); continue; }
       if (sent >= spec.max_messages) { record.deliveries.push({ contribution: c.id, to, state: 'kept_no_messages_left' }); continue; }
       const text = 'A contribution of agent:' + spec.id + ' (' + c.id + ', ' + c.state + '): ' + summary + '\n\nIts report:\n' + (report.length > 6000 ? report.slice(0, 6000) + '\n[...]' : report)
         + '\n\nIt is a colleague\'s suggestion: adopt, question or ignore it; cite it with "because": "' + c.id + '" where you act on it.';
@@ -283,7 +303,9 @@ export async function runResearchOperator(o: ResearchOperatorOptions): Promise<J
   while (!o.signal?.aborted) {
     const why = outOfBudget();
     if (why) { record.state = 'ended'; record.ended_by = 'budget:' + why; break; }
-    if ((spec.lifetime ?? 'targets') === 'targets' && targets.every((t) => fs.existsSync(t) && ended(t))) { record.state = 'ended'; record.ended_by = 'targets_ended'; break; }
+    /* Its project closed or cancelled: what is pending is cancelled, what it reached stays. */
+    if (o.project?.closed()) { record.state = 'ended'; record.ended_by = 'project_ended'; break; }
+    if ((spec.lifetime ?? 'targets') === 'targets' && (o.project ? o.project.all() : true) && targetsNow().length && targetsNow().every((t) => fs.existsSync(t) && ended(t))) { record.state = 'ended'; record.ended_by = 'targets_ended'; break; }
     const woken = facts();
     save();
     if (woken.length) await activate(woken);

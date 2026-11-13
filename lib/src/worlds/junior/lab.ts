@@ -150,6 +150,8 @@ export class JuniorWorld {
     if (v.files.has(ADAPTER)) {
       try {
         const a = JSON.parse(v.files.get(ADAPTER)!); adapter = String(a.adapter); trainedOn = ['dataset:' + a.dataset, 'training:' + a.job];
+        /* An adapter a program made from data (SPEC-INVESTIGACION-EXTERNA §8.2): learned, as the host wrote it, with its program. */
+        if (a.learned === 'trained') { learned = 'trained'; trainedOn = [...trainedOn, 'program:' + a.program]; }
         /* Of the current identity, or made again from the captures of the runs it learned from, recorded when it was
            trained - never from the dataset's paths read again; else unknown. */
         realizations = currentRealizations(Array.isArray(a.realizations) ? a.realizations : undefined, a.captures);
@@ -511,7 +513,8 @@ export class JuniorWorld {
     const T = await import('../../junior/train.ts');
     const problems = T.recipeProblems(recipe, parent);
     if (problems.length) return { state: 'refused', reason: 'the recipe: ' + problems.join('; ') };
-    if (!this.manifest.weight_edits) return { state: 'refused', reason: 'the condition authorizes no edits: a program\'s product is composed within its "weight_edits" bounds' };
+    if (recipe.program.output_format === 'mask@1' && !this.manifest.masks) return { state: 'refused', reason: 'the condition authorizes no masks: its manifest fixes no "masks" bounds' };
+    if (recipe.program.output_format === 'weight-edit-set@1' && !this.manifest.weight_edits) return { state: 'refused', reason: 'the condition authorizes no edits: a program\'s product is composed within its "weight_edits" bounds' };
     const file = path.join(this.dir, 'datasets', datasetId + '.json');
     if (!/^[0-9a-f]{64}$/.test(datasetId) || !fs.existsSync(file)) return { state: 'refused', reason: 'no dataset ' + datasetId + ' here' };
     const dataset = JSON.parse(fs.readFileSync(file, 'utf8')) as Dataset;
@@ -532,8 +535,21 @@ export class JuniorWorld {
       const operation = 'program-' + M.jobIdentity(recipe.program, inputs, executionHash(parent), this.programProfiles.find((p) => p.id === recipe.program.profile) ?? { id: recipe.program.profile, dependencies: {}, limits: { timeout_ms: 1, memory_bytes: 1, cpu_seconds: 1, output_bytes: 1 }, gpu: false }).slice(0, 24);
       const { done } = this.jobs.start({ operation_id: operation, op: 'train', inputs: { parent: executionHash(parent), dataset: datasetId, program: M.programId(recipe.program) }, reserve: { edits: 1 },
         run: async () => {
-          const job = await M.runMethodProgram({ program: recipe.program, profiles: this.programProfiles, inputs, start: executionHash(parent), startDir: this.baseDir(parent.base), availability });
+          const job = await M.runMethodProgram({ program: recipe.program, profiles: this.programProfiles, inputs, start: executionHash(parent), startDir: this.baseDir(parent.base), availability,
+            checkpoints: path.join(this.dir, 'program-checkpoints') });
           if (job.state !== 'finished') return { spent: { edits: 0 }, products: job, failed: job.state + ': ' + (job.reason ?? '') };
+          /* A mask (SPEC-EDICION-PESOS §15.3): its deletions within the condition's bounds, the adapter of a child of the start. */
+          if (job.format === 'mask@1') {
+            const a = await M.importMask(this.blobs, parent, job, this.manifest.masks);
+            if ('problems' in a) return { spent: { edits: 0 }, products: { ...job, products: undefined }, failed: 'its product: ' + a.problems.join('; ') };
+            return { spent: { edits: 1 }, products: { job: job.job, adapter: a.adapter, format: 'mask@1' } };
+          }
+          /* A LoRA adapter: checked from its config and its tensors' header, the adapter of a child of the start. */
+          if (job.format === 'lora-adapter') {
+            const a = M.importAdapter(this.blobs, parent, job);
+            if ('problems' in a) return { spent: { edits: 0 }, products: { ...job, products: undefined }, failed: 'its product: ' + a.problems.join('; ') };
+            return { spent: { edits: 1 }, products: { job: job.job, adapter: a.adapter, format: 'lora-adapter' } };
+          }
           const backend = availability.available ? availability.backend.id : 'none';
           const made = M.importProduct(this.blobs, parent, job, { program: recipe.program, backend, hypothesis: { competence: 'trained', mechanism: 'a method by program: ' + M.programId(recipe.program).slice(0, 12), effect: 'as the evaluator measures' } });
           if ('problems' in made) return { spent: { edits: 0 }, products: { ...job, products: undefined }, failed: 'its product: ' + made.problems.join('; ') };
@@ -542,9 +558,17 @@ export class JuniorWorld {
           return { spent: { edits: 1 }, products: { job: job.job, edit: made.id, adapter: v.adapter, start: v.set.start, genome: v.set.genome, totals: v.set.totals } };
         } });
       const j = await done;
-      const out = j.products as { job?: string; state?: string; reason?: string | null; adapter?: string; start?: string; genome?: string[]; totals?: unknown } | null;
+      const out = j.products as { job?: string; state?: string; reason?: string | null; adapter?: string; start?: string; genome?: string[]; totals?: unknown; format?: string } | null;
       if (j.state !== 'completed' || !out?.adapter) return { state: out?.state === 'unavailable' ? 'unavailable' : out?.state === 'refused' ? 'refused' : 'failed', reason: j.reason ?? out?.reason ?? j.state, ...(out?.job ? { job: out.job } : {}) };
       const realizations = [...new Set(captures.map((c) => realizationOfCapture(c)))].sort();
+      if (out.format === 'lora-adapter' || out.format === 'mask@1') {
+        /* Its adapter (a LoRA or a mask), as a training's is kept - learned from data, as the host says, with what it learned from. */
+        const record = { adapter: out.adapter, dataset: datasetId, recipe: { method: 'program', program: M.programId(recipe.program) }, parent: executionHash(parent), job: out.job, learned: 'trained', program: M.programId(recipe.program), realizations, captures };
+        const made = this.store.apply(from, { files: { [ADAPTER]: JSON.stringify(record, null, 2) + '\n' } }, reason);
+        if (typeof made === 'string') return { state: 'failed', reason: made };
+        appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe: { method: 'program', program: M.programId(recipe.program) }, record, version: made.hash }, { sync: true });
+        return { version: made.hash, state: 'finished', reason: null, job: out.job };
+      }
       /* Learned from data, as the host says: a training whatever its format (§8.2); with what it learned from. */
       const record = { adapter: out.adapter, start: out.start, genome: out.genome, totals: out.totals, learned: 'trained', dataset: datasetId, program: M.programId(recipe.program), job: out.job, realizations, captures };
       const made = this.store.apply(from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, reason);
@@ -642,6 +666,7 @@ export class JuniorWorld {
     if (typeof parent === 'string') return { state: 'refused', reason: parent };
     const W = await import('../../junior/weights.ts');
     if (W.adapterKind(this.blobs, parent) === 'lora') return { state: 'refused', reason: 'the version has a LoRA adapter: combining a trained adapter with edits is another recipe, which does not exist' };
+    if (W.adapterKind(this.blobs, parent) === 'mask') return { state: 'refused', reason: 'the version has a mask: a version with a mask receives no edits (no recipe combines them)' };
     if (!this.manifest.weight_edits) return { state: 'refused', reason: 'the condition authorizes no edits: its manifest fixes no "weight_edits" bounds' };
     const made = await this.makeEdit(parent, e, hypothesis);
     if ('problems' in made) return { state: 'refused', reason: made.problems.join('; ') };

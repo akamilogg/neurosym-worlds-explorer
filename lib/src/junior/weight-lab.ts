@@ -54,7 +54,7 @@ export interface WeightLabConfig {
 
 const LIMITS: readonly (keyof LabLimits)[] = ['max_cases', 'max_new_tokens', 'max_tokens', 'max_slice_entries', 'max_singular', 'max_top_logits', 'max_positions', 'max_heads',
   'max_modules', 'max_directions', 'timeout_ms', 'max_memory_bytes', 'max_response_bytes'];
-const PROGRAM: readonly (keyof ProgramLimits)[] = ['timeout_ms', 'memory_bytes', 'cpu_seconds', 'output_bytes'];
+const PROGRAM: readonly ('timeout_ms' | 'memory_bytes' | 'cpu_seconds' | 'output_bytes')[] = ['timeout_ms', 'memory_bytes', 'cpu_seconds', 'output_bytes'];
 
 /** Everything wrong with a manifest's weight laboratory: its limits, and diagnosis disjoint from selection and
     confirmation - no group shared with a case, no run shared with a probe's cut. */

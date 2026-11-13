@@ -24,6 +24,8 @@ export const WEIGHT_EDIT = 'weight-edit@1';
 export const WEIGHT_EDIT_SET = 'weight-edit-set@1';
 export const COMPOSE = 'compose@1';
 export const SET_MANIFEST = 'set.json';
+/** A mask's manifest in its tree (mask.ts, SPEC-EDICION-PESOS §15.3). */
+export const MASK_MANIFEST = 'mask.json';
 
 /** The modules of Qwen an edit may touch (as train.ts): the projections of attention, DeltaNet and the MLP. */
 export const EDITABLE = new Set(['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'in_proj_qkvz', 'in_proj_ba', 'out_proj']);
@@ -452,11 +454,11 @@ export interface EditSet {
   readonly totals: SetTotals;
 }
 
-/** The kind of a package's adapter: none, a LoRA, or a set of edits. */
-export function adapterKind(store: BlobStore, pkg: JuniorPackage): 'none' | 'lora' | 'edits' {
+/** The kind of a package's adapter: none, a LoRA, a set of edits, or a mask (mask@1). */
+export function adapterKind(store: BlobStore, pkg: JuniorPackage): 'none' | 'lora' | 'edits' | 'mask' {
   if (pkg.adapter === null) return 'none';
   const t = store.tree(pkg.adapter);
-  return t && t.files[SET_MANIFEST] ? 'edits' : 'lora';
+  return t && t.files[SET_MANIFEST] ? 'edits' : t && t.files[MASK_MANIFEST] ? 'mask' : 'lora';
 }
 
 export function readEditSet(store: BlobStore, adapter: BlobId): EditSet | null {
@@ -508,6 +510,7 @@ export function composeVersion(r: ComposeRequest): ComposeResult {
   const parent = normalizePackage(r.parent);
   const kind = adapterKind(r.store, parent);
   if (kind === 'lora') return { problems: ['the parent has a LoRA adapter: combining a trained adapter with edits is another recipe, which does not exist'] };
+  if (kind === 'mask') return { problems: ['the parent has a mask: a version with a mask receives no edits (no recipe combines them)'] };
   if (!r.authorized) return { problems: ['the condition authorizes no edits: its manifest fixes no "weight_edits" bounds'] };
   const bp = boundsProblems(r.authorized);
   if (bp.length) return { problems: bp };
@@ -1002,9 +1005,11 @@ export function construct(store: BlobStore, start: JuniorPackage, o: { construct
 
 /** Where a worker's report of the weights it served differs from the set its package carries, or null. */
 export function weightsMismatch(store: BlobStore, pkg: JuniorPackage, loaded: Readonly<Record<string, { base: string; edited: string }>> | null | undefined): string | null {
-  if (adapterKind(store, pkg) !== 'edits') return null;
-  const set = readEditSet(store, pkg.adapter!)!;
-  if (!loaded) return 'the worker did not say the weights it composed';
+  const kind = adapterKind(store, pkg);
+  if (kind !== 'edits' && kind !== 'mask') return null;
+  /* A mask is checked as the sparse change of -W it is: the same summaries, the weights it says it deletes into. */
+  const set = kind === 'edits' ? readEditSet(store, pkg.adapter!)! : JSON.parse(store.get(store.tree(pkg.adapter!)!.files[MASK_MANIFEST]).toString('utf8')) as { summaries: Record<string, ModuleSummary> };
+  if (!loaded) return 'the worker did not say the weights it ' + (kind === 'mask' ? 'masked' : 'composed');
   const wrong: string[] = [];
   for (const [m, s] of Object.entries(set.summaries)) {
     const l = loaded[m];

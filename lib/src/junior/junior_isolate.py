@@ -8,8 +8,8 @@ launcher in a namespace with no network) and Landlock (the launcher takes every 
 
 `selftest` proves the isolation by trying what it must not be able to do: it answers what happened, and the harness
 declares the backend available only when every forbidden act failed and every allowed one worked. `run` executes
-<work>/program.py with <work> as its folder (inputs in <work>/inputs, outputs to <work>/out) and the base checkpoint at
-<base>, readable only.
+<work>/program.py with <work> as its folder (inputs in <work>/inputs, outputs to <work>/out, what it keeps to go on from in
+<work>/checkpoint - given back by the host to the same job) and the base checkpoint at <base>, readable only.
 
 Anything this launcher cannot set up (no Landlock in the kernel, a namespace refused) ends it before the program runs.
 """
@@ -129,7 +129,8 @@ def run(work, base, limits):
     limit(limits)
     os.chdir(work)
     os.environ.clear()
-    os.environ.update({"HOME": work, "JUNIOR_BASE": base, "JUNIOR_WORK": work, "PATH": "/usr/bin:/bin"})
+    os.environ.update({"HOME": work, "JUNIOR_BASE": base, "JUNIOR_WORK": work, "JUNIOR_CHECKPOINT": os.path.join(work, "checkpoint"),
+                       "PATH": "/usr/bin:/bin"})
     sys.argv = [os.path.join(work, "program.py")]
     code = open(sys.argv[0], encoding="utf8").read()
     exec(compile(code, sys.argv[0], "exec"), {"__name__": "__main__", "__file__": sys.argv[0]})

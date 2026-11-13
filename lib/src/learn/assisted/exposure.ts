@@ -5,8 +5,9 @@
  * and INDIRECTLY from the first thing it receives or reads of an exposed actor (`via`). What it produces afterwards
  * carries its exposure, whether it cites or not.
  *
- * Read from a journal here; each channel that carries work between actors (experience, branches, contributions, boards)
- * joins the exposure of what it carried to its reader's (`via`).
+ * Read from a journal here; each channel that carries work between actors joins the exposure of what it carried to its
+ * reader's (`via`): the runs given as experience (a branch's cut among them), branch results and contributions (in the
+ * messages that deliver them), and what the team's board showed (`peer_read`, from what its authors had when publishing).
  * ========================================================================== */
 
 type J = Record<string, any>;
@@ -47,7 +48,7 @@ export function exposureOf(journal: J | null | undefined): ExternalExposure {
     }
     /* What reached it from an exposed actor, as the channel that carried it recorded its exposure: an event's own, or each
        message an operator_message delivered. */
-    const carriers: J[] = [e, ...(e.type === 'operator_message' && Array.isArray(e.messages) ? e.messages : [])];
+    const carriers: J[] = [e, ...(e.type === 'operator_message' && Array.isArray(e.messages) ? e.messages : []), ...(e.type === 'experience' && Array.isArray(e.runs) ? e.runs : [])];
     for (const c of carriers) {
       const carried = c.external_exposure as J | undefined;
       if (carried && (carried.direct || (Array.isArray(carried.via) && carried.via.length))) {

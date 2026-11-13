@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { maskBoundsProblems } from './mask.ts';
 import { stableStringify } from '../core/hash.ts';
 import { LABS } from '../worlds/labs.ts';
 import { boundsProblems, type WeightBounds } from './weights.ts';
@@ -110,6 +111,8 @@ export interface CompetenceManifest {
   };
   /** The bounds of the weight edits this condition authorizes (SPEC-EDICION-PESOS §3.3); without them, edits are refused. */
   readonly weight_edits?: WeightBounds;
+  /** The fraction of weights a mask may delete in this condition (SPEC-EDICION-PESOS §15.3); without it, masks are refused. */
+  readonly masks?: import('./mask.ts').MaskBounds;
   /** The weight laboratory (SPEC-EDICION-PESOS §4): its diagnosis groups and runs, disjoint from the cases', and its limits. */
   readonly weight_lab?: WeightLabConfig;
   /** What a search of juniors may do in this condition (SPEC-EDICION-PESOS §6): fixed before any search starts. */
@@ -154,6 +157,7 @@ export function competenceProblems(raw: unknown): string[] {
   }
   if (!m.execution || typeof m.execution !== 'object') e.push('"execution": the harness, checkers, snapshot formats, tools, Judge and teacher as they run');
   if (m.weight_edits !== undefined) e.push(...boundsProblems(m.weight_edits));
+  if (m.masks !== undefined) e.push(...maskBoundsProblems(m.masks));
   if (m.weight_lab !== undefined) e.push(...weightLabProblems(m.weight_lab, m));
   if (m.weight_search !== undefined) {
     const w = m.weight_search;

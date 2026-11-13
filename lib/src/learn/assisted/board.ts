@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { FetchLike } from '../../core/net.ts';
 import type { LineSelector, SelectionRecord } from './sources.ts';
+import { exposed, type ExternalExposure } from './exposure.ts';
 
 /* ============================================================================
  * The BOARD of a team (SPEC-INVESTIGACION-PARALELA §5.2): what members of a team publish for one
@@ -385,4 +386,19 @@ function describe(record: unknown): string {
   if (typeof r.act === 'string') return 'the act ' + String(r.name ?? r.act) + (r.accepted === false ? ' (refused)' : '');
   if (typeof r.step === 'string') return 'the investigation step ' + r.step;
   return clip(JSON.stringify(record) ?? '', 80);
+}
+
+/** What reached a reader of the board from outside (SPEC-INVESTIGACION-EXTERNA §4.1.1): the exposure its authors had when
+    they published what it was shown, kept apart by the operator - never on the entry its peers read. */
+export function boardExposure(board: TeamBoard, q: Record<string, unknown>, answer: Record<string, unknown>): ExternalExposure | null {
+  const ids = [...(Array.isArray(answer.entries) ? (answer.entries as { id?: unknown }[]).map((e) => String(e?.id ?? '')) : []),
+    ...(Array.isArray(q.items) ? q.items.map(String) : typeof q.item === 'string' ? [q.item] : [])].filter((x) => x.includes('#'));
+  const via = new Set<string>();
+  for (const id of new Set(ids)) {
+    const x = board.operatorOf(id)?.external_exposure as ExternalExposure | undefined;
+    if (!exposed(x)) continue;
+    via.add('peer:' + id.split('#')[0]);
+    for (const v of x!.via) via.add(v);
+  }
+  return via.size ? { direct: false, via: [...via].sort(), since: null } : null;
 }

@@ -40,6 +40,21 @@ Las citas siguen la forma `src:S2#L10-20`.
 Sus búsquedas quedan en su registro (`<run>.agent-senior.json`, `sources_log`) y sus ids llevan el prefijo
 `senior.`. Cada mensaje suyo lleva su exposición, y un mundo que no admite fuentes externas no lo recibe.
 
+## 3b. Ramas documentales
+
+Un investigador o un senior con fuentes puede abrir una rama sin mundo propio:
+
+```json
+{"investigate": [{"delegate": {"question": "...", "access": {"world": "none", "sources": true}, "budget": {"rounds": 3, "search_calls": 2}}}]}
+```
+
+- **Qué tiene:** los registros que puede leer, sus notas y las fuentes. Sus bolsas se conceden de las de quien la
+  lanza, dentro de `branches.budget`.
+- **Qué recibe:** las páginas que ya leyó quien la lanza, para leerlas sin red ni gasto con la etiqueta de su corte
+  (`exp1.S1`), aunque no tenga bolsas propias.
+- **Cómo termina:** con `{"finish": {"report": "...", "state": "complete" | "partial" | "no_result"}}`, nunca con
+  una aceptación. Su informe vuelve como contribución, con su exposición.
+
 ## 4. Un operador investigador
 
 ```powershell
@@ -57,6 +72,14 @@ contenido que llega como mensaje, nunca como directiva. Cada contribución se en
 aunque el operador se reanude. Un run terminado no se reabre: la contribución tardía queda en el registro del
 operador, `<run>.research-scout.json`.
 
+**En un proyecto.** El objetivo del proyecto (`goal.json`) puede llevar `"research": [ ... ]` con los mismos objetos:
+
+- **Destinatarios:** son ids de runs del proyecto, o `"*"` para todos según se planifican.
+- **Cuándo termina:** con `lifetime: "targets"` acaba cuando acaban sus destinatarios; con `"project"`, cuando acaba
+  el proyecto.
+- **Dónde queda:** su registro va a la carpeta del proyecto (`research-<id>.json`). Un resultado tardío queda en
+  `project.tray.jsonl`. Sus tokens cuentan en el presupuesto del proyecto.
+
 ## 5. Un método propio como programa
 
 En el mundo del junior, con los perfiles que habilita el operador:
@@ -73,7 +96,11 @@ El investigador puede entrenar con una receta `{"method": "program", ...}`, como
 - **Dónde corre:** sólo donde un backend aislado se demuestra a sí mismo, es decir, en Linux con namespaces y
   Landlock. En Windows y en un perfil GPU responde `unavailable`.
 - **Qué se importa:** el producto entra como cambio aprendido de datos (`learned: "trained"`), con las realizaciones
-  de sus ejemplos.
+  de sus ejemplos. Un `weight-edit-set@1` entra como conjunto de cambios. Un adaptador LoRA (`lora-adapter`:
+  `adapter_config.json` y `adapter_model.safetensors`) entra como adaptador de un hijo de la partida, comprobado sin
+  cargar sus tensores. `mask@1` aún no se importa.
+- **Si se corta:** lo que el programa deja en `checkpoint/` (`JUNIOR_CHECKPOINT`) se le devuelve al mismo trabajo, y
+  sólo a él.
 - **Quién lo juzga:** el evaluador fijo, nunca el programa.
 
 ## 6. Continuación y exportación

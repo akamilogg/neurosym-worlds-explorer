@@ -9,6 +9,7 @@ import { isGameLab } from '../learn/lab.ts';
 import { LABS } from '../worlds/labs.ts';
 import { runBatch, type BatchDefinition, type BatchReport, type BatchRun } from './batch.ts';
 import { researcherEvents } from './view.ts';
+import { researchSpecProblems, runResearchOperator, type OperatorResearchSpec, type ResearchContribution } from './research-operator.ts';
 
 /* ============================================================================
  * The PROJECT PLANNER (SPEC-ORQUESTADOR §5, R3, R3b, R4): an agent that pursues a big GOAL in a
@@ -60,6 +61,10 @@ export interface ProjectOptions {
   readonly print?: (line: string) => void;
   readonly maxRuns?: number;
   readonly pollMs?: number;
+  /** Researching operators that accompany the project (SPEC-INVESTIGACION-EXTERNA §6.3): operator-research@1 objects whose
+      targets are ids of the project's runs, or "*" for every run of it as it is planned; each with its own budget, counted in
+      the project's. "targets" ends when its targets end, "project" when the project does. */
+  readonly research?: readonly OperatorResearchSpec[];
 }
 
 /** One run as the planner and the criterion see it: its researcher's finding, summarised. */
@@ -104,7 +109,9 @@ export interface ProjectRecord {
   readonly autonomy: Autonomy;
   readonly threshold?: number;
   readonly started: string;
-  spent: { runs: number; planner: number };
+  spent: { runs: number; planner: number; research?: number };
+  /** Its researching operators: each one's record, in the project's folder. */
+  research?: { id: string; record: string; lifetime: 'targets' | 'project' }[];
   iterations: { n: number; hypotheses?: unknown[]; plan?: unknown; approval?: { by: string; decision: string; note?: string; at: string }; batch?: string; synthesis?: unknown; criterion?: { met: boolean; why: string } }[];
   conclusions: Conclusion[];
   open_questions: string[];
@@ -137,9 +144,11 @@ const tokensOf = (raw: unknown): number => Number((raw as { usage?: { total_toke
 const argValue = (args: readonly string[], name: string): number | null => { const i = args.indexOf('--' + name); return i >= 0 && Number.isFinite(Number(args[i + 1])) ? Number(args[i + 1]) : null; };
 
 /** The files of a project. */
-export function projectFiles(root: string, id: string): { dir: string; record: string; inbox: string; status: string; report: string } {
+export function projectFiles(root: string, id: string): { dir: string; record: string; inbox: string; status: string; report: string; tray: string } {
   const dir = path.join(root, 'runs', 'projects', id);
-  return { dir, record: path.join(dir, 'project.json'), inbox: path.join(dir, 'project.inbox.jsonl'), status: path.join(dir, 'project.status.json'), report: path.join(dir, 'project.txt') };
+  return { dir, record: path.join(dir, 'project.json'), inbox: path.join(dir, 'project.inbox.jsonl'), status: path.join(dir, 'project.status.json'), report: path.join(dir, 'project.txt'),
+    /* What its researching operators found after a recipient had ended: kept for the operator, never reopening a run. */
+    tray: path.join(dir, 'project.tray.jsonl') };
 }
 
 /** An order to a project: approve or reject the plan (or the criterion) waiting for approval, or stop. */
@@ -254,7 +263,7 @@ export async function runProject(o: ProjectOptions): Promise<ProjectRecord> {
     log('planner', { task, answer: parsed ?? answer.content });
     return (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, any>;
   };
-  const left = () => o.budget.tokens - record.spent.runs - record.spent.planner;
+  const left = () => o.budget.tokens - record.spent.runs - record.spent.planner - researchSpent();
   const runs: RunSummary[] = [];
   const runsById = new Map<string, RunSummary>();
   const stateOf = (extra: Record<string, unknown> = {}) => ({
@@ -263,7 +272,51 @@ export async function runProject(o: ProjectOptions): Promise<ProjectRecord> {
     runs: runs.map(({ journal: _j, ...r }) => r), conclusions: record.conclusions.map(({ history: _h, ...c }) => c), open_questions: record.open_questions,
     iterations: record.iterations.map((it) => ({ n: it.n, hypotheses: it.hypotheses, synthesis: it.synthesis, approval: it.approval })), ...extra
   });
-  const end = (why: string) => { clearInterval(beat); record.ended = { at: new Date().toISOString(), why }; log('ended', { why }); fs.writeFileSync(files.report, projectText(record)); say('project ' + o.id + ': ended - ' + why); return record; };
+  /* Its researching operators (SPEC-INVESTIGACION-EXTERNA §6.3): started with the project, closed with it - what they
+     reached stays in their records and in the tray. */
+  const researchSpecs = o.research ?? [];
+  {
+    const ids = new Set<string>();
+    for (const s of researchSpecs) {
+      const p = researchSpecProblems(s);
+      if (p.length) throw new LabError('research: ' + p.join('; '));
+      if (ids.has(s.id)) throw new LabError('research: two operators named ' + s.id);
+      ids.add(s.id);
+    }
+    if (researchSpecs.length && !o.agentLlm) throw new LabError('research: a researching operator needs an LLM (agentLlm)');
+  }
+  /** Each run of the project by its id: its journal as planned (while its batch runs), then as it ended. */
+  const journals = new Map<string, string>();
+  let closed = false;
+  const researchRecord = (id: string) => path.join(files.dir, 'research-' + id + '.json');
+  const researchSpent = (): number => researchSpecs.reduce((n, s) => n + (Number(readJson(researchRecord(s.id))?.spent?.tokens) || 0), 0);
+  const researching: Promise<unknown>[] = [];
+  const startResearch = () => {
+    if (!researchSpecs.length) return;
+    record.research = researchSpecs.map((s) => ({ id: s.id, record: path.relative(files.dir, researchRecord(s.id)).split(path.sep).join('/'), lifetime: s.lifetime ?? 'targets' }));
+    for (const spec of researchSpecs) {
+      const named = spec.targets.filter((t) => t !== '*');
+      researching.push(runResearchOperator({ spec, root: o.root, record: researchRecord(spec.id), blobs: path.join(files.dir, 'blobs'), llm: o.agentLlm!('research-' + spec.id),
+        ...(o.pollMs ? { pollMs: o.pollMs } : {}), say,
+        project: {
+          targets: () => (spec.targets.includes('*') ? [...journals.values()] : named.flatMap((id) => (journals.has(id) ? [journals.get(id)!] : []))),
+          /* Every run it names planned: "*" never is - it follows the project as long as it lives. */
+          all: () => !spec.targets.includes('*') && named.every((id) => journals.has(id)),
+          closed: () => closed,
+          keep: (c: ResearchContribution, to: string, why: string) => {
+            fs.appendFileSync(files.tray, JSON.stringify({ at: new Date().toISOString(), contribution: c.id, from: c.from, to, why, state: c.state, report: c.report, external_exposure: c.external_exposure }) + '\n');
+            log('research_kept', { contribution: c.id, from: c.from, to, why });
+          }
+        } }).catch((e) => { log('research_failed', { id: spec.id, error: String((e as Error)?.message ?? e) }); }));
+    }
+    save();
+  };
+  const end = async (why: string): Promise<ProjectRecord> => {
+    closed = true;
+    await Promise.all(researching);
+    if (researchSpecs.length) record.spent.research = researchSpent();
+    clearInterval(beat); record.ended = { at: new Date().toISOString(), why }; log('ended', { why }); fs.writeFileSync(files.report, projectText(record)); say('project ' + o.id + ': ended - ' + why); return record;
+  };
 
   inbox();
   /* --- The criterion: the operator's, or the planner's once the operator approves it (Q3). -------------------------- */
@@ -283,6 +336,7 @@ export async function runProject(o: ProjectOptions): Promise<ProjectRecord> {
     }
   }
   save();
+  startResearch();
 
   /* --- The loop -------------------------------------------------------------------------------------------------- */
   let operatorNote: string | null = null;
@@ -327,12 +381,16 @@ export async function runProject(o: ProjectOptions): Promise<ProjectRecord> {
     }));
     const def: BatchDefinition = { format: 'batch@1', id: o.id + '-i' + n, runs: defRuns, concurrency: Math.max(1, Number(plan.batch.concurrency) || 2), budget: { tokens: Math.min(cost, left()) } };
     iteration.batch = path.join(files.dir, 'batches', 'i' + n, 'batch.json');
+    /* Where each run will write: its researching operators follow it while it runs. */
+    for (const r of defRuns) journals.set(r.id, path.join(path.dirname(iteration.batch), r.id + '.json'));
     save();
     say('project ' + o.id + ': iteration ' + n + ' - ' + defRuns.length + ' runs');
     const report = await runBatch(def, { root: o.root, dir: path.dirname(iteration.batch), llm: o.llm, ...(o.judge ? { judge: o.judge } : {}), ...(o.fetch ? { fetch: o.fetch } : {}),
       ...(o.agentLlm ? { agentLlm: o.agentLlm } : {}), ...(o.signal ? { signal: o.signal } : {}), print: say });
     record.spent.runs += report.runs.reduce((s, r) => s + (r.tokens_total ?? 0), 0);
+    if (researchSpecs.length) record.spent.research = researchSpent();
     for (const row of report.runs) {
+      if (row.journal) journals.set(row.id, row.journal);
       const s = summarize(n, defRuns.find((d) => d.id === row.id)!, row);
       runs.push(s);
       runsById.set(s.id, s);

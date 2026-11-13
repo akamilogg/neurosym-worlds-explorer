@@ -32,7 +32,8 @@ export function researcherEvent(e: Json): Json | null {
     case 'proposal': case 'reflection': return { ...base, ...pick(e, ['rationale', 'beliefs', 'notes', 'law', 'formula', 'fingerprint', 'lessons', 'next_experiment']) };
     case 'methods': case 'consolidated': return { ...base, ...pick(e, ['methods', 'notes']) };
     case 'instrument_report': return { ...base, ...pick(e, ['id', 'by', 'what', 'evidence', 'kind']) };
-    case 'operator_message': return { ...base, messages: (e.messages ?? []).map((m: Json) => pick(m, ['id', 'text', 'by', 'at'])) };
+    /* With what lets one go from a message to the report it carries (a branch's result, a contribution). */
+    case 'operator_message': return { ...base, messages: (e.messages ?? []).map((m: Json) => pick(m, ['id', 'text', 'by', 'at', 'research_result', 'contribution'])) };
     case 'exploration_game': return { ...base, ...pick(e, ['game', 'winner', 'plies']) };
     case 'exploration_episode': case 'exploration_launch': return { ...base, ...pick(e, ['episode', 'launch', 'place', 'setup']) };
     case 'played_by_the_learner': return { ...base, ...pick(e, ['game', 'from', 'how', 'result', 'turns']) };
@@ -49,7 +50,12 @@ export function researcherEvent(e: Json): Json | null {
     case 'world_closed': return base;
     case 'peer_publish': return { ...base, ...pick(e, ['id', 'kind', 'claim', 'evidence', 'window']) };
     case 'peer_read': return { ...base, ...pick(e, ['peers', 'shown', 'items', 'version']) };
-    case 'delegation_requested': return { ...base, ...pick(e, ['id', 'question', 'expected', 'mode', 'granted']) };
+    case 'delegation_requested': return { ...base, ...pick(e, ['id', 'question', 'expected', 'mode', 'granted', 'access']) };
+    /* Its external sources (SPEC-INVESTIGACION-EXTERNA §10): what it searched and read - as its investigation was answered -
+       and a documentary session's end, its report. */
+    case 'source_search': return { ...base, ...pick(e, ['id', 'request', 'state', 'results', 'retrieved', 'why']) };
+    case 'source_acquired': return { ...base, ...pick(e, ['snapshot', 'requested', 'final', 'retrieved', 'state', 'why', 'domain']) };
+    case 'task_finished': return { ...base, ...pick(e, ['state', 'report', 'refs', 'artifacts', 'document']) };
     case 'round_closed': case 'budget_extended': case 'focus_changed': return { ...base, ...pick(e, ['why', 'to_attempts', 'facet', 'task']) };
     /* An artifact's verdict as it was told it: whether its version holds in each place, is correct, is better. */
     case 'artifact_check': return e.told && typeof e.told === 'object' ? { ...base, version: e.told.version, laboratories: Array.isArray(e.told.laboratories)
@@ -96,7 +102,7 @@ export class ResearchStore {
         const st = fs.statSync(f), stamp = st.mtimeMs + ':' + st.size;
         if (this.stamps.get(id) === stamp && this.cached.has(id)) { out.set(id, this.cached.get(id)!); continue; }
         const j = read(f);
-        if (j && (j.experiment || j.format === 'project@1' || j.format === 'agent@1')) {
+        if (j && (j.experiment || j.format === 'project@1' || j.format === 'agent@1' || j.format === 'operator-research-record@1')) {
           const s = { file: f, journal: j, stale: false }; this.cached.set(id, s); this.stamps.set(id, stamp); out.set(id, s);
         } else if (!j && this.cached.has(id)) out.set(id, { ...this.cached.get(id)!, stale: true });
       }
@@ -108,17 +114,36 @@ export class ResearchStore {
   projectEvents(j: Json): Json[] {
     return [...(j.events ?? []), ...(j.iterations ?? []).flatMap((it: Json) => ['hypotheses', 'plan', 'approval', 'synthesis', 'criterion'].filter(k => it[k] !== undefined).map(k => ({ type: 'project_' + k, round: it.n, [k]: it[k] })))];
   }
+  /** A researching operator's record (SPEC-INVESTIGACION-EXTERNA §10): its activations, what it searched and read, its
+      contributions and where each was delivered or kept - in the order they happened. */
+  researchEvents(j: Json): Json[] {
+    const at = (x: Json) => (typeof x.at === 'string' ? x.at : '');
+    const out: Json[] = [
+      ...(j.activations ?? []).map((a: Json) => ({ type: 'research_activation', at: a.at, n: a.n, woken_by: a.woken_by, readings: (a.readings ?? []).length, decision: a.decision })),
+      ...(j.sources_log ?? []),
+      /* Made at the end of its activation: placed where it was first delivered (or kept), else at its activation. */
+      ...(j.contributions ?? []).map((c: Json) => ({ type: 'research_contribution', at: (j.deliveries ?? []).find((d: Json) => d.contribution === c.id && d.at)?.at ?? (j.activations ?? []).find((a: Json) => a.n === c.activation)?.at, ...c })),
+      ...(j.deliveries ?? []).map((d: Json) => ({ type: 'contribution_delivered', ...d }))
+    ];
+    return out.map((e, i) => ({ e, i })).sort((a, b) => at(a.e).localeCompare(at(b.e)) || a.i - b.i).map((x) => x.e);
+  }
   rawEvents(j: Json): Json[] {
     if (j.format === 'project@1') return this.projectEvents(j);
+    if (j.format === 'operator-research-record@1') return this.researchEvents(j);
+    /* A senior's record: its decisions, and what it read of external sources and the branches it opened, by when. */
+    if (j.format === 'agent@1' && !Array.isArray(j.events) && (j.sources_log?.length || j.delegation_log?.length)) {
+      const all = [...(j.decisions ?? []).map((e: Json) => ({ type: 'agent_decision', ...e })), ...(j.sources_log ?? []), ...(j.delegation_log ?? [])];
+      return all.map((e, i) => ({ e, i })).sort((a, b) => String(a.e.at ?? '').localeCompare(String(b.e.at ?? '')) || a.i - b.i).map((x) => x.e);
+    }
     // Agent decisions are already in events on current journals; support older decisions arrays too.
     return Array.isArray(j.events) ? j.events : (j.decisions ?? []).map((e: Json) => ({ type: 'agent_decision', ...e }));
   }
   catalogue(): Entity[] {
     const sources = this.sources();
     const parentOf = (s: Source): string | null => {
-      const from = s.journal.resumed?.from ?? s.journal.run ?? s.journal.junior ?? s.journal.journal;
+      const from = s.journal.resumed?.from ?? s.journal.run ?? s.journal.junior ?? s.journal.journal ?? s.journal.spec?.targets?.[0];
       if (typeof from !== 'string') return null;
-      const candidates = [...sources.entries()].filter(([, x]) => x.file === path.resolve(path.dirname(s.file), from) || x.file === path.resolve(from));
+      const candidates = [...sources.entries()].filter(([, x]) => x.file === path.resolve(path.dirname(s.file), from) || x.file === path.resolve(from) || x.file === path.resolve(this.root, from));
       if (candidates.length === 1) return candidates[0][0];
       const byName = [...sources.entries()].filter(([, x]) => path.basename(x.file) === path.basename(from) && x.journal.started === s.journal.resumed?.from_started);
       return byName.length === 1 ? byName[0][0] : null;
@@ -138,7 +163,7 @@ export class ResearchStore {
       return { id, label: j.id ?? path.basename(s.file, '.json'), kind, model: j.config?.llm_model ?? j.model ?? null,
         researcher: j.researcher ?? null, parent: parentOf(s), state, round: st?.round ?? lastRound, heartbeat: st?.heartbeat ?? null,
         stale: s.stale, revision: hash(j), started: j.started ?? null, cost: st?.cost ?? j.spent ?? j.usage ?? null,
-        task: j.goal?.question ?? j.config?.task ?? null, path: id,
+        task: j.goal?.question ?? j.config?.task ?? j.spec?.task ?? null, path: id,
         capabilities: { message: live && j.researcher === 'assisted', stop: live, resume: run && ['ended', 'interrupted'].includes(state),
           branch: run && state === 'ended' && events.at(-1)?.stoppedBy === 'budget' },
         ...(run ? { anomalies: runAnomalies(s.file).map(r => ({ id: r.id, by: r.by, state: r.state, kind: r.kind, what: r.what.slice(0, 300) })) } : {}) } as Entity;
@@ -183,6 +208,8 @@ export class ResearchStore {
     for (const e of events) {
       if (e.type === 'operator_command' && e.data.id) sent.set(e.data.id, e.id);
       if (e.type === 'agent_decision' && e.data.order) sent.set(e.data.order, e.id);
+      /* A contribution delivered: from its record to the message that carried it. */
+      if (e.type === 'contribution_delivered' && e.data.order) sent.set(e.data.order, e.id);
     }
     for (const e of events) if (e.type === 'operator_message') for (const m of e.data.messages ?? []) {
       const from = sent.get(m.id); if (from) relations.push({ kind: 'delivered', from, to: e.id });

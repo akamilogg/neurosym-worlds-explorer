@@ -79,12 +79,12 @@ def served_weights(job):
     """The digests of the edited modules as served, before and after (an edit set only; None otherwise): composed into the
     resident model for the qwenputer backend, by the pure composer for the fake one."""
     adapter = (job.get("files") or {}).get("adapter")
-    if not JW.is_edit_set(adapter):
+    if not JW.changes_weights(adapter):
         return None
     if job["backend"] == "qwenputer":
         return _resident["weights"]
     if job["execution"] not in _composed:
-        _composed[job["execution"]] = JW.compose_pure(adapter, job["files"]["base"], int((job.get("circuit") or {}).get("chip_layers", 0)))
+        _composed[job["execution"]] = JW.pure_digests(adapter, job["files"]["base"], int((job.get("circuit") or {}).get("chip_layers", 0)))
     return _composed[job["execution"]]
 
 
@@ -193,9 +193,9 @@ def qwenputer_chat(job):
         chat = RvChat(job["files"]["base"])
         # The package's chat template, in place of the checkpoint's.
         chat.tok.chat_template = open(job["files"]["chat_template"], encoding="utf8").read()
-        if JW.is_edit_set(job["files"].get("adapter")):
-            # A set of edits, composed from the start's weights by its rule (never a LoRA's merge).
-            _resident["weights"] = JW.apply_edit_set(chat.model, job["files"]["adapter"], int(chat.meta["chip_layers"]), _resident["bases"])
+        if JW.changes_weights(job["files"].get("adapter")):
+            # A set of edits, composed from the start's weights by its rule (never a LoRA's merge), or a mask, its entries zeroed.
+            _resident["weights"] = JW.apply_weights(chat.model, job["files"]["adapter"], int(chat.meta["chip_layers"]), _resident["bases"])
         elif job["files"].get("adapter"):
             apply_adapter(chat, job["files"]["adapter"], int(chat.meta["chip_layers"]))
         _resident["chat"] = chat
@@ -230,8 +230,8 @@ def validity(job):
     if job["backend"] == "fake":
         touches, weights = False, None
         adapter = job["files"].get("adapter")
-        if JW.is_edit_set(adapter):
-            # A set that reaches the circuit is refused while it is read, as on the served model.
+        if JW.changes_weights(adapter):
+            # A set or a mask that reaches the circuit is refused while it is read, as on the served model.
             weights = served_weights(job)
         elif adapter:
             touches = json.load(open(os.path.join(adapter, "adapter_config.json"))).get("touches_circuit", False)

@@ -284,8 +284,11 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   const seniorExposure = (journal: Record<string, any>): ExternalExposure | null => {
     const own = (record.sources_log ?? []).some((e) => (e.type === 'source_search' && e.state === 'answered') || (e.type === 'source_acquired' && e.state === 'acquired'));
     const junior = exposureOf(journal);
-    if (!own && !exposed(junior)) return null;
-    return { direct: own, via: exposed(junior) ? [...new Set(['run:' + path.basename(o.journal), ...junior.via])].sort() : [], since: null };
+    /* And what its branches brought it (§4.1.1): each result given it, with its exposure. */
+    const branches = ((record.delegation_log ?? []) as Record<string, any>[]).filter((e) => e.type === 'branch_result_given' && exposed(e.external_exposure));
+    if (!own && !exposed(junior) && !branches.length) return null;
+    return { direct: own, via: [...new Set([...(exposed(junior) ? ['run:' + path.basename(o.journal), ...junior.via] : []),
+      ...branches.flatMap((e) => ['branch:' + e.id, ...(e.external_exposure.via ?? [])])])].sort(), since: null };
   };
   const seniorBranches = (journal: Record<string, any>): Delegations | null => {
     if (branchesOf !== undefined) return branchesOf;
@@ -309,6 +312,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       unsupported: (lab as { external?: unknown }).external ? 'its environment is outside the harness: a branch would share it, not have its own'
         : (lab as { living?: unknown }).living ? 'it is a living world: the senior\'s branches of it are not built (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): its junior delegates' : null,
       experience: experienceFiles,
+      /* Its own sources (SPEC-INVESTIGACION-EXTERNA §6.2): its branches' bags granted from its, the pages it read given to them. */
+      external: () => seniorSources(journal)?.external ?? null,
       ...(cfg.delegation.ledger ? { ledger: path.resolve(path.dirname(o.journal), cfg.delegation.ledger), requester: 'agent:' + o.id } : {})
     });
     return branchesOf;
@@ -454,7 +459,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
   const delegation = (journal.config?.delegation ?? null) as { fund: number; tokens: number; rounds: number; max_rounds: number } | null;
   const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal))
-    + (branches && delegation ? '\n\n' + SENIOR_DELEGATION_SECTION({ fund: delegation.fund, tokens: delegation.tokens, rounds: delegation.rounds, maxRounds: delegation.max_rounds }) : '')
+    + (branches && delegation ? '\n\n' + SENIOR_DELEGATION_SECTION({ fund: delegation.fund, tokens: delegation.tokens, rounds: delegation.rounds, maxRounds: delegation.max_rounds }, Boolean(sources?.external)) : '')
     /* Its external sources (SPEC-INVESTIGACION-EXTERNA, IE2): the junior's instruments, with its own bags. */
     + (sources?.external ? '\n\n' + SENIOR_EXTERNAL_SECTION + '\nYour inventory: ' + JSON.stringify(sources.external.inventory(false)) : '');
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };

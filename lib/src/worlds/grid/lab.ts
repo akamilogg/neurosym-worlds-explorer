@@ -62,7 +62,8 @@ import { describeGridTruth } from './describe.ts';
 import { GRID_PERCEPT_DOC, asciiSense, bFallback, createGridWorld, generateSpec, mulberry32, readPicture,
   type GridMove, type GridSense, type GridSpec, type GridState } from './index.ts';
 import { boardOf, examOverlap, explorationIndices, FAMILY_INDEX } from './family.ts';
-import { PEERS_SECTION, PeerChannel, parsePublication, type BoardEntry } from '../../learn/assisted/board.ts';
+import { PEERS_SECTION, PeerChannel, boardExposure, parsePublication, type BoardEntry } from '../../learn/assisted/board.ts';
+import { exposed, exposureOf } from '../../learn/assisted/exposure.ts';
 import { hashString } from '../../core/hash.ts';
 import { GRID_ANSWER, GRID_VERDICT, gridObjective } from './objective.ts';
 import { Protocol } from '../../learn/protocol.ts';
@@ -911,7 +912,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
 
   async function readPeers(q: Record<string, unknown>): Promise<unknown> {
     const answer = await peers!.run(q, currentRound) as Record<string, unknown>;
-    log('peer_read', { round: currentRound, peers: q.peers, ...(answer.version !== undefined ? { version: answer.version } : {}),
+    const exposure = boardExposure(peers!.board, q, answer);
+    log('peer_read', { round: currentRound, peers: q.peers, ...(exposure ? { from: 'board', external_exposure: exposure } : {}), ...(answer.version !== undefined ? { version: answer.version } : {}),
       ...(q.items !== undefined || q.item !== undefined ? { items: Array.isArray(q.items) ? q.items.map(String) : [String(q.item)] } : {}),
       ...(typeof q.evidence === 'string' ? { evidence: q.evidence } : {}), ...(typeof q.words === 'string' ? { words: q.words } : {}),
       ...(Array.isArray(answer.entries) ? { shown: (answer.entries as { id: string }[]).map((e) => e.id) } : {}),
@@ -966,7 +968,8 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     const { evidence: _refs, ...said } = p;
     const entry: BoardEntry = { id: team!.member + '#' + n, member: team!.member, n, round: currentRound, window: board.windowOf(currentRound), ...said,
       world: seenIn.map(placeInfo), evidence: found.map((x) => ({ ref: x.ref, record: x.at!.record })) };
-    const put = board.publish(entry, { places: seenIn.map((pl) => ({ id: pl.id, index: pl.index })), keys: found.flatMap((x) => x.at!.keys) });
+    const exposure = exposureOf(s.journal);
+    const put = board.publish(entry, { places: seenIn.map((pl) => ({ id: pl.id, index: pl.index })), keys: found.flatMap((x) => x.at!.keys), ...(exposed(exposure) ? { external_exposure: exposure } : {}) });
     peers!.published = n;
     log('peer_publish', { round: currentRound, id: entry.id, kind: entry.kind, claim: entry.claim, evidence: p.evidence, window: entry.window,
       ...(put.replayed ? { replayed: true } : {}), ...(put.conflict ? { conflict: put.conflict } : {}) });

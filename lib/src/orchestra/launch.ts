@@ -30,6 +30,8 @@ export interface ProjectFile {
   readonly autonomy?: Autonomy;
   readonly threshold?: number;
   readonly max_runs?: number;
+  /** Researching operators (SPEC-INVESTIGACION-EXTERNA §6.3): operator-research@1 objects, targets by run id or "*". */
+  readonly research?: readonly import('./research-operator.ts').OperatorResearchSpec[];
 }
 
 type ChatRole = 'PLANNER_LLM' | 'SENIOR_LLM' | 'AGENT_LLM' | 'GRADER_LLM' | 'AUDIT_LLM';
@@ -99,6 +101,7 @@ export function readProjectFile(file: string): ProjectFile {
   try { g = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { throw new LabError('cannot read ' + file + ': ' + String((e as Error).message ?? e)); }
   if (!g.id || !g.question || !(g.budget?.tokens > 0)) throw new LabError(file + ': a project needs id, question and budget.tokens');
   if (g.autonomy && !['consultive', 'threshold', 'autonomous'].includes(g.autonomy)) throw new LabError(file + ': autonomy is consultive, threshold or autonomous');
+  if (g.research !== undefined && !Array.isArray(g.research)) throw new LabError(file + ': research is a list of operator-research@1 objects');
   return g;
 }
 

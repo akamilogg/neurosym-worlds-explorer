@@ -4,9 +4,10 @@ Estado (12/11/2026): **WE1 a WE6 implementadas en código** (edición y composic
 cerrados y backend aislado; la palanca en el mundo del junior; la búsqueda; el atasco y la rama del operador; la
 comparación A–F con su plan, sus pasos C y E y su informe; §12). **Sin ejecuciones reales:** la comparación se lanza en la
 máquina 2×3090 después de la línea base de la fase A. Dos revisiones externas del mismo día conciliadas (§14).
-**§15 (borrar pesos con gradiente: WE7a, WE7 a WE9), propuesta sin implementar**; WE7 espera al ejecutor general de
-programas (IE5 de [SPEC-INVESTIGACION-EXTERNA](SPEC-INVESTIGACION-EXTERNA.md)), y su ejecución real en GPU, a la prueba de
-aislamiento de la GPU (§15.8, revisión externa del 13/11/2026). Amplía
+**§15 (borrar pesos con gradiente): WE7a implementada en código el 13/11/2026** (el adaptador `mask@1`,
+`lib/src/junior/mask.ts`, con sus pruebas; §15.8); **WE7 a WE9, propuesta sin implementar**. WE7 ya tiene el ejecutor
+general de programas (IE5 de [SPEC-INVESTIGACION-EXTERNA](SPEC-INVESTIGACION-EXTERNA.md)) y `mask@1`; su ejecución real en
+GPU espera a la prueba de aislamiento de la GPU (§15.8, revisión externa del 13/11/2026). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -916,7 +917,24 @@ Nada de esto se abre antes de la línea base de la fase A y de las condiciones F
 | **WE8 · GRPO con recompensas de sondas** | WE7, VM4; para ejecutar, la prueba de aislamiento de la GPU | `rl-probes@1` con su contrato de muestreo (§15.3.1): decodificación estocástica con semillas en el trabajador, estado restaurado por respuesta, probabilidades de los tokens, tokens del circuito fuera de la pérdida, grupos sin variación contados; trayectorias en cortes de casos `training`, recompensa del comprobador en el corte, KL a la partida; en la máquina real |
 | **WE9 · F′, G y `wanda_mask@1`** | WE7, WE6 | Las condiciones en `weight-comparison` (plan, paso de G, informe con H3 y H4); el constructor cerrado, sobre la consulta `input_norms` de WE7 |
 
-Orden: WE7a puede hacerse ya; WE7 tras IE5 y WE7a; WE8 y WE9 tras WE7. Nada de WE7 a WE9 se ejecuta de verdad antes de la
+**Estado de WE7a (13/11/2026).** El formato, en `mask.json`, guarda la partida, la base, las capas del circuito, cada
+módulo con su fichero de índices I64 y cuántos borra, su cota y las medidas de §3.3. Esas medidas se calculan componiendo
+el cambio `sparse` de `−W`, con `compose@1` sin cambios. La cota es la fracción máxima borrada por módulo y en total, en el
+campo `masks` del manifiesto; una cota declarada sólo puede ser más estricta.
+
+- **Aplicarla:** el trabajador pone a cero las entradas, en Python puro (backend de imitación) y en torch (modelo
+  servido). Informa de los digests y se comprueban contra los de la máscara.
+- **Equivalencia bit a bit con componer:** un módulo tocado pasa por la regla de la composición como cualquier módulo
+  editado, así que sus −0 salen +0.
+- **Verificación:** `verifyMask`, y `lab junior package` la verifica sin modelo.
+- **Importación:** el importador de IE5 la admite (`importMask`, desde `modules.json` y sus índices). En el mundo del
+  junior, una receta por programa con `output_format: "mask@1"` da una versión que declara `trained`, con sus
+  realizaciones.
+- **Prohibiciones:** una versión con máscara no recibe ediciones, otra receta ni LoRA, y una máscara sólo se hace desde
+  una versión sin adaptador.
+- **Pruebas:** `lib/test/mask.test.ts`, criterios de aceptación 1 a 4.
+
+Orden: WE7a está hecha; WE7 tras IE5 (hecha) y WE7a; WE8 y WE9 tras WE7. Nada de WE7 a WE9 se ejecuta de verdad antes de la
 línea base de la fase A ni, en la GPU, antes de su prueba de aislamiento.
 
 Aceptación:

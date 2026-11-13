@@ -7,7 +7,7 @@ import { stableStringify } from '../core/hash.ts';
 import type { CompetenceManifest } from './competence.ts';
 import { selectionOverlap, type Dataset, type Example } from './distill.ts';
 import { datasetRealizations } from './groups.ts';
-import { methodProgramProblems } from './method-program.ts';
+import { LORA_MODULES, methodProgramProblems } from './method-program.ts';
 import { executionHash, normalizePackage, type BlobStore, type JuniorPackage } from './package.ts';
 import { materialize } from './worker.ts';
 
@@ -51,7 +51,7 @@ export interface Recipe {
   readonly max_gpu_hours: number;
 }
 
-const MODULES = new Set(['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'in_proj_qkvz', 'in_proj_ba', 'out_proj']);
+const MODULES = LORA_MODULES;
 
 /** A recipe by program (SPEC-INVESTIGACION-EXTERNA §8.2): the method is the researcher's program, run under a profile the
     operator enabled; the host decides what data it reads (the dataset's rows, of examples the recipe admits) and imports

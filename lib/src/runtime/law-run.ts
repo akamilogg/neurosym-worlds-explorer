@@ -7,7 +7,8 @@ import { Delegations, type Launcher } from '../learn/assisted/delegation.ts';
 import type { OperatorMessage } from '../learn/assisted/session.ts';
 import { capabilityAt } from '../learn/lab.ts';
 import type { ExperienceRun } from '../learn/assisted/experience.ts';
-import { PeerChannel, parsePublication, type BoardEntry, type TeamBoard } from '../learn/assisted/board.ts';
+import { PeerChannel, boardExposure, parsePublication, type BoardEntry, type TeamBoard } from '../learn/assisted/board.ts';
+import { exposed, exposureOf } from '../learn/assisted/exposure.ts';
 import { WorldJournal, type LivingSession } from '../living/world.ts';
 import { LivingBridge } from '../living/bridge.ts';
 import type { ArtifactWorld } from '../artifacts/world.ts';
@@ -249,7 +250,9 @@ export function teamParts(o: { readonly team: { board: TeamBoard; member: string
     const { evidence: _refs, ...said } = p;
     const entry: BoardEntry = { id: team!.member + '#' + n, member: team!.member, n, round: o.round(), window: peers.board.windowOf(o.round()), ...said,
       world: seenIn.map(placeOfTeam), evidence: found.map((x) => ({ ref: x.ref, record: x.at!.record })) };
-    const put = peers.board.publish(entry, { places: seenIn.map((id) => ({ id })), keys: [...new Set(found.flatMap((x) => x.at!.keys))] });
+    /* Its author's exposure when it published (§4.1.1), kept apart: whoever is shown it is exposed through it. */
+    const exposure = exposureOf(o.journal);
+    const put = peers.board.publish(entry, { places: seenIn.map((id) => ({ id })), keys: [...new Set(found.flatMap((x) => x.at!.keys))], ...(exposed(exposure) ? { external_exposure: exposure } : {}) });
     peers.published = n;
     log('peer_publish', { round: o.round(), id: entry.id, kind: entry.kind, claim: entry.claim, evidence: p.evidence, window: entry.window,
       ...(put.replayed ? { replayed: true } : {}), ...(put.conflict ? { conflict: put.conflict } : {}) });
@@ -258,7 +261,8 @@ export function teamParts(o: { readonly team: { board: TeamBoard; member: string
   }
   async function readPeers(q: Record<string, unknown>, round: number): Promise<unknown> {
     const answer = await team!.channel.run(q, round) as Record<string, unknown>;
-    log('peer_read', { round, peers: q.peers, ...(answer.version !== undefined ? { version: answer.version } : {}),
+    const exposure = boardExposure(team!.channel.board, q, answer);
+    log('peer_read', { round, peers: q.peers, ...(exposure ? { from: 'board', external_exposure: exposure } : {}), ...(answer.version !== undefined ? { version: answer.version } : {}),
       ...(q.items !== undefined || q.item !== undefined ? { items: Array.isArray(q.items) ? q.items.map(String) : [String(q.item)] } : {}),
       ...(typeof q.evidence === 'string' ? { evidence: q.evidence } : {}), ...(typeof q.words === 'string' ? { words: q.words } : {}),
       ...(Array.isArray(answer.entries) ? { shown: (answer.entries as { id: string }[]).map((e) => e.id) } : {}),

@@ -202,3 +202,36 @@ test('the console and the command line show a project and carry the operator\'s 
     assert.equal(rv.status, 200, 'a batch\'s run opens in its run view');
   } finally { await c.close(); }
 });
+
+test('IE4: researching operators within a project - targets by run id (ended with them) or "*" (every run as planned, ended with the project); a late result kept in its tray; their tokens counted in the project', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'project-research-'));
+  const criterion = '(runs) => runs.length >= 2';
+  const answered: Record<string, number> = {};
+  const agentLlm = (id: string): ChatClient => ({ complete: async () => {
+    answered[id] = (answered[id] ?? 0) + 1;
+    return { content: JSON.stringify(id === 'research-all' ? { decision: 'contribute', to: 'all', summary: 's', report: 'A lead I read nowhere: try the other columns.', state: 'partial', why: 'w' } : { decision: 'wait', why: 'nothing yet' }),
+      latencyMs: 0, raw: { usage: { total_tokens: 7 } } };
+  } });
+  const spec = (id: string, targets: string[], lifetime: 'targets' | 'project') => ({ format: 'operator-research@1' as const, id, task: 't', targets, wake: { opening: true },
+    budget: { tokens: 1000, calls: 20, minutes: 5, activations: 5 }, max_messages: 3, lifetime });
+  /* Its world answers after a while, as a real one does: the operators' clocks run meanwhile. */
+  const slow = world();
+  const r = await runProject(base(root, { goal: { question: 'q', criterion }, autonomy: 'autonomous', budget: { tokens: 20000, iterations: 3 }, agentLlm, fetch: async (u, i) => { await sleep(3); return slow(u, i); },
+    research: [spec('one', ['run-1'], 'targets'), spec('all', ['*'], 'project')] }));
+  assert.match(r.ended!.why, /criterion is met/);
+  const files = projectFiles(root, 'p1');
+  const one = JSON.parse(fs.readFileSync(path.join(files.dir, 'research-one.json'), 'utf8'));
+  const all = JSON.parse(fs.readFileSync(path.join(files.dir, 'research-all.json'), 'utf8'));
+  assert.equal(one.ended_by, 'targets_ended', 'its target ended: it ended');
+  assert.equal(all.ended_by, 'project_ended', '"*" lives as long as the project');
+  assert.ok(all.activations.some((a: any) => a.woken_by.some((w: any) => w.target === 'run-2.json')), 'it followed a run planned after it started');
+  /* A result for a recipient already ended: never reopening it - kept, in the tray too. */
+  const kept = all.deliveries.filter((d: any) => d.state === 'kept_recipient_ended');
+  assert.ok(kept.length >= 1, JSON.stringify(all.deliveries));
+  const tray = fs.readFileSync(files.tray, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(tray.some((t) => t.to === 'run-1.json' && t.from === 'agent:all'));
+  assert.equal(r.spent.research, (one.spent.tokens as number) + (all.spent.tokens as number));
+  assert.ok((r.spent.research ?? 0) > 0);
+  assert.deepEqual(r.research!.map((x) => [x.id, x.lifetime]), [['one', 'targets'], ['all', 'project']]);
+  await assert.rejects(runProject(base(fs.mkdtempSync(path.join(os.tmpdir(), 'project-research-')), { goal: { question: 'q', criterion }, research: [spec('one', ['run-1'], 'targets')] })), /needs an LLM/);
+});

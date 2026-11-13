@@ -557,6 +557,16 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
                 if (problems.length) return 1;
                 out('edit set: composed again from its tree, the same weights; its constructors give its values');
               }
+              /* A mask (SPEC-EDICION-PESOS §15.3): applied again and measured again from its tree, without a model. */
+              if (W.adapterKind(store, pkg) === 'mask') {
+                const K = await import('../junior/mask.ts');
+                const problems = K.verifyMask(store, pkg);
+                const mask = K.readMask(store, pkg.adapter!)!;
+                out('mask      ' + mask.modules.length + ' modules, ' + mask.modules.reduce((n, m) => n + m.deleted, 0) + ' of ' + mask.totals.entries + ' entries deleted, from start ' + mask.start.slice(0, 12));
+                for (const p of problems) out('mask: ' + p);
+                if (problems.length) return 1;
+                out('mask: applied again from its tree, the same weights as its sparse change of -W; its measures as it records them');
+              }
             }
             const exp = take(args, 'export');
             if (exp && closed.closed) out('exported ' + J.exportPackage(pkg, store, path.resolve(exp)).blobs + ' blobs to ' + path.resolve(exp));

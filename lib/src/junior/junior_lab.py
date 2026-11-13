@@ -88,8 +88,8 @@ class FakeModel:
                         bits.frombytes(data)
                         self.weights[name[:-len(".weight")]] = (shape, bits)
         # The package's own set of edits, composed from the start: what the junior diagnosed serves.
-        if JW.is_edit_set(adapter_dir):
-            for name, w in JW.compose_pure_weights(adapter_dir, base_dir, chip).items():
+        if JW.changes_weights(adapter_dir):
+            for name, w in JW.pure_weights(adapter_dir, base_dir, chip).items():
                 self.weights[name] = (w["shape"], w["bits"])
 
     def values(self, name):
