@@ -25,7 +25,9 @@ export const COMMON_REQUESTS: Readonly<Record<string, RequestClass>> = {
   memory: 'recall', experience: 'recall', list: 'recall', open: 'recall', find: 'recall',
   /* External sources (SPEC-INVESTIGACION-EXTERNA §5.3): they read sources, not the world. */
   search: 'recall', links: 'recall',
-  peers: 'exchange', publish: 'exchange', delegate: 'exchange', delegation: 'exchange'
+  peers: 'exchange', publish: 'exchange', delegate: 'exchange', delegation: 'exchange',
+  /* A documentary task's end with its report (SPEC-INVESTIGACION-EXTERNA §5.3). */
+  finish: 'exchange'
 };
 
 /** Keys of a request that qualify it (where from, which model, how much), never what it asks for. */

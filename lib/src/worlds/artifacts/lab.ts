@@ -61,6 +61,7 @@ const TASKS: Readonly<Record<string, (scale: number) => ArtifactTask>> = { dedup
 const latest = new WeakMap<ArtifactWorld, string>();
 /** The latest version made in a world (its base when none): where an evolutionary branch starts when none is named. */
 export const latestVersionOf = (w: ArtifactWorld): string => latest.get(w) ?? w.reference;
+
 const seedOf = (text: string): number => parseInt(createHash('sha256').update(text).digest('hex').slice(0, 8), 16);
 
 function pointOf(world: ArtifactWorld, version: string, family: string, workload: ArtifactPoint['workload']): ArtifactPoint {
@@ -185,6 +186,8 @@ export const ARTIFACTS_PROGRESS: LabProgress = {
 };
 
 export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, ArtifactCase, ArtifactAct> = {
+  /* What an evolutionary branch needs of this world (runtime/evolve-branch.ts, through the registry). */
+  evolution: { latestVersionOf: latestVersionOf as (world: never) => string },
   id: 'artifacts@1',
   progress: ARTIFACTS_PROGRESS,
   /* Its product is the artifact, as good as the budget allows: an accepted model of it does not end the investigation. */

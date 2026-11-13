@@ -1,7 +1,6 @@
 import { verifySearch } from '../learn/evolve/verify.ts';
 import { nodeVmRunner } from './node-vm.ts';
 import { verifyPolicyDecisions } from '../learn/assisted/research-policy.ts';
-import { artifactsLab } from '../worlds/artifacts/lab.ts';
 import type { ArtifactTask } from '../artifacts/task.ts';
 import type { SearchManifest } from '../learn/evolve/engine.ts';
 import { createHash } from 'node:crypto';
@@ -267,7 +266,7 @@ export async function verifyPackage(dir: string, options: { readonly timeoutMs?:
     /* Its task, from the branch's request beside it: its verdicts are computed again from their evidence. */
     const request = path.join(dir, p.replace(/\.search\.jsonl$/, '.evolve.json'));
     let task: ArtifactTask | undefined;
-    try { const r = JSON.parse(fs.readFileSync(request, 'utf8')); task = (artifactsLab.generate(r.seed, r.options) as { world: { task: ArtifactTask } }).world.task; } catch { /* no request: rebuilt only */ }
+    try { const r = JSON.parse(fs.readFileSync(request, 'utf8')); task = ((LABS.artifacts as import('../learn/lab.ts').LawLab).generate(r.seed, r.options) as { world: { task: ArtifactTask } }).world.task; } catch { /* no request: rebuilt only */ }
     searches.push({ file: p, ...(await verifySearch(path.join(dir, p), path.join(dir, p.replace(/\.jsonl$/, '.manifest.json')), (h) => manifests.get(h) ?? null, task)) });
   }
   const policyProof = verifyPolicyDecisions(original, nodeVmRunner({ timeoutMs: 2000 }));

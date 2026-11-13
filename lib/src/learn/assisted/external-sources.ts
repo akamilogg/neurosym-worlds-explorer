@@ -81,6 +81,22 @@ export class ExternalSources {
     return { search_calls: Math.max(0, this.budget.search_calls - this.spent.search_calls), fetch_calls: Math.max(0, this.budget.fetch_calls - this.spent.fetch_calls),
       download_bytes: Math.max(0, this.budget.download_bytes - this.spent.download_bytes) };
   }
+  /** Bags granted to a branch (SPEC-INVESTIGACION-EXTERNA §4, §9.1): reserved from this actor's - a grant, never a copy of
+      its balance - as much of what is asked as the configuration's branch bag and what is left allow. */
+  grant(asked: Partial<ExternalBudget>): ExternalBudget {
+    const cap = this.o.config.branches.budget;
+    if (!cap) return { search_calls: 0, fetch_calls: 0, download_bytes: 0 };
+    const left = this.left();
+    const g = (k: keyof ExternalBudget) => Math.max(0, Math.min(Number.isInteger(asked[k]) ? Number(asked[k]) : cap[k], cap[k], left[k]));
+    const granted = { search_calls: g('search_calls'), fetch_calls: g('fetch_calls'), download_bytes: g('download_bytes') };
+    this.reserve(granted);
+    return granted;
+  }
+  /** A grant made again where a resumed run answers its request as it was. */
+  reserve(b: ExternalBudget): void { for (const k of ['search_calls', 'fetch_calls', 'download_bytes'] as const) this.spent[k] += Number(b[k]) || 0; }
+  /** Its configuration (a branch's is written from it, with the bags granted). */
+  get config(): ExternalResearchConfig { return this.o.config; }
+
   /** What it has spent of its bags. */
   spending(): ExternalBudget { return { ...this.spent }; }
   snapshot(id: string): Snapshot | null { return this.snapshots.get(id) ?? null; }

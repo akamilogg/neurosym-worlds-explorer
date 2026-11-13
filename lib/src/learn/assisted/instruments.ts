@@ -1,5 +1,5 @@
 import vm from 'node:vm';
-import { mulberry32 } from '../../worlds/grid/gen.ts';
+import { mulberry32 } from '../../core/random.ts';
 
 /* ============================================================================
  * The researcher's OWN INSTRUMENTS (SPEC-INSTRUMENTOS-PROPIOS): code it writes and registers, run

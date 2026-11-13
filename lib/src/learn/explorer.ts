@@ -4,9 +4,20 @@ import type { Formula, MeasureDecl, QuestionType, Rule } from '../core/types.ts'
 import { describeTest, type Probe, type ProbeResult } from './experiments.ts';
 import { STANCES, type BeliefStance, type NoteOp, type Stance } from './notebook.ts';
 import { INVESTIGATION_TOOLS as COMMON_INVESTIGATION, system2Prompt, type WorldInterface } from './prompt.ts';
-import { objectiveLines } from './objective.ts';
+import { objectiveLines, type AnswerForm } from './objective.ts';
 import { unknownFields } from './lab.ts';
-import { GRID_ANSWER, GRID_VERDICT } from '../worlds/grid/objective.ts';
+
+/* The answer and the verdict of a game, as its explorer states them (the grid's objective reads them here). */
+export const GRID_ANSWER: AnswerForm = {
+  form: ['YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.'],
+  use: 'act'
+};
+
+export const GRID_VERDICT: readonly string[] = [
+  'At the end of each episode you learn how it ended for you: a score from -1 to 1.',
+  'In a check, the VERDICT on an episode is the score it ended with. The episodes of your previous check in a laboratory are also run again there with this model, from the same starts and with everything you do not control the same: you learn how many changed score, each way. Your model holds in a place when every episode of its check there scored 1 and none of those run again scored less than before.'
+];
+
 
 /* ============================================================================
  * The explorer: System 2 in a world it has never seen.

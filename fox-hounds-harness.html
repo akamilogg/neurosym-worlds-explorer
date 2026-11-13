@@ -597,7 +597,9 @@ var Neurosym = (() => {
     Evaluator: () => Evaluator,
     FORMULA_FORMAT: () => FORMULA_FORMAT,
     FORMULA_FORMAT_VERSION: () => FORMULA_FORMAT_VERSION,
+    GRID_ANSWER: () => GRID_ANSWER,
     GRID_INTERFACE: () => GRID_INTERFACE,
+    GRID_VERDICT: () => GRID_VERDICT,
     HypothesisRegistry: () => HypothesisRegistry,
     ID: () => ID2,
     INVESTIGATION_TOOLS: () => INVESTIGATION_TOOLS2,
@@ -3925,7 +3927,7 @@ var Neurosym = (() => {
     return unknown.length ? what + " has no field " + unknown.map((k) => '"' + k + '"').join(", ") + ": its fields are " + fields.join(", ") : null;
   }
 
-  // src/worlds/grid/objective.ts
+  // src/learn/explorer.ts
   var GRID_ANSWER = {
     form: ["YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines."],
     use: "act"
@@ -3934,8 +3936,6 @@ var Neurosym = (() => {
     "At the end of each episode you learn how it ended for you: a score from -1 to 1.",
     "In a check, the VERDICT on an episode is the score it ended with. The episodes of your previous check in a laboratory are also run again there with this model, from the same starts and with everything you do not control the same: you learn how many changed score, each way. Your model holds in a place when every episode of its check there scored 1 and none of those run again scored less than before."
   ];
-
-  // src/learn/explorer.ts
   var GRID_INTERFACE = {
     tools: ["view", "inspect", "act", "replay", "measure", "table"],
     features: ["check"],

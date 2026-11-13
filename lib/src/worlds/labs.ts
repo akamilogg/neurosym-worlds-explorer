@@ -12,6 +12,8 @@ import { closedLab } from './c302closed/lab.ts';
 import { artifactsLab } from './artifacts/lab.ts';
 import { platesLab } from './plates/lab.ts';
 import { juniorLab } from './junior/lab.ts';
+/* What the runtime needs of a world beyond its laboratory, reached through this registry (SPEC-CONSOLIDACION §5.3). */
+export { JuniorWorld } from './junior/lab.ts';
 
 /** The worlds declared as laboratories (SPEC-OBJETIVO O9), by the name `run-lab.ts --lab` takes. The grid has a loop of
     its own (its model is a formula a search plays with) and runs with the services every laboratory shares. */

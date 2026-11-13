@@ -86,6 +86,9 @@ export interface LawSessionHost<A> {
   readonly overreach?: number;
   /** Whether it may close a round without a new model (PLAN-Y-SI, Entrega 1): `{"close_round": {"why": ...}}`. None by default. */
   closeRound?(): boolean;
+  /** A documentary session (SPEC-INVESTIGACION-EXTERNA §6.2): it may end the task with a report, `{"finish": {...}}`, which
+      the host checks (an error, or null when accepted). None by default. */
+  finish?(): ((f: Finish, round: number) => string | null) | null;
   /** Whether it may keep documents of its own (the assisted researcher, from its first question asked live:
       SPEC-INVESTIGADOR-ASISTIDO §14.1). None by default. */
   documents?(): boolean;
@@ -395,6 +398,14 @@ export class LawSession<A> {
         for (const l of r.reflection.lessons) h.say('  lesson: ' + l);
         return end({ kind: 'reflected' });
       }
+      /* A documentary task ended with its report (SPEC-INVESTIGACION-EXTERNA §6.2): checked by the host; the session ends there. */
+      const finishing = mode === 'propose' && h.finish?.() ? finishOf(content) : null;
+      if (finishing !== null) {
+        const why = typeof finishing === 'string' ? finishing : h.finish!()!(finishing, round);
+        if (why) { refused = [why]; refusals++; h.log('proposal_refused', { round, errors: refused, content }); continue; }
+        this.halted = 'task_completed';
+        return end({ kind: 'finished', round });
+      }
       /* It closes the round without a new model (PLAN-Y-SI, Entrega 1): its latest model stays as it was, the round counts. */
       const closing = mode === 'propose' && h.closeRound?.() ? closeOf(content) : null;
       if (closing !== null) {
@@ -463,9 +474,30 @@ export type RoundEnd =
   | { readonly kind: 'none' }
   | { readonly kind: 'proposal'; readonly round: number }
   | { readonly kind: 'closed'; readonly round: number; readonly why: string }
+  | { readonly kind: 'finished'; readonly round: number }
   | { readonly kind: 'no_proposal'; readonly round: number }
   | { readonly kind: 'reflected' }
   | { readonly kind: 'stopped' };
+
+/** The end of a documentary task, as written (SPEC-INVESTIGACION-EXTERNA §6.2): its report, its state, what it cites and
+    what it made - alone, never with an investigation or a model. */
+export interface Finish { readonly report: string; readonly state: 'complete' | 'partial' | 'no_result'; readonly refs: readonly string[]; readonly artifacts: readonly string[] }
+
+export function finishOf(content: string): Finish | string | null {
+  const o = obj(parseJsonLoose(content));
+  if (!o || o.finish === undefined) return null;
+  const f = obj(o.finish);
+  if (o.observations || o.rules || o.output || Array.isArray(o.investigate) || o.close_round !== undefined) return 'a task is finished with "finish" alone: no model and no investigation with it';
+  const report = typeof f?.report === 'string' ? f.report.trim() : '';
+  if (!report) return '"finish": {"report": "<your report, or document:<id> of one of your documents>", "state": "complete" | "partial" | "no_result", "refs": [...], "artifacts": [...]}';
+  const state = f!.state ?? 'complete';
+  if (!['complete', 'partial', 'no_result'].includes(String(state))) return '"finish.state": complete, partial or no_result';
+  const list = (v: unknown, k: string): string[] | string => (v === undefined ? [] : Array.isArray(v) && v.every((x) => typeof x === 'string') ? v as string[] : '"finish.' + k + '": a list of references');
+  const refs = list(f!.refs, 'refs'), artifacts = list(f!.artifacts, 'artifacts');
+  if (typeof refs === 'string') return refs;
+  if (typeof artifacts === 'string') return artifacts;
+  return { report, state: state as Finish['state'], refs, artifacts };
+}
 
 /** A closing of the round, as written: `{"close_round": {"why": "..."}}` alone - or why it is not one; null when it is none. */
 export function closeOf(content: string): { why: string } | string | null {

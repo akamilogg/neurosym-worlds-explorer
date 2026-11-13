@@ -5,11 +5,10 @@ import { parseJsonLoose } from '../core/net.ts';
 import { Notebook, type Note, type NotebookBelief } from '../learn/notebook.ts';
 import { formOf, FALSE_BELIEF_RULE, graderSaw, quotedFalseBeliefs } from '../learn/operator.ts';
 import { findingOf, findingView, type Finding } from '../learn/finding.ts';
-import { isGameLab } from '../learn/lab.ts';
+import { isGameLab, type GameLab } from '../learn/lab.ts';
 import type { ChatClient } from '../learn/system2.ts';
 import { providerOf } from './provider.ts';
 import { LABS } from '../worlds/labs.ts';
-import { GRID_GRADING_SYSTEM } from '../worlds/grid/lab.ts';
 import { LabError } from './lab-runner.ts';
 import { methodOf } from '../audit/audit.ts';
 import { worldOptionsIn } from '../orchestra/reader.ts';
@@ -75,7 +74,7 @@ export async function gradeSenior(journalFile: string, agentRecord: string, llm:
   let system: string, user: string;
   if (isGameLab(lab)) {
     const glyphs = journal.hidden_from_the_learner?.glyphs ?? {};
-    system = GRID_GRADING_SYSTEM;
+    system = (lab as GameLab).gradingSystem;
     user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: glyphs.you, other: glyphs.other }, learner });
   } else {
     if (!lab.grading) throw new LabError('grade: ' + lab.id + ' has no grader');
@@ -114,7 +113,7 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   let system: string, user: string, type: string;
   if (isGameLab(lab)) {
     const glyphs = journal.hidden_from_the_learner?.glyphs ?? {};
-    system = GRID_GRADING_SYSTEM; type = 'operator_rule_recovery';
+    system = (lab as GameLab).gradingSystem; type = 'operator_rule_recovery';
     user = JSON.stringify({ true_rules: truth, picture_glyphs: { learner: glyphs.you, other: glyphs.other }, learner });
   } else {
     if (!lab.grading) throw new LabError('grade: ' + lab.id + ' has no grader');

@@ -1,6 +1,6 @@
 # SPEC · Consolidación: un diario con esquema, piezas comunes y evidencia comprobable
 
-Estado (11/11/2026): **CC1 empezada** (su escritura, §8); el resto, propuesta sin implementar. Sale del [repaso del repositorio](REPASO-2026-11-10.md) (§4.2 y
+Estado (13/11/2026): **CC1 empezada** (su escritura, §8) y **CC3 hecha** (§8); el resto, propuesta sin implementar. Sale del [repaso del repositorio](REPASO-2026-11-10.md) (§4.2 y
 §5.2). No añade ninguna capacidad: reduce a una las piezas que el arnés tiene repetidas, da tipo al diario y deja los
 hallazgos comprobables desde fuera. Toca el runner ([SPEC-OBJETIVO](SPEC-OBJETIVO.md) O9), los registros de
 [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), del [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), del
@@ -220,6 +220,25 @@ vivo y del junior (parte de CC3 y CC5) esperan a su primera ejecución real.
   registro desde el estado leído antes de llamar al modelo. Ahora publica bajo el cerrojo del diario (`<run>.lock`, creado
   en exclusiva; `withJournalLock`), relee dentro el estado vigente y anexa sobre él; si el run es ya otra ejecución
   (`run_id` distinto) declara el conflicto y no publica (`regrade.test.ts`, «review 3 of 0bec9b3»).
+**CC3, el runner (§5.1, §5.3), hecho (13/11/2026):**
+
+- **Las cinco partes.** `lib/src/runtime/law-run.ts`: la reanudación (`labContextOf`: el contexto con `recorded`,
+  `effects`, lo guardado por contenido), el canal (`researcherChannel`: su presupuesto fijado, sus pins, lo que publica el
+  mundo), la delegación (`runBranches`: el fondo, las ramas, sus resultados como mensajes), el equipo (`teamParts`: el
+  tablón, las publicaciones con su evidencia, las claves de cada intervención) y el mundo vivo (`livingParts`: su sesión y
+  su puente, el control del operador, las señales de cada ronda, su cierre). Cada una recibe un contexto explícito y lee lo
+  que se hace después (la sesión, las ramas) por funciones; `runLawLab` ordena las fases de la ronda. `LabError` vive en
+  `runtime/lab-error.ts`.
+- **Ningún evento se movió (K3).** Una muestra de diarios (cells puro y asistido con fuentes y memoria, plates vivo con una
+  rama, artifacts) grabada antes y después da los mismos eventos y las mismas peticiones a System 2, byte a byte, salvo
+  tiempos y hashes de cortes con hora.
+- **El orden de las capas (§5.3).** `core` no lee nada de arriba (`mulberry32` pasa a `core/random.ts`); `learn` no lee
+  ningún mundo (las formas de respuesta y veredicto del juego las enuncia `learn/explorer.ts`); `runtime` llega a un mundo
+  sólo por el registro `worlds/labs.ts` y las capacidades (`GameLab.gradingSystem`, `Lab.evolution`). Prueba:
+  `lib/test/layers.test.ts`, sin excepciones declaradas.
+- **Lo que no hace.** El resto de CC3 que la spec no pide (la fábrica de mundo de `runLawLab`, su protocolo) sigue dentro;
+  CC4 (capacidades de `Lab` agrupadas) es aparte.
+
 - **Pendiente de CC1.** El esquema de eventos (§3.1, `journal@2`, `eventsOf` tipado) y que los lectores lean del registro
   de líneas.
 

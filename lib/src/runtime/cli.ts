@@ -428,7 +428,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           }
           const manifest = JSON.parse(fs.readFileSync(path.resolve(m.competence), 'utf8'));
           const base = JSON.parse(fs.readFileSync(path.resolve(m.reference), 'utf8'));
-          const { JuniorWorld } = await import('../worlds/junior/lab.ts');
+          const { JuniorWorld } = await import('../worlds/labs.ts');
           const b = m.budget;
           const world = (dir: string) => new JuniorWorld({ manifest, base, blobs: path.resolve(m.blobs), server: m.server, dir, evaluations: b.evaluations, edits: b.edits, searches: b.searches });
           if (what === 'control-edits' || what === 'control-search') {

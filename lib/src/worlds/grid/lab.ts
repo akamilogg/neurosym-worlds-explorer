@@ -97,6 +97,7 @@ export const PLACES_SECTION = [
 
 export const gridLab: GameLab = {
   kind: 'game',
+  gradingSystem: GRID_GRADING_SYSTEM,
   id: 'unknown-world@1',
   about: 'System 2 plays a generated game it has never seen, perceiving only an ASCII picture; its model is a formula that answers how good a point is for it, and a search plays with it.',
   options: [

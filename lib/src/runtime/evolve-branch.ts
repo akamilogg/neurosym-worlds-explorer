@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { artifactsLab, latestVersionOf } from '../worlds/artifacts/lab.ts';
+import { LABS } from '../worlds/labs.ts';
+
+/* The world of artifacts, through the registry (the order of the layers, SPEC-CONSOLIDACION §5.3). */
+const artifactsLab = (): import('../learn/lab.ts').LawLab => LABS.artifacts as import('../learn/lab.ts').LawLab;
 import { cutLabel, type Delegations } from '../learn/assisted/delegation.ts';
 import { ArtifactWorld } from '../artifacts/world.ts';
 import { artifactEvaluator } from '../learn/evolve/artifacts.ts';
@@ -67,7 +70,7 @@ export function evolveConfigOf(e: J): NonNullable<ConstructorParameters<typeof D
     - a version of the requester's by its name, or its latest - by its content. Only in a world with an evaluator. */
 export function evolveCapability(labId: string, seed: number, options: Readonly<Record<string, string>>, world: () => ArtifactWorld,
   experience: () => readonly { readonly label: string; readonly journal: J }[] = () => []): ConstructorParameters<typeof Delegations>[0]['evolve'] {
-  if (labId !== artifactsLab.id) return undefined;
+  if (labId !== artifactsLab().id || !artifactsLab().evolution) return undefined;
   const versionOf = (w: ArtifactWorld, name: string): { hash: string; files: Readonly<Record<string, string>> } | { error: string } => {
     const v = w.store.get(name);
     return v ? { hash: name, files: Object.fromEntries(v.files) } : { error: 'no version "' + name + '"' };
@@ -77,14 +80,14 @@ export function evolveCapability(labId: string, seed: number, options: Readonly<
     resolveExperience(label, version) {
       const run = experience().find((r) => r.label === label);
       if (!run) return { error: 'no run "' + label + '" read as experience' };
-      if (run.journal.experiment !== artifactsLab.id) return { error: 'run "' + label + '" is not of this world' };
+      if (run.journal.experiment !== artifactsLab().id) return { error: 'run "' + label + '" is not of this world' };
       const cfg = run.journal.config ?? {};
       return versionOf(worldFromJournal(run.journal, Number(cfg.seed), { artifact: String(cfg.artifact ?? options.artifact), scale: String(cfg.scale ?? options.scale ?? '1'),
         acts: String(cfg.acts ?? '3'), tolerance: String(cfg.tolerance ?? '0.25'), workloads: String(cfg.workloads ?? '2') }), version);
     },
     resolveStart(start) {
     const w = world();
-    const name = start ?? latestVersionOf(w);
+    const name = start ?? artifactsLab().evolution!.latestVersionOf(w as never);
     const v = w.store.get(name);
     if (!v) return { error: 'no version "' + name + '" of yours' };
     return { hash: name, files: Object.fromEntries(v.files) };
@@ -94,9 +97,9 @@ export function evolveCapability(labId: string, seed: number, options: Readonly<
 /** The requester's world as its record leaves it (for a senior, who has no world of its own): made from its archived base,
     its versions made again from the changes its record holds. */
 export function worldFromJournal(journal: J, seed: number, options: Readonly<Record<string, string>>): ArtifactWorld {
-  const spec = artifactsLab.generate(seed, options as never, journal.world_archive);
-  artifactsLab.rebuild?.(spec as never, (journal.events ?? []) as never);
-  return spec.world as ArtifactWorld;
+  const spec = artifactsLab().generate(seed, options as never, journal.world_archive) as { world: ArtifactWorld };
+  artifactsLab().rebuild?.(spec as never, (journal.events ?? []) as never);
+  return spec.world;
 }
 const readJson = (f: string): J | null => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 const endOf = (j: J | null): J | null => (j ? [...(j.events ?? [])].reverse().find((e: J) => e.type === 'end') ?? null : null);
@@ -163,7 +166,7 @@ export async function runEvolutionBranch(o: EvolveBranchOptions): Promise<J> {
   const tooLittle = () => msLeft() < 600;
 
   try {
-    const world = artifactsLab.generate(spec.seed, spec.options as never).world as ArtifactWorld;
+    const world = (artifactsLab().generate(spec.seed, spec.options as never) as { world: ArtifactWorld }).world;
     const laboratories = world.task.families.filter((x) => x.role === 'laboratory').map((x) => x.id);
     const evaluatorAt = (seed: number) => o.evaluator ? o.evaluator(world, seed) : artifactEvaluator(world, { families: laboratories, workloads: spec.exploration.workloads, seed, ...(spec.start ? { start: spec.start } : {}) });
 

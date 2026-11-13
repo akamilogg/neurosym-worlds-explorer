@@ -51,7 +51,9 @@ export function criteriaProblems(criteria: unknown): string[] {
 
 export interface RunResults {
   /** model: null where the run left no finding to read it from - no datum, never "not accepted" (SPEC-VALIDEZ-MEDIDA §7). */
-  readonly o1_predictive_acceptance: { readonly model: boolean | null; readonly artifact?: boolean };
+  readonly o1_predictive_acceptance: { readonly model: boolean | null; readonly artifact?: boolean;
+    /** A documentary session: no model to propose (model null) - how it ended, and the state of its report. */
+    readonly documentary?: { readonly ended: string; readonly report: string | null } };
   readonly o2_discriminating_evidence: { readonly severe_passed_as_preregistered: number | null; readonly tests: readonly { readonly test: string; readonly rival: string }[] };
   readonly o3_adequacy: Readonly<Record<string, 'yes' | 'no' | 'not evaluable'>> | 'no criteria declared';
   readonly o4_mechanistic_recovery: { readonly score: number; readonly grader_version: number | null } | 'no truth to grade against, or not graded';
@@ -94,7 +96,9 @@ export function runResults(journalFile: string, criteria?: Criteria): RunResults
   const audit = readJson(base + '.method.json');
   const events = (journal.events ?? []) as J[];
   const end = [...events].reverse().find((e) => e.type === 'end') ?? {};
-  const model = found === null ? null : finding.outcome?.status === 'accepted';
+  /* A documentary investigation (SPEC-INVESTIGACION-EXTERNA §6.2) has no model to propose: no datum of one, and said so. */
+  const documentary = journal.config?.documentary === true;
+  const model = found === null || documentary ? null : finding.outcome?.status === 'accepted';
   const artifact = finding.artifact ? finding.artifact.status === 'accepted' : undefined;
   /* O2: the severe ones among the tests its final model passed as preregistered, with the Judge's reading of each rival. */
   const severe = new Set(events.filter((e) => e.type === 'test_result' && e.severe).map((e) => String(e.test)));
@@ -134,7 +138,7 @@ export function runResults(journalFile: string, criteria?: Criteria): RunResults
   if (end.delegation && (end.delegation.branches ?? []).some((b: J) => b.spent === null)) unknown.push('a branch still running when it ended (its tokens not counted)');
   if (uncertainBranches) unknown.push(uncertainBranches + ' branch(es) stopped without ending: what they spent is not known - counted at what was observed, a lower bound; what the fund holds for them is apart (delegated_held_uncertain), not a bound either: the limit is checked between calls');
   return {
-    o1_predictive_acceptance: { model, ...(artifact !== undefined ? { artifact } : {}) },
+    o1_predictive_acceptance: { model, ...(artifact !== undefined ? { artifact } : {}), ...(documentary ? { documentary: { ended: String(end.stoppedBy ?? 'unfinished'), report: [...events].reverse().find((e) => e.type === 'task_finished')?.state ?? null } } : {}) },
     o2_discriminating_evidence: o2,
     o3_adequacy: o3,
     o4_mechanistic_recovery: recovery !== null ? { score: recovery, grader_version: rec.grader_version ?? null } : 'no truth to grade against, or not graded',

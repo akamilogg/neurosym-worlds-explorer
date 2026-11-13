@@ -14,11 +14,12 @@ import { providerOf } from './provider.ts';
 import { replayOnEvidence } from '../learn/gates.ts';
 import { reflectionTask, system2Prompt, toolOf, type Tool } from '../learn/prompt.ts';
 import { buildLaw, ownLaw, type LawRequest } from '../learn/law-explorer.ts';
-import { CLOSE_ROUND_SECTION } from '../learn/law-session.ts';
-import { Delegations, DELEGATION_SECTION, type Launcher } from '../learn/assisted/delegation.ts';
+import { CLOSE_ROUND_SECTION, type Finish } from '../learn/law-session.ts';
+import { Delegations, DELEGATION_SECTION, DOCUMENTARY_SECTION, type Launcher } from '../learn/assisted/delegation.ts';
 import { OwnTests, ownTestsSection } from '../learn/assisted/own-tests.ts';
 import { FINGERPRINT_VERSION, LawSession, lawFingerprint } from '../learn/law-session.ts';
 import { CAPABILITIES, capabilityAt, roundsAt } from '../learn/lab.ts';
+import { labContextOf, livingParts, researcherChannel, runBranches, teamParts } from './law-run.ts';
 import { experimentStates } from '../orchestra/view.ts';
 import { Protocol } from '../learn/protocol.ts';
 import { anomalyFile, holding, parseVerdict, readVerdicts, reportStates, reportsOf, type VerdictRecord } from '../learn/anomalies.ts';
@@ -46,7 +47,7 @@ import { ExternalSources } from '../learn/assisted/external-sources.ts';
 import { exposed, type ExternalExposure } from '../learn/assisted/exposure.ts';
 import { braveProvider, type SearchProvider } from '../learn/assisted/source-search.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
-import { mulberry32 } from '../worlds/grid/gen.ts';
+import { mulberry32 } from '../core/random.ts';
 import { WorldJournal, type LivingSession } from '../living/world.ts';
 import { LivingBridge } from '../living/bridge.ts';
 import { PolicyRunner, asksJudge as asksPolicyJudge, policySummary, readPolicyConfig, type PolicyConfig } from '../learn/assisted/research-policy.ts';
@@ -115,7 +116,8 @@ const FLAGS: readonly { name: string; help: string }[] = [
   { name: 'no-close-round', help: 'the assisted researcher cannot close a round without a new model (PLAN-Y-SI, Entrega 1): the condition without' },
   { name: 'budget-hidden', help: 'the assisted researcher is not shown its budget (SPEC-INVESTIGADOR-ASISTIDO §15): the condition without it' },
   { name: 'no-instruments', help: 'the assisted researcher writes no instruments of its own (SPEC-INSTRUMENTOS-PROPIOS): the condition without them' },
-  { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' }
+  { name: 'flat', help: 'CONTROL: a Judge that knows nothing (every answer neutral); the LLM is still consulted' },
+  { name: 'documentary', help: 'a documentary investigation (SPEC-INVESTIGACION-EXTERNA §6.2): no simulator, no baseline, no evaluation - records, sources, notes; it ends with {"finish": ...}' }
 ];
 
 /** Options that control the run, not the experiment: a resumed run takes them anew (SPEC-OBJETIVO O11). */
@@ -230,11 +232,8 @@ function commitOf(root: string): string | null {
  * A configuration it cannot run is a LabError. The command line (runLab) is a wrapper.
  * ========================================================================== */
 
-/** A configuration the runner cannot run: bad arguments, a journal that cannot be resumed, a missing endpoint. */
-export class LabError extends Error {
-  readonly code: number;
-  constructor(message: string, code = 2) { super(message); this.name = 'LabError'; this.code = code; }
-}
+import { LabError } from './lab-error.ts';
+export { LabError };
 
 /** Where a model is served: an OpenAI-compatible chat URL (System 2) or the Judge's URL, and the key and model to use. */
 export interface LabConnection {
@@ -523,7 +522,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
       ...(previous?.config?.delegation?.ledger ? { ledger: derived ? path.relative(path.dirname(path.resolve(derived)), path.resolve(path.dirname(path.resolve(resumeFrom!)), String(previous.config.delegation.ledger))).split(path.sep).join('/')
         : String(previous.config.delegation.ledger) } : {}) } } : {}),
     stated_task: !flag('task-as-model'),
-    reflection: !flag('no-reflection') && !flag('quick'),
+    reflection: !flag('no-reflection') && !flag('quick') && !flag('documentary'),
+    ...(flag('documentary') ? { documentary: true } : {}),
     flat: flag('flat'),
     ...(arg('focus') ? { focus: arg('focus') } : {}),
     ...(arg('task') ? { task: arg('task') } : {}),
@@ -563,6 +563,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   if (arg('task') && researcher !== 'assisted') throw new LabError('--task: a statement of what to understand is help: only the assisted researcher takes it');
   if (arg('sources-allow') && researcher !== 'assisted') throw new LabError('--sources-allow: sources are help: only the assisted researcher reads them');
   if (externalConfig && researcher !== 'assisted') throw new LabError('--external-research: external sources are help: only the assisted researcher reads them (the unknown-world researcher keeps its condition)');
+  if (flag('documentary') && (researcher !== 'assisted' || isGameLab(lab))) throw new LabError('--documentary: a documentary investigation is the assisted researcher\'s, in a world of laws');
   for (const o of originsOf(arg('sources-allow'), options.root)) { const problem = originProblem(o); if (problem) throw new LabError('--sources-allow: ' + problem); }
   /* The assisted researcher of a laboratory with a loop of its own (the grid) takes the operator's messages and may have a
      selective memory; focus, a task and sources are not built for it yet (A7). */
@@ -760,7 +761,7 @@ function originsOf(list: string, root: string): string[] {
  * The run's common services, the same for every laboratory.
  * ========================================================================== */
 
-interface OpenRun {
+export interface OpenRun {
   readonly services: import('../learn/lab.ts').LabServices;
   readonly judge: JevJudge;
   readonly llm: ReturnType<typeof openAiChatClient>;
@@ -1227,33 +1228,22 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
-  /* The researcher's channel (SPEC-CANAL-MENSAJES): the assisted researcher's, in a run that starts with it. */
-  const channelOn = run.journal.researcher === 'assisted' && (cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.channel === 0;
-  const channel = new Channel(run.log);
-  /* The channel is the assisted researcher's from its first question (after a hand-over, from then): its budget is pinned by
-     the harness then, read as it stands when delivered (SPEC-INVESTIGADOR-ASISTIDO §15). */
-  let channelOpened = false;
-  const channelNow = (): Channel | null => {
-    if (!channelOn || !helping) return null;
-    if (!channelOpened) {
-      channelOpened = true;
-      if (run.services.budget) channel.publish('harness', { kind: 'pinned', key: 'budget', body: () => run.services.budget!(attemptNow, roundsAt(cfg, attemptNow)) });
-    }
-    return channel;
-  };
-  /* What it pins itself, with --no-pins the condition without. */
-  const pinning = (): boolean => channelOn && helping && (cfg as { pins?: boolean }).pins !== false;
-  const applyPinsNow = (ops: readonly PinOp[]): string[] => applyPins(channel, ops, (id) => session.notebook.documents.get(id));
+  /* The researcher's channel (SPEC-CANAL-MENSAJES), its budget pinned, its own pins (law-run.ts, part 2). */
+  const researcher = researcherChannel({ run, cfg, helping: () => helping, attempt: () => attemptNow, document: (id) => session.notebook.documents.get(id) as never });
+  const { on: channelOn, channel, now: channelNow, pinning, applyPins: applyPinsNow } = researcher;
   /* Texts kept whole by their content, beside the journal (shared by the runs of its folder: the same content, one file). */
   const keep = keeperOf(run.outFile);
-  const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, keep, episodeOf: (id: string) => episodes.get(id)?.data,
-    ...(channelOn ? { publish: (m: ChannelPublication) => { channelNow()?.publish('world', m); } } : {}) };
+  /* What it computes itself given again when resumed (law-run.ts, part 1). */
+  const ctx: LabContext = labContextOf({ base: o.ctx, run, keep, episodeOf: (id: string) => episodes.get(id)?.data, ...(channelOn ? { publish: researcher.publishWorld } : {}) });
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
   if (assistedAfter !== null) journal.assisted_after_attempts = assistedAfter;
   const acts = lab.act && worldOptions.acts !== undefined ? Number(worldOptions.acts) : undefined;
   if (acts !== undefined) journal.config = { ...journal.config, acts };
-  const tools: ReadonlySet<Tool> = new Set(cfg.tools as Tool[]);
-  const investigative = cfg.tools.length > 0;
+  /* A documentary investigation (SPEC-INVESTIGACION-EXTERNA §6.2): none of the environment's instruments, yet it investigates -
+     its records, its sources, its notes - and ends with a report. */
+  const documentary = (cfg as { documentary?: boolean }).documentary === true;
+  const tools: ReadonlySet<Tool> = documentary ? new Set<Tool>() : new Set(cfg.tools as Tool[]);
+  const investigative = documentary || cfg.tools.length > 0;
   /* The facet in force (SPEC-INVESTIGADOR-ASISTIDO §6.2): set at the start, changed by the operator in an assisted run. */
   let focus: string | null = (worldOptions.__focus as string | undefined) || null;
   let task: string | null = (worldOptions.__task as string | undefined) || null;
@@ -1332,6 +1322,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const checkPoints = new Map<number, Case[]>();
 
   const explore = async (): Promise<void> => {
+    /* A documentary investigation starts no simulator: no episode of the environment. */
+    if (documentary) return;
     /* A living world: it goes on before the researcher's first round, and what it showed is the environment's episodes. */
     if (bridge) {
       for (let k = 0; k < cfg.explore; k++) {
@@ -1512,11 +1504,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       const e = store(id, place, session.currentRound, 'you', data);
       const answer = { act: written, accepted: true, name: e.id, ...lab.act.shown(e.data) };
       actAnswers.set(e.id, answer);
-      if (team) {
-        const key = 'act|' + place.id + '|' + JSON.stringify(lab.act.asWritten ? lab.act.asWritten(req.act) : req.act);
-        stepInterventions.push({ kind: 'act', place: place.id, key });
-        keyOfEpisode.set(e.id, key);
-      }
+      if (team) board.noteIntervention('act', place.id, 'act|' + place.id + '|' + JSON.stringify(lab.act.asWritten ? lab.act.asWritten(req.act) : req.act), e.id);
       return answer;
     }
     if ('measure' in req) {
@@ -1590,185 +1578,16 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     return { table: req.table.source, on: req.on, ...(lab.residual ? { residuals_of: latest ? 'your latest model' : 'no model yet' } : {}), rows };
   };
 
-  /* --- Its team's board (SPEC-INVESTIGACION-PARALELA §5.2) -------------------------------------------------------------
-     What it publishes carries the records behind its evidence as the world answered them; what it reads is the version its
-     round opens, through its run's log. The operator keeps, apart, the key of each intervention (to measure a team). */
-  const actAnswers = new Map<string, unknown>();
-  const stepAnswers = new Map<string, { requests: unknown; results: unknown }>();
-  const stepsInRound = new Map<number, number>();
-  let stepInterventions: { kind: string; place: string; key: string }[] = [];
-  const stepKeys = new Map<string, string[]>();
-  const keyOfEpisode = new Map<string, string>();
-  /* --- A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO): its one session, the researcher an actor in it. Its journal beside
-     the run's, written ahead; a resumed run derives it again against the one it continues. ----------------------------- */
-  const worldJournalOf = (f: string) => f.replace(/\.json$/, '') + '.world.jsonl';
-  /* A session shared with other members is its runner's (its journal, its closing); a session of its own, the run's. */
-  const shared = o.living ?? null;
-  /* Its identity and its actions as declared (a manifest's, a world option's), alone as in a shared session. */
-  const actor = shared?.actor ?? (worldOptions.actor || LIVING_ACTOR);
-  const declared = String(worldOptions.actions ?? '*');
-  const alone = { id: actor, kind: 'researcher' as const, ...(declared === '*' ? {} : { actions: declared === 'none' ? [] : declared.split(',').map((x) => x.trim()).filter(Boolean) }) };
-  if (shared && !channelOn) throw new LabError('a shared living world delivers its members\' messages through the researcher\'s channel: this run has none');
-  const opened = (): LivingSession<unknown, unknown> | null => {
-    if (shared || !lab.living) return null;
-    try { return lab.living.open(spec, { actors: [alone], options: worldOptions,
-    journal: new WorldJournal(worldJournalOf(outFile), { ...(previous && resumeFrom ? { from: worldJournalOf(resumeFrom) } : {}),
-      onDiverge: (d) => { log('world_diverged', { key: d.key }); say('  the world diverged from the record it continues, at ' + d.key); } }) }); }
-    catch (e) { throw new LabError(lab.id + ': ' + String((e as Error).message ?? e)); }
-  };
-  const living = shared ? shared.session : opened();
-  /* Its own material it may share: its episodes and the environment's, its checks' - never a validation's, never what another
-     member shared with it - and its documents in their latest version. */
-  const shareable = (id: string) => { const e = episodes.get(id); return e && (e.by === 'you' || e.by === 'the environment' || e.by.startsWith('the check')) ? e : null; };
-  const bridge = living && lab.living ? new LivingBridge<unknown>({ session: living, actor,
-    intent: (a) => lab.living!.intent(a), asWritten: (a) => (lab.act?.asWritten ? lab.act.asWritten(a) : a), shown: (seg) => lab.act!.shown(seg),
-    store: (seg, round, by, answer, name) => {
-      const id = name ?? (by === 'you' ? 'act' : 'ep') + (++counter);
-      store(id, labs()[0]!, round, by, seg);
-      if (answer) actAnswers.set(id, answer(id));
-      return id;
-    },
-    material: (ref) => {
-      if (ref.document !== undefined) {
-        const d = session.notebook.documents.get(ref.document);
-        return d ? { kind: 'document' as const, id: d.id, version: d.versions, text: d.text } : 'no document "' + ref.document + '" of yours';
-      }
-      const e = episodes.get(String(ref.episode));
-      if (!e) return 'no episode "' + ref.episode + '" of yours';
-      return shareable(e.id) ? { kind: 'episode' as const, name: e.id, segment: e.data as never } : 'share what is yours: ' + e.id + ' is ' + (e.by.startsWith('actor:') ? 'what ' + e.by.slice(6) + ' shared with you' : 'not yours to share (' + e.by + ')');
-    },
-    own: (ref) => { const r = ref.trim(); return shareable(r.split('@')[0]) !== null || session.notebook.documents.has(r); },
-    deliver: (messages, waiting) => {
-      /* Each with its provenance: a member's word, an instrument's reading (the world, as measured), the operator's announcement. */
-      for (const m of messages) {
-        if (m.from === 'operator' && typeof m.pin === 'string') { channelNow()?.publish('operator', { kind: 'pinned', key: m.pin as string, body: m.text }); continue; }
-        channelNow()?.publish((m.reading ? 'world' : m.from === 'operator' ? 'operator' : 'actor:' + m.from) as never, { kind: 'notice', body: m });
-        /* The operator's word reached it: help, counted apart from the operator's interventions on the world. */
-        if (m.help) log('world_help', { round: session.currentRound, message: m.message, text: m.text });
-      }
-      if (waiting) channelNow()?.publish('harness', { kind: 'notice', body: { messages_waiting: waiting, read_them: '{"read": "inbox"}' } });
-      log('messages_delivered', { round: session.currentRound, messages: messages.map((m) => m.message), ...(waiting ? { waiting } : {}) });
-    }, log, say }) : null;
-  /* The operator's changes to the programs (`lab world`), taken before each question: applied when the next window opens. */
-  let worldClosedSaid = false;
-  const controlWorld = (): void => {
-    for (const o of run.operator.world()) {
-      const who = { id: o.id ?? null, kind: 'world', ...(o.by ? { by: o.by } : {}) };
-      /* A shared branch made a member of its own: its requester's, not the world's (§12). */
-      if (o.op === 'promote') {
-        const why = !delegations ? 'this run has no branches' : delegations.promote(String(o.target), String(o.by ?? 'operator'), typeof o.budget === 'number' ? o.budget : undefined);
-        log(why ? 'operator_command_refused' : 'operator_command', { ...who, ...(why ? { reason: why } : { accepted: true, op: 'promote' }) });
-        continue;
-      }
-      const why = !living ? 'this run has no living world' : living.control({ id: String(o.id), op: o.op as never, ...(o.program ? { program: o.program as never } : {}),
-        ...(typeof o.target === 'string' ? { target: o.target } : {}), ...(o.actor ? { actor: o.actor as never } : {}), ...(typeof o.to === 'string' ? { to: o.to } : {}),
-        ...(typeof o.text === 'string' ? { text: o.text } : {}), ...(typeof o.key === 'string' ? { key: o.key } : {}),
-        by: String(o.by ?? 'operator'), ...(typeof o.why === 'string' ? { why: o.why } : {}) });
-      log(why ? 'operator_command_refused' : 'operator_command', { ...who, ...(why ? { reason: why } : { accepted: true, op: o.op }) });
-    }
-  };
-  /* What its checks say, as a signal the operator declared on them (§10): a sample per round; none for a round without one. */
-  const checkSample = (round: number, laboratories: readonly Record<string, any>[] | null): void => {
-    if (!living) return;
-    const pts = laboratories?.reduce((n, l) => n + (typeof l.points === 'number' ? l.points : 0), 0) ?? 0;
-    const value = !laboratories ? null : pts > 0 ? laboratories.reduce((n, l) => n + (Number(l.exact) || 0), 0) / pts : laboratories.filter((l) => l.holds).length / Math.max(1, laboratories.length);
-    for (const sg of living.signalsFrom(actor, 'checks')) living.sample(sg, 'r' + round, value, { harness: true });
-  };
-  /* A judge the operator configured, asked of each round (§10): what it was given, its rule, its answer and its cost kept
-     with the sample; its failure a missing sample, never a reading. */
-  const judgeSample = async (round: number, laboratories: readonly Record<string, any>[] | null): Promise<void> => {
-    if (!living) return;
-    for (const sg of living.signalsFrom(actor, 'judge')) {
-      const j = living.signalOf(sg)!.judge!;
-      const inputs = j.inputs ?? ['check'];
-      const brief = session.notebook.brief() as Record<string, any>;
-      const texts: Record<string, string> = {
-        ...(inputs.includes('check') ? { last_check: JSON.stringify(laboratories ? laboratories.map((l) => ({ place: l.place, holds: l.holds, exact: l.exact, points: l.points })) : 'no check this round') } : {}),
-        ...(inputs.includes('beliefs') ? { beliefs: JSON.stringify((brief.beliefs_held ?? []).map((b: Record<string, unknown>) => b.statement)) } : {}) };
-      const rule = { type: 'score' as const, instructions: j.instructions, criteria: [...j.criteria] };
-      const before = judge.stats.calls;
-      try {
-        const answers = await judge.judge({ world: lab.id, rulesOfTheWorld: '', sideToMove: 'nature', measurements: {}, texts, questions: { signal: rule } });
-        const a = answers.signal;
-        living.sample(sg, 'r' + round, a && Number.isFinite(a.value) ? a.value : null, { harness: true }, { inputs: texts, rule, answer: { value: a?.value ?? null, confidence: a?.confidence ?? null }, judge_calls: judge.stats.calls - before });
-      } catch (e) { living.sample(sg, 'r' + round, null, { harness: true }, { inputs: texts, rule, error: String((e as Error).message ?? e).slice(0, 200), judge_calls: judge.stats.calls - before }); }
-    }
-  };
-  /* The operator's orders to the world are taken as they come, not only before a question: a world paused waits for one. */
-  const worldTimer = living ? setInterval(controlWorld, 500) : null;
+  /* Its team's board (SPEC-INVESTIGACION-PARALELA §5.2; law-run.ts, part 4). */
+  const board = teamParts({ team, journal, log, say, lab, episodes, roleOf: (id) => places.get(id)?.role, round: () => session.currentRound });
+  const { actAnswers, logged, publish, readPeers, exchange } = board;
   /* Its shared branches, run in this process: awaited before its world closes. */
   const sharedRuns: Promise<unknown>[] = [];
-  if (living) journal.world = { session: living.id, adapter: living.adapter.id, actor, ...(shared ? { shared: true, journal: living.journal.file ? path.relative(path.dirname(outFile), living.journal.file).split(path.sep).join('/') : null }
-    : { journal: path.basename(worldJournalOf(outFile)) }), clock: living.clock, limits: living.limits };
-  /* Every investigation step, as it was asked and answered: what a publication may cite ("r<round>.<step>"). */
-  const logged = (type: string, data: Record<string, unknown> = {}): void => {
-    if (type === 'investigation' && typeof data.round === 'number') {
-      const step = (stepsInRound.get(data.round) ?? 0) + 1;
-      stepsInRound.set(data.round, step);
-      const id = 'r' + data.round + '.' + step;
-      stepAnswers.set(id, { requests: data.requests, results: data.results });
-      if (stepInterventions.length) {
-        stepKeys.set(id, stepInterventions.map((x) => x.key));
-        log('operator_interventions', { round: data.round, step, interventions: stepInterventions });
-        stepInterventions = [];
-      }
-    }
-    log(type, data);
-  };
-  /** Where an entry was observed, as the environment can say it (a team shares its laboratories and its family). */
-  const placeOfTeam = (placeId: string): Record<string, unknown> => ({ place: placeId, same_place_for_the_whole_team: places.get(placeId)?.role !== 'confirmation' });
-  /** The record of the environment behind one of its references, as it answered it; null when there is none. */
-  function evidenceOf(ref: string): { record: Record<string, unknown>; place: string | null; keys: string[] } | null {
-    const r = ref.trim();
-    const step = /^(?:investigation:)?r(\d+)\.(\d+)$/.exec(r);
-    if (step) {
-      const id = 'r' + step[1] + '.' + step[2];
-      const s = stepAnswers.get(id);
-      return s ? { record: { step: id, ...s }, place: null, keys: stepKeys.get(id) ?? [] } : null;
-    }
-    const point = /^(.+)@(\d+)$/.exec(r);
-    if (point) {
-      const e = episodes.get(point[1]);
-      const k = Number(point[2]);
-      if (!e || k > lab.steps(e.data)) return null;
-      return { record: { point: r, place: e.place, episode: e.id, step: k, ...lab.view(e.data, k, k) }, place: e.place, keys: [] };
-    }
-    const e = episodes.get(r);
-    if (!e) return null;
-    return { record: { episode: e.id, place: e.place, chosen_by: e.by, steps: lab.steps(e.data), ...(actAnswers.has(e.id) ? { act: actAnswers.get(e.id) } : {}),
-      ...lab.view(e.data, 0, lab.steps(e.data)) }, place: e.place, keys: keyOfEpisode.has(e.id) ? [keyOfEpisode.get(e.id)!] : [] };
-  }
-  /** A publication: checked, its evidence's records attached, put on the board under its number (the same number when a
-      resumed run publishes it again: nothing is added). What it is answered is the same live or resumed. */
-  function publish(raw: unknown): unknown {
-    const p = parsePublication(raw);
-    if (typeof p === 'string') return { publish: 'refused', error: p };
-    const found = p.evidence.map((ref) => ({ ref, at: evidenceOf(ref) }));
-    const missing = found.filter((x) => !x.at).map((x) => x.ref);
-    if (missing.length) return { publish: 'refused', error: 'no record of yours behind ' + missing.join(', ') + ' (an episode, a point "<episode>@<step>", an act "act<n>", an investigation step "r<round>.<step>" already answered)' };
-    const peers = team!.channel;
-    const n = peers.published + 1;
-    const seenIn = [...new Set(found.flatMap((x) => (x.at!.place ? [x.at!.place] : [])))];
-    const { evidence: _refs, ...said } = p;
-    const entry: BoardEntry = { id: team!.member + '#' + n, member: team!.member, n, round: session.currentRound, window: peers.board.windowOf(session.currentRound), ...said,
-      world: seenIn.map(placeOfTeam), evidence: found.map((x) => ({ ref: x.ref, record: x.at!.record })) };
-    const put = peers.board.publish(entry, { places: seenIn.map((id) => ({ id })), keys: [...new Set(found.flatMap((x) => x.at!.keys))] });
-    peers.published = n;
-    log('peer_publish', { round: session.currentRound, id: entry.id, kind: entry.kind, claim: entry.claim, evidence: p.evidence, window: entry.window,
-      ...(put.replayed ? { replayed: true } : {}), ...(put.conflict ? { conflict: put.conflict } : {}) });
-    say('  publishes ' + entry.id + ' (' + entry.kind + ')' + (put.replayed ? ' [already on the board]' : '') + (put.conflict ? ' [CONFLICT: ' + put.conflict + ']' : ''));
-    return { publish: 'published', id: entry.id, window: entry.window, readable_in_round: entry.window * peers.board.spec.window + 1 };
-  }
-  async function readPeers(q: Record<string, unknown>, round: number): Promise<unknown> {
-    const answer = await team!.channel.run(q, round) as Record<string, unknown>;
-    log('peer_read', { round, peers: q.peers, ...(answer.version !== undefined ? { version: answer.version } : {}),
-      ...(q.items !== undefined || q.item !== undefined ? { items: Array.isArray(q.items) ? q.items.map(String) : [String(q.item)] } : {}),
-      ...(typeof q.evidence === 'string' ? { evidence: q.evidence } : {}), ...(typeof q.words === 'string' ? { words: q.words } : {}),
-      ...(Array.isArray(answer.entries) ? { shown: (answer.entries as { id: string }[]).map((e) => e.id) } : {}),
-      ...(answer.error ? { error: answer.error } : {}) });
-    return answer;
-  }
-  const exchange = team !== null && team.board.spec.exchange && journal.researcher === 'assisted';
+  /* A living world (SPEC-ACONTECIMIENTOS-DEL-MUNDO; law-run.ts, part 5). */
+  const lw = livingParts({ lab, spec, worldOptions, run, say, previous, resumeFrom, shared: o.living ?? null, open: !documentary, channelOn, channelNow, judge, actAnswers, episodes,
+    store: (seg, round, by, name) => { const id = name ?? (by === 'you' ? 'act' : 'ep') + (++counter); store(id, labs()[0]!, round, by, seg); return id; },
+    notebook: () => session.notebook as never, round: () => session.currentRound, delegations: () => delegations });
+  const { living, bridge, actor, checkSample, judgeSample } = lw;
 
   const sessionHost: import('../learn/law-session.ts').LawSessionHost<unknown> = {
     llm, system: SYSTEM_PROMPT, world: world.id, perceptDoc: lab.perceptDoc, steps: cfg.steps, investigative,
@@ -1792,16 +1611,28 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     ...(bridge ? { extraRequest: (q: Record<string, unknown>) => LivingBridge.accepts(q),
       endStep: async (round: number, results: readonly unknown[]) => bridge.endStep(round, results) } : {}),
     known: (ref) => episodes.has(ref.trim()) || resolve(ref) !== null,
-    failures,
+    failures: (law) => (documentary ? ['a documentary investigation proposes no model of the environment: end it with {"finish": {"report": ..., "state": ...}}'] : failures(law)),
+    /* Its end with a report (SPEC-INVESTIGACION-EXTERNA §6.2): checked, kept by its content, recorded - never an acceptance. */
+    ...(documentary ? { finish: () => (f: Finish, round: number) => {
+      let text = f.report, document: string | undefined;
+      if (/^document:/.test(f.report)) {
+        document = f.report.slice('document:'.length).trim();
+        const d = session.notebook.documents.get(document);
+        if (!d) return 'no document "' + document + '" of yours: write it first, or give the report itself';
+        text = d.text;
+      }
+      log('task_finished', { round, state: f.state, report: { sha256: keep(text), kept: true, chars: text.length }, ...(document ? { document } : {}), refs: f.refs, artifacts: f.artifacts });
+      say('  finishes its task (' + f.state + '): ' + text.slice(0, 160));
+      return null;
+    } } : {}),
     episodes: episodeIndex,
     places: () => protocol.placesView(), validationsLeft: () => protocol.validationsLeft, lastCheck: () => protocol.lastView,
     /* Its closing (the reflection that leaves what it could not answer) is asked even when a budget stopped the
        investigation: a budget ends the research, not its account (SPEC-INVESTIGADOR-ASISTIDO §14.9). */
     /* Asked before every question: a living world's decision rests on the revision it has now (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.1). */
-    log: logged, say, halt: () => { bridge?.decide(); controlWorld();
+    log: logged, say, halt: () => { bridge?.decide(); lw.controlWorld();
       /* A world the operator closed: its researcher stops, as a cancellation does (its closing kept). */
-      if (living && living.status === 'completed' && !worldClosedSaid) { worldClosedSaid = true; log('world_closed', { round: session.currentRound }); }
-      if (living && living.status === 'completed') return 'world_closed';
+      if (lw.closedNow(session.currentRound)) return 'world_closed';
       const h = halt(); return closing && (h === 'token_budget' || h === 'judge_budget' || h === 'time_budget') ? null : h; },
     /* A member of a team tells the board where it is: the versions every member has passed are sealed. */
     ...(team ? { onRound: (round: number) => team.board.reach(team.member, round) } : bridge ? { onRound: (round: number) => bridge.round(round) } : {})
@@ -1929,69 +1760,12 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     },
     log
   }) : null;
-  /* Its branches (SPEC-DELEGACION-INVESTIGACIONES): the assisted researcher's, where the operator gives it a fund, from when
-     this code gives it; one at a time, none delegating in turn, never in a world whose environment is outside the harness. */
-  const delegationCfg = (cfg as { delegation?: { fund: number; tokens: number; rounds: number; max_rounds: number; ledger?: string } }).delegation;
-  const delegating = (): boolean => journal.researcher === 'assisted' && helping && investigative && delegationCfg !== undefined && capabilityAt(cfg as never, 'delegation', attemptNow);
-  /* The fund's ledger, beside the journal of the run that began the lineage, shared by its junior and its senior (one fund). */
-  if (delegationCfg && !delegationCfg.ledger) {
-    (delegationCfg as { ledger?: string }).ledger = path.basename(run.outFile).replace(/\.json$/, '') + '.delegation-fund.jsonl';
-    if (journal.config?.delegation) journal.config.delegation.ledger = delegationCfg.ledger;
-  }
-  const delegations = delegationCfg ? new Delegations({
-    config: { fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds,
-      ...((delegationCfg as { evolve?: Record<string, any> }).evolve ? { evolve: evolveConfigOf((delegationCfg as { evolve?: Record<string, any> }).evolve!) } : {}) },
-    journalFile: run.outFile, snapshot: () => JSON.parse(JSON.stringify(journal)), lab: lab.id,
-    ...((delegationCfg as { evolve?: unknown }).evolve ? { evolve: evolveCapability(lab.id, cfg.seed, worldOptions as Record<string, string>, () => (spec as { world: ArtifactWorld }).world,
-      () => (cfg as { __experienceRuns?: ExperienceRun[] }).__experienceRuns ?? []) } : {}),
-    worldArgs: ['--seed', String(cfg.seed), ...Object.entries(worldOptions).flatMap(([k, v]) => ['--' + k, String(v)]),
-      ...(cfg.flat ? ['--flat'] : []), ...(cfg.memory === 'selective' ? ['--memory', 'selective'] : [])],
-    /* A run in a process of its own, with the keys of this process's environment (loaded when first needed: control.ts reads
-       every laboratory). */
-    launcher: o.delegate ?? (async (l) => { const c = await import('./control.ts'); return { pid: (l.evolve ? c.startEvolveAt(l.journal, l.evolve) : c.startRunAt(l.journal, c.labNameOf(l.lab), l.args)).pid }; }), log,
-    /* The run that begins the lineage's fund opens it (a new run, or a continuation given one now); a run resumed finds it -
-       or its loss, said so. */
-    ...(delegationCfg.ledger ? { ledger: path.resolve(path.dirname(run.outFile), delegationCfg.ledger), requester: 'junior', opens: !previous?.config?.delegation } : {}),
-    history: (previous?.events ?? []) as Record<string, any>[],
-    /* Its history was written beside the run it resumes, wherever that is. */
-    ...(previous && resumeFrom ? { historyDir: path.dirname(path.resolve(resumeFrom)) } : {}),
-    unsupported: lab.external ? 'its environment is outside the harness: a branch would share it, not have its own' : null,
-    /* A living world's branches (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12): a realization of its own, or a member of this one. */
-    ...(living ? { living: {
-      modes: String(worldOptions.branches ?? 'isolated').split(',').map((x) => x.trim()).filter((x): x is 'isolated' | 'shared' => x === 'isolated' || x === 'shared'),
-      fork: (file: string, randomness: 'same' | 'fresh', by: string) => {
-        const at = living.forkPoint(by);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(at));
-        return { args: ['--fork', file, '--fork-randomness', randomness], revision: at.from.revision, tick: at.from.tick };
-      },
-      join: (b: { id: string; actor: string; journal: string; args: readonly string[]; resume: string | null; stopAs?: string }) => {
-        const c = o.connection;
-        if (!c) return 'this run cannot start a run in its own process';
-        const joined = living.join({ id: b.actor, kind: 'researcher', ...(living.actionsOf(actor) ? { actions: living.actionsOf(actor)! } : {}) });
-        if (!joined.accepted) return joined.reason;
-        /* Resumed: a record of its own, derived from the one it continues - never the same file written twice. */
-        let out = b.journal;
-        if (b.resume) {
-          /* The first number no record has: never the record it resumes, never one written by an earlier resumption. */
-          const base = b.resume.replace(/(\.resumed-\d+)?\.json$/, '');
-          let k = 1;
-          while (fs.existsSync(base + '.resumed-' + k + '.json') || path.resolve(base + '.resumed-' + k + '.json') === path.resolve(b.resume)) k++;
-          out = base + '.resumed-' + k + '.json';
-        }
-        const args = b.resume ? ['--resume', b.resume, '--out', out] : [...b.args, '--out', out];
-        const done = runLaboratory(lab, { args, root: c.root, llm: c.llm, ...(c.judge ? { judge: c.judge } : {}), ...(c.fetch ? { fetch: c.fetch } : {}), living: { session: living, actor: b.actor },
-          ...(b.stopAs ? { stopAsRecorded: b.stopAs } : {}) })
-          .catch((e) => { living.retire(b.actor, 'failed'); log('delegation_branch_failed', { id: b.id, error: String((e as Error)?.message ?? e).slice(0, 300) }); });
-        sharedRuns.push(done);
-        return { journal: out, done };
-      }
-    } } : {}),
-    experience: (cfg as { __experienceFiles?: string[] }).__experienceFiles ?? []
-  }) : null;
-  /* The results of its branches, delivered as they end: messages of their own, never help (a resumed run delivers them at the
-     same questions, as any message). */
-  const branchResults = (): OperatorMessage[] => (delegations && delegating() ? delegations.results().map((r) => ({ ...r, by: 'agent:' + r.research_result, at: new Date().toISOString() })) : []);
+  /* Its branches (SPEC-DELEGACION-INVESTIGACIONES; law-run.ts, part 3). */
+  const branches = runBranches({ lab, run, cfg, worldOptions, spec, previous, resumeFrom, helping: () => helping, investigative, attempt: () => attemptNow, ...(o.delegate ? { delegate: o.delegate } : {}),
+    ...(o.connection ? { connection: o.connection } : {}), living, actor, sharedRuns, external: () => external ?? null,
+    runShared: (args, c, member, stopAs) => runLaboratory(lab, { args, root: c.root, llm: c.llm, ...(c.judge ? { judge: c.judge } : {}), ...(c.fetch ? { fetch: c.fetch } : {}), living: member,
+      ...(stopAs ? { stopAsRecorded: stopAs } : {}) }) });
+  const { delegations, config: delegationCfg, delegating, results: branchResults } = branches;
   const session: LawSession<unknown> = journal.researcher === 'assisted'
     ? assistedSession(sessionHost, {
       /* Before it is handed over, nothing of the assisted researcher's: its prompt is the unknown-world one, and a message
@@ -2005,7 +1779,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
         + (delegating() && delegationCfg ? '\n\n' + DELEGATION_SECTION({ fund: delegationCfg.fund, tokens: delegationCfg.tokens, rounds: delegationCfg.rounds, maxRounds: delegationCfg.max_rounds }) : '')
         + (ownTests ? '\n\n' + ownTestsSection(lab.rivals?.(spec) ?? [], Boolean(lab.act?.identity && lab.episodeIdentity), ownTestsRequired()) : '')
         + (reviewing ? '\n\n' + OWN_DOCUMENTS_SECTION(withMemory) + '\n\n' + TASK_COVERAGE_SECTION + (instrumenting() ? '\n\n' + instrumentsSection(lab.seriesDoc ?? null) : '') : '')
-        + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '') : promptFor(focus)),
+        + (run.services.budget ? '\n\n' + BUDGET_SECTION('help_left' in run.services.budget(1, 1)) : '') + (pinning() ? '\n\n' + PINS_SECTION : '')
+        + (documentary ? '\n\n' + DOCUMENTARY_SECTION : '') : promptFor(focus)),
       task: () => (helping ? task : null),
       /* Its research policy's advice, before a question it is asked as the assisted researcher; never while its history replays. */
       ...(run.policy ? { advise: (question: number, recorded?: OperatorMessage) => (helping ? run.policy!.advise(question, run.replay.pending() === 0, recorded) : Promise.resolve(recorded ?? null)) } : {}),
@@ -2338,11 +2113,13 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const stoppedBy = session.fatal ? 'llm_error' : instrumentDown ? 'judge_unavailable' : accepted ? 'accepted' : satisfied ? 'quick_stop' : session.halted ?? 'budget';
   /* Its branches asked to stop; in a living world it leaves it first - a shared branch never waits for it - and the world is
      closed only once they have stopped (SPEC-ACONTECIMIENTOS-DEL-MUNDO §12, §13). */
+  /* A documentary investigation that ended without its report (a budget, a stop): what its notebook holds, partial - no
+     report invented, no inference asked beyond its budget. */
+  if (documentary && stoppedBy !== 'task_completed') log('task_finished', { round: session.currentRound, state: 'partial', report: null, from: 'its notebook and documents', why: stoppedBy });
   const delegationEnd = delegations ? delegations.close() : null;
   if (bridge) bridge.retire(stoppedBy);
   await Promise.allSettled(sharedRuns);
-  if (worldTimer) clearInterval(worldTimer);
-  const worldEnd = living ? (shared ? { ...living.summary(), left: stoppedBy } : living.close(stoppedBy)) : null;
+  const worldEnd = lw.end(stoppedBy);
   const result = run.finish({ stoppedBy, halted: session.halted }, {
     ...(session.fatal ? { llm_error: session.fatal } : {}),
     /* A living world: its session closed, what was in course kept as pending (§13). */

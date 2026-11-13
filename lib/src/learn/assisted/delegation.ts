@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { exposed, exposureOf } from './exposure.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Experience } from './experience.ts';
@@ -45,6 +46,12 @@ export interface DelegationConfig {
 const EVOLVE_FIELDS = new Set(['mode', 'question', 'start', 'continue_from', 'refs', 'expected', 'budget', 'seeds']);
 const NOT_IMPLEMENTED = new Set(['analogies', 'analogy', 'profile', 'descriptors', 'models', 'mutator', 'islands', 'novelty']);
 const BUDGET_FIELDS = new Set(['evaluations', 'tokens', 'rounds']);
+/** A branch's bags of external sources, as it may ask for them (SPEC-INVESTIGACION-EXTERNA §6.2). */
+const SOURCE_BUDGET = ['search_calls', 'fetch_calls', 'download_bytes'] as const;
+
+/** What a documentary branch is told (SPEC-INVESTIGACION-EXTERNA §6.2): no instruments of the environment, and how it ends. */
+export const DOCUMENTARY_SECTION = 'A DOCUMENTARY INVESTIGATION. You have no instruments of the environment here: no episodes, no acts, no checks. You investigate what you can read - the records you are given as experience, your sources where you have them, your notes and your own documents - and you test nothing in the environment, so never present a lead as evidence of it. '
+  + 'When your report is ready, END the task with {"finish": {"report": "<your report, or document:<id> of one of your documents>", "state": "complete" | "partial" | "no_result", "refs": ["<what you cite>"], "artifacts": ["<what you made>"]}} - alone, never with an investigation or a model. Keep apart in it what you read, what you infer and what you did not test. A partial result, or none, is a result too. Proposing a model of the environment is refused here.';
 
 /** What the search part of an evolutionary branch may spend of its grant; the rest is the consolidation's, protected (§12). */
 const SEARCH_SHARE = 0.75;
@@ -90,6 +97,8 @@ interface Branch {
   uncertain?: Uncertain;
   /** An evolutionary search (its supervisor's record), not a run of the general investigator. */
   mode?: 'evolve';
+  /** A documentary investigation (SPEC-INVESTIGACION-EXTERNA §6.2): no world of its own, a report to end with. */
+  documentary?: boolean;
 }
 
 /** A spending not known: observed at least, and held in the fund. */
@@ -157,6 +166,8 @@ export class Delegations {
     /** The runs the requester reads as experience (their files, in its order): a branch reads them too, under the same
         labels - access to the same resources, never a summary of them. */
     readonly experience?: readonly string[];
+    /** The requester's external sources: a branch's bags of them granted from its own (SPEC-INVESTIGACION-EXTERNA §4). */
+    readonly external?: () => import('./external-sources.ts').ExternalSources | null;
     /** An evolutionary branch's world and where it starts: present only where the world has an evaluator (artifacts). */
     readonly evolve?: {
       readonly seed: number;
@@ -194,7 +205,7 @@ export class Delegations {
     for (const e of o.history) {
       if (e.type === 'delegation_requested') {
         this.branches.push({ id: e.id, round: e.round, question: e.question, journal: path.resolve(o.historyDir ?? path.dirname(o.journalFile), e.journal), granted: e.granted, state: 'running', spent: null, delivered: false,
-          ...(e.mode === 'evolve' ? { mode: 'evolve' as const } : {}), ...(e.world ? { world: e.world } : {}) });
+          ...(e.mode === 'evolve' ? { mode: 'evolve' as const } : {}), ...(e.world ? { world: e.world } : {}), ...(e.access?.world === 'none' ? { documentary: true } : {}) });
         this.reserved += Number(e.granted?.tokens) || 0;
         this.perRound.set(e.round, Math.max(this.perRound.get(e.round) ?? 0, Number(String(e.id).split('.').pop()) || 0));
       }
@@ -358,6 +369,8 @@ export class Delegations {
       this.answered.shift();
       /* Logged again as they were - their paths made relative to this run's folder, wherever its history was written. */
       for (const { t: _t, type, ...e } of head.events) this.o.log(type, rebaseDelegationEvent(e, this.o.historyDir ?? path.dirname(this.o.journalFile), path.dirname(this.o.journalFile)));
+      /* The bags of sources it granted, reserved again from its requester's as they were. */
+      for (const e of head.events) if (e.type === 'delegation_requested' && e.sources?.granted) this.o.external?.()?.reserve(e.sources.granted);
       this.o.log('delegation_answered', { round, request, answer: head.answer });
       /* A shared branch acts in this very world: a run that derives the world again resumes it here, from its own record, at
          the same request - never left out, or the world would not be the one recorded. */
@@ -418,12 +431,20 @@ export class Delegations {
   private async decide(r: J | null, question: string, round: number): Promise<Record<string, unknown>> {
     if (!question) return { delegate: null, error: '"question": what to investigate - the branch knows nothing else of your intent' };
     if (this.o.unsupported) return { delegate: { question }, error: 'not here: ' + this.o.unsupported };
+    /* Its access (SPEC-INVESTIGACION-EXTERNA §6.2): a world assigned as the delegation allows (the default), or none - a
+       documentary investigation, with records, sources and notes, ended by a report. */
+    const access = r!.access === undefined ? null : r!.access as J;
+    if (access !== null && (typeof access !== 'object' || !['none', 'assigned'].includes(String(access.world ?? 'assigned')) || (access.sources !== undefined && typeof access.sources !== 'boolean')))
+      return { delegate: { question }, error: '"access": {"world": "none" | "assigned", "sources": true | false}' };
+    const documentary = access?.world === 'none';
+    if (documentary && r!.mode === 'evolve') return { delegate: { question }, error: 'an evolutionary search needs its world: "access.world" "none" is a documentary investigation' };
+    if (documentary && r!.world !== undefined) return { delegate: { question }, error: '"world" chooses a realization of a living world; a documentary investigation has none' };
     /* In a living world: a realization of its own (the default) or a member of this one - as the run allows, never another. */
     const living = this.o.living;
     if (r!.world !== undefined && !living) return { delegate: { question }, error: '"world": only a living world has realizations to choose between' };
     const worldMode = (r!.world ?? 'isolated') as string;
     const randomness = (r!.randomness ?? 'fresh') as string;
-    if (living) {
+    if (living && !documentary) {
       if (!['isolated', 'shared'].includes(worldMode)) return { delegate: { question }, error: '"world": "isolated" (a realization of its own) or "shared" (a member of this world)' };
       if (!living.modes.includes(worldMode as 'isolated')) return { delegate: { question, world: worldMode }, error: 'the mode "' + worldMode + '" is not available in this run (it allows: ' + living.modes.join(', ') + '): refused, nothing replaced' };
       if (r!.randomness !== undefined && (worldMode !== 'isolated' || !['same', 'fresh'].includes(randomness))) return { delegate: { question }, error: '"randomness": "same" or "fresh", for an isolated branch' };
@@ -496,22 +517,39 @@ export class Delegations {
       'Its record, as it stood when it asked, is readable as experience (run "' + cutLabel(this.o.experience) + '"): its beliefs, notes, models and experiments - its word, not evidence; test what you take from it here' + (worldMode === 'shared' && living ? '.' : ', in your own laboratory.'),
       ...((this.o.experience ?? []).length ? ['The records it reads as experience are readable to you too, under the same labels it uses: ' + this.o.experience!.map((_f, i) => 'exp' + (i + 1)).join(', ') + '.'] : []),
       ...(worldMode === 'shared' && living ? ['You are a member of ITS very world: what you do there is done in its world too, and you may write to it ("researcher") or read what it writes to you.'] : []),
-      'Investigate with your own instruments. What you find goes back to it: write it down as you go - what you investigated, what you found, the directions you propose and what tells them apart, your evidence apart from your interpretation, the alternatives you ruled out, your uncertainties. Strengthening its view, refuting an alternative, or finding no direction you can defend are results too. You need not end with a model: close your rounds when a model would add nothing.'].join('\n');
+      ...(documentary ? ['You have NO world of your own: this is a documentary investigation - the records you may read, your sources and your notes. End it with your report ({"finish": ...}).'] : []),
+      (documentary ? 'Investigate what you can read.' : 'Investigate with your own instruments.') + ' What you find goes back to it: write it down as you go - what you investigated, what you found, the directions you propose and what tells them apart, your evidence apart from your interpretation, the alternatives you ruled out, your uncertainties. Strengthening its view, refuting an alternative, or finding no direction you can defend are results too. You need not end with a model: close your rounds when a model would add nothing.'].join('\n');
     /* A living world's branch: its world given by its mode - a snapshot of this one, or a member's place in it. */
-    const actor = living && worldMode === 'shared' ? 'branch-' + name.replace(/^delegation-/, '').replace(/[^a-z0-9]+/gi, '-') : null;
+    const actor = living && !documentary && worldMode === 'shared' ? 'branch-' + name.replace(/^delegation-/, '').replace(/[^a-z0-9]+/gi, '-') : null;
     let worldOf: Record<string, unknown> | null = null;
     let worldArgs = [...this.o.worldArgs];
     const without = (xs: string[], keys: readonly string[]) => { const out: string[] = []; for (let i = 0; i < xs.length; i++) { if (keys.includes(xs[i])) { i++; continue; } out.push(xs[i]); } return out; };
-    if (living && worldMode === 'isolated') {
+    if (living && !documentary && worldMode === 'isolated') {
       const forkFile = path.join(base + '.branches', name + '.fork.json');
       const f = living.fork(forkFile, randomness as 'same', id);
       worldArgs = [...without(worldArgs, ['--fork', '--fork-randomness']), ...f.args];
       worldOf = { mode: 'isolated', randomness, revision: f.revision, tick: f.tick, fork: path.relative(path.dirname(this.o.journalFile), forkFile).split(path.sep).join('/') };
-    } else if (living) {
+    } else if (living && !documentary) {
       worldArgs = [...without(worldArgs, ['--actor', '--explore']), '--actor', actor!, '--explore', '0'];
       worldOf = { mode: 'shared', actor };
     }
+    /* Its sources (SPEC-INVESTIGACION-EXTERNA §4): inherited where asked - or, unsaid, where the configuration inherits them -
+       its bags granted from its requester's, never a copy of its balance. A world that refuses them refuses them to its
+       branches too: the branch is of the same world. */
+    const ext = this.o.external?.() ?? null;
+    let sources: { granted: Record<string, number>; file: string } | null = null;
+    if (ext && (access?.sources ?? ext.config.branches.inherit_sources)) {
+      const asked = (r!.budget ?? {}) as J;
+      const granted: Record<string, number> = { ...ext.grant(Object.fromEntries(SOURCE_BUDGET.filter((k) => asked[k] !== undefined).map((k) => [k, Number(asked[k])]))) };
+      if (SOURCE_BUDGET.some((k) => granted[k] > 0)) {
+        const file = path.join(base + '.branches', name + '.external.json');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ ...ext.config, budget: granted, branches: { inherit_sources: false, budget: null } }, null, 2));
+        sources = { granted, file };
+      }
+    }
     const args = [...worldArgs, '--researcher', 'assisted', '--attempts', String(rounds), '--max-tokens', String(tokens), '--task', task,
+      ...(documentary ? ['--documentary'] : []), ...(sources ? ['--external-research', sources.file] : []),
       '--experience', [...(this.o.experience ?? []), cutFile].join(','), '--experience-mode', 'meta', '--experience-scope', 'all', '--no-grade', '--no-ablation'];
     const granted = { rounds, tokens, ...(evolve ? { evaluations: evolve.evaluations } : {}) };
     /* Its supervisor's request: the search's part of the grant and the consolidation's, protected (§12). */
@@ -533,9 +571,11 @@ export class Delegations {
         ...(evolve.seeds.length ? { seeds: evolve.seeds.map((x) => ({ id: x.id, source: x.source, hash: x.hash, knows_task: x.knows_task })) } : {}) } : {}),
       journal: path.relative(path.dirname(this.o.journalFile), journal).split(path.sep).join('/'),
       cut: { file: path.relative(path.dirname(this.o.journalFile), cutFile).split(path.sep).join('/'), sha256: createHash('sha256').update(cutText).digest('hex'), events: (snap.events ?? []).length },
-      laboratory: worldOf?.mode === 'shared' ? 'this very world, as a member of it: what it does there is done in yours' : worldOf ? 'a realization of its own of this world, as it is now: what it does there is not done in yours'
+      ...(access ? { access: { world: documentary ? 'none' : 'assigned', sources: Boolean(sources) } } : {}),
+      ...(sources ? { sources: { granted: sources.granted, config: path.relative(path.dirname(this.o.journalFile), sources.file).split(path.sep).join('/') } } : {}),
+      laboratory: documentary ? 'none: a documentary investigation - its records, sources and notes, no simulator' : worldOf?.mode === 'shared' ? 'this very world, as a member of it: what it does there is done in yours' : worldOf ? 'a realization of its own of this world, as it is now: what it does there is not done in yours'
         : 'the same world (its seed and options), in an instance of its own: what it does there is not done in yours', args, ...(worldOf ? { world: worldOf } : {}) });
-    const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false, ...(evolve ? { mode: 'evolve' as const } : {}),
+    const b: Branch = { id, round, question, journal, granted, state: 'accepted', spent: null, delivered: false, ...(evolve ? { mode: 'evolve' as const } : {}), ...(documentary ? { documentary: true } : {}),
       ...(worldOf ? { world: { mode: worldOf.mode as 'isolated', ...(actor ? { actor } : {}) } } : {}) };
     this.branches.push(b);
     this.reserved += tokens;
@@ -606,8 +646,13 @@ export class Delegations {
     for (const b of this.branches) {
       if (b.delivered || (b.state !== 'completed' && b.state !== 'failed' && b.state !== 'cancelled')) continue;
       b.delivered = true;
+      const report = reportOf(b);
+      /* What reached it from outside goes with its result (SPEC-INVESTIGACION-EXTERNA §4.1.1): its requester is exposed through it. */
+      const exposure = exposureOf(readJson(b.journal));
       out.push({ id: 'result-' + b.id, research_result: b.id, result_state: b.state, result_spent: this.observed(b), ...(b.uncertain ? { result_spent_uncertain: b.uncertain } : {}),
-        text: 'RESEARCH RESULT of your branch ' + b.id + ' (a delegated contribution, not an order nor an answer of the environment): ' + JSON.stringify(reportOf(b)) });
+        ...(report.contribution ? { contribution: { id: (report.contribution as J).id, report: (report.contribution as J).report?.sha256 ?? null, state: (report.contribution as J).state } } : {}),
+        ...(exposed(exposure) ? { external_exposure: { ...exposure, via: [...new Set([...exposure.via, 'branch:' + b.id])].sort() } } : {}),
+        text: 'RESEARCH RESULT of your branch ' + b.id + ' (a delegated contribution, not an order nor an answer of the environment): ' + JSON.stringify(report) });
     }
     return out;
   }
@@ -687,7 +732,21 @@ const readLines = (f: string): J[] => (fs.existsSync(f) ? fs.readFileSync(f, 'ut
 const evolveFiles = (journal: string) => { const base = journal.replace(/\.json$/, ''); return { manifest: base + '.search.manifest.json', search: base + '.search.jsonl' }; };
 
 /** A branch's report, by its mode. */
-function reportOf(b: Branch): Record<string, unknown> { return b.mode === 'evolve' ? evolveReportOf(b) : investigationReportOf(b); }
+function reportOf(b: Branch): Record<string, unknown> { return b.mode === 'evolve' ? evolveReportOf(b) : b.documentary ? documentaryReportOf(b) : investigationReportOf(b); }
+
+/** A documentary branch's report (SPEC-INVESTIGACION-EXTERNA §6.2, §7): its own, as its finish gave it - kept by its content -
+    as a research-contribution@1, with its record's reading beside it; ended without one, what its notebook holds, partial. */
+function documentaryReportOf(b: Branch): Record<string, unknown> {
+  const journal = readJson(b.journal) ?? {};
+  const events = (journal.events ?? []) as J[];
+  const fin = [...events].reverse().find((e) => e.type === 'task_finished') ?? null;
+  const sha = fin?.report?.sha256 as string | undefined;
+  let text: string | null = null;
+  if (sha) { try { text = fs.readFileSync(path.join(path.dirname(b.journal), 'blobs', sha), 'utf8'); } catch { text = null; } }
+  const contribution = { format: 'research-contribution@1', id: b.id, from: b.id, task: b.question, report: fin?.report ?? null, refs: fin?.refs ?? [], artifacts: fin?.artifacts ?? [],
+    state: fin?.state ?? 'partial', external_exposure: exposureOf(journal) };
+  return { ...investigationReportOf(b), documentary: true, contribution, ...(text !== null ? { report: text.length > 8000 ? text.slice(0, 8000) + '\n[...]' : text } : { report: null, note: 'it ended without a report: what its notebook holds' }) };
+}
 
 /** An evolutionary branch's report (§4): its candidates, materialized and runnable (their files whole), what was measured
     of each against the start and whether a confirmation on new workloads held it, why to look at each again, the state of

@@ -17,15 +17,9 @@ import type { AnswerForm, CaseContext, Objective, Place, RunContext } from '../.
  * the operator's (turns still winning, the step that threw the win, action accuracy).
  * ========================================================================== */
 
-export const GRID_ANSWER: AnswerForm = {
-  form: ['YOUR ANSWER, for a point: a number from 0 to 1 - how good the point is for you (outside that range it is cut). The steps that are yours are chosen by a search that looks a few steps ahead and uses your answer for each point it imagines.'],
-  use: 'act'
-};
-
-export const GRID_VERDICT: readonly string[] = [
-  'At the end of each episode you learn how it ended for you: a score from -1 to 1.',
-  'In a check, the VERDICT on an episode is the score it ended with. The episodes of your previous check in a laboratory are also run again there with this model, from the same starts and with everything you do not control the same: you learn how many changed score, each way. Your model holds in a place when every episode of its check there scored 1 and none of those run again scored less than before.'
-];
+/* Stated by the explorer (learn/explorer.ts), the loop of games: a world below it reads them, never the other way. */
+import { GRID_ANSWER, GRID_VERDICT } from '../../learn/explorer.ts';
+export { GRID_ANSWER, GRID_VERDICT };
 
 /** One episode of a check. */
 export interface GridEpisode {
