@@ -4,7 +4,9 @@ Estado (12/11/2026): **WE1 a WE6 implementadas en código** (edición y composic
 cerrados y backend aislado; la palanca en el mundo del junior; la búsqueda; el atasco y la rama del operador; la
 comparación A–F con su plan, sus pasos C y E y su informe; §12). **Sin ejecuciones reales:** la comparación se lanza en la
 máquina 2×3090 después de la línea base de la fase A. Dos revisiones externas del mismo día conciliadas (§14).
-**§15 (borrar pesos con gradiente: WE7 a WE9), propuesta sin implementar.** Amplía
+**§15 (borrar pesos con gradiente: WE7a, WE7 a WE9), propuesta sin implementar**; WE7 espera al ejecutor general de
+programas (IE5 de [SPEC-INVESTIGACION-EXTERNA](SPEC-INVESTIGACION-EXTERNA.md)), y su ejecución real en GPU, a la prueba de
+aislamiento de la GPU (§15.8, revisión externa del 13/11/2026). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -791,7 +793,9 @@ Lo que no tiene, y que nuestra comparación sí pone:
 Una receta nueva de `train` (MA5), junto a `lora` y `qlora`. Se implementa como el primer procedimiento por programa
 (`method: "program"`, SPEC-INVESTIGACION-EXTERNA §8.2): un programa del perfil de entrenamiento que aprende la máscara y
 emite `mask@1`, con `learned: "trained"` en la procedencia, de modo que aprender qué borrar no añade un tipo de
-trabajador propio. Lo que sigue es lo que ese programa y su importador deben cumplir:
+trabajador propio. Por eso su entrega (WE7) depende del ejecutor y su contrato (IE5: `method-program@1`, perfiles, ABI,
+importador y el campo `learned`), del adaptador `mask@1` (WE7a) y de la captura `input_norms` con la que arranca. Lo que
+sigue es lo que ese programa y su importador deben cumplir:
 
 - **Qué entrena.** Un logit por peso de `gate_proj` en las capas de Qwen a partir de `chip_layers`; el circuito nunca
   (la misma regla que `recipeProblems` aplica hoy a LoRA). Los logits arrancan de Wanda, calculada con la captura de
@@ -864,7 +868,8 @@ verificado ejecutándolo otra vez, como los demás.
 
 **La captura que necesita** (revisión externa, 12/11/2026). Wanda puntúa cada peso por su magnitud y la norma de su
 **entrada**, canal a canal: `|W_ij| · ‖X_j‖`. La consulta `activations` de hoy guarda medias de las **salidas** de los
-módulos, y la norma de una entrada no se recupera de una media. WE9 añade al laboratorio una consulta `input_norms`:
+módulos, y la norma de una entrada no se recupera de una media. WE7 añade al laboratorio una consulta `input_norms`
+(la necesita ya `deletion@1` para arrancar sus logits; `wanda_mask@1`, en WE9, la reutiliza):
 
 - por módulo y por canal de entrada, la **suma de cuadrados** de sus entradas, calculada antes de promediar nada;
 - el **número de tokens válidos** que la forman y las **posiciones** que cuenta (las del modelo, nunca las del circuito);
@@ -906,9 +911,13 @@ Nada de esto se abre antes de la línea base de la fase A y de las condiciones F
 
 | Etapa | Depende de | Entrega |
 |---|---|---|
-| **WE7 · `deletion@1` con SFT** | MA5 | La receta y su cota; el adaptador `mask@1` (árbol, aplicación en el trabajador, verificación, medidas de §3.3); `trained` en la procedencia; la capacidad medida antes; pruebas con el backend de imitación |
-| **WE8 · GRPO con recompensas de sondas** | WE7, VM4 | `rl-probes@1` con su contrato de muestreo (§15.3.1): decodificación estocástica con semillas en el trabajador, estado restaurado por respuesta, probabilidades de los tokens, tokens del circuito fuera de la pérdida, grupos sin variación contados; trayectorias en cortes de casos `training`, recompensa del comprobador en el corte, KL a la partida; en la máquina real |
-| **WE9 · F′, G y `wanda_mask@1`** | WE7, WE6 | Las condiciones en `weight-comparison` (plan, paso de G, informe con H3 y H4); la consulta `input_norms` del laboratorio; el constructor cerrado |
+| **WE7a · El adaptador `mask@1`** | MA5 | El formato (árbol de índices por módulo), su aplicación en el trabajador, su verificación y las medidas de §3.3 como cambio `sparse` de `−W`; la cota y las prohibiciones de combinación (circuito, LoRA, ediciones); `mask@1` admitido por el importador. No necesita el ejecutor: se prueba también en Windows con el backend de imitación |
+| **WE7 · `deletion@1` con SFT** | WE7a, IE5, MA5 | El programa del perfil de entrenamiento que aprende la máscara, sobre el ejecutor general (`method-program@1`, perfil, ABI e importador de IE5), con `learned: "trained"` escrito por el host; la receta y su cota; la consulta `input_norms` del laboratorio (§15.5) para arrancar de Wanda; la capacidad medida antes. Pruebas con el backend de imitación **sólo en Linux**, donde está el aislamiento demostrado; en Windows se saltan como las de WE2. **Su ejecución real en la GPU espera a la prueba de aislamiento de la GPU** (SPEC-INVESTIGACION-EXTERNA §8.1) |
+| **WE8 · GRPO con recompensas de sondas** | WE7, VM4; para ejecutar, la prueba de aislamiento de la GPU | `rl-probes@1` con su contrato de muestreo (§15.3.1): decodificación estocástica con semillas en el trabajador, estado restaurado por respuesta, probabilidades de los tokens, tokens del circuito fuera de la pérdida, grupos sin variación contados; trayectorias en cortes de casos `training`, recompensa del comprobador en el corte, KL a la partida; en la máquina real |
+| **WE9 · F′, G y `wanda_mask@1`** | WE7, WE6 | Las condiciones en `weight-comparison` (plan, paso de G, informe con H3 y H4); el constructor cerrado, sobre la consulta `input_norms` de WE7 |
+
+Orden: WE7a puede hacerse ya; WE7 tras IE5 y WE7a; WE8 y WE9 tras WE7. Nada de WE7 a WE9 se ejecuta de verdad antes de la
+línea base de la fase A ni, en la GPU, antes de su prueba de aislamiento.
 
 Aceptación:
 

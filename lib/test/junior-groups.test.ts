@@ -131,3 +131,57 @@ test('VM4 review 2: a world is what its generator reads - a budget of the resear
   const leak = { ...base, weight_lab: undefined, cases: [...base.cases, { id: 't1', kind: 'investigation' as const, lab: 'cells', args: ['--seed', '9', '--level', '1', '--acts', '5'], partition: 'training' as const, group: 'g-other', components: ['cells-L1'] }] } as CompetenceManifest;
   assert.ok(competenceProblems(leak).some((p) => /t1/.test(p) && /c1/.test(p)), competenceProblems(leak).join('; '));
 });
+
+/* --- An external review of 0bec9b3 (13/11/2026) -------------------------------------------------------------------------- */
+
+test('review 0bec9b3: a realization names its identity - one under another, or a bare hash of before, is an unknown origin the confirmation refuses; made again from its recorded runs it is compared', async () => {
+  const { ConfirmationService } = await import('../src/junior/confirm.ts');
+  const { realizationOf, currentRealizations, isCurrentRealization, REALIZATION } = await import('../src/junior/groups.ts');
+  const { createHash } = await import('node:crypto');
+  const { stableStringify } = await import('../src/core/hash.ts');
+  const store = new BlobStore(path.join(tmp(), 'blobs'));
+  const m = { ...manifest(), cases: manifest().cases.filter((c) => c.kind === 'investigation'), components: [manifest().components[1]], weight_lab: undefined };
+  const svc = new ConfirmationService({ root: tmp(), manifest: m as CompetenceManifest, client: {} as never, launcher: {} as never });
+  const reserved = ['--level', '1', '--seed', '9'];
+  const now = realizationOf('cells', reserved);
+  assert.ok(isCurrentRealization(now) && now.startsWith(REALIZATION + ':'));
+  /* The reserved world as realization@1 hashed it (the experiment and every option, budgets included): a bare hash. */
+  const before = createHash('sha256').update(stableStringify(['realization@1', 'cells@1', { seed: 9, level: '1' }])).digest('hex');
+  const trained = normalizePackage({ ...pkg(store), adapter: store.put('adapter'), provenance: { parents: [], reason: 'trained', sources: ['dataset:x', 'training:y'] } });
+  const declare = (r: string[]) => normalizePackage({ ...trained, provenance: { ...trained.provenance, realizations: r } });
+  assert.match(String(svc.refusalOf(declare([now]))), /overlap/, 'the new hash: refused');
+  const old = String(svc.refusalOf(declare([before])));
+  assert.match(old, /not under realization@2/, 'the old hash of the same world: refused too, never admitted');
+  assert.doesNotMatch(old, /seed|9|c1/);
+  assert.match(String(svc.refusalOf(declare([now.replace(REALIZATION, 'realization@3')]))), /not under realization@2/, 'another identity: not compared');
+  /* Recorded under another identity, made again from the capture recorded with it; unknown where none was. */
+  const capture = { experiment: 'cells@1', argv: reserved, run_id: 'r9' };
+  assert.deepEqual(currentRealizations([before], [capture]), [now]);
+  assert.equal(currentRealizations([before]), undefined, 'nothing to make it again from: unknown');
+  assert.deepEqual(currentRealizations([now]), [now]);
+});
+
+test('review 2 of 0bec9b3: a realization is made again from the capture of its run taken when it was cut, never from the path read again - a file reused by another run is not the run it was', async () => {
+  const { currentRealizations, datasetCaptures, datasetRealizations, realizationOf } = await import('../src/junior/groups.ts');
+  const { ConfirmationService } = await import('../src/junior/confirm.ts');
+  const dir = tmp();
+  const run = path.join(dir, 'run.json');
+  /* An example cut from a run of seed 9, its capture taken then; the file later reused by a run of seed 3. */
+  const capture = { experiment: 'cells@1', argv: ['--seed', '9', '--level', '1'], run_id: 'nine' };
+  fs.mkdirSync(path.join(dir, 'examples'));
+  fs.writeFileSync(path.join(dir, 'examples', 'e1.json'), JSON.stringify({ id: 'e1', cut: { run, question: 0, hash: 'h', capture } }));
+  fs.writeFileSync(run, JSON.stringify({ experiment: 'cells@1', argv: ['--seed', '3', '--level', '1'], run_id: 'three', events: [] }));
+  const nine = realizationOf('cells', ['--seed', '9', '--level', '1']);
+  assert.deepEqual(datasetRealizations(path.join(dir, 'examples'), { examples: ['e1'] }), [nine], 'the run it was cut from, not the file as it is now');
+  const legacy = 'a'.repeat(64);
+  assert.deepEqual(currentRealizations([legacy], datasetCaptures(path.join(dir, 'examples'), { examples: ['e1'] })!), [nine]);
+  /* An example of before captures were kept: its origin unknown, never read from the reused path. */
+  fs.writeFileSync(path.join(dir, 'examples', 'e2.json'), JSON.stringify({ id: 'e2', cut: { run, question: 0, hash: 'h' } }));
+  assert.equal(datasetRealizations(path.join(dir, 'examples'), { examples: ['e1', 'e2'] }), null);
+  /* So the confirmation on seed 9 refuses what learned from it. */
+  const store = new BlobStore(path.join(tmp(), 'blobs'));
+  const m = { ...manifest(), cases: manifest().cases.filter((c) => c.kind === 'investigation'), components: [manifest().components[1]], weight_lab: undefined };
+  const svc = new ConfirmationService({ root: tmp(), manifest: m as CompetenceManifest, client: {} as never, launcher: {} as never });
+  const trained = normalizePackage({ ...pkg(store), adapter: store.put('adapter'), provenance: { parents: [], reason: 'trained', sources: ['dataset:x'], realizations: currentRealizations([legacy], [capture])! } });
+  assert.match(String(svc.refusalOf(trained)), /overlap/);
+});

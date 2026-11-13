@@ -195,6 +195,31 @@ vivo y del junior (parte de CC3 y CC5) esperan a su primera ejecución real.
   cambia, y la reanudación toma el estado completo más nuevo (el diario o un temporal pendiente), o la cabecera unida al
   registro de líneas. `appendEvent` corta el fragmento final antes de añadir, y una línea rota antes de la última es un
   error con su número, nunca una línea saltada. Los recorridos de carpetas de runs excluyen `.meta.json`.
+- **Revisión externa de `0bec9b3` (13/11/2026).** Dos fallos reproducidos por el revisor, arreglados con su prueba en
+  `journal-files.test.ts` («review 0bec9b3»):
+  - *Un temporal de otra ejecución podía sustituir el estado de un run nuevo* que reutilizaba el nombre: la reanudación
+    elegía el fichero con más eventos. Ahora los ficheros de un run pertenecen a una ejecución: el diario y su cabecera
+    llevan `run_id`, el registro de líneas lo nombra en su primera línea (`{"journal_run": …}`) y un temporal es el diario
+    que se estaba escribiendo. `readJournalFile` toma sólo estados de esa ejecución y sólo si continúan los eventos del
+    diario; uno de la misma ejecución que se aparta de ellos es un error, nunca se elige por su longitud. Un diario de
+    antes, sin `run_id`, sólo toma estados sin nombre que lo continúen.
+  - *Exportar podía perder eventos que el lector recuperaba:* `packRun` copiaba `<run>.json`. Ahora exporta una
+    instantánea leída con `readJournalFile`, y calcula sobre ella las ramas y los blobs, incluidos los que citan los
+    eventos recuperados.
+- **Segunda revisión de `0bec9b3` (13/11/2026).** Otros dos fallos reproducidos, arreglados con su prueba:
+  - *Si fallaba el primer renombrado de un run nuevo se recuperaba el anterior:* la ejecución se tomaba del JSON legible,
+    que aún era el del run anterior. Ahora la ejecución vigente es la última que **empezó** con ese nombre: su marcador es
+    la primera línea del registro de líneas, que se escribe antes que nada. El lector toma el estado coherente de esa
+    ejecución (el diario si es suyo, un temporal suyo, o su cabecera unida a sus líneas) y, si no dejó ninguno, declara el
+    conflicto; nunca devuelve en silencio el run anterior (`journal-files.test.ts`, «review 2 of 0bec9b3»).
+  - *Recalificar podía dejar inconsistente un diario recuperable:* `regrade` leía el JSON y añadía su evento a dos
+    secuencias distintas. Ahora lee con `readJournalFile`, escribe el diario y los findings desde esa secuencia, y el
+    registro de líneas se completa o se reescribe entero (`rewriteEvents`) para que no se aparten
+    (`regrade.test.ts`, «review 2 of 0bec9b3»: se sigue leyendo y exportando).
+- **Tercera revisión de `0bec9b3` (13/11/2026).** *Una recalificación lenta podía borrar otra ya terminada:* reescribía el
+  registro desde el estado leído antes de llamar al modelo. Ahora publica bajo el cerrojo del diario (`<run>.lock`, creado
+  en exclusiva; `withJournalLock`), relee dentro el estado vigente y anexa sobre él; si el run es ya otra ejecución
+  (`run_id` distinto) declara el conflicto y no publica (`regrade.test.ts`, «review 3 of 0bec9b3»).
 - **Pendiente de CC1.** El esquema de eventos (§3.1, `journal@2`, `eventsOf` tipado) y que los lectores lean del registro
   de líneas.
 

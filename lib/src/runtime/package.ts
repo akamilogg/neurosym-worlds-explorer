@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { blobsOf, runLaboratory } from './lab-runner.ts';
+import { readJournalFile } from './journal-files.ts';
 import { LABS } from '../worlds/labs.ts';
 import { JEV_DEFAULT_URL } from '../core/jev.ts';
 import type { FetchLike } from '../core/net.ts';
@@ -67,7 +68,11 @@ export function packageReport(finding: Record<string, any>, journal: Record<stri
 
 /** Packs a run: copies what it needs into `<run>.package/` (or `outDir`), writes its report and its manifest. */
 export function packRun(journalFile: string, outDir?: string): { dir: string; manifest: PackageManifest } {
-  const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'));
+  /* ONE snapshot of the run, read as a resumption reads it (SPEC-CONSOLIDACION §3.2): its journal with the events its record
+     of lines recovered, of its own execution only. The package's journal is this snapshot, and its branches and blobs are
+     taken from it - never from a journal file that holds fewer events or another moment of the run. */
+  const journal = readJournalFile(journalFile);
+  const journalText = JSON.stringify(journal, null, 2);
   const base = journalFile.replace(/\.json$/, '');
   const name = path.basename(base);
   const dir = path.resolve(outDir ?? base + '.package');
@@ -85,9 +90,10 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
      of its method, and the operator's verdicts on its reports of the instrument (its resumption reads them: without them a run
      that had them would not be rebuilt). */
   /* A living world of its own: its session's journal, the record of everything the world did (SPEC-ACONTECIMIENTOS-DEL-MUNDO §14). */
-  const own = fs.readdirSync(folder).filter((f) => f === name + '.json' || f === name + '.replay.jsonl' || f === name + '.anomalies.jsonl' || f === name + '.world.jsonl'
+  const own = fs.readdirSync(folder).filter((f) => f === name + '.replay.jsonl' || f === name + '.anomalies.jsonl' || f === name + '.world.jsonl'
     || (f.startsWith(name + '.') && /^\.(finding|finding\.researcher|method|agent-[^.]+)\.json$/.test(f.slice(name.length))));
   for (const f of own) fs.copyFileSync(path.join(folder, f), path.join(dir, f));
+  fs.writeFileSync(path.join(dir, name + '.json'), journalText);
   /* Its branches (SPEC-DELEGACION-INVESTIGACIONES §7, §10.3): every one its record names - and its agents' records - wherever it lives (a run resumed may name the branches
      of the run it resumed), each with its folder (its record, its cut, its blobs), by the path its record gives. */
   const named: string[] = [];
@@ -103,7 +109,7 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
   /* The fund's ledger of its lineage (it may be named after the run that began it): without it, what was spent is not known. */
   const ledger = journal.config?.delegation?.ledger;
   if (typeof ledger === 'string' && fs.existsSync(path.resolve(folder, ledger))) fs.copyFileSync(path.resolve(folder, ledger), path.join(dir, path.basename(ledger)));
-  const { dir: blobs, cited } = blobsOf(journalFile);
+  const { dir: blobs, cited } = blobsOf(journalFile, journalText);
   const missing: string[] = [], corrupt: string[] = [];
   for (const b of cited) {
     const from = path.join(blobs, b);

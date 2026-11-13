@@ -74,3 +74,60 @@ test('a world of laws whose run kept no truth is graded against the laboratory\'
   assert.equal(out.score, 0.5);
   assert.deepEqual(out.event.truth, asked[0].true_statements, 'the truth it was graded against is kept with the grading');
 });
+
+test('review 2 of 0bec9b3: a run whose record of lines holds events its journal lacks is regraded as a resumption reads it - the journal and the record never part ways, and it can still be packed', async () => {
+  const { readJournalFile, eventRecordOf } = await import('../src/runtime/journal-files.ts');
+  const { packRun } = await import('../src/runtime/package.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'regrade-'));
+  const r = await runLaboratory(gridLab, { args: [...GRID, '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
+  const whole = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  /* The journal as a stop between a line and its rewrite left it: its last two events only in the record of lines. */
+  fs.writeFileSync(r.journal, JSON.stringify({ ...whole, events: whole.events.slice(0, -2) }));
+  assert.equal(readJournalFile(r.journal).events.length, whole.events.length);
+  const grader: ChatClient = { complete: async () => ({ content: JSON.stringify({ grades: [{ id: 'win_other', grade: 'exact', evidence: 'e' }], false_beliefs: [] }), latencyMs: 0, raw: null }) };
+  const out = await regrade(r.journal, grader, 'senior-model');
+  const read = readJournalFile(r.journal);
+  assert.equal(read.events.length, whole.events.length + 1, 'the recovered events and the regrading, read without a conflict');
+  assert.deepEqual(eventRecordOf(r.journal)!.events, read.events, 'the record of lines holds the same sequence');
+  assert.deepEqual(JSON.parse(fs.readFileSync(r.journal, 'utf8')).events, read.events, 'and so does the journal');
+  assert.equal(out.finding.operator?.rule_recovery?.score, out.score, 'its findings from that sequence');
+  const pack = packRun(r.journal, path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'regrade-pkg-')), 'p'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(pack.dir, 'run.json'), 'utf8')).events.length, read.events.length);
+});
+
+test('review 3 of 0bec9b3: a slow regrading never erases one that finished while it waited - each published on the state in force, one after the other', async () => {
+  const { readJournalFile, eventRecordOf } = await import('../src/runtime/journal-files.ts');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'regrade-'));
+  const r = await runLaboratory(gridLab, { args: [...GRID, '--out', path.join(dir, 'run.json')], root: dir, llm: { url: 'http://system2.test/chat', model: 'stand-in' }, fetch });
+  const before = readJournalFile(r.journal).events.length;
+  /* The journal two events short, as a stop left it: the record of lines differs from what the slow one read. */
+  const whole = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  fs.writeFileSync(r.journal, JSON.stringify({ ...whole, events: whole.events.slice(0, -2) }));
+  let release!: () => void;
+  const held = new Promise<void>((ok) => { release = ok; });
+  const answer = { content: JSON.stringify({ grades: [{ id: 'win_other', grade: 'exact', evidence: 'e' }], false_beliefs: [] }), latencyMs: 0, raw: null };
+  const slow: ChatClient = { complete: async () => { await held; return answer; } };
+  const quick: ChatClient = { complete: async () => answer };
+  const pending = regrade(r.journal, slow, 'slow');
+  await new Promise((ok) => setTimeout(ok, 50));
+  await regrade(r.journal, quick, 'fast');
+  release();
+  await pending;
+  const read = readJournalFile(r.journal);
+  assert.deepEqual(read.events.slice(before).map((e: Record<string, unknown>) => e.grader_model), ['fast', 'slow'], 'both kept, in the order they were published');
+  assert.equal(read.events.length, before + 2);
+  assert.deepEqual(eventRecordOf(r.journal)!.events, read.events);
+  assert.deepEqual(JSON.parse(fs.readFileSync(r.journal, 'utf8')).events, read.events);
+  assert.ok(!fs.existsSync(r.journal.replace(/\.json$/, '.lock')), 'the lock let go');
+  /* Another execution under the name by the time it publishes: a conflict, nothing published. */
+  let release2!: () => void;
+  const held2 = new Promise<void>((ok) => { release2 = ok; });
+  const pending2 = regrade(r.journal, { complete: async () => { await held2; return answer; } }, 'late');
+  await new Promise((ok) => setTimeout(ok, 50));
+  const { startEvents } = await import('../src/runtime/journal-files.ts');
+  const other = { ...read, run_id: 'another', events: read.events };
+  fs.writeFileSync(r.journal, JSON.stringify(other));
+  startEvents(r.journal, 'another');
+  release2();
+  await assert.rejects(pending2, /another execution now/);
+});

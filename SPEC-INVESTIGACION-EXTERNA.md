@@ -3,7 +3,9 @@
 Estado (13/11/2026): **propuesta para implementar; ninguna de las entregas IE1–IE6 se declara hecha**. Revisada el
 13/11/2026 contra el código y las reglas del proyecto (§13): la lista blanca es el acceso por defecto, la web pública
 se activa explícitamente, un mundo puede negarse a las fuentes externas, y las piezas que chocaban con lo construido
-(clases de petición, identidad de los ensayos, procedencia de lo aprendido) quedan resueltas.
+(clases de petición, identidad de los ensayos, procedencia de lo aprendido) quedan resueltas. Una segunda revisión del
+mismo día deriva la exposición externa del registro en vez de las citas (§4.1.1) y separa el ejecutor de programas (IE5)
+de `deletion@1` (WE7 de SPEC-EDICION-PESOS).
 
 Se apoya en [fuentes y experiencia](SPEC-INVESTIGADOR-ASISTIDO.md),
 [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), [operadores y senior](SPEC-ORQUESTADOR.md),
@@ -119,24 +121,51 @@ Un laboratorio declara `externalSources: { admitted: false, why: "..." }` cuando
 documentado fuera y leerlo contaminaría la medida: el investigador dejaría de investigar un mundo desconocido. Es una
 declaración del mundo, no una opción del run, y nadie la levanta desde la configuración.
 
-- **Qué se niega:** las fuentes externas, es decir, los orígenes de la lista blanca (A6, locales o web) y la web pública.
-  Las herramientas no se anuncian a quien investiga ese mundo y, si se piden, responden `not_allowed` con el motivo del
-  mundo. Vale para el investigador, el senior, las ramas que trabajan en ese mundo (`world: "assigned"`) y las
-  contribuciones: una contribución que cite fuentes externas no se entrega a un investigador de ese mundo.
+- **Qué se niega:** las fuentes externas, es decir, los orígenes de la lista blanca (A6, locales o web) y la web pública,
+  y todo lo que llegue a ese mundo empujado por quien las leyó: contribuciones, mensajes, directivas y artefactos de un
+  actor con exposición externa (§4.1.1). Las herramientas no se anuncian a quien investiga ese mundo y, si se piden,
+  responden `not_allowed` con el motivo del mundo. Vale para el investigador, el senior y las ramas encargadas para ese
+  mundo. La restricción sigue al encargo, no al modo de acceso: una rama que un investigador de ese mundo encarga con
+  `world: "none"` la hereda igual que una con `world: "assigned"`, y una rama no la levanta en sus propias ramas.
 - **Qué no se niega:** la metainvestigación. La experiencia de otros runs (`--experience`), el propio registro del
   investigador y su memoria selectiva, los resultados de sus ramas y los tablones de su equipo siguen disponibles. El
-  mundo no los puede bloquear.
+  mundo no los puede bloquear. Pero lo que se lee por ahí conserva su exposición: si procede de un actor expuesto, el run
+  que lo lee pasa a tener exposición indirecta (§4.1.1). Nunca se convierte en silencio en experiencia sin influencia
+  externa.
 - **Quién lo declara al principio:** `c302nav` y `c302closed`, cuyo circuito es el conectoma publicado de *C. elegans*
   con literatura que describe su mecanismo. Los mundos generados por semilla (`cells`, `orbit`, `particles3d`, `tank`,
   `messages`, `plates`, `grid`) no tienen respuesta publicada y no la declaran; el de artefactos y el del junior tampoco,
   porque traer métodos de fuera es justo lo que se busca en ellos. Un laboratorio puede cambiar su declaración con su
   motivo; la prueba de §12 recorre todos.
 
+#### 4.1.1 La exposición externa se deriva del registro
+
+Una cita declarada no basta para saber qué influyó en un actor: una paráfrasis con `refs: []` transporta lo mismo que una
+cita (revisión externa, 13/11/2026). Por eso la exposición la calcula el host desde el historial registrado, nunca desde
+lo que el actor declara.
+
+- **Exposición directa.** Un actor (run, rama, sesión del operador, senior) está expuesto desde la primera petición
+  `search`, `open`, `links` o `fetch` a una fuente externa que consta en su registro.
+- **Exposición indirecta.** También lo está desde que recibe o lee algo de un actor expuesto: una contribución, un mensaje,
+  una directiva, el resultado de una rama, un artefacto, la experiencia de otro run, un tablón. Se propaga por el
+  historial, no por el contenido: lo que un actor produce después de exponerse lleva su exposición, cite o no.
+- **Su forma.** `external_exposure: { direct: boolean, via: [<ids de actores o de lecturas>] }`, con el punto del registro
+  en que empezó. Viaja en el sobre de una contribución (§7), en los artefactos que el actor publica, en el resultado de una
+  rama y en el hallazgo del run. Lo escribe el host; el actor no lo puede vaciar.
+- **En un mundo que no admite fuentes externas.** No se le entrega nada empujado por un actor expuesto. Lo que su
+  investigador lee por metainvestigación sigue disponible y marca su run con exposición indirecta. Ese run se cuenta
+  aparte en el corpus, en el metalaboratorio y en los informes: no es una investigación sin fuentes externas, aunque su
+  mundo las niegue.
+- **Fuera de esos mundos** la exposición también se registra, porque dice qué resultados se obtuvieron con ayuda externa
+  (§10) aunque nada se bloquee.
+
 ### 4.2 La configuración forma parte de la identidad
 
 Un ensayo con acceso externo y otro sin él no son el mismo ensayo. La configuración `external-research@1` efectiva, por
 su hash, y la declaración del mundo entran en la identidad de un ensayo del metalaboratorio y en la del run que la usa:
-el manifiesto de un metalaboratorio la fija para todos sus casos, igual que los argumentos del junior.
+el manifiesto de un metalaboratorio la fija para todos sus casos, igual que los argumentos del junior. La exposición
+derivada de un ensayo (§4.1.1) queda en su resultado: dos ensayos de la misma identidad, uno expuesto y otro no, no se
+suman como si fueran el mismo.
 
 ## 5. Buscar, leer y citar
 
@@ -252,7 +281,8 @@ no arranca simuladores, no pide un baseline del mundo y no consume evaluaciones.
 que la delegación ya tenga autorizado, aislado o compartido según su contrato. No permite elegir otro mundo oculto.
 Si se omite `access`, se conserva la semántica actual; las fuentes se heredan sólo si lo habilita la configuración.
 Una rama documental puede desarrollar código y entregarlo, pero para ejecutarlo necesita un perfil autorizado o una
-nueva delegación experimental. No puede elevar sus propios permisos.
+nueva delegación experimental. No puede elevar sus propios permisos. Encargada por un investigador de un mundo que no
+admite fuentes externas, hereda esa restricción aunque sea `world: "none"` (§4.1).
 
 La rama recibe un corte identificable del trabajo del solicitante y acceso a sus snapshots documentales, sin resumen
 obligatorio. El coste de leer copias locales no es otra llamada web. Su resultado vuelve por el `research_result` de
@@ -306,7 +336,8 @@ del orquestador. Un fallo de búsqueda no detiene la investigación principal.
 ## 7. Entrega: una contribución que se puede seguir hasta su origen
 
 El resultado documental es un informe libre en un artefacto versionado. Su sobre de transporte `research-contribution@1`
-contiene `id`, `from`, `to`, `task`, `report`, `refs`, `artifacts`, `cut` y `state` (`complete`, `partial`, `no_result`).
+contiene `id`, `from`, `to`, `task`, `report`, `refs`, `artifacts`, `cut`, `state` (`complete`, `partial`, `no_result`) y
+`external_exposure`, que escribe el host desde el registro del emisor (§4.1.1), no desde sus `refs`.
 `report` y los artefactos se identifican por contenido; `refs` puede apuntar a fuentes, búsquedas, episodios o ramas.
 No se exige una estructura de hipótesis en el contenido ni que el agente afirme novedad positiva.
 
@@ -393,7 +424,8 @@ el producto, nunca el programa, y `owes` lo lee antes que el formato; los paquet
 leyendo como hasta ahora.
 
 **Con §15 de SPEC-EDICION-PESOS, una sola forma.** `deletion@1` se implementa como el primer `method: "program"`: un
-programa del perfil de entrenamiento que aprende la máscara y emite `mask@1`, con `learned: "trained"`. Así el
+programa del perfil de entrenamiento que aprende la máscara y emite `mask@1`, con `learned: "trained"`. Es una entrega
+aparte (WE7), sobre el ejecutor de IE5 y el adaptador de WE7a, no parte de IE5. Así el
 aprendizaje de qué borrar no añade un tipo de trabajador propio, y lo que §15 exige (cotas, capas del circuito,
 realizaciones, partición `training`) es lo que el importador comprueba aquí.
 
@@ -486,11 +518,13 @@ capacidad, pero sí para decidir usarla por defecto en una campaña.
 | **IE2 · Herramientas compartidas** | `session.ts`, `agent-operator.ts`, bucle `grid`, `learn/requests.ts`, presupuesto y capacidades | Junior sin senior y senior buscan por sí mismos; puro y runs sin capacidad conservan su comportamiento |
 | **IE3 · Ramas documentales** | `delegation.ts`, lanzamiento/control, sesión común sin hooks de mundo; herencia de permisos y reservas. **Después de CC3** de SPEC-CONSOLIDACION: la sesión y `runLawLab` están hoy atados al mundo, y separar sus hooks es partir el runner | Investigar fuentes no arranca una simulación; entrega y reanudación sin duplicados; puede producir artefactos |
 | **IE4 · Operador investigador** | `agent-operator.ts`, planificador, activaciones persistidas, contribuciones y canal | Busca por atasco, encargo o reloj; funciona con varios destinatarios; no obliga a obedecer; cierre y coste completos |
-| **IE5 · Procedimientos adquiridos** | Artefactos; `weights.ts`, `isolation.ts`, `train.ts` y trabajadores; perfil, ABI, importador y procedencia (`learned`); `deletion@1` como primer programa. Sólo Linux; GPU pendiente de su prueba de aislamiento | Un algoritmo escrito como programa produce un candidato sin registrar una técnica nativa; mismo evaluador; aislamiento y límites comprobados |
+| **IE5 · El ejecutor de programas y su contrato** | Artefactos; `weights.ts`, `isolation.ts`, `train.ts` y trabajadores; `method-program@1`, perfiles, ABI, importador (LoRA, `weight-edit-set@1` y, con WE7a, `mask@1`) y procedencia (`learned`). Sin ningún método concreto: `deletion@1` es WE7 de SPEC-EDICION-PESOS y se entrega después, sobre este ejecutor. Sólo Linux; GPU pendiente de su prueba de aislamiento | Un algoritmo escrito como programa produce un candidato sin registrar una técnica nativa; mismo evaluador; aislamiento y límites comprobados; `learned` escrito por el host y leído por `owes` |
 | **IE6 · Recorrido completo** | `runtime/package.ts`, replay, consola, findings, ejemplos y piloto | Del bloqueo a fuente, contribución y experimento; paquete reproducible offline; gasto y limitaciones visibles |
 
-Orden: IE1 → IE2 → IE4; IE3 tras CC3; IE5 puede desarrollarse tras IE2 reutilizando IE1 para entradas. IE6 integra
-todas.
+Orden: IE1 → IE2 → IE4; IE3 tras CC3. IE5 no depende de las fuentes: puede desarrollarse en paralelo, y usa IE1 para
+sus entradas cuando exista. WE7 (`deletion@1`, SPEC-EDICION-PESOS §15.8) va después de IE5 y de WE7a. La exposición
+externa (§4.1.1) se registra desde IE1, que es la primera entrega que lee fuentes externas, y se propaga con cada canal
+que se añade (IE2 a IE4). IE6 integra todas.
 Cada entrega actualiza esta cabecera y declara qué funciona realmente. IE1–IE4 ya aportan búsqueda e inspiración con
 las herramientas actuales; **el objetivo completo incluye IE5**, para no conservar como cuello de botella la necesidad
 de que el humano implemente cada método encontrado. No se exige que todos los entornos dispongan de GPU o PDF.
@@ -529,13 +563,19 @@ con el laboratorio del junior; declarar las dependencias de este último antes d
 12. Exportar, desconectar todos los servicios y reproducir conserva el recorrido, los textos y las entregas. Borrar un
     blob requerido provoca un error explícito. Ninguna prueba offline hace inferencia ni paga búsquedas.
 13. En un mundo que declara `externalSources.admitted: false`, ni la lista blanca ni `public` llegan a su investigador,
-    su senior ni sus ramas: las herramientas no se anuncian y, pedidas, responden `not_allowed` con el motivo del mundo;
-    una contribución que cita fuentes externas no se le entrega. La experiencia de otros runs, su registro, su memoria y
-    los resultados de sus ramas siguen disponibles. Una prueba recorre todos los laboratorios y lista su declaración.
+    su senior ni sus ramas: las herramientas no se anuncian y, pedidas, responden `not_allowed` con el motivo del mundo.
+    La experiencia de otros runs, su registro, su memoria y los resultados de sus ramas siguen disponibles. Una prueba
+    recorre todos los laboratorios y lista su declaración.
 14. `search` y `links` son `recall` para la auditoría y el senior, como `list`, `open` y `find`.
 15. Dos ensayos del metalaboratorio que sólo difieren en su configuración `external-research@1` tienen ids distintos.
 16. Un programa que aprende de datos y emite cambios `−W` produce un paquete con `learned: "trained"`; la confirmación lo
     lee como entrenado aunque su formato sea un conjunto de ediciones, y exige sus realizaciones.
+17. Un actor que leyó una fuente externa y entrega una paráfrasis con `refs: []` produce un sobre con
+    `external_exposure.direct: true`; a un investigador de un mundo que no admite fuentes externas no se le entrega. Lo
+    mismo para un mensaje o un artefacto suyo posterior, y para lo que reenvíe otro actor que lo recibió (`via`).
+18. Una rama que un investigador de ese mundo encarga con `world: "none"` no tiene herramientas externas.
+19. Ese investigador lee por `--experience` un run expuesto: la lectura se sirve, y su run termina con exposición
+    indirecta que el corpus y el metalaboratorio cuentan aparte.
 
 ## 13. Revisión (13/11/2026)
 
@@ -553,6 +593,15 @@ Revisada contra el código y las reglas del proyecto antes de entregarla:
 | IE5 y el aislamiento | Sólo Linux; GPU pendiente de una prueba de aislamiento propia (§8.1) |
 | `stoppedBy: "task_completed"` sin lectura | `runResults` y el corpus lo leen como sesión sin modelo (§6.2) |
 | La utilidad no se medía | Comparación pareada opcional con y sin acceso externo, antes de usarlo por defecto en una campaña (§10) |
+
+**Segunda revisión externa (13/11/2026).**
+
+| Punto | Decisión |
+|---|---|
+| La restricción de §4.1 dependía de las citas declaradas: una paráfrasis con `refs: []` la saltaba | La exposición externa se deriva del registro y se propaga por artefactos, mensajes, contribuciones, ramas y experiencia (§4.1.1); el host la escribe y el actor no la vacía |
+| Una rama documental (`world: "none"`) de un mundo restringido no heredaba su restricción | La restricción sigue al encargo, no al modo de acceso (§4.1, §6.2) |
+| La metainvestigación podía convertir lo expuesto en experiencia limpia | Sigue disponible, pero el run que la lee queda con exposición indirecta y se cuenta aparte (§4.1.1, §4.2) |
+| IE5 incluía `deletion@1`, y WE7 sólo dependía de MA5 | IE5 entrega el ejecutor y su contrato sin ningún método; WE7 (`deletion@1`) depende de IE5, de WE7a (`mask@1`) y trae `input_norms`; su ejecución real en GPU, de la prueba de aislamiento (§11 y SPEC-EDICION-PESOS §15.8) |
 
 Las pruebas automáticas usan respuestas y transportes simulados y ejecutores controlados. El piloto real comprueba la
 utilidad y la integración con el proveedor; no se ejecuta como parte de la suite ni consume presupuesto sin configurar.

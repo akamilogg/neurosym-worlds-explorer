@@ -458,6 +458,25 @@ de E), `judgmentHash` y
 `formulaHash` de 32 bits (cambian una vez por fórmula y están escritos en registros), y las sondas, que no se comparan por
 realización con los casos de confirmación.
 
+**Tercera revisión externa (13/11/2026, sobre `0bec9b3`).** Cuatro fallos reproducidos; arreglados el mismo día, cada uno
+con su prueba. Los dos del diario están en SPEC-CONSOLIDACION §8 (CC1); los dos de esta spec:
+
+| Problema | Arreglo | Prueba |
+|---|---|---|
+| Las élites de una rama evolutiva del operador se saltaban el `holdout`: su registro dice `branch` y `searchesOf` sólo leía `search` y `searches`, así que su check usaba la regla de un candidato que ninguna búsqueda seleccionó | `searchesOf` lee también `branch` (como `branch:<id>`), y la entrega registra la búsqueda al hacer la versión, unida al linaje de la versión de partida (`searches`). Una edición posterior y una búsqueda desde ella lo conservan | `junior-weight-stall-branch.test.ts` («review 0bec9b3»): entrega, edición y check, con y sin `holdout` |
+| Con `realization@2` el mismo mundo reservado se rechazaba por su hash nuevo y se admitía por el anterior: un hash no dice con qué regla se hizo | Una realización nombra su identidad (`realization@2:<sha256>`). La confirmación rechaza la que no es de la identidad vigente, o un hash sin nombre, como origen desconocido. El mundo del junior las rehace desde lo que registró (las ejecuciones de un recibo, ahora guardadas con él; el dataset de un entrenamiento); si no puede, el paquete no declara ninguna y la confirmación lo rechaza | `junior-groups.test.ts` («review 0bec9b3») |
+
+**Segunda revisión del mismo día.** La migración anterior rehacía las realizaciones releyendo la ruta del run, y una ruta
+nombra un fichero que puede ser ya otro run: un candidato que aprendió de la semilla 9, con su fichero reutilizado por la
+semilla 3, quedaba atribuido a la 3 y la confirmación sobre la 9 lo admitía. Ahora lo que hace una realización (el
+experimento, sus argumentos y su `run_id`) se **captura del run al cortarlo** (`captureCut`) y viaja con lo que se aprende:
+en cada ejemplo (`cut.capture`), en el recibo del laboratorio de pesos por caso y en el registro de cada entrenamiento y de
+cada edición construida. Se rehacen sólo desde esas capturas, nunca desde la ruta; lo que no tiene captura (ejemplos y
+recibos de antes) es origen desconocido y la confirmación lo rechaza (`junior-groups.test.ts`, «review 2 of 0bec9b3»). Una
+tercera revisión encontró que `captureCut` releía la ruta original tras reconstruir el corte en una copia: si el run se
+sustituía entretanto, devolvía el contenido de uno con la identidad de otro. Ahora el contenido, el hash y la captura salen
+de los mismos bytes de la copia (`junior-cut-capture.test.ts`).
+
 ## 12. Aceptación
 
 1. Un candidato con un ensayo resuelto y nueve `infra` no tiene calidad; con diez terminados y cinco resueltos, 0,5.

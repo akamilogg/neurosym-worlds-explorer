@@ -1,3 +1,4 @@
+import { captureOfJournal, type RunCapture } from './groups.ts';
 import fs from 'node:fs';
 import { appendRecord } from './jsonl.ts';
 import os from 'node:os';
@@ -40,7 +41,7 @@ const sha = (v: unknown): string => createHash('sha256').update(typeof v === 'st
 
 /** The files of a run (its journal and everything beside it with its name) copied to a scratch folder, its replay log cut
     before the answer to System 2's question `question` (0-based). */
-function stage(run: string, question: number): { dir: string; journal: string; journalHash: string; kept: number } {
+function stage(run: string, question: number): { dir: string; journal: string; journalHash: string; capture: RunCapture | null; kept: number } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-'));
   const base = path.basename(run, '.json');
   for (const f of fs.readdirSync(path.dirname(run))) if (f === base + '.json' || f.startsWith(base + '.')) {
@@ -59,7 +60,13 @@ function stage(run: string, question: number): { dir: string; journal: string; j
   }
   if (cutAt < 0) throw new Error('the run never answered question ' + question + ' (' + (llm + 1) + ' answers of System 2 in its log)');
   fs.writeFileSync(log, lines.slice(0, cutAt).map((l) => l + '\n').join(''));
-  return { dir, journal: path.join(dir, base + '.json'), journalHash: sha(fs.readFileSync(run, 'utf8')), kept: cutAt };
+  /* Its hash and its capture from the bytes of the copy the cut is rebuilt from - never the original path read again, which
+     may be another run by then (an external review of 0bec9b3: the content of one run with the identity of another). */
+  const journal = path.join(dir, base + '.json');
+  const text = fs.readFileSync(journal, 'utf8');
+  let capture: RunCapture | null = null;
+  try { capture = captureOfJournal(JSON.parse(text)); } catch { /* not a record: no capture */ }
+  return { dir, journal, journalHash: sha(text), capture, kept: cutAt };
 }
 
 /** System 2's request as content of a junior's question: its system message, its user parts. */
@@ -73,7 +80,7 @@ interface Resumed { events: J[]; stoppedBy: string; asked: { body: J }[] }
 
 /** The run resumed from the cut: `answer` gives the text to answer System 2's first live question, or null to stop there;
     the second live question always stops it. The Judge is the one given, or none (its calls then fail: no measure). */
-async function resumeAtCut(run: string, question: number, answer: (body: J) => string | null, o: { judge?: LabConnection; timeoutMs?: number } = {}): Promise<Resumed & { journalHash: string; kept: number }> {
+async function resumeAtCut(run: string, question: number, answer: (body: J) => string | null, o: { judge?: LabConnection; timeoutMs?: number } = {}): Promise<Resumed & { journalHash: string; capture: RunCapture | null; kept: number }> {
   const s = stage(run, question);
   try {
     const original = JSON.parse(fs.readFileSync(s.journal, 'utf8'));
@@ -104,7 +111,7 @@ async function resumeAtCut(run: string, question: number, answer: (body: J) => s
       stoppedBy = r.stoppedBy;
     } catch (e) { stoppedBy = 'error: ' + String((e as Error).message ?? e).slice(0, 200); } finally { clearTimeout(timer); }
     const events = fs.existsSync(out) ? (JSON.parse(fs.readFileSync(out, 'utf8')).events ?? []) as J[] : [];
-    return { events, stoppedBy, asked, journalHash: s.journalHash, kept: s.kept };
+    return { events, stoppedBy, asked, journalHash: s.journalHash, capture: s.capture, kept: s.kept };
   } finally { fs.rmSync(s.dir, { recursive: true, force: true }); }
 }
 
@@ -117,6 +124,8 @@ export interface Cut {
   readonly content: { readonly system: string; readonly user: { readonly parts: readonly string[] } };
   /** Events the run logged before the question: what follows them in a check is the answer's reaction. */
   readonly events_before: number;
+  /** What its realization is made of, read from the run when it was cut (groups.ts): never read from the path again. */
+  readonly capture: RunCapture | null;
 }
 
 /** A cut taken: the run resumed to its question, what System 2 is asked there captured. A run that cannot be cut there
@@ -125,9 +134,10 @@ export async function captureCut(run: string, question: number, o: { timeoutMs?:
   const r = await resumeAtCut(run, question, () => null, o);
   if (!r.asked.length) throw new Error('the run resumed to question ' + question + ' never asked it (' + r.stoppedBy + ')');
   const content = contentOf(r.asked[0].body);
-  const experiment = JSON.parse(fs.readFileSync(run, 'utf8')).experiment;
+  /* Everything of the cut from the one copy it was rebuilt from: its content, its hash and its capture. */
+  const experiment = r.capture?.experiment;
   const lab = Object.entries(LABS).find(([, l]) => l.id === experiment)?.[0] ?? String(experiment);
-  return { run, question, lab, content, events_before: beforeTail(r.events),
+  return { run, question, lab, content, events_before: beforeTail(r.events), capture: r.capture,
     hash: sha({ journal: r.journalHash, question, kept: r.kept, asked: r.asked[0].body }) };
 }
 

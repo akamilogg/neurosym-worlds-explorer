@@ -1,3 +1,4 @@
+import type { RunCapture } from './groups.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -42,7 +43,8 @@ export interface MemoryCallRecord { readonly op: string; readonly name?: string;
 export interface Example {
   readonly format: 'junior-example@1';
   readonly id: string;
-  readonly cut: { readonly run: string; readonly question: number; readonly hash: string };
+  /** The cut, with the capture of its run taken when it was cut (groups.ts): what its realization is made again from. */
+  readonly cut: { readonly run: string; readonly question: number; readonly hash: string; readonly capture?: RunCapture };
   readonly group: string;
   readonly mode: Mode;
   /** The input as the junior is asked it (and the teacher), the task included when there is one. */
@@ -133,7 +135,7 @@ export async function distill(o: { dir: string; req: DistillRequest; pkg: Junior
   const state: ExampleState = !measured(tOut) || !measured(jOut) ? 'unverified' : !tOut!.pass ? 'rejected' : jOut!.pass ? 'unverified' : 'verified';
   const slim = (x: CheckOutcome | null) => (x ? { state: x.state, pass: x.pass, detail: x.detail } : null);
   const body = {
-    format: 'junior-example@1' as const, cut: { run: o.req.run, question: o.req.question, hash: cut.hash }, group: o.req.group, mode: o.req.mode, input: content,
+    format: 'junior-example@1' as const, cut: { run: o.req.run, question: o.req.question, hash: cut.hash, ...(cut.capture ? { capture: cut.capture } : {}) }, group: o.req.group, mode: o.req.mode, input: content,
     target: state === 'verified' ? t!.answer : null, span: (t?.calls.length ? 'decisions' : 'answer') as 'answer' | 'decisions', state,
     competence: { checker: o.req.checker, ...(o.req.request ? { request: o.req.request } : {}) },
     junior: { execution, answer: j.answer, outcome: slim(jOut), receipt: j.receipt },

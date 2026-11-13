@@ -76,3 +76,78 @@ test('CC1 review: an event appended after a cut line is kept; a line broken in t
   fs.writeFileSync(eventsFileOf(file), JSON.stringify({ type: 'start' }) + '\n{"type": broken}\n' + JSON.stringify({ type: 'end' }) + '\n');
   assert.throws(() => eventsOf(file), /line 2/);
 });
+
+/* --- An external review of 0bec9b3 (13/11/2026) -------------------------------------------------------------------------- */
+
+test('review 0bec9b3: a temporary another execution left under a name used again is never taken for the new run\'s state; one of the same execution that parts ways is told', async () => {
+  const dir = tmp();
+  const out = path.join(dir, 'run.json');
+  const old = await runLaboratory(cellsLab, { args: args(out, 2), root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: standIn, print: () => {} });
+  const oldJournal = JSON.parse(fs.readFileSync(old.journal, 'utf8'));
+  /* What an older process left pending: its journal, holding more events than the new run will. */
+  fs.writeFileSync(out + '.999.tmp', JSON.stringify(oldJournal));
+  const fresh = await runLaboratory(cellsLab, { args: args(out, 1), root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: standIn, print: () => {} });
+  const now = JSON.parse(fs.readFileSync(fresh.journal, 'utf8'));
+  assert.ok(oldJournal.events.length > now.events.length && oldJournal.run_id !== now.run_id);
+  const read = readJournalFile(out);
+  assert.deepEqual([read.run_id, read.started, read.events.length], [now.run_id, now.started, now.events.length], 'the new run, never the old one');
+  /* The new run's record of lines names its execution; the old one's lines would not be taken either. */
+  const { eventRecordOf } = await import('../src/runtime/journal-files.ts');
+  assert.equal(eventRecordOf(out)!.run, now.run_id);
+  /* A pending state of the SAME execution whose events part ways from the journal's: told, not chosen by its length. */
+  fs.rmSync(out + '.999.tmp');
+  fs.writeFileSync(out + '.998.tmp', JSON.stringify({ ...now, events: [{ type: 'other' }, ...now.events] }));
+  assert.throws(() => readJournalFile(out), /part ways/);
+  /* And one of the same execution that continues it is the newest state. */
+  fs.rmSync(out + '.998.tmp');
+  fs.writeFileSync(out + '.997.tmp', JSON.stringify({ ...now, events: [...now.events, { type: 'later' }] }));
+  assert.equal(readJournalFile(out).events.length, now.events.length + 1);
+});
+
+test('review 0bec9b3: a package is one snapshot read as a resumption reads it - the events the record of lines recovered, and the blobs they cite', async () => {
+  const { createHash } = await import('node:crypto');
+  const { packRun } = await import('../src/runtime/package.ts');
+  const dir = tmp();
+  const r = await runLaboratory(cellsLab, { args: args(path.join(dir, 'run.json'), 1), root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: standIn, print: () => {} });
+  const whole = JSON.parse(fs.readFileSync(r.journal, 'utf8'));
+  /* An event only the record of lines holds, citing a blob kept beside the run; the journal two events short. */
+  const text = 'a text kept whole';
+  const sha = createHash('sha256').update(text).digest('hex');
+  fs.mkdirSync(path.join(dir, 'blobs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'blobs', sha), text);
+  const extra = { t: 0, type: 'note', text: { sha256: sha, kept: true } };
+  fs.appendFileSync(eventsFileOf(r.journal), JSON.stringify(extra) + '\n');
+  fs.writeFileSync(r.journal, JSON.stringify({ ...whole, events: whole.events.slice(0, -2) }));
+  const recovered = readJournalFile(r.journal).events;
+  assert.equal(recovered.length, whole.events.length + 1);
+  const pack = packRun(r.journal, path.join(tmp(), 'pkg'));
+  const packed = JSON.parse(fs.readFileSync(path.join(pack.dir, 'run.json'), 'utf8'));
+  assert.deepEqual(packed.events, recovered, 'every event the reader recovers is exported');
+  assert.ok(fs.existsSync(path.join(pack.dir, 'blobs', sha)), 'with the blob a recovered event cites');
+  assert.deepEqual(pack.manifest.missing_blobs, []);
+});
+
+test('review 2 of 0bec9b3: the execution is the one last started (its start marker), never the journal an earlier one left; where it left no state, a conflict is told', async () => {
+  const { writeAtomic, metaFileOf, startEvents, appendEvent } = await import('../src/runtime/journal-files.ts');
+  const dir = tmp();
+  const file = path.join(dir, 'run.json');
+  const head = (id: string) => ({ experiment: 'cells@1', argv: ['--seed', '1'], run_id: id, started: id });
+  writeAtomic(file, JSON.stringify({ ...head('old'), events: [{ type: 'start' }, { type: 'a' }, { type: 'b' }] }));
+  /* A new run under the same name whose renames are all refused: its marker, its lines, its checkpoint and its temporary
+     are new; the journal is still the old one. */
+  startEvents(file, 'new');
+  const refuse = () => { const e = new Error('busy') as NodeJS.ErrnoException; e.code = 'EPERM'; throw e; };
+  fs.writeFileSync(metaFileOf(file), JSON.stringify(head('new')));
+  appendEvent(file, { type: 'start' });
+  writeAtomic(file, JSON.stringify({ ...head('new'), events: [{ type: 'start' }] }), { rename: refuse, wait: 0 });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).run_id, 'old', 'the journal still the earlier run');
+  const read = readJournalFile(file);
+  assert.deepEqual([read.run_id, read.events.length], ['new', 1], 'the run last started, never the old one');
+  /* Without its temporary, its checkpoint and its lines. */
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.tmp'))) fs.rmSync(path.join(dir, f));
+  assert.deepEqual([readJournalFile(file).run_id, readJournalFile(file).events.length], ['new', 1]);
+  /* A new run that left nothing of its own but its marker: a conflict, told. */
+  fs.rmSync(metaFileOf(file));
+  startEvents(file, 'newer');
+  assert.throws(() => readJournalFile(file), /last started under this name is newer/);
+});

@@ -242,3 +242,45 @@ test('review 2: a run resumed (its acts replayed) applies what was delivered at 
     assert.deepEqual(resumed.collectBranches(), [], 'never collected twice');
   } finally { await f.close(); }
 });
+
+/* --- An external review of 0bec9b3 (13/11/2026) -------------------------------------------------------------------------- */
+
+test('review 0bec9b3: a branch\'s elite is a candidate a search selected - delivered, edited and checked, it is promoted on the holdout alone and never without one', { skip: !python && 'no Python' }, async () => {
+  const f = await fixture();
+  try {
+    const branches = path.join(f.dir, 'branches');
+    const researcher = f.make({ weightBranches: branches });
+    const startPkg = await researcher.packageOf(researcher.reference);
+    fs.writeFileSync(path.join(f.dir, 'start.json'), JSON.stringify(startPkg));
+    const spec: WeightBranchSpec = { format: 'weight-search-branch@1', id: 'wb5', question: 'q', from: researcher.reference, start: path.join(f.dir, 'start.json'), manifest: path.join(f.dir, 'manifest.json'),
+      reference: path.join(f.dir, 'reference.json'), blobs: path.join(f.dir, 'blobs'), server: f.h.url,
+      seeds: [{ written: { modules: [{ module: DOWN, encoding: 'sparse', indices: [0], values: [-1.5] }] }, competence: 'protocol', why: 'w', expect: 'e' }],
+      control_seeds: 1, max_candidates: 3, seed: 2, fund: { edits: 20, evaluations: 20 } };
+    fs.writeFileSync(path.join(f.dir, 'wb5.json'), JSON.stringify(spec));
+    await runWeightBranch(path.join(f.dir, 'wb5.json'), branches, { probes: f.probesOf, heartbeatMs: 50 });
+    const [d] = researcher.deliverBranches() as { delegated: { versions: { version: string }[] } }[];
+    const delivered = d.delegated.versions[0].version;
+    assert.deepEqual(researcher.searchesOf(delivered), ['branch:wb5'], 'its search registered when the delivery is made');
+    const child = await researcher.editFrom(delivered, { written: { modules: [{ module: Q, encoding: 'sparse', indices: [0], values: [0.5] }] } },
+      { competence: 'requests', mechanism: 'm', effect: 'e' }, undefined, { why: 'built on the elite' });
+    assert.ok(child.version, JSON.stringify(child));
+    assert.deepEqual(researcher.searchesOf(child.version!), ['branch:wb5'], 'and kept by a later edit');
+    /* Checked: evaluations made up (the candidate better on every case), the rule the check applies read from its record. */
+    const check = async (world: JuniorWorld, version: string) => {
+      const ev = (execution: string, value: number) => ({ format: 'junior-evaluation@1' as const, manifest: world.manifestHash, execution, partition: 'development' as const, temperature: 0, measure: null as never,
+        observations: world.manifest.cases.map((c) => ({ component: c.kind === 'probe' ? (c as { component: string }).component : 'cells-L1', case: c.id, rep: 0, value, state: 'measured' as const })) });
+      (world as unknown as { evaluate: (v: string) => Promise<unknown> }).evaluate = async (v: string) => v === world.reference ? ev(f.manifest.reference, 0) : ev('c'.repeat(64), 1);
+      return (await juniorLab.artifact!.check({ world } as JuniorSpec, version, {} as never, {} as never)) as unknown as { journal: { verdict: string; why: string } };
+    };
+    for (const v of [delivered, child.version!]) assert.match((await check(researcher, v)).journal.why, /best of N in selection/, 'no holdout: never promoted');
+    const held = new JuniorWorld({ manifest: { ...f.manifest, holdout: ['p2', 'p5'] }, base: f.pkg, blobs: path.join(f.dir, 'blobs'), server: f.h.url, dir: path.join(f.dir, 'held'), evaluations: 10, edits: 5, store: researcher.store });
+    const { promoteOnHoldout } = await import('../src/junior/evaluate.ts');
+    for (const v of [delivered, child.version!]) {
+      const r = (await check(held, v)).journal;
+      assert.doesNotMatch(r.why, /best of N in selection/);
+      const evs = await Promise.all([held.reference, v].map((x) => (held as unknown as { evaluate: (v: string) => Promise<never> }).evaluate(x)));
+      const expected = promoteOnHoldout(held.manifest, held.manifestHash, evs[0], evs[1])!;
+      assert.deepEqual([r.verdict, r.why], [expected.verdict, expected.why], 'on the holdout alone');
+    }
+  } finally { await f.close(); }
+});

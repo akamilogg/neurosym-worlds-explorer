@@ -39,7 +39,7 @@ import { evolveCapability } from './evolve-branch.ts';
 import type { ArtifactWorld } from '../artifacts/world.ts';
 import { EVOLVE_ENGINE, type SearchManifest } from '../learn/evolve/engine.ts';
 import { evolveConfigOf } from './evolve-branch.ts';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
@@ -157,8 +157,7 @@ function madeWith(made: unknown, commit: string, root: string): boolean | null {
 }
 
 /** The texts a journal kept whole by their content (`"sha256": ..., "kept": true`), and where they are: `blobs/` beside it. */
-export const blobsOf = (journalFile: string): { dir: string; cited: string[] } => {
-  const text = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, 'utf8') : '';
+export const blobsOf = (journalFile: string, text: string = fs.existsSync(journalFile) ? fs.readFileSync(journalFile, 'utf8') : ''): { dir: string; cited: string[] } => {
   const cited = [...new Set([...text.matchAll(/"sha256":\s*"([0-9a-f]{64})"[^}]*"kept":\s*true/g)].map((m) => m[1]))];
   return { dir: path.join(path.dirname(journalFile), 'blobs'), cited };
 };
@@ -829,8 +828,11 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     } });
 
   const commit = commitOf(options.root);
+  /* The execution its files belong to - the journal, its checkpoint, its record of lines and any temporary it leaves
+     (SPEC-CONSOLIDACION §3.2): a resumption never takes another's state left under the same name. */
+  const runId = randomUUID();
   const journal: Record<string, any> = {
-    experiment: lab.id, started: started.toISOString(), ...(commit ? { commit } : {}),
+    experiment: lab.id, run_id: runId, started: started.toISOString(), ...(commit ? { commit } : {}),
     ...(blobsCarried && (blobsCarried.carried || blobsCarried.missing.length || blobsCarried.corrupt.length) ? { blobs_carried: blobsCarried } : {}),
     /* Who ran it, what was asked, and under which policy of the operator (SPEC-INVESTIGADOR-ASISTIDO §3.1). */
     researcher, researcher_requested: o.asked, researcher_policy: o.policy,
@@ -846,7 +848,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     hidden_from_the_learner: {},
     events: [] as unknown[]
   };
-  startEvents(outFile);
+  startEvents(outFile, runId);
   let lastHead = '';
   /* Once a divergence has ended the run where it was, the loop left behind writes nothing more. */
   let closed = false;

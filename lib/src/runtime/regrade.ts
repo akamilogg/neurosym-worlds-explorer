@@ -1,4 +1,4 @@
-import { appendEvent, eventsOf, writeAtomic } from './journal-files.ts';
+import { appendEvent, eventRecordOf, readJournalFile, rewriteEvents, withJournalLock, writeAtomic } from './journal-files.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseJsonLoose } from '../core/net.ts';
@@ -56,7 +56,10 @@ function truthOf(journal: J, lab: AnyLab): { id: string; statement: string }[] {
     methods - against the run's truth, with the run's grader. The grading goes to the senior's record (`gradings`), never to
     the run's journal: what the senior understood and what reached the junior are measured apart. */
 export async function gradeSenior(journalFile: string, agentRecord: string, llm: ChatClient, graderModel: string): Promise<{ score: number | null; event: J }> {
-  const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')) as J;
+  /* The run as a resumption reads it (SPEC-CONSOLIDACION §3.2): the events its record of lines recovered included, of its
+     own execution only - never the journal file alone, which may hold fewer. */
+  let journal: J;
+  try { journal = readJournalFile(journalFile) as J; } catch (e) { throw new LabError('grade: cannot read ' + path.basename(journalFile) + ': ' + String((e as Error).message ?? e)); }
   const lab = Object.values(LABS).find((l) => l.id === journal.experiment);
   if (!lab) throw new LabError('grade: ' + path.basename(journalFile) + ' is not a run of a known laboratory');
   if (!fs.existsSync(agentRecord)) throw new LabError('grade: no senior followed this run (' + path.basename(agentRecord) + ')');
@@ -97,7 +100,10 @@ export async function gradeSenior(journalFile: string, agentRecord: string, llm:
 }
 
 export async function regrade(journalFile: string, llm: ChatClient, graderModel: string): Promise<Regrade> {
-  const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')) as J;
+  /* The run as a resumption reads it (SPEC-CONSOLIDACION §3.2): the events its record of lines recovered included, of its
+     own execution only - never the journal file alone, which may hold fewer. */
+  let journal: J;
+  try { journal = readJournalFile(journalFile) as J; } catch (e) { throw new LabError('grade: cannot read ' + path.basename(journalFile) + ': ' + String((e as Error).message ?? e)); }
   const lab = Object.values(LABS).find((l) => l.id === journal.experiment);
   if (!lab) throw new LabError('grade: ' + path.basename(journalFile) + ' is not a run of a known laboratory');
   const events = (journal.events ?? []) as J[];
@@ -127,15 +133,30 @@ export async function regrade(journalFile: string, llm: ChatClient, graderModel:
   } catch (e) {
     event = { type, truth, error: String((e as Error)?.message ?? e), grader_model: graderModel };
   }
-  /* Appended after the end, marked: the run is as it was; this is the operator's later reading of it. */
-  const last = events.length ? Number(events[events.length - 1].t ?? 0) : 0;
-  const stamped = { t: last, ...event, regraded: new Date().toISOString() };
-  journal.events = [...events, stamped];
-  /* Its record of lines too, where the run kept one (SPEC-CONSOLIDACION §3.2). */
-  if (eventsOf(journalFile) !== null) appendEvent(journalFile, stamped);
-  writeAtomic(journalFile, JSON.stringify(journal, null, 2));
-  const finding = findingOf(JSON.parse(JSON.stringify(journal)), { journal: path.basename(journalFile), ...methodOf(journalFile) });
-  fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.json', JSON.stringify(finding, null, 2));
-  fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.researcher.json', JSON.stringify(findingView(finding, 'researcher'), null, 2));
+  /* Appended after the end, marked: the run is as it was; this is the operator's later reading of it. Published under the
+     journal's lock, on the state in force THEN - read again, never the one read before asking the model, which another
+     regrading may have added to meanwhile (an external review of 0bec9b3: a slow regrading erased a fast one). */
+  const published = await withJournalLock(journalFile, () => {
+    let now: J;
+    try { now = readJournalFile(journalFile) as J; } catch (e) { throw new LabError('grade: cannot read ' + path.basename(journalFile) + ' again to publish: ' + String((e as Error).message ?? e)); }
+    if ((now.run_id ?? null) !== (journal.run_id ?? null)) throw new LabError('grade: ' + path.basename(journalFile) + ' is another execution now (' + (now.run_id ?? 'unnamed') + ', it was ' + (journal.run_id ?? 'unnamed') + '): a conflict, the grading not published');
+    const current = (now.events ?? []) as J[];
+    const last = current.length ? Number(current[current.length - 1].t ?? 0) : 0;
+    const stamped = { t: last, ...event, regraded: new Date().toISOString() };
+    now.events = [...current, stamped];
+    /* Its record of lines too, where the run kept one (SPEC-CONSOLIDACION §3.2): the event appended where the record holds
+       exactly the events in force; otherwise written again whole from them - the journal and its record never part ways. */
+    const record = eventRecordOf(journalFile);
+    if (record !== null) {
+      if ((record.run ?? null) === (now.run_id ?? null) && JSON.stringify(record.events) === JSON.stringify(current)) appendEvent(journalFile, stamped);
+      else rewriteEvents(journalFile, now.run_id ?? null, now.events);
+    }
+    writeAtomic(journalFile, JSON.stringify(now, null, 2));
+    const finding = findingOf(JSON.parse(JSON.stringify(now)), { journal: path.basename(journalFile), ...methodOf(journalFile) });
+    fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.json', JSON.stringify(finding, null, 2));
+    fs.writeFileSync(journalFile.replace(/\.json$/, '') + '.finding.researcher.json', JSON.stringify(findingView(finding, 'researcher'), null, 2));
+    return { stamped, finding };
+  });
+  const { stamped, finding } = published;
   return { score: typeof event.score === 'number' ? event.score : null, event: stamped, finding };
 }

@@ -20,6 +20,7 @@ import { BlobStore, checkClosed, executionHash, normalizePackage, type JuniorPac
 import { WeightLab, type LabCase, type LabQuery, type LabReceipt } from '../../junior/weight-lab.ts';
 import type { Availability } from '../../junior/isolation.ts';
 import type { RawTensor, WeightBounds } from '../../junior/weights.ts';
+import { currentRealizations, datasetCaptures, realizationOfCapture } from '../../junior/groups.ts';
 
 /* ============================================================================
  * The world of a junior's COMPETENCE (SPEC-METAPOLITICA-APRENDIZAJE §6, §7.1): an artifact world whose artifact is the
@@ -115,7 +116,7 @@ export class JuniorWorld {
       const cutter = o.cutter ?? (async (run: string, question: number) => {
         const { captureCut } = await import('../../junior/probes.ts');
         const c = await captureCut(run, question);
-        return { content: c.content, hash: c.hash };
+        return { content: c.content, hash: c.hash, capture: c.capture };
       });
       this.weightLab = new WeightLab({ config, manifest: o.manifest, service: this.client, ledger: this.jobs, store: this.blobs, cutter });
     }
@@ -137,7 +138,12 @@ export class JuniorWorld {
        from its genome. Undefined where they cannot be told: the confirmation refuses it. */
     let realizations: readonly string[] | undefined;
     if (v.files.has(ADAPTER)) {
-      try { const a = JSON.parse(v.files.get(ADAPTER)!); adapter = String(a.adapter); trainedOn = ['dataset:' + a.dataset, 'training:' + a.job]; realizations = Array.isArray(a.realizations) ? a.realizations : undefined; } catch { return ADAPTER + ' is not JSON'; }
+      try {
+        const a = JSON.parse(v.files.get(ADAPTER)!); adapter = String(a.adapter); trainedOn = ['dataset:' + a.dataset, 'training:' + a.job];
+        /* Of the current identity, or made again from the captures of the runs it learned from, recorded when it was
+           trained - never from the dataset's paths read again; else unknown. */
+        realizations = currentRealizations(Array.isArray(a.realizations) ? a.realizations : undefined, a.captures);
+      } catch { return ADAPTER + ' is not JSON'; }
     }
     if (v.files.has(EDITS)) {
       if (adapter !== null) return 'a version with a LoRA adapter and a set of edits: no recipe combines them';
@@ -150,22 +156,31 @@ export class JuniorWorld {
 
   private realizationsFile(): string { return path.join(this.dir, 'realizations.jsonl'); }
 
-  /** The searches that selected a version, by its lineage (SPEC-VALIDEZ-MEDIDA §4.3): an elite's record names its search; a
-      branch's delivery and a later edit of one keep it. Empty: no search chose it. */
+  /** The searches that selected a version, by its lineage (SPEC-VALIDEZ-MEDIDA §4.3): an elite's record names its search
+      (`search`), an operator's branch its branch (`branch`, read as `branch:<id>`), and whatever selected the version it
+      was made from is kept in `searches` - by a later edit, a search from it and a branch's delivery alike. Empty: no
+      search chose it. */
   searchesOf(version: string): string[] {
     const v = this.store.get(version);
     const text = v?.files.get(EDITS);
     if (!text) return [];
     try {
-      const e = JSON.parse(text) as { search?: unknown; searches?: unknown };
-      return [...new Set([...(typeof e.search === 'string' ? [e.search] : []), ...(Array.isArray(e.searches) ? e.searches.map(String) : [])])];
+      const e = JSON.parse(text) as { search?: unknown; searches?: unknown; branch?: unknown };
+      return [...new Set([...(typeof e.search === 'string' ? [e.search] : []), ...(typeof e.branch === 'string' ? ['branch:' + e.branch] : []),
+        ...(Array.isArray(e.searches) ? e.searches.map(String) : [])])].sort();
     } catch { return []; }
+  }
+
+  /** The lineage a version made from `from` carries: what selected `from`, and what selects it now. */
+  private lineageFrom(from: string, own: readonly string[] = []): { searches?: string[] } {
+    const all = [...new Set([...this.searchesOf(from), ...own])].sort();
+    return all.length ? { searches: all } : {};
   }
 
   /** The realizations a set of edits learned from: each edit's as recorded when it was constructed from the lab's receipts,
       an edit derived by an operator its parents', a written one none. Undefined when one of them cannot be told. */
   private genomeRealizations(genome: readonly string[]): readonly string[] | undefined {
-    const recorded = new Map<string, { realizations?: string[]; unknown?: boolean }>();
+    const recorded = new Map<string, { realizations?: string[]; unknown?: boolean; captures?: unknown[] }>();
     if (fs.existsSync(this.realizationsFile())) for (const l of fs.readFileSync(this.realizationsFile(), 'utf8').split('\n')) {
       try { const e = JSON.parse(l); if (typeof e.edit === 'string') recorded.set(e.edit, e); } catch { /* a cut line */ }
     }
@@ -176,7 +191,13 @@ export class JuniorWorld {
       seen.add(id);
       const r = recorded.get(id);
       if (r?.unknown) return false;
-      for (const x of r?.realizations ?? []) out.add(x);
+      /* Of the current identity, or made again from the captures of the runs it was fed, recorded with it when it was made
+         (never from their paths read again); else its origin is unknown. */
+      if (r) {
+        const current = currentRealizations(r.realizations, r.captures);
+        if (!current) return false;
+        for (const x of current) out.add(x);
+      }
       let origin: { kind?: string; parents?: readonly string[] } = {};
       try { origin = (JSON.parse(this.blobs.get(id).toString('utf8')) as { origin?: typeof origin }).origin ?? {}; } catch { return r !== undefined; }
       /* A constructed edit reads what it was fed: where this world did not record it (an edit a branch made, one made before
@@ -422,7 +443,9 @@ export class JuniorWorld {
       const t = job.products as { state: string; reason: string | null; adapter: string | null; steps: number | null; gpu_hours: number | null; child?: JuniorPackage | null } | null;
       if (job.state !== 'completed' || !t || !t.adapter) return { state: t?.state ?? job.state, reason: t?.reason ?? job.reason, steps: t?.steps ?? null, gpu_hours: t?.gpu_hours ?? null };
       const learned = t.child?.provenance.realizations;
-      const record = { adapter: t.adapter, dataset: datasetId, recipe, parent: executionHash(parent), job: operation, ...(learned ? { realizations: learned } : {}) };
+      /* With the captures they were made from (each example's, taken when it was cut): what they are made again from. */
+      const captures = learned ? datasetCaptures(path.join(this.dir, 'examples'), dataset) : null;
+      const record = { adapter: t.adapter, dataset: datasetId, recipe, parent: executionHash(parent), job: operation, ...(learned ? { realizations: learned } : {}), ...(captures ? { captures } : {}) };
       const v = this.store.apply(from, { files: { [ADAPTER]: JSON.stringify(record, null, 2) + '\n' } }, reason);
       if (typeof v === 'string') return { state: 'failed', reason: v };
       appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe, record, version: v.hash }, { sync: true });
@@ -522,10 +545,11 @@ export class JuniorWorld {
       const made = this.weightLab.construct(start, { constructor: e.construct.name, args: e.construct.args, inputs, hypothesis, authorship: 'strong' });
       /* What it learned from (SPEC-VALIDEZ-MEDIDA §5.2): the realizations of the diagnosis runs its receipts read. */
       if ('id' in made) {
-        const { realizationOfRun } = await import('../../junior/groups.ts');
-        const runs = Object.values(inputs).flatMap((src) => (Buffer.isBuffer(src) ? [] : (this.weightLab!.receiptOf(src.from)?.cases ?? []).flatMap((c) => (c.source === 'cut' && c.run ? [c.run] : []))));
-        const read = runs.map((r) => realizationOfRun(path.resolve(r)));
-        appendRecord(this.realizationsFile(), read.some((r) => r === null) ? { edit: made.id, unknown: true, runs } : { edit: made.id, realizations: [...new Set(read as string[])].sort() }, { sync: true });
+        /* Each diagnosis case by the capture of its run taken when the lab cut it: a case without one has an unknown origin. */
+        const cases = Object.values(inputs).flatMap((src) => (Buffer.isBuffer(src) ? [] : (this.weightLab!.receiptOf(src.from)?.cases ?? []).filter((c) => c.source === 'cut' && c.run)));
+        const captures = cases.map((c) => c.capture ?? null);
+        appendRecord(this.realizationsFile(), captures.some((c) => c === null) ? { edit: made.id, unknown: true, runs: cases.map((c) => c.run) }
+          : { edit: made.id, realizations: [...new Set(captures.map((c) => realizationOfCapture(c!)))].sort(), captures }, { sync: true });
       }
       return made;
     }
@@ -562,8 +586,7 @@ export class JuniorWorld {
       const job = await done;
       if (job.state !== 'completed') return { state: 'refused', reason: job.reason, edit: made.id };
       /* What selected its parent stays in its lineage: an edit of a search's elite is still a candidate a search selected. */
-      const inherited = this.searchesOf(from);
-      const record = { ...(job.products as { adapter: string; start: string; genome: string[]; totals: unknown }), ...(inherited.length ? { searches: inherited } : {}) };
+      const record = { ...(job.products as { adapter: string; start: string; genome: string[]; totals: unknown }), ...this.lineageFrom(from) };
       const v = this.store.apply(from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, reason);
       if (typeof v === 'string') return { state: 'failed', reason: v, edit: made.id };
       appendRecord(path.join(this.dir, 'edits.jsonl'), { from, asked, edit: made.id, declared: declared ?? null, record, version: v.hash }, { sync: true });
@@ -698,7 +721,7 @@ export class JuniorWorld {
       if (!c.genome.length) continue;
       const v = W.composeVersion({ store: this.blobs, parent: start, add: c.genome, authorized: this.manifest.weight_edits, reason: 'an elite of a search' });
       if ('problems' in v) continue;
-      const record = { adapter: v.adapter, start: v.set.start, genome: v.set.genome, totals: v.set.totals, search: asked, niche: c.niche, origin: c.origin };
+      const record = { adapter: v.adapter, start: v.set.start, genome: v.set.genome, totals: v.set.totals, search: asked, niche: c.niche, origin: c.origin, ...this.lineageFrom(from) };
       const made = this.store.apply(from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, { ...(reason as object), niche: c.niche });
       if (typeof made === 'string') continue;
       versions.push({ version: made.hash, niche: c.niche!, genome: c.genome.length, deficits: c.deficits, origin: c.origin, record });
@@ -802,7 +825,10 @@ export class JuniorWorld {
   applyDelivery(d: Delivery): Record<string, unknown> {
     const versions: { version: string; niche: string; deficits: unknown }[] = [];
     if (this.store.get(d.from)) for (const e of d.elites) {
-      const v = this.store.apply(d.from, { files: { [EDITS]: JSON.stringify(e.record, null, 2) + '\n' } }, { branch: d.id, niche: e.niche });
+      /* A search selected it - the branch's - whatever its record says: its lineage registered when it is made here, joined
+         to what selected the version it starts from, so its check promotes it on the holdout alone (SPEC-VALIDEZ-MEDIDA §4.3). */
+      const record = { ...(e.record as Record<string, unknown>), ...this.lineageFrom(d.from, ['branch:' + d.id]) };
+      const v = this.store.apply(d.from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, { branch: d.id, niche: e.niche });
       if (typeof v !== 'string') versions.push({ version: v.hash, niche: e.niche, deficits: e.deficits });
     }
     this.redelivered.add(d.id);

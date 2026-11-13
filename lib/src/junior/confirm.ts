@@ -6,7 +6,7 @@ import type { TrialLauncher } from '../meta/lab.ts';
 import type { LabConnection } from '../runtime/lab-runner.ts';
 import type { JuniorSessionClient } from './client.ts';
 import { competenceHash, competenceProblems, powerOf, type CompetenceManifest } from './competence.ts';
-import { realizationOf } from './groups.ts';
+import { isCurrentRealization, REALIZATION, realizationOf } from './groups.ts';
 import { evaluate, promoteEvaluations, type Evaluation } from './evaluate.ts';
 import { appendRecord } from './jsonl.ts';
 import { BlobStore, checkClosed, executionHash, normalizePackage, treesOf, type JuniorPackage } from './package.ts';
@@ -120,6 +120,11 @@ export class ConfirmationService {
     if (declared === undefined) return o.distilled || o.trained || o.edited
       ? 'the candidate learned (' + [o.distilled ? 'distilled' : '', o.trained ? 'trained' : '', o.edited ? 'edited' : ''].filter(Boolean).join(', ') + ') and declares no realizations of what it learned from: the world that made it writes them'
       : null;
+    /* Each declared under the identity this service compares with (realization@2): one of another identity, or a bare hash
+       of before identities were named, cannot be compared - its origin is unknown, and an unknown origin is never taken
+       for a clean one (an external review of 0bec9b3: the same reserved world refused by its new hash, admitted by its old). */
+    const foreign = declared.filter((r) => !isCurrentRealization(r));
+    if (foreign.length) return 'the candidate declares ' + foreign.length + ' realization(s) not under ' + REALIZATION + ': what it learned from cannot be compared with the reserved cases, so its origin is unknown; the world that made it writes them again from its record';
     /* A reserved case's world as its trial makes it: its own arguments and the junior's. */
     const reserved = new Set(this.manifest.cases.filter((c) => c.partition === 'confirmation' && c.kind === 'investigation')
       .map((c) => realizationOf(c.lab, [...(c.kind === 'investigation' ? c.args : []), ...this.manifest.limits.junior_args])));

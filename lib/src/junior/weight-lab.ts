@@ -1,3 +1,4 @@
+import type { RunCapture } from './groups.ts';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { stableStringify } from '../core/hash.ts';
@@ -92,7 +93,7 @@ export interface LabReceipt {
   readonly args: unknown;
   readonly execution: string;
   /** Each case by the hash of what the junior was given, with where it came from. */
-  readonly cases: readonly { readonly hash: string; readonly source: 'cut' | 'text'; readonly run?: string; readonly question?: number; readonly group?: string }[];
+  readonly cases: readonly { readonly hash: string; readonly source: 'cut' | 'text'; readonly run?: string; readonly question?: number; readonly group?: string; readonly capture?: RunCapture }[];
   readonly set: BlobId | null;
   readonly state: 'answered' | 'failed' | 'timeout' | 'over_limit';
   readonly reason: string | null;
@@ -107,7 +108,7 @@ export interface LabReceipt {
 
 /** What runs the query: the server, or its client over HTTP. */
 export interface LabService { lab(o: Parameters<import('./sessions.ts').SessionServer['lab']>[0]): Promise<LabServed> }
-export type Cutter = (run: string, question: number) => Promise<{ content: { system: string; user: { parts: readonly string[] } }; hash: string }>;
+export type Cutter = (run: string, question: number) => Promise<{ content: { system: string; user: { parts: readonly string[] } }; hash: string; capture?: RunCapture | null }>;
 
 const sha = (v: unknown): string => createHash('sha256').update(typeof v === 'string' ? v : stableStringify(v)).digest('hex');
 const RUNS_JUNIOR = new Set(['forward', 'activations', 'attention', 'try']);
@@ -169,7 +170,7 @@ export function queryProblems(q: LabQuery, l: LabLimits): string[] {
 }
 
 export class WeightLab {
-  private readonly cuts = new Map<string, { content: { system: string; user: { parts: readonly string[] } }; hash: string }>();
+  private readonly cuts = new Map<string, { content: { system: string; user: { parts: readonly string[] } }; hash: string; capture?: RunCapture | null }>();
   private readonly o: { readonly config: WeightLabConfig; readonly manifest: Pick<CompetenceManifest, 'cases'>; readonly service: LabService; readonly ledger: JobLedger; readonly store: BlobStore; readonly cutter: Cutter };
   constructor(o: WeightLab['o']) { this.o = o; }
 
@@ -188,7 +189,7 @@ export class WeightLab {
     let cut = this.cuts.get(key);
     if (!cut) { cut = await this.o.cutter(run, c.cut.question); this.cuts.set(key, cut); }
     if ((this.o.manifest.cases ?? []).some((k) => k.kind === 'probe' && k.cut.hash === cut!.hash)) return 'that cut is a probe that selects: never run by the lab';
-    return { content: cut.content, meta: { hash: sha(cut.content), source: 'cut', run: c.cut.run, question: c.cut.question, group } };
+    return { content: cut.content, meta: { hash: sha(cut.content), source: 'cut', run: c.cut.run, question: c.cut.question, group, ...(cut.capture ? { capture: cut.capture } : {}) } };
   }
 
   /** One query: refused before anything runs when it is not within the limits, its cases not of diagnosis, or its bags
