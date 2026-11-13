@@ -1,4 +1,4 @@
-import { appendEvent, readJournalFile, startEvents, writeAtomic } from './journal-files.ts';
+import { appendEvent, metaFileOf, readJournalFile, startEvents, writeAtomic } from './journal-files.ts';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -847,6 +847,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     events: [] as unknown[]
   };
   startEvents(outFile);
+  let lastHead = '';
   /* Once a divergence has ended the run where it was, the loop left behind writes nothing more. */
   let closed = false;
   let helpDelivered = 0;
@@ -858,6 +859,9 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     /* Each event a line of its record, then the whole journal written to a temporary and renamed: never read half written
        (SPEC-CONSOLIDACION §3.2). */
     appendEvent(outFile, event);
+    /* The journal without its events, whenever it changes: what joins the record of lines if the journal cannot be read. */
+    const head = JSON.stringify({ ...journal, events: undefined });
+    if (head !== lastHead) { writeAtomic(metaFileOf(outFile), head); lastHead = head; }
     writeAtomic(outFile, JSON.stringify(journal, null, 2));
     writeStatus();
   };
@@ -1354,7 +1358,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const artifactAccepted: { version: string; round: number }[] = [];
   const protocol = new Protocol(objective, {
     /* The Judge's failed calls and the rules it left unanswered: a check during which either grew is no verdict (VM5). */
-    instrumentFailures: () => judge.stats.errors + evaluator.stats.fallbacks,
+    instrumentFailures: () => judge.stats.errors - judge.stats.refused + evaluator.stats.fallbacks,
     places: () => [...places.values()],
     blindPlaces: (set: number, round: number) => (team
       ? team.board.blindBoards(team.member, 'c' + confirmations + '.s' + set, cfg.confirmPlaces)
@@ -2162,7 +2166,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     if (outcome.void) {
       /* No verdict: nothing of the check is kept, its round is given back, and the researcher is told (protocol.lastView). */
       voidInARow++;
-      log('check_void', { round: record.round, attempt, ...outcome.void, in_a_row: voidInARow, jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+      log('check_void', { round: record.round, attempt, ...outcome.void, in_a_row: voidInARow, jev: { calls: judge.stats.calls, errors: judge.stats.errors, refused: judge.stats.refused } });
       if (voidInARow >= VOID_IN_A_ROW) { instrumentDown = voidInARow + ' checks in a row void: the Judge did not answer'; say('  stopping: ' + instrumentDown); break; }
       attempt--;
       continue;
@@ -2175,7 +2179,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     const own = lab.operator?.check?.({ law: record.law, round: record.round, reused: outcome.reused, detail, cost: outcome.cost,
       cases: checkPoints.get(outcome.reused ?? record.round) ?? [] }, operatorContext) ?? {};
     if (own.test) record.test = own.test;
-    log('check', { ...outcome.journal, jev: { calls: judge.stats.calls, errors: judge.stats.errors }, ...(own.journal ?? {}) });
+    log('check', { ...outcome.journal, jev: { calls: judge.stats.calls, errors: judge.stats.errors, refused: judge.stats.refused }, ...(own.journal ?? {}) });
     /* The version it puts forward, judged by the artifact's own protocol; its verdict goes with the check, under `artifact`. */
     if (artifactProtocol && record.artifact) {
       let told: Record<string, unknown>;
@@ -2281,7 +2285,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
       ...(productVersion() && lab.lineage ? { product_lineage: productLineage(productVersion()!) } : {}) } } : {}),
     places: [...places.values()].map((p) => ({ id: p.id, role: p.role, seen: p.seen, ...lab.placeInfo(p.spec) })),
     notebook: session.notebook, episodes: episodeIndex(),
-    jev: { calls: judge.stats.calls, errors: judge.stats.errors },
+    jev: { calls: judge.stats.calls, errors: judge.stats.errors, refused: judge.stats.refused },
     ...(reports.length ? { instrument: { reports, ...(held ? { acceptance_held: { round: held.round, reports: held.reports } } : {}) } } : {}),
     ...(ownTests && (ownTests.summary().registered as number) > 0 ? { own_tests: { ...ownTests.summary(), ...(cfg.ownTests ? { required: cfg.ownTests } : {}),
       ...(finalTests ? { final_model: { passed_preregistered: finalTests.preregistered, passed_regression: finalTests.regression, failing: finalTests.failing } } : {}) } } : {}),

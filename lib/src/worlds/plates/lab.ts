@@ -123,6 +123,8 @@ export const platesLab: Lab<PlatesSpec, PlatesPoint, Segment<PlatesFrame>, Plate
     { name: 'fork-randomness', default: 'fresh', help: '"same": its chance as the world it was forked from; "fresh": a stream of its own' },
     { name: 'window-ms', default: '0', help: 'wall time a window waits for its researchers once one sealed (0: it waits for every one)' }
   ],
+  /* Its laws and layout come from its seed; its clock is part of the world. Its windows' limits and members are the session's. */
+  realization: (o) => ({ interval: Number(o.interval), horizon: Number(o.horizon) }),
   generate: (seed, o) => ({ seed, laws: platesLaws(seed), layout: seed, interval: Number(o.interval), horizon: Number(o.horizon), calls: Number(o['window-calls']), intents: Number(o['window-intents']),
     tickMs: Number(o['tick-ms'] ?? 0), members: Number(o.members ?? 0), shared: String(o.branches ?? '').split(',').map((x) => x.trim()).includes('shared'),
     fork: String(o.fork ?? ''), forkRandomness: o['fork-randomness'] === 'same' ? 'same' as const : 'fresh' as const,

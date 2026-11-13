@@ -46,7 +46,7 @@ export interface CorpusEntry {
 
 export interface CorpusIndex { readonly format: 'research-corpus@1'; readonly made: string; readonly entries: readonly CorpusEntry[]; readonly lineages: Readonly<Record<string, readonly string[]>> }
 
-const SKIP = /\.(finding(\.researcher)?|status|method|agent-[^.]+|cut|evolve|manifest|search\.manifest)\.json$/;
+const SKIP = /\.(finding(\.researcher)?|status|method|agent-[^.]+|cut|evolve|manifest|search\.manifest|meta)\.json$/;
 
 /** The journals of runs under a folder: files of JSON with an experiment and events, the files beside them left out. */
 export function runJournals(runsDir: string): string[] {

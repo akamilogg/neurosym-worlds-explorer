@@ -241,6 +241,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
   /** The classes of its own requests beyond the common ones (SPEC-VALIDEZ-MEDIDA §6.1): its acts' kinds where they differ
       (a junior's `edit` is an experiment, its `inspect_weights` an observation), and requests only it answers. */
   readonly requests?: Readonly<Record<string, import('./requests.ts').RequestClass>>;
+  /** Its world's canonical identity beyond its seed (SPEC-VALIDEZ-MEDIDA §5): what its generator reads of its options,
+      normalized as it reads them - never a budget of the researcher. Two cases with the same seed and the same identity are
+      one world. Undeclared: the seed alone, which may join worlds that differ but never parts one. */
+  readonly realization?: (options: Readonly<Record<string, string>>) => unknown;
 
   /* --- The actions (optional) ----------------------------------------------------------- */
   readonly act?: {
@@ -458,6 +462,10 @@ export interface LabRunEnd {
 export interface GameLab {
   readonly kind: 'game';
   readonly id: string;
+  /** Its world's canonical identity beyond its seed (SPEC-VALIDEZ-MEDIDA §5): what its generator reads of its options,
+      normalized as it reads them - never a budget of the researcher. Two cases with the same seed and the same identity are
+      one world. Undeclared: the seed alone, which may join worlds that differ but never parts one. */
+  readonly realization?: (options: Readonly<Record<string, string>>) => unknown;
   /** The metrics of its progress (SPEC-VISTA-ESCALADA §3). */
   readonly progress?: import('./progress.ts').LabProgress;
   readonly about: string;

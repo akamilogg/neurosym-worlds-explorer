@@ -110,6 +110,8 @@ export const particles3dLab: Lab<SceneSpec, P3Point, P3Episode, P3Case, P3Act> =
   external: { url: (o) => o.service },
 
   /* --- The world ------------------------------------------------------------------------ */
+  realization: (o) => ({ level: Math.min(6, Math.max(1, Number(o.level) || 1)),
+    condition: ['A', 'B', 'C'].includes(String(o.condition).toUpperCase()) ? String(o.condition).toUpperCase() : 'A' }),
   generate: (seed, o) => {
     const level = Math.min(6, Math.max(1, Number(o.level) || 1));
     const condition = (['A', 'B', 'C'].includes(String(o.condition).toUpperCase()) ? String(o.condition).toUpperCase() : 'A') as Condition;

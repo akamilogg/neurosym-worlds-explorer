@@ -431,6 +431,7 @@ top of each says how far it was built (some predate their implementation and lag
 | [SPEC-CALIBRACION-INSTRUMENTOS.md](SPEC-CALIBRACION-INSTRUMENTOS.md) | when reality may be a bug: calibrating instruments and reporting anomalies |
 | [SPEC-ORQUESTADOR.md](SPEC-ORQUESTADOR.md), [SPEC-INVESTIGACION-PARALELA.md](SPEC-INVESTIGACION-PARALELA.md) | agent operators, the senior, batches, the planner; research in parallel |
 | [SPEC-DELEGACION-INVESTIGACIONES.md](SPEC-DELEGACION-INVESTIGACIONES.md), [SPEC-DELEGACION-EVOLUTIVA.md](SPEC-DELEGACION-EVOLUTIVA.md) | delegating an investigation from another, and evolutionary search as a branch |
+| [SPEC-INVESTIGACION-EXTERNA.md](SPEC-INVESTIGACION-EXTERNA.md) | proposed: researchers and autonomous operators discovering sources, adapting methods and turning them into traceable experiments |
 | [SPEC-METAPOLITICA-INVESTIGACION.md](SPEC-METAPOLITICA-INVESTIGACION.md), [CATALOGO-METAPOLITICAS-INVESTIGACION.md](CATALOGO-METAPOLITICAS-INVESTIGACION.md) | learning a research meta-policy, and a catalogue of research methods |
 | [SPEC-METAPOLITICA-APRENDIZAJE.md](SPEC-METAPOLITICA-APRENDIZAJE.md), [SPEC-EDICION-PESOS.md](SPEC-EDICION-PESOS.md) | the learning meta-policy: a small model that learns to improve itself; editing its weights, and an evolutionary search over them |
 | [SPEC-AUDITORIA-METODO.md](SPEC-AUDITORIA-METODO.md), [SPEC-VISTA-ESCALADA.md](SPEC-VISTA-ESCALADA.md), [SPEC-CONSOLA-INVESTIGACION.md](SPEC-CONSOLA-INVESTIGACION.md) | the method audit; the climb view; the research observatory |

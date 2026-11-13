@@ -190,6 +190,11 @@ vivo y del junior (parte de CC3 y CC5) esperan a su primera ejecución real.
   la escritura es una mejora de rendimiento aparte.
 - **Pruebas.** `lib/test/journal-files.test.ts`: el registro de líneas y el diario tienen los mismos eventos, no queda
   ningún temporal, y una reanudación toma los eventos del registro de líneas cuando el diario se quedó corto.
+- **Revisión externa (12/11/2026).** `writeAtomic` ya no escribe en el sitio cuando el renombrado falla: deja el
+  temporal pendiente y el diario como estaba. `<run>.meta.json` guarda la cabecera (el diario sin eventos) cada vez que
+  cambia, y la reanudación toma el estado completo más nuevo (el diario o un temporal pendiente), o la cabecera unida al
+  registro de líneas. `appendEvent` corta el fragmento final antes de añadir, y una línea rota antes de la última es un
+  error con su número, nunca una línea saltada. Los recorridos de carpetas de runs excluyen `.meta.json`.
 - **Pendiente de CC1.** El esquema de eventos (§3.1, `journal@2`, `eventsOf` tipado) y que los lectores lean del registro
   de líneas.
 

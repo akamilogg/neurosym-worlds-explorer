@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { TrialLauncher } from '../meta/lab.ts';
 import type { LabConnection } from '../runtime/lab-runner.ts';
 import type { JuniorSessionClient } from './client.ts';
-import { competenceHash, competenceProblems, holdoutManifest, measure, promote, type CompetenceManifest, type Measure, type Observation, type Partition, type Promotion } from './competence.ts';
+import { competenceHash, competenceProblems, competenceWarnings, holdoutManifest, measure, promote, type CompetenceManifest, type Measure, type Observation, type Partition, type Promotion } from './competence.ts';
 import { executionHash, normalizePackage, type JuniorPackage } from './package.ts';
 import { captureCut, runProbes } from './probes.ts';
 import { juniorCandidate, juniorTrials } from './trials.ts';
@@ -29,8 +29,10 @@ export interface Evaluation {
 
 /** A manifest prepared to run: valid, and every probe's cut taken again with the hash it declares. Refused otherwise,
     before anything is reserved. */
-export async function prepareManifest(raw: unknown): Promise<{ manifest: CompetenceManifest; hash: string; problems: string[] }> {
+export async function prepareManifest(raw: unknown): Promise<{ manifest: CompetenceManifest; hash: string; problems: string[]; warnings: string[] }> {
   const problems = competenceProblems(raw);
+  /* What does not stop it from running but bounds what it can decide (SPEC-VALIDEZ-MEDIDA §4.2): told to whoever prepares it. */
+  const warnings = problems.length ? [] : competenceWarnings(raw as CompetenceManifest);
   const m = raw as CompetenceManifest;
   if (!problems.length) for (const c of m.cases) {
     if (c.kind !== 'probe') continue;
@@ -40,7 +42,7 @@ export async function prepareManifest(raw: unknown): Promise<{ manifest: Compete
       if (cut.lab !== c.lab) problems.push('case ' + c.id + ': its cut is of ' + cut.lab + ', not ' + c.lab);
     } catch (e) { problems.push('case ' + c.id + ': its cut cannot be taken: ' + (e as Error).message); }
   }
-  return { manifest: m, hash: problems.length ? '' : competenceHash(m), problems };
+  return { manifest: m, hash: problems.length ? '' : competenceHash(m), problems, warnings };
 }
 
 const evaluationFile = (dir: string, manifestHash: string, execution: string, partition: Partition) => path.join(dir, 'evaluations', manifestHash.slice(0, 16) + '-' + execution.slice(0, 16) + '-' + partition + '.json');
@@ -75,7 +77,32 @@ export function promoteOnHoldout(m: CompetenceManifest, manifestHash: string, re
   const held = holdoutManifest(m);
   if (!held) return null;
   const checked = promoteEvaluations(m, manifestHash, reference, candidate, held);
-  return checked;
+  if (checked.verdict === 'inconclusive' && !checked.components.length) return checked;
+  /* It answers for every component, not only the holdout's: one without cases there is judged on all of development, where
+     selecting on the probes favours none of it - a candidate that sinks it is not promoted, whatever it gains on the holdout
+     (SPEC-VALIDEZ-MEDIDA §4.3). The holdout's components are judged on the holdout alone, where nothing was selected. */
+  const inHoldout = new Set(held.components.map((c) => c.id));
+  const whole = promoteEvaluations(m, manifestHash, reference, candidate);
+  const outside = whole.components.filter((c) => !inHoldout.has(c.id));
+  if (whole.verdict === 'inconclusive' && !whole.components.length) return whole;
+  const sunk = outside.filter((c) => c.regresses);
+  const components = [...checked.components, ...outside.map((c) => ({ ...c, improves: false }))];
+  if (sunk.length) return { verdict: 'not_promoted', why: 'it regresses outside the holdout, on development: ' + sunk.map((c) => c.id).join(', '), components };
+  return { ...checked, components };
+}
+
+/** The one rule that promotes a candidate, whatever path presents it - the researcher's check, the operator's rule in C
+    and E (SPEC-VALIDEZ-MEDIDA §4.3): one no search selected, on all of development; one a search selected, on the holdout
+    alone (promoteOnHoldout); and without a holdout, never - it may be adopted and investigated further, but it is the best
+    of N in selection, not a promotion. */
+export function promoteCandidate(m: CompetenceManifest, manifestHash: string, reference: Evaluation, candidate: Evaluation, o: { readonly fromSearch: boolean }): Promotion {
+  if (!o.fromSearch) return promoteEvaluations(m, manifestHash, reference, candidate);
+  const held = promoteOnHoldout(m, manifestHash, reference, candidate);
+  if (held) return held;
+  const whole = promoteEvaluations(m, manifestHash, reference, candidate);
+  return { verdict: whole.verdict === 'promoted' ? 'inconclusive' : whole.verdict,
+    why: 'a candidate a search selected, with no holdout to promote it on: the best of N in selection, never a promotion' + (whole.verdict === 'promoted' ? '' : ' (' + whole.why + ')'),
+    components: whole.components.map((c) => ({ ...c, improves: false })) };
 }
 
 /** paired-cases between two evaluations of the same manifest and partition; anything else is refused. `on`: a part of the

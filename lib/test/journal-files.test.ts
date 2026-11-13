@@ -46,3 +46,33 @@ test('CC1: resuming, the record of lines rules where the journal holds fewer eve
   const again = await runLaboratory(cellsLab, { args: ['--resume', r.journal, '--attempts', '2', '--out', path.join(dir, 'more.json')], root: dir, llm: { url: 'http://x.test/c', model: 's' }, fetch: standIn, print: () => {} });
   assert.notEqual(again.stoppedBy, 'diverged');
 });
+
+test('CC1 review: a refused rename never writes in place - the last whole journal stays, the pending one is kept, and a resumption recovers the newest complete state', async () => {
+  const { writeAtomic, metaFileOf } = await import('../src/runtime/journal-files.ts');
+  const dir = tmp();
+  const file = path.join(dir, 'run.json');
+  const head = { experiment: 'cells@1', argv: ['--seed', '1'], config: {} };
+  writeAtomic(file, JSON.stringify({ ...head, events: [{ type: 'start' }] }));
+  const refuse = () => { const e = new Error('busy') as NodeJS.ErrnoException; e.code = 'EPERM'; throw e; };
+  writeAtomic(file, JSON.stringify({ ...head, events: [{ type: 'start' }, { type: 'check' }] }), { rename: refuse, wait: 0 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).events, [{ type: 'start' }], 'the journal as it was, whole');
+  assert.equal(readJournalFile(file).events.length, 2, 'the newer one kept, pending, and recovered');
+  /* A journal cut mid-write by an older writer: its header from the checkpoint of metadata, its events from the lines. */
+  fs.writeFileSync(metaFileOf(file), JSON.stringify(head));
+  fs.writeFileSync(eventsFileOf(file), JSON.stringify({ type: 'start' }) + '\n' + JSON.stringify({ type: 'check' }) + '\n');
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.tmp'))) fs.rmSync(path.join(dir, f));
+  fs.writeFileSync(file, '{"experiment": "cells@1", "ev');
+  const j = readJournalFile(file);
+  assert.deepEqual([j.experiment, j.events.length], ['cells@1', 2]);
+});
+
+test('CC1 review: an event appended after a cut line is kept; a line broken in the middle is told, never skipped', async () => {
+  const { appendEvent } = await import('../src/runtime/journal-files.ts');
+  const dir = tmp();
+  const file = path.join(dir, 'run.json');
+  fs.writeFileSync(eventsFileOf(file), JSON.stringify({ type: 'start' }) + '\n{"type": "che');
+  appendEvent(file, { type: 'end' });
+  assert.deepEqual(eventsOf(file), [{ type: 'start' }, { type: 'end' }]);
+  fs.writeFileSync(eventsFileOf(file), JSON.stringify({ type: 'start' }) + '\n{"type": broken}\n' + JSON.stringify({ type: 'end' }) + '\n');
+  assert.throws(() => eventsOf(file), /line 2/);
+});

@@ -19,6 +19,7 @@ export const cellsLab: Lab<CellsSpec, CellsPoint, string[], CellsCase, CellsAct>
     { name: 'acts', default: '4', help: 'episodes System 2 may start itself per round' }
   ],
   generate: (seed, o) => generateCells(seed, Number(o.level)),
+  realization: (o) => ({ level: Number(o.level) }),
   placeOf,
   teams: true,
   runName: (seed, o) => 'cells-s' + seed + 'L' + o.level,

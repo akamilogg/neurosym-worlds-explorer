@@ -137,7 +137,7 @@ const readJsonl = (f: string): Record<string, any>[] => (fs.existsSync(f) ? fs.r
     <work>/packages/<execution>.json: what the operator exports for its external confirmation. */
 async function productByRule(world: World, work: string, candidates: readonly JuniorPackage[], deps: StepDeps, fromSearch = false): Promise<{ product: string; evaluation: Evaluation | null; package: string; checked: { candidate: string; verdict: string }[]; rule: Rule }> {
   const ev = deps.evaluate ?? ((w: World, p: JuniorPackage) => w.evaluatePackage(p));
-  const { promoteEvaluations, promoteOnHoldout } = await import('./evaluate.ts');
+  const { promoteCandidate, promoteEvaluations } = await import('./evaluate.ts');
   /* Candidates that came out of a search were selected on the probes: promoted only on the holdout the search never saw;
      without one the rule's product is the best of N in selection, and is called so - never promoted (SPEC-VALIDEZ-MEDIDA §4.3). */
   const rule: Rule = !fromSearch ? 'development' : world.manifest.holdout?.length ? 'holdout' : 'best of N in selection';
@@ -150,9 +150,12 @@ async function productByRule(world: World, work: string, candidates: readonly Ju
     const id = executionHash(p);
     const e = await ev(world, p);
     if (typeof e === 'string') { checked.push({ candidate: id, verdict: 'not evaluated: ' + e }); if (/bags cannot hold/.test(e)) break; continue; }
-    const v = rule === 'holdout' ? promoteOnHoldout(world.manifest, world.manifestHash, ref, e)! : promoteEvaluations(world.manifest, world.manifestHash, ref, e);
-    checked.push({ candidate: id, verdict: rule === 'best of N in selection' && v.verdict === 'promoted' ? 'best of N in selection' : v.verdict });
-    if (v.verdict === 'promoted') { product = id; evaluation = e; pkgFile = keep(p); }
+    /* The one rule the researcher's check applies too (promoteCandidate). Without a holdout a search's candidate is never
+       promoted; the rule's product is then the best of N in selection, kept as such. */
+    const v = promoteCandidate(world.manifest, world.manifestHash, ref, e, { fromSearch });
+    const best = rule === 'best of N in selection' && promoteEvaluations(world.manifest, world.manifestHash, ref, e).verdict === 'promoted';
+    checked.push({ candidate: id, verdict: best ? 'best of N in selection' : v.verdict });
+    if (v.verdict === 'promoted' || best) { product = id; evaluation = e; pkgFile = keep(p); }
   }
   return { product, evaluation, package: pkgFile, checked, rule };
 }

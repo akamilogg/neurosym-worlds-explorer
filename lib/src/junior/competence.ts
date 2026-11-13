@@ -4,6 +4,7 @@ import { LABS } from '../worlds/labs.ts';
 import { boundsProblems, type WeightBounds } from './weights.ts';
 import { weightLabProblems, type WeightLabConfig } from './weight-lab.ts';
 import { searchConfigProblems } from './weight-search.ts';
+import { realizationOf } from './groups.ts';
 
 /* ============================================================================
  * The measure of a junior (SPEC-METAPOLITICA-APRENDIZAJE §6.1-§6.5): its manifest, the deficit of each observation, the
@@ -237,12 +238,30 @@ export function competenceProblems(raw: unknown): string[] {
     if (counts.size > 1) e.push('component ' + id + ': every world gives it as many probes (' + [...q].map(([lab, n]) => lab + ' ' + n).join(', ') + ')');
   }
   if (m.holdout !== undefined) e.push(...holdoutProblems(m));
+  /* One world in one realization is in one partition: a training case run in the world of a case that selects or confirms,
+     under another group, would teach the junior the very case it is measured on (SPEC-VALIDEZ-MEDIDA §5). Compared by the
+     world the arguments make, the junior's after the case's, as its trial runs it. */
+  if (!e.length) {
+    const seen = new Map<string, InvestigationCase>();
+    for (const c of m.cases) {
+      if (c.kind !== 'investigation') continue;
+      const key = realizationOf(c.lab, [...c.args, ...m.limits.junior_args]);
+      const other = seen.get(key);
+      if (other && other.partition !== c.partition) e.push('cases ' + other.id + ' and ' + c.id + ': the same world in ' + other.partition + ' and ' + c.partition);
+      if (!other) seen.set(key, c);
+    }
+  }
   /* Under paired-cases@2 a manifest that can promote nothing on development is refused (SPEC-VALIDEZ-MEDIDA §4.2): its
      evaluations would be spent on a verdict fixed before they ran. Under @1 the same lack is only told (competenceWarnings). */
   if (!e.length && m.promotion.procedure === 'paired-cases@2') {
     const power = powerOf(m, 'development');
     if (power.length && !power.some((p) => p.can)) e.push('no component can be promoted with its cases (the least p of the sign-flip test is 2^-n, against alpha / ' + power.length + '): '
       + power.map((p) => p.id + ': ' + p.n + ' cases, it needs ' + p.needs).join('; '));
+    /* A search's candidates are promoted on the holdout alone: one that can promote nothing would leave every one of them
+       unpromotable by construction. */
+    const held = holdoutManifest(m);
+    const hp = held ? powerOf(held, 'development') : [];
+    if (held && hp.length && !hp.some((p) => p.can)) e.push('"holdout": no component can be promoted with the holdout\'s cases: ' + hp.map((p) => p.id + ': ' + p.n + ' cases, it needs ' + p.needs).join('; '));
   }
   return e;
 }
@@ -299,6 +318,9 @@ export function competenceWarnings(m: CompetenceManifest): string[] {
     for (const p of powerOf(m, partition)) if (!p.can)
       out.push('component ' + p.id + ' (' + partition + '): with ' + p.n + ' cases it can never be promoted (least p ' + p.min_p + ' > ' + Math.round(p.threshold * 1e6) / 1e6 + '): it needs ' + p.needs + ', ' + (p.needs - p.n) + ' more');
   }
+  const held = holdoutManifest(m);
+  if (held) for (const p of powerOf(held, 'development')) if (!p.can)
+    out.push('component ' + p.id + ' (holdout): with ' + p.n + ' cases a search\'s candidate can never be promoted on it: it needs ' + p.needs + ', ' + (p.needs - p.n) + ' more');
   return out;
 }
 
@@ -309,6 +331,17 @@ export function selectionManifest(m: CompetenceManifest): CompetenceManifest {
   const comps = new Set(cases.map((c) => (c as ProbeCase).component));
   const { holdout: _held, ...rest } = m;
   return { ...rest, id: m.id + '-probes', cases, components: m.components.filter((c) => c.rung <= 4 && comps.has(c.id)) };
+}
+
+/** The manifest as a researcher may see it measured: every case but the holdout's, the components they score. What it is
+    shown of an evaluation never includes the reserved answers it could select on (SPEC-VALIDEZ-MEDIDA §4.3). */
+export function withoutHoldout(m: CompetenceManifest): CompetenceManifest {
+  if (!m.holdout?.length) return m;
+  const held = new Set(m.holdout);
+  const cases = m.cases.filter((c) => !held.has(c.id));
+  const comps = new Set(cases.flatMap((c) => (c.kind === 'probe' ? [c.component] : c.components)));
+  const { holdout: _held, ...rest } = m;
+  return { ...rest, cases, components: m.components.filter((c) => comps.has(c.id)) };
 }
 
 /** The manifest a candidate of a search is promoted on: the holdout's cases alone and the components they score; null

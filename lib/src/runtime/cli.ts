@@ -493,6 +493,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           const { prepareManifest, promoteEvaluations } = await import('../junior/evaluate.ts');
           const prepared = await prepareManifest(JSON.parse(fs.readFileSync(file(f), 'utf8')));
           if (prepared.problems.length) { out('the manifest is refused, nothing runs:'); for (const p of prepared.problems) out('  ' + p); return 2; }
+          for (const w of prepared.warnings) out('warning: ' + w);
           if (sub === 'manifest') { out('manifest ' + prepared.hash + ': valid, every cut taken again as declared'); return 0; }
           const [refFile, candFile] = [args.shift(), args.shift()];
           if (!refFile || !candFile) { out(usage); return 2; }
@@ -510,6 +511,7 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
           const { prepareManifest, evaluate } = await import('../junior/evaluate.ts');
           const prepared = await prepareManifest(JSON.parse(fs.readFileSync(file(mf), 'utf8')));
           if (prepared.problems.length) { out('the manifest is refused, nothing runs:'); for (const p of prepared.problems) out('  ' + p); return 2; }
+          for (const w of prepared.warnings) out('warning: ' + w);
           const pkg = J.normalizePackage(JSON.parse(fs.readFileSync(file(pf), 'utf8')));
           if (!J.checkClosed(pkg, store).closed) { out('the package is not closed in the store: nothing runs'); return 1; }
           const { inProcessLauncher } = await import('../meta/lab.ts');

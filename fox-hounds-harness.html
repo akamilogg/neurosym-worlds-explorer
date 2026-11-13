@@ -671,11 +671,13 @@ var Neurosym = (() => {
     foxhounds: () => foxhounds_exports,
     hasEvaluableChange: () => hasEvaluableChange,
     hashString: () => hashString,
+    hashString64: () => hashString64,
     jevWireQuestions: () => jevWireQuestions,
     jevWireState: () => jevWireState,
     jsFunctionRunner: () => jsFunctionRunner,
     judgeConsensus: () => judgeConsensus,
     judgeMeasured: () => judgeMeasured,
+    judgeRefused: () => judgeRefused,
     judgmentHash: () => judgmentHash,
     labelPositions: () => labelPositions,
     makeFormula: () => makeFormula,
@@ -761,6 +763,18 @@ var Neurosym = (() => {
       h = Math.imul(h, 16777619) >>> 0;
     }
     return h.toString(36);
+  }
+  function hashString64(input) {
+    const text = String(input);
+    let h1 = 3735928559, h2 = 1103547991;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 2654435761);
+      h2 = Math.imul(h2 ^ c, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507) ^ Math.imul(h2 ^ h2 >>> 13, 3266489909);
+    h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507) ^ Math.imul(h1 ^ h1 >>> 13, 3266489909);
+    return (h1 >>> 0).toString(16).padStart(8, "0") + (h2 >>> 0).toString(16).padStart(8, "0");
   }
   function stableStringify(value) {
     if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -1198,7 +1212,7 @@ var Neurosym = (() => {
           }
           const text = value.length > TEXT_LIMIT ? value.slice(0, TEXT_LIMIT) + "…" : value;
           texts[id] = text;
-          parts.push(id + "=#" + hashString(text) + "#" + compiled.hash);
+          parts.push(id + "=#" + hashString64(text) + "#" + compiled.hash);
           this.stats.computations++;
           continue;
         }
@@ -1481,6 +1495,10 @@ var Neurosym = (() => {
   var JEV_NEUTRAL_CONTRACT = "Judge only the declared measurements: they are all you are shown of this point.";
   var JEV_NEUTRAL_TEXTS_CONTRACT = "Judge only the declared measurements and the observed texts: they are all you are shown of this point.";
   var JEV_OBSERVED_TEXTS_CONTRACT = "Judge only the declared measurements and the observed texts: they are everything System 2 chose to show of the position, O(s).";
+  function judgeRefused(error) {
+    const e = error;
+    return e?.kind === "http" && (e.details?.status === 400 || e.details?.status === 422);
+  }
   function pickNumber(value) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
@@ -1599,7 +1617,7 @@ var Neurosym = (() => {
   var JevJudge = class {
     constructor(options = {}) {
       __publicField(this, "id");
-      __publicField(this, "stats", { calls: 0, errors: 0, peakActive: 0, latenciesMs: [] });
+      __publicField(this, "stats", { calls: 0, errors: 0, refused: 0, peakActive: 0, latenciesMs: [] });
       __publicField(this, "options");
       __publicField(this, "active", 0);
       __publicField(this, "waiters", []);
@@ -1639,6 +1657,7 @@ var Neurosym = (() => {
         return parsed.answers;
       } catch (error) {
         this.stats.errors++;
+        if (judgeRefused(error)) this.stats.refused++;
         throw error;
       } finally {
         release();

@@ -430,6 +430,34 @@ VM6 cuando toque.
   intérprete de actos del junior; una clave que se acepte de otra forma se le escaparía. Los actos de los demás mundos
   (`act` con sus campos) son experimentos sin distinguir tipos.
 
+**Revisión de VM1 a VM6 (12/11/2026).** Una revisión de lo implementado contra los hallazgos encontró, con sondas sobre el
+código, siete huecos; arreglados el mismo día, cada uno con su prueba que fallaba antes:
+
+| Hueco | Qué pasaba | Arreglo | Prueba |
+|---|---|---|---|
+| 1 (VM5) | Un fallo del juez causado por la regla del modelo se tomaba por el instrumento caído: el check nulo, el run parado como fallo del proveedor, el investigador sin saber qué falló | El juez cuenta aparte las preguntas que rechaza (`refused`: HTTP 400 y 422, `judgeRefused` en `core/jev.ts`); son defecto del modelo y cuentan contra él, como antes de VM5. El instrumento es la red, el tiempo, 5xx, 429, cuerpos ilegibles y respuestas fuera de contrato. `check.jev` y `end.jev` llevan `refused`; el metalaboratorio y las sondas lo restan | `check-void.test.ts` («VM5 review») |
+| 2 (VM1, VM4) | La separación comparaba etiquetas: el mismo mundo escrito de otra forma, o un caso `training` de la realización de uno de confirmación con otro grupo, pasaban | `manifestProblems` y `competenceProblems` comparan por `realizationOf` (con los argumentos del junior detrás de los del caso, como corre el ensayo); `realizationOf` lee como el runner, la primera aparición de un argumento y los valores por defecto del laboratorio | `junior-groups.test.ts` («VM4 review») |
+| 3 (VM2) | Promovido sobre el `holdout`, un candidato que hundía un componente sin casos en él salía promovido | `promoteOnHoldout` juzga las mejoras en el `holdout` y las regresiones de los componentes de fuera en todo desarrollo, donde seleccionar con las sondas no los favorece | `junior-competence.test.ts` («VM2 review: promoted on the holdout») |
+| 4 (VM2) | `competenceWarnings` no la llamaba nadie; un `holdout` sin potencia pasaba | `prepareManifest` devuelve `warnings` y `lab junior manifest`, `promote` y `evaluate` los imprimen; con `@2` un `holdout` que no puede promover nada se rechaza, con `@1` se avisa | `junior-competence.test.ts` («a holdout that can promote nothing») |
+| 6 (VM4) | Una edición construida que el mundo no registró (la de una rama, una anterior) declaraba procedencia vacía, limpia | Su procedencia es desconocida: el paquete no declara realizaciones y la confirmación lo rechaza. Las construidas sin laboratorio se registran con `[]` | `junior-weight-edit-world.test.ts` |
+| 5 (VM1) | Una respuesta leída entera sin contenido (el modelo no dijo nada) contaba como fallo del proveedor y el ensayo se relanzaba | Se atribuye como un timeout: del candidato si el servicio respondió en el run, indeterminada si no; un cuerpo ilegible sigue siendo del proveedor | `meta-lab.test.ts` («an answer with nothing in it») |
+| 7 (VM1) | `policyHash` y el hash de cada texto que lee el juez eran de 32 bits | `policyHash` por SHA-256 (24 hexadecimales), los registros anteriores leídos con `legacyPolicyHash` y `samePolicy`; los textos del vector de observación, que es la clave de la caché del juez, con `hashString64` (`core/hash.ts`, JS puro) | `meta-lab.test.ts` («a policy is named by SHA-256») |
+
+**Segunda revisión externa (12/11/2026).** Cuatro problemas reproducidos por el revisor; arreglados el mismo día, cada uno
+con su prueba que fallaba antes:
+
+| Problema | Arreglo | Prueba |
+|---|---|---|
+| El mismo mundo podía entrar en entrenamiento y en confirmación: `realizationOf` contaba todas las opciones del laboratorio, presupuestos del investigador (`acts`) incluidos | Cada laboratorio declara la identidad canónica de su mundo (`Lab.realization`): lo que lee su `generate`, normalizado como lo lee. Sin declaración, sólo la semilla, que puede juntar mundos distintos pero nunca separar uno. `realization@2` | `junior-groups.test.ts` («VM4 review 2») |
+| El check del investigador promovía con todo desarrollo lo que el `holdout` rechazaba | Una sola regla, `promoteCandidate`, para el check del investigador y para C y E: lo que una búsqueda seleccionó (por su linaje, que una edición posterior conserva en `searches`) se promueve sólo sobre el `holdout`, y nunca sin él. Lo que el investigador ve de una evaluación deja fuera los casos reservados (`withoutHoldout`) | `junior-competence.test.ts` («VM2 review 2») |
+| La escritura «atómica» sobrescribía el diario si fallaba el renombrado | Nunca escribe en el sitio: el diario se queda el último completo y el temporal queda pendiente; `<run>.meta.json` guarda la cabecera; la reanudación toma el estado completo más nuevo y une la cabecera con el registro de líneas | `journal-files.test.ts` («CC1 review») |
+| Un evento añadido tras una línea cortada se perdía | `appendEvent` corta el fragmento antes de añadir (`appendRecord` de los registros del junior); una línea rota antes de la última se señala con su número | `journal-files.test.ts` («CC1 review») |
+
+Siguen sin cubrir: la condición D sin `holdout` (sus candidatos se adoptan, nunca se promueven; con uno, la regla es la
+de E), `judgmentHash` y
+`formulaHash` de 32 bits (cambian una vez por fórmula y están escritos en registros), y las sondas, que no se comparan por
+realización con los casos de confirmación.
+
 ## 12. Aceptación
 
 1. Un candidato con un ensayo resuelto y nueve `infra` no tiene calidad; con diez terminados y cinco resueltos, 0,5.

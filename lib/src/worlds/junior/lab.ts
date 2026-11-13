@@ -9,7 +9,7 @@ import type { World } from '../../core/types.ts';
 import { HOLDING, holdingShare, type LabProgress } from '../../learn/progress.ts';
 import { ArtifactStore } from '../../artifacts/store.ts';
 import { JuniorSessionClient } from '../../junior/client.ts';
-import { competenceHash, competenceProblems, selectionManifest, type CompetenceManifest, type Component, type Observation } from '../../junior/competence.ts';
+import { competenceHash, competenceProblems, measure, selectionManifest, withoutHoldout, type CompetenceManifest, type Component, type Observation } from '../../junior/competence.ts';
 import type { Evaluation } from '../../junior/evaluate.ts';
 import type { Dataset, Example } from '../../junior/distill.ts';
 import type { Validity } from '../../junior/sessions.ts';
@@ -150,6 +150,18 @@ export class JuniorWorld {
 
   private realizationsFile(): string { return path.join(this.dir, 'realizations.jsonl'); }
 
+  /** The searches that selected a version, by its lineage (SPEC-VALIDEZ-MEDIDA §4.3): an elite's record names its search; a
+      branch's delivery and a later edit of one keep it. Empty: no search chose it. */
+  searchesOf(version: string): string[] {
+    const v = this.store.get(version);
+    const text = v?.files.get(EDITS);
+    if (!text) return [];
+    try {
+      const e = JSON.parse(text) as { search?: unknown; searches?: unknown };
+      return [...new Set([...(typeof e.search === 'string' ? [e.search] : []), ...(Array.isArray(e.searches) ? e.searches.map(String) : [])])];
+    } catch { return []; }
+  }
+
   /** The realizations a set of edits learned from: each edit's as recorded when it was constructed from the lab's receipts,
       an edit derived by an operator its parents', a written one none. Undefined when one of them cannot be told. */
   private genomeRealizations(genome: readonly string[]): readonly string[] | undefined {
@@ -165,9 +177,12 @@ export class JuniorWorld {
       const r = recorded.get(id);
       if (r?.unknown) return false;
       for (const x of r?.realizations ?? []) out.add(x);
-      let parents: readonly string[] = [];
-      try { const e = JSON.parse(this.blobs.get(id).toString('utf8')) as { origin?: { parents?: readonly string[] } }; parents = e.origin?.parents ?? []; } catch { return r !== undefined; }
-      return parents.every(walk);
+      let origin: { kind?: string; parents?: readonly string[] } = {};
+      try { origin = (JSON.parse(this.blobs.get(id).toString('utf8')) as { origin?: typeof origin }).origin ?? {}; } catch { return r !== undefined; }
+      /* A constructed edit reads what it was fed: where this world did not record it (an edit a branch made, one made before
+         the record was kept) its origin is unknown - never taken for a clean one (VM4 review). */
+      if (origin.kind === 'constructor' && !r) return false;
+      return (origin.parents ?? []).every(walk);
     };
     return genome.every(walk) ? [...out].sort() : undefined;
   }
@@ -499,7 +514,10 @@ export class JuniorWorld {
       if (!this.weightLab) {
         const direct: Record<string, Buffer> = {};
         for (const [name, src] of Object.entries(inputs)) { if (!Buffer.isBuffer(src)) return { problems: ['this run has no weight laboratory to take ' + name + ' from'] }; direct[name] = src; }
-        return W.construct(this.blobs, start, { constructor: e.construct.name, args: e.construct.args, inputs: direct, hypothesis, authorship: 'strong' });
+        const built = W.construct(this.blobs, start, { constructor: e.construct.name, args: e.construct.args, inputs: direct, hypothesis, authorship: 'strong' });
+        /* Fed only what the strong model wrote: it learned from no run, and says so. */
+        if ('id' in built) appendRecord(this.realizationsFile(), { edit: built.id, realizations: [] }, { sync: true });
+        return built;
       }
       const made = this.weightLab.construct(start, { constructor: e.construct.name, args: e.construct.args, inputs, hypothesis, authorship: 'strong' });
       /* What it learned from (SPEC-VALIDEZ-MEDIDA §5.2): the realizations of the diagnosis runs its receipts read. */
@@ -543,7 +561,9 @@ export class JuniorWorld {
         } });
       const job = await done;
       if (job.state !== 'completed') return { state: 'refused', reason: job.reason, edit: made.id };
-      const record = job.products as { adapter: string; start: string; genome: string[]; totals: unknown };
+      /* What selected its parent stays in its lineage: an edit of a search's elite is still a candidate a search selected. */
+      const inherited = this.searchesOf(from);
+      const record = { ...(job.products as { adapter: string; start: string; genome: string[]; totals: unknown }), ...(inherited.length ? { searches: inherited } : {}) };
       const v = this.store.apply(from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, reason);
       if (typeof v === 'string') return { state: 'failed', reason: v, edit: made.id };
       appendRecord(path.join(this.dir, 'edits.jsonl'), { from, asked, edit: made.id, declared: declared ?? null, record, version: v.hash }, { sync: true });
@@ -922,6 +942,12 @@ function versionEpisode(w: JuniorWorld, version: string, reason?: unknown, paren
 function evaluationEpisode(w: JuniorWorld, version: string, e: Evaluation): JuniorEpisode {
   const comps = new Map<string, Component>(w.manifest.components.map((c) => [c.id, c]));
   const changed = changedOf(w, version);
+  /* The holdout's answers are never shown: what the researcher selects on stays apart from what promotes it (§4.3). */
+  const held = new Set(w.manifest.holdout ?? []);
+  const shown = withoutHoldout(w.manifest);
+  const observations = e.observations.filter((o) => !held.has(o.case));
+  const measured = held.size ? measure(shown, e.partition, e.temperature, observations) : e.measure;
+  e = { ...e, observations, measure: measured };
   const points = e.observations.map((o) => {
     const c = w.manifest.cases.find((x) => x.id === o.case)!;
     return { version, changed, case: o.case, component: o.component, rung: comps.get(o.component)!.rung, lab: c.lab, kind: c.kind, rep: o.rep };
@@ -1214,8 +1240,10 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       const ref = await spec.world.evaluate(spec.world.reference, spec.judge);
       const cand = await spec.world.evaluate(version, spec.judge);
       if (typeof ref === 'string' || typeof cand === 'string') return { holds: false, view: { verdict: 'inconclusive', why: 'not evaluated' }, journal: { error: typeof ref === 'string' ? ref : cand } };
-      const { promoteEvaluations } = await import('../../junior/evaluate.ts');
-      const p = promoteEvaluations(spec.world.manifest, spec.world.manifestHash, ref, cand);
+      /* One rule whatever path presents a candidate (SPEC-VALIDEZ-MEDIDA §4.3): one a search selected - by its lineage - is
+         promoted on the holdout alone, and never without one. */
+      const { promoteCandidate } = await import('../../junior/evaluate.ts');
+      const p = promoteCandidate(spec.world.manifest, spec.world.manifestHash, ref, cand, { fromSearch: spec.world.searchesOf(version).length > 0 });
       spec.world.notePromotion(version, p.verdict === 'promoted');
       const stall = spec.world.stall();
       if (stall) ctx?.publish?.({ kind: 'notice', body: stall });

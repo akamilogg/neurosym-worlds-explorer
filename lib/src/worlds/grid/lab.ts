@@ -596,7 +596,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   const protocol = new Protocol(objective, {
     /* The Judge's failed calls: a check during which it failed is no verdict (SPEC-VALIDEZ-MEDIDA §7). A rule it left without
        an answer composes as 0.5 here - the game's decision, kept for the search that plays - and is not a failure. */
-    instrumentFailures: () => judge.stats.errors,
+    instrumentFailures: () => judge.stats.errors - judge.stats.refused,
     places: () => [...places.values()],
     blindPlaces: (set) => team
       ? team.board.blindBoards(team.member, 'c' + confirmations + '.s' + set, cfg.confirmBoards).map((index) => makePlace('blind' + (++confirmCounter), index, 'confirmation'))
@@ -1284,7 +1284,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
     if (outcome.void) {
       /* No verdict: nothing of it kept, the attempt given back, the same model measured again; three in a row and it stops. */
       voidInARow++;
-      log('check_void', { round, attempt, ...outcome.void, in_a_row: voidInARow, jev: { calls: judge.stats.calls, errors: judge.stats.errors } });
+      log('check_void', { round, attempt, ...outcome.void, in_a_row: voidInARow, jev: { calls: judge.stats.calls, errors: judge.stats.errors, refused: judge.stats.refused } });
       if (voidInARow >= 3) { stoppedBy = 'judge_unavailable'; say('  stopping: ' + voidInARow + ' checks in a row void: the Judge did not answer'); break; }
       attempt--;
       continue;
@@ -1300,7 +1300,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       if (!best || wins / Math.max(1, total) > best.wins / Math.max(1, best.total)) best = { formula: candidate, wins, total };
     }
     log('check', { ...outcome.journal, level: cfg.levels[level],
-      jev: { calls: judge.stats.calls, errors: judge.stats.errors, calls_per_game: Math.round((outcome.cost.jev_calls ?? 0) / Math.max(1, reused ? 1 : total) * 10) / 10,
+      jev: { calls: judge.stats.calls, errors: judge.stats.errors, refused: judge.stats.refused, calls_per_game: Math.round((outcome.cost.jev_calls ?? 0) / Math.max(1, reused ? 1 : total) * 10) / 10,
         /* Evaluations where the model's output read none of its rules: the Judge was not asked (its rules are decorative). */
         ...(Object.keys(candidate.rules).length && candidate.output ? { not_asked_output_ignores_rules: outcome.cost.jev_not_asked ?? 0 } : {}) },
       abstraction: abstractionOf(candidate, stored),
@@ -1390,7 +1390,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       hypotheses: registry.all(), summary: registry.summary(), notebook,
       /* OPERATOR ONLY (SPEC-OBJETIVO O4): milestones and cost of the run. */
       operator_summary: operatorSummary(protocol.summary(), ablations),
-      jev: { calls: judge.stats.calls, errors: judge.stats.errors }
+      jev: { calls: judge.stats.calls, errors: judge.stats.errors, refused: judge.stats.refused }
     }
   };
 }

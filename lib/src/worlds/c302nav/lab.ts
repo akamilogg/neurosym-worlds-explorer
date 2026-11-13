@@ -233,6 +233,7 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
   external: { url: (o) => o.service, timeoutMs: 40 * 60_000 },
 
   generate: (seed, options) => ({ seed, place: 'steps', family: 'steps', names: namesOf(options), namesSeed: seed }),
+  realization: (o) => ({ names: namesOf(o) }),
   /* The family's places draw from the drive never seen; the blind ones from either, by turns. The names stay the run's. */
   placeOf: (spec, index) => {
     const family: Family = index >= 1000 ? (index % 2 ? 'rotating' : 'steps') : 'rotating';

@@ -3,8 +3,9 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { hashString, stableStringify } from '../core/hash.ts';
 import { LABS } from '../worlds/labs.ts';
+import { realizationOf } from '../junior/groups.ts';
 import { runResults } from '../orchestra/results.ts';
-import { checkPolicy, policyHash, verifyPolicyDecisions, type PolicyConfig, type ResearchPolicy } from '../learn/assisted/research-policy.ts';
+import { checkPolicy, legacyPolicyHash, policyHash, verifyPolicyDecisions, type PolicyConfig, type ResearchPolicy } from '../learn/assisted/research-policy.ts';
 import type { Evaluator, SearchManifest } from '../learn/evolve/engine.ts';
 import { verifySearch } from '../learn/evolve/verify.ts';
 import type { Evaluation } from '../learn/evolve/policy.ts';
@@ -84,14 +85,16 @@ export function manifestProblems(m: unknown): string[] {
     if (!['development', 'confirmation', 'training'].includes(c?.partition)) errors.push(at + ': "partition" is "development", "confirmation" or "training"');
     if (!['model_accepted', 'artifact_accepted'].includes(c?.criterion)) errors.push(at + ': "criterion" is "model_accepted" or "artifact_accepted"');
   }
-  /* One world in one realization is one case: the same laboratory with the same arguments in development and in
-     confirmation would confirm on what was developed on (SPEC-VALIDEZ-MEDIDA §3.4). */
+  /* One world in one realization is one case: the same world in development and in confirmation would confirm on what was
+     developed on (SPEC-VALIDEZ-MEDIDA §3.4). Compared by the world its arguments make - its trial's: the case's, then the
+     junior's - never by how they are written. */
   const where = new Map<string, { id: string; partition: string }>();
+  const juniorArgs = Array.isArray(o.junior?.args) ? (o.junior.args as unknown[]).map(String) : [];
   for (const c of (Array.isArray(o.cases) ? o.cases : []) as J[]) {
-    if (!Array.isArray(c?.args)) continue;
-    const key = stableStringify([c.lab, c.args]);
+    if (!Array.isArray(c?.args) || !LABS[c?.lab]) continue;
+    const key = realizationOf(c.lab, [...c.args.map(String), ...juniorArgs]);
     const seen = where.get(key);
-    if (seen && seen.partition !== c.partition) errors.push('cases "' + seen.id + '" and "' + c.id + '": the same world and realization (' + c.lab + ' ' + c.args.join(' ') + ') in ' + seen.partition + ' and ' + c.partition);
+    if (seen && seen.partition !== c.partition) errors.push('cases "' + seen.id + '" and "' + c.id + '": the same world and realization (' + c.lab + ') in ' + seen.partition + ' and ' + c.partition);
     if (!seen) where.set(key, { id: c.id, partition: c.partition });
   }
   if (o.repetitions !== undefined && !(Number.isInteger(o.repetitions) && o.repetitions > 0)) errors.push('"repetitions": a whole number above 0');
@@ -175,7 +178,8 @@ export function trialResult(journalFile: string, criterion: Criterion): TrialRes
      to the provider. But a candidate that does not answer within its time while the same service answers its other
      requests (a junior that runs out its time) failed by itself: its trial ended, and is read as it ended. Only what cannot
      be told either way is left apart, as infra counted on its own (SPEC-VALIDEZ-MEDIDA §3.1). */
-  const judgeErrors = Number(end.jev?.errors) || 0;
+  /* The Judge's failures, its refusals of the model's own questions aside: those measured the model (VM5 review). */
+  const judgeErrors = Math.max(0, (Number(end.jev?.errors) || 0) - (Number(end.jev?.refused) || 0));
   const answers = Number(end.console_usage?.llm_answers) || 0;
   const causes = events.filter((e) => e.type === 'proposal_failed').map((e) => failureCause(e, answers));
   const provider = causes.filter((c) => c === 'provider').length, unknown = causes.filter((c) => c === 'indeterminate').length;
@@ -199,6 +203,9 @@ function failureCause(e: J, answers: number): 'candidate' | 'provider' | 'indete
   const kind = typeof e.kind === 'string' ? e.kind
     : status !== null ? 'http' : /aborted after \d+ ms|did not finish within/i.test(words) ? 'timeout' : null;
   if (kind === 'timeout') return answers > 0 ? 'candidate' : 'indeterminate';
+  /* A body read whole with no answer in it (no status: the service answered, the model said nothing) is the candidate's
+     where the service answered the run, as a timeout is (VM1 review); a body that could not be read is the provider's. */
+  if (kind === 'parse' && typeof e.status !== 'number' && !/HTTP \d{3}/.test(words)) return answers > 0 ? 'candidate' : 'indeterminate';
   if (kind === 'network' || kind === 'parse') return 'provider';
   if (kind === 'http' && status !== null && (status < 400 || [401, 402, 403, 408, 429].includes(status) || status >= 500)) return 'provider';
   return 'indeterminate';
@@ -558,13 +565,16 @@ export function policyEvaluator(trials: Trials, start: ResearchPolicy, o: { sign
     as the record has them, its candidates made again by their content. */
 export function recordedPolicyEvaluator(events: readonly J[], startFiles: Readonly<Record<string, string>>, start: string): Evaluator {
   const started = events.find((e) => e.type === 'search_started');
+  /* A search recorded before policies were named by SHA-256 is rebuilt under the names it recorded. */
+  const nameOf = /^[0-9a-f]{24}$/.test(start) ? policyHash : legacyPolicyHash;
+  const candidateOf = (p: ResearchPolicy) => ({ hash: nameOf(p), files: { 'policy.json': JSON.stringify(p, null, 2) } });
   return {
     identity: async () => String(started?.evaluator ?? ''),
     contract: () => events.find((e) => e.type === 'attempt_planned')?.context?.task ?? null,
     start: () => ({ hash: start, files: startFiles }),
     validate: (files) => { const p = policyOfFiles(files); return typeof p === 'string' ? p : null; },
     materialize(_from, files) { const p = policyOfFiles(files); return typeof p === 'string' ? { error: p } : candidateOf(p); },
-    adopt(hash, files) { const p = policyOfFiles(files); return typeof p === 'string' ? p : policyHash(p) === hash ? null : 'its content hashes to ' + policyHash(p); },
+    adopt(hash, files) { const p = policyOfFiles(files); return typeof p === 'string' ? p : nameOf(p) === hash ? null : 'its content hashes to ' + nameOf(p); },
     evaluate: async () => { throw new Error('verification is offline: a measure the record does not hold is not taken'); }
   };
 }

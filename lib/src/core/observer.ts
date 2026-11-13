@@ -1,4 +1,4 @@
-import { clamp, cloneJson, deepFreeze, hashString, round, specHash } from './hash.ts';
+import { clamp, cloneJson, deepFreeze, hashString64, round, specHash } from './hash.ts';
 import { coreDialect } from './core-dialect.ts';
 import { jsFunctionRunner } from './code-runner.ts';
 import type {
@@ -222,7 +222,8 @@ export class Observer<S = unknown> {
         }
         const text = value.length > TEXT_LIMIT ? value.slice(0, TEXT_LIMIT) + '…' : value;
         texts[id] = text;
-        parts.push(id + '=#' + hashString(text) + '#' + compiled.hash);
+        /* The text by a 64-bit hash: this vector keys the Judge's cache, where thousands of texts meet. */
+        parts.push(id + '=#' + hashString64(text) + '#' + compiled.hash);
         this.stats.computations++;
         continue;
       }

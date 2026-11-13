@@ -173,14 +173,16 @@ test('VM2: the confirmation service refuses a paired-cases@2 manifest whose rese
 
 test('VM2: the holdout - probe cases a search never selects on, and the only ones a candidate of a search is promoted on', async () => {
   const { selectionManifest, holdoutManifest } = await import('../src/junior/competence.ts');
-  const m = powered(8, { holdout: ['f6', 'f7', 'r6', 'r7'] });
+  /* Six cases a component: a holdout that can promote (a smaller one is refused under @2 - VM2 review). */
+  const held = ['f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'r6', 'r7', 'r8', 'r9', 'r10', 'r11'];
+  const m = powered(12, { holdout: held });
   assert.deepEqual(competenceProblems(m), []);
   assert.ok(competenceProblems(powered(8, { holdout: ['nowhere'] })).some((p) => /holdout/.test(p)));
   assert.ok(competenceProblems(powered(8, { holdout: ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7'] })).some((p) => /holdout/.test(p) && /format/.test(p)), 'a component keeps cases to select on');
   const sel = selectionManifest(m);
-  assert.deepEqual(sel.cases.map((c) => c.id).filter((id) => /[67]$/.test(id)), [], 'a search selects on none of them');
+  assert.deepEqual(sel.cases.map((c) => c.id).filter((id) => held.includes(id)), [], 'a search selects on none of them');
   const hold = holdoutManifest(m)!;
-  assert.deepEqual(hold.cases.map((c) => c.id).sort(), ['f6', 'f7', 'r6', 'r7']);
+  assert.deepEqual(hold.cases.map((c) => c.id).sort(), [...held].sort());
   assert.equal(holdoutManifest(powered(8)), null, 'without a holdout there is none');
 });
 
@@ -202,4 +204,61 @@ test('VM2: a candidate of a search is promoted on the holdout alone - a gain on 
   assert.equal(p.verdict, 'promoted', p.why);
   assert.deepEqual(p.components.map((c) => [c.id, c.n]), [['format', 6], ['rules', 2]], 'measured on the holdout\'s cases');
   assert.equal(promoteEvaluations(m, hash, reference, real).components.find((c) => c.id === 'format')!.n, 8, 'the same evaluations on all of development');
+});
+
+test('VM2 review: promoted on the holdout, a candidate still answers for every component outside it - one it sinks on development blocks it', async () => {
+  const { promoteEvaluations, promoteOnHoldout } = await import('../src/junior/evaluate.ts');
+  const { competenceHash } = await import('../src/junior/competence.ts');
+  const inv = (id: string, seed: string) => ({ id, kind: 'investigation' as const, lab: 'cells', args: ['--seed', seed], partition: 'development' as const, group: 'g-' + id, components: ['cells-L1'] });
+  const p = powered(12);
+  const m = { ...p, components: [p.components[0], { id: 'cells-L1', rung: 6, lab: 'cells', level: 'L1', extractor: { id: 'accepted', version: 1 }, unit: 'solved', direction: 'up', target: 1, bad: 0, tolerance: 0 }],
+    cases: [...p.cases.filter((c) => (c as { component: string }).component === 'format'), ...Array.from({ length: 6 }, (_, i) => inv('d' + i, String(10 + i)))],
+    holdout: ['f6', 'f7', 'f8', 'f9', 'f10', 'f11'] } as CompetenceManifest;
+  assert.deepEqual(competenceProblems(m), []);
+  const hash = competenceHash(m);
+  const ev = (execution: string, f: number, w: number) => ({ format: 'junior-evaluation@1' as const, manifest: hash, execution, partition: 'development' as const, temperature: 0, measure: null as never,
+    observations: m.cases.map((c) => obs(c.kind === 'probe' ? 'format' : 'cells-L1', c.id, c.kind === 'probe' ? f : w)) });
+  const reference = ev(H, 0, 1), sinks = ev('b'.repeat(64), 1, 0);
+  assert.equal(promoteEvaluations(m, hash, reference, sinks).verdict, 'not_promoted');
+  const held = promoteOnHoldout(m, hash, reference, sinks)!;
+  assert.equal(held.verdict, 'not_promoted', held.why);
+  assert.match(held.why, /cells-L1/);
+  const keeps = ev('c'.repeat(64), 1, 1);
+  assert.equal(promoteOnHoldout(m, hash, reference, keeps)!.verdict, 'promoted', 'better on the holdout, nothing worse elsewhere');
+});
+
+test('VM2 review: a holdout that can promote nothing is refused under @2 and told under @1; the warnings reach whoever prepares the manifest', async () => {
+  const { competenceWarnings } = await import('../src/junior/competence.ts');
+  const small = powered(12, { holdout: ['f10', 'f11', 'r10', 'r11'] });
+  assert.ok(competenceProblems(small).some((p) => /holdout/.test(p) && /can be promoted/.test(p)), competenceProblems(small).join('; '));
+  const told = powered(12, { holdout: ['f10', 'f11', 'r10', 'r11'] }, 'paired-cases@1');
+  assert.deepEqual(competenceProblems(told), []);
+  assert.ok(competenceWarnings(told).some((w) => /holdout/.test(w) && /format/.test(w)), competenceWarnings(told).join('; '));
+  const { prepareManifest } = await import('../src/junior/evaluate.ts');
+  const prepared = await prepareManifest(powered(3, {}, 'paired-cases@1'));
+  assert.ok(prepared.warnings.length > 0, 'prepared with its warnings');
+});
+
+test('VM2 review 2: one rule promotes a candidate whatever path presents it - one a search selected, on the holdout or never', async () => {
+  const { promoteCandidate, promoteOnHoldout } = await import('../src/junior/evaluate.ts');
+  const { competenceHash, withoutHoldout } = await import('../src/junior/competence.ts');
+  const held = ['f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'r6', 'r7', 'r8', 'r9', 'r10', 'r11'];
+  const m = powered(12, { holdout: held });
+  const hash = competenceHash(m);
+  const ev = (execution: string, better: (id: string) => boolean) => ({ format: 'junior-evaluation@1' as const, manifest: hash, execution, partition: 'development' as const, temperature: 0, measure: null as never,
+    observations: m.cases.map((c) => obs((c as { component: string }).component, c.id, better(c.id) ? 1 : 0)) });
+  const reference = ev(H, (id) => held.includes(id));
+  /* Better on every case it was selected on, worse on every reserved one. */
+  const selected = ev('b'.repeat(64), (id) => !held.includes(id));
+  const { promoteEvaluations } = await import('../src/junior/evaluate.ts');
+  assert.equal(promoteCandidate(m, hash, reference, selected, { fromSearch: false }).verdict, promoteEvaluations(m, hash, reference, selected).verdict, 'a candidate of no search: all of development');
+  const bySearch = promoteCandidate(m, hash, reference, selected, { fromSearch: true });
+  assert.equal(bySearch.verdict, promoteOnHoldout(m, hash, reference, selected)!.verdict, 'the researcher\'s check and the operator\'s rule agree');
+  assert.equal(bySearch.verdict, 'not_promoted');
+  const none = powered(12);
+  const noHold = promoteCandidate(none, competenceHash(none), { ...reference, manifest: competenceHash(none) }, { ...selected, manifest: competenceHash(none) }, { fromSearch: true });
+  assert.notEqual(noHold.verdict, 'promoted', 'without a holdout a search\'s candidate is never promoted');
+  assert.match(noHold.why, /best of N in selection/);
+  /* What the researcher is shown leaves the reserved cases out. */
+  assert.deepEqual(withoutHoldout(m).cases.filter((c) => held.includes(c.id)), []);
 });

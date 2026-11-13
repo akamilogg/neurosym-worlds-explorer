@@ -150,7 +150,7 @@ export async function checkAtCut(cut: Pick<Cut, 'run' | 'question' | 'hash'> & {
   const before = cut.events_before ?? (await captureCut(cut.run, cut.question, o)).events_before;
   const reaction = r.events.slice(before, beforeTail(r.events));
   const check = reaction.find((e) => e.type === 'check');
-  if (check && Number(check.jev?.errors) > 0) return { state: 'infra', pass: false, detail: 'the Judge failed in its check', events: reaction };
+  if (check && (Number(check.jev?.errors) || 0) - (Number(check.jev?.refused) || 0) > 0) return { state: 'infra', pass: false, detail: 'the Judge failed in its check', events: reaction };
   const accepted = reaction.some((e) => ACCEPTED.has(e.type));
   const investigations = reaction.filter((e) => e.type === 'investigation');
   const errored = investigations.some((e) => (e.results ?? []).some((x: J) => x && typeof x === 'object' && x.error));

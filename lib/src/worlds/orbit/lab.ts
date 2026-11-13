@@ -126,6 +126,7 @@ export const orbitLab: Lab<OrbitSpec, OrbitPoint, OrbitEpisode, OrbitCase, Orbit
 
   /* --- The world ------------------------------------------------------------------------ */
   generate: (seed, o) => generateOrbit(seed, Number(o.level)).spec,
+  realization: (o) => ({ level: Number(o.level) }),
   placeOf: (spec, index, o) => environmentOf(spec, index, varying(o)),
   /* The laboratories to start with: the base world, then (with --labs > 1) setups with two and three bodies. The family to
      validate against: a finite set, with every number of bodies represented. */

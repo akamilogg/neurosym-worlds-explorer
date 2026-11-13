@@ -224,6 +224,7 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
     { name: 'workloads', default: '2', help: 'fresh workloads per family in a check' }
   ],
   /* Made from the base a run archived, when it is rebuilt: its directory is never read again. */
+  realization: (o) => ({ artifact: String(o.artifact), scale: Number(o.scale) || 1, workloads: Math.max(1, Math.floor(Number(o.workloads) || 2)) }),
   generate: (seed, o, archived) => {
     const make = TASKS[o.artifact];
     if (!make) throw new Error('--artifact: no artifact task "' + o.artifact + '" (' + Object.keys(TASKS).join(', ') + ')');

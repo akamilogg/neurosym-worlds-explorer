@@ -1,6 +1,7 @@
 import { Observer } from '../../core/observer.ts';
 import { Evaluator } from '../../core/evaluate.ts';
 import { Predictor, checkLaw, type Law } from '../../core/predict.ts';
+import { createHash } from 'node:crypto';
 import { hashString, stableStringify } from '../../core/hash.ts';
 import type { CodeRunner, CodeSpec, Judge, MeasureDecl, Rule, World } from '../../core/types.ts';
 import { researcherEvents } from '../../orchestra/view.ts';
@@ -74,11 +75,21 @@ export interface PolicyConfig {
 const DEFAULT_CONTEXT = { events: 60, text: 600 };
 const DEFAULT_LIMITS = { evaluations: 200, advice: 20, judge_calls: 200, state_bytes: 4000 };
 
-/** What runs - everything but its provenance: its identity. */
+/** What runs - everything but its provenance: its identity, by SHA-256 (24 hexadecimals). The evolutionary engine keeps its
+    candidates by it and serves a policy for its name: a 32-bit hash would serve one for another (SPEC-VALIDEZ-MEDIDA §3.3). */
 export function policyHash(p: ResearchPolicy): string {
+  const { provenance: _p, ...runs } = p;
+  return createHash('sha256').update(stableStringify(runs)).digest('hex').slice(0, 24);
+}
+
+/** The identity records written before named a policy by: read, never written. */
+export function legacyPolicyHash(p: ResearchPolicy): string {
   const { provenance: _p, ...runs } = p;
   return hashString(stableStringify(runs));
 }
+
+/** Whether a name a record gives is this policy's: by its identity, or the one records written before used. */
+export const samePolicy = (p: ResearchPolicy, hash: unknown): boolean => hash === policyHash(p) || hash === legacyPolicyHash(p);
 
 export const asksJudge = (p: ResearchPolicy): boolean => Object.keys(p.rules ?? {}).length > 0;
 
@@ -425,7 +436,7 @@ export function verifyPolicyDecisions(journal: J, runner: CodeRunner): { holds: 
   const c = journal?.research_policy as PolicyConfig | undefined;
   if (!c) return null;
   const problems: string[] = [];
-  if (journal.config?.research_policy?.hash !== policyHash(c.policy)) problems.push('the policy kept is not the one its configuration names');
+  if (!samePolicy(c.policy, journal.config?.research_policy?.hash)) problems.push('the policy kept is not the one its configuration names');
   const events = (journal.events ?? []) as J[];
   const decided = events.filter((e) => e.type === 'research_policy_decided' && e.guidance);
   let rebuilt = 0;

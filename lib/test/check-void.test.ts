@@ -29,7 +29,7 @@ function world(down: (n: number) => boolean, seen: unknown[]): FetchLike {
   return async (url, init) => {
     if (url.startsWith(JEV_DEFAULT_URL)) {
       calls++;
-      if (down(calls)) return { ok: false, status: 400, statusText: 'Bad Request', text: async () => 'down', headers: { get: () => null } };
+      if (down(calls)) return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'down', headers: { get: () => null } };
       const text = jevAnswer(JSON.parse(String(init.body)));
       return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
     }
@@ -118,4 +118,23 @@ test('VM5: a run with no finding has no datum of what it reached - never "not ac
   assert.deepEqual([t.state, t.cause, t.solved], ['infra', 'harness', null], 'a trial that cannot say what it reached measures nothing');
   fs.writeFileSync(journal.replace(/\.json$/, '.finding.json'), JSON.stringify({ outcome: { status: 'rejected' } }));
   assert.equal(runResults(journal).o1_predictive_acceptance.model, false);
+});
+
+test('VM5 review: a question the Judge refuses (400, 422) is the model\'s defect - the check stands, its points fail, the trial ended', async () => {
+  const dir = tmp();
+  const seen: Record<string, any>[] = [];
+  /* The Judge up, refusing this model's question as malformed: the instrument works, the rule does not. */
+  const base = world(() => false, seen);
+  const refusing: FetchLike = async (url, init) => (url.startsWith(JEV_DEFAULT_URL)
+    ? { ok: false, status: 422, statusText: 'Unprocessable', text: async () => '{"error":"the question cannot be answered as declared"}', headers: { get: () => null } }
+    : base(url, init));
+  const r = await run(dir, refusing, 2);
+  const events = JSON.parse(fs.readFileSync(r.journal, 'utf8')).events as Record<string, any>[];
+  assert.equal(events.filter((e) => e.type === 'check_void').length, 0, 'not the instrument down');
+  const checks = events.filter((e) => e.type === 'check');
+  assert.equal(checks.length, 2, 'its rounds checked, and spent');
+  assert.ok(checks.every((c) => c.jev.refused > 0), JSON.stringify(checks.map((c) => c.jev)));
+  assert.notEqual(r.stoppedBy, 'judge_unavailable');
+  const t = trialResult(r.journal, 'model_accepted');
+  assert.equal(t.state, 'ended', 'a trial whose model asked what the Judge refuses measured that model: ' + JSON.stringify(t));
 });

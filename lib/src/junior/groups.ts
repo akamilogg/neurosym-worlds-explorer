@@ -37,11 +37,10 @@ export function measuringGroups(m: Parameters<typeof usesOf>[0]): Set<string> {
 
 const sha = (v: unknown): string => createHash('sha256').update(stableStringify(v)).digest('hex');
 
-/** The value an argument list gives an option (its last), or undefined. */
+/** The value an argument list gives an option, as the runner reads it: its first one; undefined when none. */
 function valueOf(args: readonly string[], name: string): string | undefined {
-  let v: string | undefined;
-  for (let i = 0; i < args.length; i++) if (args[i] === '--' + name) v = args[i + 1];
-  return v;
+  const i = args.indexOf('--' + name);
+  return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : undefined;
 }
 
 /** A realization by hash: the laboratory (by its registry name or its experiment id) and the world its arguments make - its
@@ -51,9 +50,15 @@ export function realizationOf(lab: string, args: readonly string[]): string {
   const l = LABS[lab] ?? Object.values(LABS).find((x) => x.id === lab);
   const id = l?.id ?? lab;
   const options = ((l as { options?: readonly { name: string; default: string }[] } | undefined)?.options ?? []);
-  const world: Record<string, string | null> = { seed: valueOf(args, 'seed') ?? '1' };
-  for (const o of options) world[o.name] = valueOf(args, o.name) ?? o.default;
-  return sha(['realization@1', id, world]);
+  /* A laboratory may change a default (Lab.defaults): the world its arguments make with it. */
+  const defaults = ((l as { defaults?: Readonly<Record<string, string>> } | undefined)?.defaults ?? {});
+  const given: Record<string, string> = {};
+  for (const o of options) given[o.name] = valueOf(args, o.name) ?? defaults[o.name] ?? o.default;
+  /* What its generator reads, normalized as it reads it (Lab.realization); never a budget of the researcher. */
+  const identity = (l as { realization?: (o: Readonly<Record<string, string>>) => unknown } | undefined)?.realization?.(given) ?? null;
+  const rawSeed = valueOf(args, 'seed') ?? defaults.seed ?? '1';
+  const seed = Number.isFinite(Number(rawSeed)) ? Number(rawSeed) : rawSeed;
+  return sha(['realization@2', id, seed, identity]);
 }
 
 /** The realization of a run, from its record: its experiment and the arguments it was given (argv). Null when the record

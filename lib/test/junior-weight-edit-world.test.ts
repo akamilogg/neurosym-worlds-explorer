@@ -141,6 +141,17 @@ test('a constructor fed by the lab\'s activations, tried on a copy before it is 
     const edited = await f.world.packageOf(version);
     assert.ok(typeof edited !== 'string');
     assert.deepEqual(edited.provenance.realizations, []);
+    /* VM4 review: a constructed edit whose origin this world did not record (a branch's, an older one) declares none - an
+       origin unknown is never a clean one. */
+    const record = path.join(f.dir, 'world', 'realizations.jsonl');
+    const kept = fs.readFileSync(record, 'utf8');
+    fs.writeFileSync(record, '');
+    (f.world as unknown as { packages: Map<string, unknown> }).packages.clear();
+    const unknown = await f.world.packageOf(version);
+    assert.ok(typeof unknown !== 'string');
+    assert.equal(unknown.provenance.realizations, undefined);
+    fs.writeFileSync(record, kept);
+    (f.world as unknown as { packages: Map<string, unknown> }).packages.clear();
     const tried = await f.act({ inspect_weights: { version: f.world.reference, query: 'try', candidate: version, args: { inner: 'forward', args: {} }, cases: [{ text: { user: 'hello' } }] } });
     assert.ok(tried && tried.kind === 'records' && tried.summary.state === 'answered', JSON.stringify(tried));
     // Rebuilt from the run's events: the same version, from the world's record, never charged again.

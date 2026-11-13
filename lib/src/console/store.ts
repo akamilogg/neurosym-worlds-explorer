@@ -91,7 +91,7 @@ export class ResearchStore {
         if (d.isSymbolicLink() || d.name.startsWith('.')) continue;
         const f = path.join(dir, d.name);
         if (d.isDirectory()) { walk(f); continue; }
-        if (!d.name.endsWith('.json') || /\.(finding(?:\.researcher)?|status|method)\.json$/.test(d.name)) continue;
+        if (!d.name.endsWith('.json') || /\.(finding(?:\.researcher)?|status|method|meta)\.json$/.test(d.name)) continue;
         const id = path.relative(path.join(this.root, 'runs'), f).replaceAll('\\', '/').replace(/\.json$/, '');
         const st = fs.statSync(f), stamp = st.mtimeMs + ':' + st.size;
         if (this.stamps.get(id) === stamp && this.cached.has(id)) { out.set(id, this.cached.get(id)!); continue; }

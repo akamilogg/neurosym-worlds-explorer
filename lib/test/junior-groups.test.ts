@@ -100,3 +100,34 @@ test('VM4: a case of the training partition is run only to be learned from - it 
   const shared = { ...m, cases: [...m.cases, { ...(m.cases.at(-1) as object), id: 't2', group: 'g-inv' } as never] };
   assert.match(competenceProblems(shared).join(), /group g-inv is in both partitions/, 'a training case never shares a group with one that selects');
 });
+
+test('VM4 review: the same world under another label is the same world - by realization, in every manifest', async () => {
+  const { realizationOf } = await import('../src/junior/groups.ts');
+  const { manifestProblems } = await import('../src/meta/lab.ts');
+  const { competenceProblems } = await import('../src/junior/competence.ts');
+  /* As the runner reads its arguments: the first one given wins. */
+  assert.equal(realizationOf('cells', ['--seed', '4', '--seed', '9']), realizationOf('cells', ['--seed', '4']));
+  /* A meta-laboratory: --seed 1 in development, --seed 1 --level 1 (its default) in confirmation. */
+  const meta = { format: 'meta-lab@1', id: 'm', junior: { args: ['--max-tokens', '10', '--max-judge-calls', '5'] }, cases: [
+    { id: 'd', lab: 'cells', args: ['--seed', '1'], partition: 'development', criterion: 'model_accepted' },
+    { id: 'c', lab: 'cells', args: ['--seed', '1', '--level', '1'], partition: 'confirmation', criterion: 'model_accepted' }] };
+  assert.ok(manifestProblems(meta).some((p) => /"d" and "c"/.test(p) && /same world/.test(p)), manifestProblems(meta).join('; '));
+  /* A competence manifest: a training case of the realization of a confirmation case, under another group. */
+  const base = manifest();
+  const leak = { ...base, weight_lab: undefined, cases: [...base.cases, { id: 't1', kind: 'investigation' as const, lab: 'cells', args: ['--level', '1', '--seed', '9'], partition: 'training' as const, group: 'g-other', components: ['cells-L1'] }] } as CompetenceManifest;
+  assert.ok(competenceProblems(leak).some((p) => /t1/.test(p) && /c1/.test(p) && /same world/.test(p)), competenceProblems(leak).join('; '));
+  const dev = { ...leak, cases: [...base.cases, { id: 't1', kind: 'investigation' as const, lab: 'cells', args: ['--seed', '3', '--level', '1'], partition: 'training' as const, group: 'g-other', components: ['cells-L1'] }] } as CompetenceManifest;
+  assert.ok(competenceProblems(dev).some((p) => /t1/.test(p) && /i1/.test(p)), 'nor of a development one');
+});
+
+test('VM4 review 2: a world is what its generator reads - a budget of the researcher (acts) never makes another world', async () => {
+  const { realizationOf } = await import('../src/junior/groups.ts');
+  const { competenceProblems } = await import('../src/junior/competence.ts');
+  assert.equal(realizationOf('cells', ['--seed', '9', '--level', '1', '--acts', '4']), realizationOf('cells', ['--seed', '9', '--level', '1', '--acts', '5']));
+  assert.notEqual(realizationOf('cells', ['--seed', '9', '--level', '1']), realizationOf('cells', ['--seed', '9', '--level', '2']));
+  /* Normalized as the generator reads it: particles3d's condition in any case, its level clamped. */
+  assert.equal(realizationOf('particles3d', ['--seed', '2', '--condition', 'b']), realizationOf('particles3d', ['--seed', '2', '--condition', 'B']));
+  const base = manifest();
+  const leak = { ...base, weight_lab: undefined, cases: [...base.cases, { id: 't1', kind: 'investigation' as const, lab: 'cells', args: ['--seed', '9', '--level', '1', '--acts', '5'], partition: 'training' as const, group: 'g-other', components: ['cells-L1'] }] } as CompetenceManifest;
+  assert.ok(competenceProblems(leak).some((p) => /t1/.test(p) && /c1/.test(p)), competenceProblems(leak).join('; '));
+});

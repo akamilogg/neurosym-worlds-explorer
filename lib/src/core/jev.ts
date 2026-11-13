@@ -45,9 +45,20 @@ export interface JevJudgeOptions {
   readonly onResponse?: (info: { request: JudgeRequest; data: unknown; parsed: ParsedAnswers; latencyMs: number }) => void;
 }
 
+/** Whether a failed call to the Judge was its refusal of the question as asked (HTTP 400, 422): the Judge answered, and what
+    it answered is that the question - the model's rule - cannot be answered. Anything else that fails is the instrument. */
+export function judgeRefused(error: unknown): boolean {
+  const e = error as { kind?: string; details?: { status?: number } | null };
+  return e?.kind === 'http' && (e.details?.status === 400 || e.details?.status === 422);
+}
+
 export interface JevStats {
   calls: number;
+  /** Every call that failed, the refused among them. */
   errors: number;
+  /** Calls the Judge answered by refusing the question as asked (HTTP 400, 422): the question's defect - a rule of the
+      model it cannot answer - never the instrument down (SPEC-VALIDEZ-MEDIDA §7). */
+  refused: number;
   peakActive: number;
   latenciesMs: number[];
 }
@@ -179,7 +190,7 @@ export function jevWireState(request: JudgeRequest): Record<string, unknown> {
 
 export class JevJudge implements Judge {
   readonly id: string;
-  readonly stats: JevStats = { calls: 0, errors: 0, peakActive: 0, latenciesMs: [] };
+  readonly stats: JevStats = { calls: 0, errors: 0, refused: 0, peakActive: 0, latenciesMs: [] };
   private readonly options: JevJudgeOptions;
   private active = 0;
   private readonly waiters: Array<() => void> = [];
@@ -224,6 +235,7 @@ export class JevJudge implements Judge {
       return parsed.answers;
     } catch (error) {
       this.stats.errors++;
+      if (judgeRefused(error)) this.stats.refused++;
       throw error;
     } finally {
       release();

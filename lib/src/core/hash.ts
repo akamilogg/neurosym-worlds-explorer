@@ -13,6 +13,22 @@ export function hashString(input: string): string {
   return h.toString(36);
 }
 
+/** A 64-bit hash, in 16 hexadecimals: two 32-bit lanes mixed apart (the cyrb53 construction, carried to both lanes). Pure,
+    for the browser too. Where many contents share one map - the texts a Judge reads, keys of its cache - a 32-bit hash
+    collides within thousands of them and serves one for another (SPEC-VALIDEZ-MEDIDA §3.3); this one does not. */
+export function hashString64(input: string): string {
+  const text = String(input);
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+
 export function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';

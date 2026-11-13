@@ -619,3 +619,27 @@ test('VM1: a ledger begun before SHA-256 keeps its trials under their ids - cont
   const v = await verifyTrials(dir, one, runner);
   assert.equal(v.holds, true, v.problems.join('; '));
 });
+
+test('VM1 review: an answer with nothing in it is the candidate\'s where the service answered the run; a body that cannot be read is the provider\'s', () => {
+  const dir = tmp('meta-empty-');
+  const at = (name: string, events: unknown[]) => { const f = path.join(dir, name + '.json'); write(f, { experiment: 'cells@1', config: {}, events }); write(f.replace(/\.json$/, '.finding.json'), { outcome: { status: 'rejected' } }); return f; };
+  const check = { type: 'check', round: 1, laboratories: [{ place: 'lab1', holds: false }] };
+  const end = (answers: number) => ({ type: 'end', stoppedBy: 'budget', jev: { calls: 9, errors: 0 }, console_usage: { llm_tokens_live: 10, llm_answers: answers } });
+  const empty = { type: 'proposal_failed', round: 2, error: 'LLM response contained no choices[0].message.content.', kind: 'parse' };
+  assert.equal(trialResult(at('empty', [check, empty, end(4)]), 'model_accepted').state, 'ended', 'the junior said nothing while the service answered it');
+  assert.deepEqual([trialResult(at('empty0', [empty, end(0)]), 'model_accepted').cause], ['indeterminate']);
+  const unreadable = { type: 'proposal_failed', round: 2, error: 'Response body was not valid JSON (HTTP 200, 12 chars).', kind: 'parse', status: 200 };
+  assert.equal(trialResult(at('unreadable', [check, unreadable, end(4)]), 'model_accepted').cause, 'provider');
+});
+
+test('VM1 review: a policy is named by SHA-256 - the engine never serves one for another; a record named the old way still reads', async () => {
+  const { policyHash, legacyPolicyHash, samePolicy } = await import('../src/learn/assisted/research-policy.ts');
+  assert.match(policyHash(policy('contrast')), /^[0-9a-f]{24}$/);
+  assert.notEqual(policyHash(policy('contrast')), policyHash(policy('plain')));
+  assert.equal(samePolicy(policy('contrast'), legacyPolicyHash(policy('contrast'))), true, 'a record written before');
+  assert.equal(samePolicy(policy('contrast'), policyHash(policy('contrast'))), true);
+  assert.equal(samePolicy(policy('contrast'), policyHash(policy('plain'))), false);
+  const { hashString64 } = await import('../src/core/hash.ts');
+  assert.match(hashString64('a text the Judge reads'), /^[0-9a-f]{16}$/);
+  assert.notEqual(hashString64('ab'), hashString64('ba'));
+});

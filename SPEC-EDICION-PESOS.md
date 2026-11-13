@@ -1,9 +1,10 @@
 # SPEC · Edición de pesos: el modelo fuerte escribe en los pesos del junior, y una búsqueda evolutiva los explora
 
-Estado (04/11/2026): **WE1 a WE6 implementadas en código** (edición y composición; laboratorio de pesos, constructores
+Estado (12/11/2026): **WE1 a WE6 implementadas en código** (edición y composición; laboratorio de pesos, constructores
 cerrados y backend aislado; la palanca en el mundo del junior; la búsqueda; el atasco y la rama del operador; la
 comparación A–F con su plan, sus pasos C y E y su informe; §12). **Sin ejecuciones reales:** la comparación se lanza en la
-máquina 2×3090 después de la línea base de la fase A. Dos revisiones externas del mismo día conciliadas (§14). Amplía
+máquina 2×3090 después de la línea base de la fase A. Dos revisiones externas del mismo día conciliadas (§14).
+**§15 (borrar pesos con gradiente: WE7 a WE9), propuesta sin implementar.** Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -737,3 +738,191 @@ Segunda revisión de WE2–WE6, el mismo día:
 |---|---|
 | Las entregas de una rama se perdían al reanudar con `--resume`, que repite los actos y no pasa por la reconstrucción: ahora recoger (una vez, con un marcador persistente) y aplicar están separados, y lo recogido en cada acto queda en el registro del run (`ctx.recorded`), también cuando no hay nada, para aplicarse igual en vivo y al reanudar | §6.6, `collectBranches` y `applyDelivery` |
 | C perdía los cambios de prompt, memoria o decodificación hechos entre ediciones de B: ahora cada gemelo sale del paquete que B editó (su padre inmediato), sin su adaptador, con el genoma de controles compuesto desde el checkpoint | §8, `comparison.ts` |
+
+## 15. Borrar pesos con gradiente: una receta para F, un control que falta y un camino hacia la automejora
+
+Estado (12/11/2026): **propuesta, sin implementar.** Nada de esta sección cambia WE1 a WE6.
+
+### 15.1 De dónde sale
+
+[*The Surprising Effectiveness of Deleting Weights in LLM Post-Training*](https://agenticlearning.ai/deleting-weights/)
+([arXiv 2611.10866](https://arxiv.org/abs/2611.10866), NeurIPS 2026; código en
+[agentic-learning-ai-lab/deleting-weights](https://github.com/agentic-learning-ai-lab/deleting-weights)) propone
+*Deletion Tuning*:
+
+- **Qué aprende.** Los pesos del modelo no cambian de valor. Cada peso de las proyecciones `gate_proj` recibe un logit
+  entrenable; durante el entrenamiento el peso se multiplica por una máscara suave que se endurece poco a poco, y al
+  final cada peso se queda como estaba o pasa a cero. El adaptador es **un bit por peso**.
+- **Cuánto borra.** Menos del 0,05 % de los pesos, sin objetivo de dispersión: lo decide el entrenamiento. Los logits
+  arrancan de la puntuación Wanda (magnitud del peso por norma de su activación).
+- **Con qué señal.** RL con recompensa verificable (GRPO), SFT y destilación on-policy.
+- **Resultados que da.** Con GRPO iguala al ajuste completo desde 7B (Llama 8B en GSM8K, 83,6 frente a 83,2; Qwen 7B, 14B y
+  30B-A3B a la par o por encima en matemáticas) y recupera el 90–99 % por debajo. Olvida casi nada: la media de seis tareas
+  previas queda a 1 punto o menos de la base, con KL a la base de 0,05 o menos; el ajuste completo pierde de 1,3 a 3,1
+  puntos y LoRA hasta 5,4. Pass@128 queda por encima del modelo base, que no resuelve en ninguna de sus 128 muestras
+  algunos problemas que la máscara sí. El adaptador ocupa de 0,5 a 30 MB.
+- **El control decisivo.** Wanda sola, sin entrenar, mueve la exactitud como mucho 2,4 puntos. Lo que encuentra el 0,04 %
+  útil es el **gradiente de la recompensa**, no una lectura de los pesos.
+
+Lo que no tiene, y que nuestra comparación sí pone:
+
+- **Ningún modelo propone las ediciones.** Es un método de entrenamiento.
+- **Ningún control aleatorio del mismo tamaño**: borrar al azar el mismo número de pesos en los mismos módulos.
+- **Una sola ejecución por condición**, sin semillas, intervalos ni tests.
+
+### 15.2 Lo que cambia en lo que esperamos
+
+- **Para H1** (B frente a C, D frente a E): que la puntuación Wanda sola no mueva casi nada y el gradiente sí es una
+  advertencia. Un modelo fuerte que elige qué tocar leyendo pesos y activaciones, y una búsqueda sin gradiente sobre
+  millones de entradas, pueden no encontrar las pocas que importan. No es razón para dejar de medir H1: es la expectativa
+  que se declara antes, y el resultado de B y D se lee contra ella.
+- **Para F**: es una receta con dos propiedades que nuestro protocolo premia. Olvida poco, y `paired-cases@2` bloquea
+  cualquier componente que empeore, así que debería promoverse más a menudo que LoRA. Pesa megas, así que se pueden
+  guardar muchas versiones, exportarlas a la confirmación y verificarlas.
+- **Lo que no se da por supuesto:** que el resultado valga a 4B, que la ventaja de pass@k sea robusta (una ejecución) y
+  que borrar añada capacidades en lugar de quitar obstáculos (lo mismo que §1 deja como hipótesis causal). El artículo no
+  tiene resultados a 4B, y los que tiene dependen del régimen: con GRPO iguala al ajuste completo desde 7B y recupera el
+  90–99 % por debajo; con SFT ya iguala a 3B (MMLU-Pro 22,3 frente a 21,2; BBEH 11,4 en ambos) y no a 1B en BBEH
+  ([§5.6](https://arxiv.org/html/2611.10866v1#S5.SS6)). Para nuestro 4B, con SFT y luego con GRPO, cualquier
+  expectativa es una extrapolación (corregido tras la revisión externa del 12/11/2026).
+
+### 15.3 La receta `deletion@1` en F
+
+Una receta nueva de `train` (MA5), junto a `lora` y `qlora`:
+
+- **Qué entrena.** Un logit por peso de `gate_proj` en las capas de Qwen a partir de `chip_layers`; el circuito nunca
+  (la misma regla que `recipeProblems` aplica hoy a LoRA). Los logits arrancan de Wanda, calculada con la captura de
+  §15.5 sobre los propios datos de entrenamiento. La pendiente de la máscara sube de forma lineal; al final se umbraliza
+  en cero.
+- **Cuánto puede borrar.** Sin objetivo de dispersión, pero con una cota: la receta declara la fracción máxima de pesos
+  borrados por módulo y en total, nunca más laxa que la del manifiesto de la condición. Una máscara que la supera no es
+  una versión.
+- **Con qué señal**, en dos etapas:
+  - **SFT** sobre un dataset verificado de MA4, igual que LoRA: la primera, porque no necesita nada nuevo fuera del
+    entrenador.
+  - **GRPO** con recompensas de sondas (`rl-probes@1`): en cortes de runs de casos de la partición `training` (VM4), el
+    junior responde G veces, el comprobador de la sonda (`protocol`, `request`, `rules`, `proposal`) puntúa cada respuesta
+    en ese corte, y la recompensa es su veredicto. Las investigaciones enteras son demasiado lentas para generar
+    trayectorias. Nada de selección ni de confirmación entra: lo garantiza `measuringGroups` y lo declara
+    `provenance.realizations`. Su contrato de muestreo está en §15.3.1.
+- **Qué produce.** Un adaptador de tipo nuevo, `mask@1`: por módulo, la lista de índices borrados, como árbol de blobs
+  igual que los demás. Se aplica en el trabajador poniendo a cero esas entradas. Es exacto en cualquier precisión (cero es
+  cero), y la composición lo representa como un cambio `sparse` de valor `−W` en esos índices, así que las medidas de
+  tamaño de §3.3 se calculan igual. Un paquete con máscara declara `trained` (no `edited`): sale de un entrenamiento, con
+  su dataset o sus trayectorias y sus realizaciones.
+- **Lo que no combina.** Como con LoRA, una versión con máscara no recibe ediciones ni otra receta: eso sería otra receta,
+  que no existe. Una máscara se entrena desde una versión sin adaptador.
+- **Capacidad antes de nada.** El paso `capacity` del entrenador ya existe: con un logit en fp32 por peso de `gate_proj`
+  y los estados del optimizador, estimo unos 10–15 GB además del modelo para Qwen3.5-4B. Es una estimación sin medir: la
+  mide el propio paso, y una receta que no cabe se rechaza.
+
+#### 15.3.1 El contrato de muestreo de `rl-probes@1`
+
+El trabajador de hoy sólo decodifica de forma voraz: preguntar G veces lo mismo desde el mismo estado da G veces la misma
+respuesta, y GRPO no tiene variación de recompensa que aprender (revisión externa, 12/11/2026). WE8 exige:
+
+- **Decodificación estocástica** con su temperatura y su `top_p` declarados en la receta, y **una semilla registrada por
+  respuesta**, derivada de la semilla de la receta, el corte y el índice de la respuesta en su grupo.
+- **El mismo estado de partida para cada respuesta:** la memoria del junior y la sesión se restauran al estado del corte
+  antes de cada una, nunca la que dejó la anterior.
+- **Las probabilidades de los tokens generados,** registradas por respuesta: las que GRPO usa en su razón de importancia y
+  las que permiten comprobarla después.
+- **Los tokens del modelo, aparte de los del circuito:** sólo los que genera el modelo entran en la pérdida; los que
+  produce el ordenador compilado, nunca.
+- **Los grupos sin variación de recompensa** (todas las respuestas aciertan o todas fallan) no dan ventaja: se cuentan y se
+  registran como tales, y no actualizan nada. Una ronda en la que todos los grupos lo son se dice, no se toma por un paso
+  de entrenamiento.
+- **Reproducción:** con la misma partida, el mismo corte y las mismas semillas, las trayectorias salen iguales, token a
+  token.
+
+### 15.4 Dos condiciones nuevas en la comparación
+
+| Condición | Qué se hace |
+|---|---|
+| F′ | Destilación y entrenamiento con `deletion@1`, con el mismo presupuesto que las demás |
+| G | Paso del operador tras F′: cada versión de F′ tiene una gemela con una máscara aleatoria del mismo número de pesos borrados en cada módulo, desde la misma partida |
+
+Lo que se lee, además de H1 y H2:
+
+- **H3.** La máscara aprendida supera a una aleatoria del mismo tamaño (F′ frente a G, par a par). Es el control que le
+  falta al artículo.
+- **H4.** Borrar frente a LoRA (F′ frente a F): cuántos productos se promueven con `paired-cases@2` y componentes
+  protegidos, cuántos confirma el operador, y a qué coste (horas de GPU, megas). Lo que se espera, por el olvido, es más
+  promociones con F′; si no las hay a 4B, también es un resultado.
+
+G reutiliza lo que C ya hace: controles aleatorios escalados a un tamaño (`controlOf`), aquí con el número de entradas por
+módulo como tamaño y el valor fijo `−W`.
+
+### 15.5 `wanda_mask@1`, un constructor cerrado
+
+Para el laboratorio de pesos (§4.3): con una captura de casos de diagnóstico, calcula la puntuación Wanda de un
+`gate_proj` y borra las `k` entradas de menor puntuación, `k` dentro de las cotas. Determinista dadas sus entradas,
+verificado ejecutándolo otra vez, como los demás.
+
+**La captura que necesita** (revisión externa, 12/11/2026). Wanda puntúa cada peso por su magnitud y la norma de su
+**entrada**, canal a canal: `|W_ij| · ‖X_j‖`. La consulta `activations` de hoy guarda medias de las **salidas** de los
+módulos, y la norma de una entrada no se recupera de una media. WE9 añade al laboratorio una consulta `input_norms`:
+
+- por módulo y por canal de entrada, la **suma de cuadrados** de sus entradas, calculada antes de promediar nada;
+- el **número de tokens válidos** que la forman y las **posiciones** que cuenta (las del modelo, nunca las del circuito);
+- su **procedencia**: los casos de diagnóstico y sus cortes, como cualquier recibo del laboratorio.
+
+`‖X_j‖` es la raíz de la suma de cuadrados. Un ejemplo pequeño, calculado a mano con matrices de juguete, da las mismas
+puntuaciones que el cálculo directo sobre sus activaciones.
+
+- **Para qué sirve.** Es lo que un modelo puede hacer sin gradiente con la misma idea. Da al modelo fuerte y a la búsqueda
+  una familia de semillas con fundamento.
+- **Lo que se espera.** Por el control del artículo, poco efecto por sí sola: una referencia contra la que leer B y D, y
+  un control negativo si mejorara mucho.
+
+### 15.6 Hacia la automejora
+
+Una máscara es pequeña, discreta, reversible, barata de medir y de deriva acotada: un espacio de acción razonable para un
+junior que se mejore a sí mismo. El camino que esta sección deja preparado, sin construirlo todavía:
+
+1. El modelo fuerte diseña las recompensas (qué sondas, en qué cortes) y el alcance (qué módulos, qué cota), lanza
+   `deletion@1` y lee qué se borró. Deja de elegir pesos uno a uno.
+2. El junior lanza él mismo `train` con `deletion@1` sobre sus propias sondas, como un acto de su mundo con su bolsa de
+   horas de GPU.
+3. Lo que produce pasa por lo mismo que cualquier candidato: `paired-cases@2`, el `holdout` cuando salga de una búsqueda,
+   y la confirmación externa, que exige sus realizaciones.
+
+Nada de esto se abre antes de la línea base de la fase A y de las condiciones F′ y G medidas.
+
+### 15.7 Riesgos
+
+- **Tamaño.** El artículo no tiene resultados a 4B: con GRPO recupera el 90–99 % del ajuste completo por debajo de 7B, con SFT
+  ya lo iguala a 3B. Lo que pase a 4B se mide; no se extrapola.
+- **Trampa con la recompensa.** GRPO sobre comprobadores de forma puede aprender a satisfacerlos sin investigar mejor. Lo
+  frenan la partición `training`, el `holdout`, H2 (si no se transfiere al peldaño 6, no sirve) y la confirmación externa.
+- **Olvido.** Una KL baja no garantiza lo que no se mide: lo cubren los componentes protegidos de `paired-cases@2`.
+- **Evidencia.** El artículo da una ejecución por condición: H3 y H4 se miden con repeticiones, semillas pareadas y su
+  test, no se toman de él.
+
+### 15.8 Entregas y aceptación
+
+| Etapa | Depende de | Entrega |
+|---|---|---|
+| **WE7 · `deletion@1` con SFT** | MA5 | La receta y su cota; el adaptador `mask@1` (árbol, aplicación en el trabajador, verificación, medidas de §3.3); `trained` en la procedencia; la capacidad medida antes; pruebas con el backend de imitación |
+| **WE8 · GRPO con recompensas de sondas** | WE7, VM4 | `rl-probes@1` con su contrato de muestreo (§15.3.1): decodificación estocástica con semillas en el trabajador, estado restaurado por respuesta, probabilidades de los tokens, tokens del circuito fuera de la pérdida, grupos sin variación contados; trayectorias en cortes de casos `training`, recompensa del comprobador en el corte, KL a la partida; en la máquina real |
+| **WE9 · F′, G y `wanda_mask@1`** | WE7, WE6 | Las condiciones en `weight-comparison` (plan, paso de G, informe con H3 y H4); la consulta `input_norms` del laboratorio; el constructor cerrado |
+
+Aceptación:
+
+1. Una máscara que borra en una capa del circuito, o más de lo que su cota permite, se rechaza antes de entrenar o al
+   umbralizar; no es una versión.
+2. Aplicar `mask@1` y componer el cambio `sparse` equivalente dan los mismos pesos, bit a bit; las medidas de §3.3
+   coinciden.
+3. Un paquete con máscara declara `trained`, su dataset o sus trayectorias y sus realizaciones; la confirmación lo
+   rechaza sin ellas.
+4. Una versión con máscara no recibe ediciones ni otro entrenamiento.
+5. Las trayectorias de `rl-probes@1` sólo salen de casos `training`: un corte de un caso que selecciona o confirma se
+   rechaza.
+6. La gemela de G tiene, módulo a módulo, el mismo número de pesos borrados que su versión de F′, en otros índices, desde
+   la misma partida; la verificación lo recalcula.
+7. `wanda_mask@1` repetido con las mismas entradas da la misma máscara; sólo lee capturas de casos de diagnóstico.
+8. El informe de la comparación da H3 (F′ frente a G) y H4 (F′ frente a F) par a par, reconstruido sin modelo.
+9. `input_norms` sobre un ejemplo pequeño da las sumas de cuadrados y el número de tokens que da el cálculo directo, y las
+   puntuaciones Wanda que salen de ellas coinciden con las calculadas a mano.
+10. Con la misma partida, el mismo corte y las mismas semillas, las trayectorias de `rl-probes@1` se reproducen token a
+    token; un grupo con recompensas distintas cambia los logits de la máscara, y uno sin variación no cambia nada.

@@ -76,10 +76,18 @@ El código observa; el juez responde preguntas cerradas, como en la auditoría d
   - si el acto repite uno de la ronda *n* (la misma identidad);
   - qué creencias cita y si alguna había caído en la ronda *n*;
   - si pide por memoria selectiva algo que estaba en la ronda *n*.
-- **Por el juez,** sobre las dos respuestas y el cuaderno, sin ver el mundo:
+- **Por el juez,** sobre las dos respuestas, el cuaderno y la **transcripción registrada de la ronda *n*** (lo que el
+  investigador vio y escribió en ella, tal como consta en su diario), sin ver el mundo ni la verdad oculta, y con las
+  condiciones anonimizadas (no sabe cuál respuesta es N y cuál L):
   - ¿persiguen la misma pregunta?
   - ¿alguna contradice un hecho que la ronda *n* dejó establecido?
   - ¿alguna ignora un plan que el cuaderno declaraba?
+- **Por qué la transcripción y no sólo el cuaderno** (revisión externa, 12/11/2026): lo que se quiere medir es justo lo
+  que se pierde entre rondas, y un hecho perdido puede faltar del cuaderno. Si el juez sólo viera el cuaderno, no podría
+  ver esa pérdida.
+- **Cada pérdida que atribuye lleva su cita:** el paso o el pasaje de la transcripción donde quedó establecido el hecho, y
+  el de la respuesta que lo contradice o lo ignora. Una pérdida sin cita no cuenta. Prueba: un hecho presente en la
+  transcripción y ausente del cuaderno, contradicho por una respuesta, se detecta y se cita.
 
 ### 3.3 Qué da
 
