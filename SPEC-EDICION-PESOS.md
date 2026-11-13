@@ -788,7 +788,10 @@ Lo que no tiene, y que nuestra comparación sí pone:
 
 ### 15.3 La receta `deletion@1` en F
 
-Una receta nueva de `train` (MA5), junto a `lora` y `qlora`:
+Una receta nueva de `train` (MA5), junto a `lora` y `qlora`. Se implementa como el primer procedimiento por programa
+(`method: "program"`, SPEC-INVESTIGACION-EXTERNA §8.2): un programa del perfil de entrenamiento que aprende la máscara y
+emite `mask@1`, con `learned: "trained"` en la procedencia, de modo que aprender qué borrar no añade un tipo de
+trabajador propio. Lo que sigue es lo que ese programa y su importador deben cumplir:
 
 - **Qué entrena.** Un logit por peso de `gate_proj` en las capas de Qwen a partir de `chip_layers`; el circuito nunca
   (la misma regla que `recipeProblems` aplica hoy a LoRA). Los logits arrancan de Wanda, calculada con la captura de
