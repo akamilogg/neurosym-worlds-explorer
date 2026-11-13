@@ -21,6 +21,7 @@ import { WeightLab, type LabCase, type LabQuery, type LabReceipt } from '../../j
 import type { Availability } from '../../junior/isolation.ts';
 import type { RawTensor, WeightBounds } from '../../junior/weights.ts';
 import { currentRealizations, datasetCaptures, realizationOfCapture } from '../../junior/groups.ts';
+import { profileProblems as profileProblemsOf } from '../../junior/method-program.ts';
 
 /* ============================================================================
  * The world of a junior's COMPETENCE (SPEC-METAPOLITICA-APRENDIZAJE §6, §7.1): an artifact world whose artifact is the
@@ -75,6 +76,9 @@ export class JuniorWorld {
   private readonly labPython: readonly string[];
   private isolationP: Promise<Availability> | null = null;
   private readonly weightBranches: string | null;
+  /** The execution profiles enabled for programs, and a backend given in place of the proved one (tests). */
+  readonly programProfiles: readonly import('../../junior/method-program.ts').ExecutionProfile[];
+  private readonly programAvailability: Availability | null;
   /** The deliveries of branches this instance holds (made or made again). */
   private readonly redelivered = new Set<string>();
   /** The evaluations of this run in their order, and the versions its checks promoted: what a stall is told from. */
@@ -84,6 +88,9 @@ export class JuniorWorld {
 
   constructor(o: { manifest: CompetenceManifest; base: JuniorPackage; blobs: string; server: string; dir: string; evaluations: number; memoryBuilds?: number; distillations?: number; gpuHours?: number;
     training?: { python: readonly string[]; backend: 'fake' | 'qwenputer' }; store?: ArtifactStore;
+    /** The execution profiles the operator enabled for programs (SPEC-INVESTIGACION-EXTERNA §8.1), and - tests only - a
+        backend in place of the isolated one proved by its self-test. */
+    programProfiles?: readonly import('../../junior/method-program.ts').ExecutionProfile[]; programAvailability?: Availability;
     labQueries?: number; labTokens?: number; edits?: number; searches?: number; labPython?: readonly string[]; cutter?: import('../../junior/weight-lab.ts').Cutter;
     /** Where the operator's weight-search branches leave their findings (SPEC-EDICION-PESOS §6.6): read, never written. */
     weightBranches?: string;
@@ -111,6 +118,8 @@ export class JuniorWorld {
     this.labPython = o.labPython ?? ['python3'];
     this.probesStandIn = o.probes ?? null;
     this.weightBranches = o.weightBranches ?? null;
+    this.programProfiles = o.programProfiles ?? [];
+    this.programAvailability = o.programAvailability ?? null;
     if (o.manifest.weight_lab && (o.labQueries ?? 0) > 0) {
       const config = o.manifest.weight_lab;
       const cutter = o.cutter ?? (async (run: string, question: number) => {
@@ -127,7 +136,7 @@ export class JuniorWorld {
   }
 
   /** A version's parts as they are written: its prompt, its decoding, the memory files it asks for, the memory it published. */
-  private parts(version: string): { prompt: string; decoding: unknown; files: Record<string, string>; published: Published | null; adapter: string | null; trainedOn: string[]; realizations?: readonly string[] } | string {
+  private parts(version: string): { prompt: string; decoding: unknown; files: Record<string, string>; published: Published | null; adapter: string | null; trainedOn: string[]; realizations?: readonly string[]; learned?: 'trained' } | string {
     const v = this.store.get(version);
     if (!v) return 'no version ' + version;
     let decoding: unknown, published: Published | null = null;
@@ -137,6 +146,7 @@ export class JuniorWorld {
     /* The realizations of what it learned from (SPEC-VALIDEZ-MEDIDA §5.2): a training's, as it recorded them; a set of edits',
        from its genome. Undefined where they cannot be told: the confirmation refuses it. */
     let realizations: readonly string[] | undefined;
+    let learned: 'trained' | undefined;
     if (v.files.has(ADAPTER)) {
       try {
         const a = JSON.parse(v.files.get(ADAPTER)!); adapter = String(a.adapter); trainedOn = ['dataset:' + a.dataset, 'training:' + a.job];
@@ -148,10 +158,16 @@ export class JuniorWorld {
     if (v.files.has(EDITS)) {
       if (adapter !== null) return 'a version with a LoRA adapter and a set of edits: no recipe combines them';
       /* What it owes (P3, E4): the set of edits, and each edit of its genome. */
-      try { const e = JSON.parse(v.files.get(EDITS)!); adapter = String(e.adapter); trainedOn = ['edit-set:' + e.adapter, ...((e.genome ?? []) as string[]).map((id) => 'edit:' + id)]; realizations = this.genomeRealizations((e.genome ?? []) as string[]); } catch { return EDITS + ' is not JSON'; }
+      try {
+        const e = JSON.parse(v.files.get(EDITS)!); adapter = String(e.adapter); trainedOn = ['edit-set:' + e.adapter, ...((e.genome ?? []) as string[]).map((id) => 'edit:' + id)];
+        /* A set a program learned from data (SPEC-INVESTIGACION-EXTERNA §8.2): a training, with its dataset and the realizations
+           of what it learned from - never read from its format. */
+        if (e.learned === 'trained') { learned = 'trained'; trainedOn = [...trainedOn, 'dataset:' + e.dataset, 'program:' + e.program]; realizations = currentRealizations(e.realizations, e.captures); }
+        else realizations = this.genomeRealizations((e.genome ?? []) as string[]);
+      } catch { return EDITS + ' is not JSON'; }
     }
     const files = Object.fromEntries([...v.files].filter(([f]) => MEMORY_FILE.test(f)).map(([f, t]) => [f.slice('memory/'.length), t]));
-    return { prompt: v.files.get('prompt.md') ?? '', decoding, files, published, adapter, trainedOn, ...(realizations ? { realizations } : {}) };
+    return { prompt: v.files.get('prompt.md') ?? '', decoding, files, published, adapter, trainedOn, ...(realizations ? { realizations } : {}), ...(learned ? { learned } : {}) };
   }
 
   private realizationsFile(): string { return path.join(this.dir, 'realizations.jsonl'); }
@@ -208,12 +224,12 @@ export class JuniorWorld {
     return genome.every(walk) ? [...out].sort() : undefined;
   }
 
-  private shell(version: string, prompt: string, decoding: unknown, memory: { neural: string | null; twin: string | null }, adapter: string | null = null, owes: readonly string[] = [], realizations?: readonly string[]): JuniorPackage {
+  private shell(version: string, prompt: string, decoding: unknown, memory: { neural: string | null; twin: string | null }, adapter: string | null = null, owes: readonly string[] = [], realizations?: readonly string[], learned?: 'trained'): JuniorPackage {
     /* Its provenance: its line in this world, and what it owes to others - the dataset and training of its adapter (P3) -
        with the realizations of what it learned from, where it learned anything (SPEC-VALIDEZ-MEDIDA §5.2). */
     return normalizePackage({ ...this.base, prompt, decoding, memory, adapter,
       provenance: { parents: [executionHash(this.base)], reason: 'version ' + version + ' of the junior-competence world', sources: [...this.store.lineage(version).map((t) => t.from + '->' + t.to), ...owes],
-        ...(adapter !== null && realizations !== undefined ? { realizations } : {}) } });
+        ...(adapter !== null && realizations !== undefined ? { realizations } : {}), ...(learned ? { learned } : {}) } });
   }
 
   /** The junior a version is: the base package with its parts; its memory the base's, or the one it published, with the
@@ -225,7 +241,7 @@ export class JuniorWorld {
     if (typeof parts === 'string') return parts;
     const start = parts.published ? { neural: parts.published.neural, twin: parts.published.twin } : this.base.memory;
     let pkg: JuniorPackage;
-    try { pkg = this.shell(version, parts.prompt, parts.decoding, start, parts.adapter, parts.trainedOn, parts.realizations); } catch (e) { return (e as Error).message; }
+    try { pkg = this.shell(version, parts.prompt, parts.decoding, start, parts.adapter, parts.trainedOn, parts.realizations, parts.learned); } catch (e) { return (e as Error).message; }
     if (Object.keys(parts.files).length) {
       const { buildMemory } = await import('../../junior/memory.ts');
       const operation = 'mem-' + createHash('sha256').update(executionHash(pkg) + ':' + JSON.stringify(Object.entries(parts.files).sort())).digest('hex').slice(0, 24);
@@ -239,7 +255,7 @@ export class JuniorWorld {
         const job = await done;
         if (job.state !== 'completed') return 'its memory was not written: ' + (job.reason ?? job.state);
         const b = job.products as { state: { neural: string | null; twin: string | null } };
-        pkg = this.shell(version, parts.prompt, parts.decoding, b.state, parts.adapter, parts.trainedOn, parts.realizations);
+        pkg = this.shell(version, parts.prompt, parts.decoding, b.state, parts.adapter, parts.trainedOn, parts.realizations, parts.learned);
       } catch (e) { return e instanceof JobRefused ? e.message : String((e as Error).message ?? e); }
     }
     this.packages.set(version, pkg);
@@ -418,7 +434,9 @@ export class JuniorWorld {
   /** A child of a version trained on a dataset (§11, train): a job paid from gpu_hours; the child a version whose adapter
       is the training's, its line kept in the world's ledger. Refused before anything runs when the recipe reaches the
       circuit or the dataset shares groups with the selection probes. */
-  async trainFrom(from: string, datasetId: string, recipe: unknown, reason: unknown): Promise<{ version?: string; state: string; reason: string | null; steps?: number | null; gpu_hours?: number | null }> {
+  async trainFrom(from: string, datasetId: string, recipe: unknown, reason: unknown): Promise<{ version?: string; state: string; reason: string | null; steps?: number | null; gpu_hours?: number | null; job?: string }> {
+    const T = await import('../../junior/train.ts');
+    if (T.isProgramRecipe(recipe)) return this.trainByProgram(from, datasetId, recipe, reason);
     if (!this.training) return { state: 'refused', reason: 'no trainer is configured for this run (--train-python)' };
     const parent = await this.packageOf(from);
     if (typeof parent === 'string') return { state: 'refused', reason: parent };
@@ -481,6 +499,59 @@ export class JuniorWorld {
     }
     const operation = 'wlab-' + createHash('sha256').update(JSON.stringify([executionHash(pkg), q.query, q.args ?? {}, q.cases ?? [], candidate ? executionHash(candidate) : null])).digest('hex').slice(0, 24);
     return this.weightLab.query(pkg, { query: q.query, ...(q.args ? { args: q.args } : {}), ...(q.cases ? { cases: q.cases } : {}), ...(candidate ? { candidate } : {}) }, operation);
+  }
+
+  /** A training by PROGRAM (SPEC-INVESTIGACION-EXTERNA §8, IE5): the researcher's method run under a profile the operator
+      enabled, where an isolated backend is proved; it reads the dataset's rows (mounted as dataset.jsonl) and whatever else
+      it declares; what it makes is imported as an edit of the start, LEARNED FROM DATA (`learned: "trained"`), with the
+      realizations of the runs its examples came from. A job of the world's ledger: asked again, the same job. */
+  async trainByProgram(from: string, datasetId: string, recipe: import('../../junior/train.ts').ProgramRecipe, reason: unknown): Promise<{ version?: string; state: string; reason: string | null; job?: string }> {
+    const parent = await this.packageOf(from);
+    if (typeof parent === 'string') return { state: 'refused', reason: parent };
+    const T = await import('../../junior/train.ts');
+    const problems = T.recipeProblems(recipe, parent);
+    if (problems.length) return { state: 'refused', reason: 'the recipe: ' + problems.join('; ') };
+    if (!this.manifest.weight_edits) return { state: 'refused', reason: 'the condition authorizes no edits: a program\'s product is composed within its "weight_edits" bounds' };
+    const file = path.join(this.dir, 'datasets', datasetId + '.json');
+    if (!/^[0-9a-f]{64}$/.test(datasetId) || !fs.existsSync(file)) return { state: 'refused', reason: 'no dataset ' + datasetId + ' here' };
+    const dataset = JSON.parse(fs.readFileSync(file, 'utf8')) as Dataset;
+    const { selectionOverlap } = await import('../../junior/distill.ts');
+    const shared = selectionOverlap(dataset, this.manifest);
+    if (shared.length) return { state: 'refused', reason: 'the dataset shares groups with the cases that select or confirm juniors (' + shared.join(', ') + ')' };
+    const rows = T.trainingRows(path.join(this.dir, 'examples'), dataset, recipe);
+    if ('error' in rows) return { state: 'refused', reason: rows.error };
+    /* What it learned from, by the captures of the runs its examples were cut from: none known, none admitted. */
+    const captures = datasetCaptures(path.join(this.dir, 'examples'), dataset);
+    if (!captures) return { state: 'refused', reason: 'an example of the dataset does not say which run it was cut from: what it would learn from cannot be told' };
+    const M = await import('../../junior/method-program.ts');
+    const inputs = { 'dataset.jsonl': Buffer.from(rows.map((r) => JSON.stringify(r)).join('\n') + '\n') };
+    const availability = this.programAvailability ?? await this.isolation();
+    const W = await import('../../junior/weights.ts');
+    const authorized = this.manifest.weight_edits;
+    try {
+      const operation = 'program-' + M.jobIdentity(recipe.program, inputs, executionHash(parent), this.programProfiles.find((p) => p.id === recipe.program.profile) ?? { id: recipe.program.profile, dependencies: {}, limits: { timeout_ms: 1, memory_bytes: 1, cpu_seconds: 1, output_bytes: 1 }, gpu: false }).slice(0, 24);
+      const { done } = this.jobs.start({ operation_id: operation, op: 'train', inputs: { parent: executionHash(parent), dataset: datasetId, program: M.programId(recipe.program) }, reserve: { edits: 1 },
+        run: async () => {
+          const job = await M.runMethodProgram({ program: recipe.program, profiles: this.programProfiles, inputs, start: executionHash(parent), startDir: this.baseDir(parent.base), availability });
+          if (job.state !== 'finished') return { spent: { edits: 0 }, products: job, failed: job.state + ': ' + (job.reason ?? '') };
+          const backend = availability.available ? availability.backend.id : 'none';
+          const made = M.importProduct(this.blobs, parent, job, { program: recipe.program, backend, hypothesis: { competence: 'trained', mechanism: 'a method by program: ' + M.programId(recipe.program).slice(0, 12), effect: 'as the evaluator measures' } });
+          if ('problems' in made) return { spent: { edits: 0 }, products: { ...job, products: undefined }, failed: 'its product: ' + made.problems.join('; ') };
+          const v = W.composeVersion({ store: this.blobs, parent, add: [made.id], authorized });
+          if ('problems' in v) return { spent: { edits: 0 }, products: { ...job, products: undefined }, failed: v.problems.join('; ') };
+          return { spent: { edits: 1 }, products: { job: job.job, edit: made.id, adapter: v.adapter, start: v.set.start, genome: v.set.genome, totals: v.set.totals } };
+        } });
+      const j = await done;
+      const out = j.products as { job?: string; state?: string; reason?: string | null; adapter?: string; start?: string; genome?: string[]; totals?: unknown } | null;
+      if (j.state !== 'completed' || !out?.adapter) return { state: out?.state === 'unavailable' ? 'unavailable' : out?.state === 'refused' ? 'refused' : 'failed', reason: j.reason ?? out?.reason ?? j.state, ...(out?.job ? { job: out.job } : {}) };
+      const realizations = [...new Set(captures.map((c) => realizationOfCapture(c)))].sort();
+      /* Learned from data, as the host says: a training whatever its format (§8.2); with what it learned from. */
+      const record = { adapter: out.adapter, start: out.start, genome: out.genome, totals: out.totals, learned: 'trained', dataset: datasetId, program: M.programId(recipe.program), job: out.job, realizations, captures };
+      const made = this.store.apply(from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, reason);
+      if (typeof made === 'string') return { state: 'failed', reason: made };
+      appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe: { method: 'program', program: M.programId(recipe.program) }, record, version: made.hash }, { sync: true });
+      return { version: made.hash, state: 'finished', reason: null, job: out.job };
+    } catch (e) { return { state: 'refused', reason: e instanceof JobRefused ? e.message : String((e as Error).message ?? e) }; }
   }
 
   /** The isolated backend for free programs, by its self-test, asked once per run. */
@@ -879,6 +950,16 @@ export class JuniorWorld {
   }
 }
 
+/** The execution profiles of a file (a list of them), each checked: an operator's configuration, never the researcher's. */
+export function programProfilesOf(file: string): import('../../junior/method-program.ts').ExecutionProfile[] {
+  let raw: unknown;
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { throw new Error('--program-profiles: ' + file + ' is not JSON (' + String((e as Error).message ?? e) + ')'); }
+  const list = Array.isArray(raw) ? raw : (raw as { profiles?: unknown })?.profiles;
+  if (!Array.isArray(list)) throw new Error('--program-profiles: a list of profiles');
+  for (const p of list) { const e = profileProblemsOf(p); if (e.length) throw new Error('--program-profiles: ' + e.join('; ')); }
+  return list as import('../../junior/method-program.ts').ExecutionProfile[];
+}
+
 /** What an operator's branch delivered: everything its versions are made of. */
 export interface Delivery {
   readonly id: string;
@@ -1077,7 +1158,11 @@ const WEIGHT_ACTS = 'Or {"act": {"inspect_weights": {"version": "<version>", "qu
 const EVOLVE_ACT = 'Or {"act": {"evolve": {"from": "<version without an adapter>", "seeds": [<edits as above, each with its "competence", "why", "expect">, ...], "control_seeds": <n>, "max_candidates": <n>, "operators": {"scale" | "drop" | "combine" | "retarget" | "sparsify" | "perturb" | "reinit": <weight>}, "seed": <n>, "why": "...", "expect": "..." | "exploratory": true}}}   '
   + 'a search of juniors: your seeds - DISTINCT hypotheses, in other modules or by other means - with random controls of the same size, varied by code operators (perturb and reinit bring directions nobody proposed), each candidate checked (bounds, circuit), measured on the selection probes, and kept by niche - which probe components it improves and where it acts. Its elites come back as versions you may run, adopt or leave; each candidate composed costs one of `edits`, each measured one of `evaluations`.';
 
-function juniorInterface(tolerance: number, weights = false, searches = true): WorldInterface {
+/** Its own methods as programs (SPEC-INVESTIGACION-EXTERNA §8, IE5): told only where the operator enabled profiles. */
+const programAct = (profiles: readonly string[]): string => 'Or, as the recipe of a train, YOUR OWN METHOD as a program: {"format": "junior-recipe@1", "method": "program", "admits": ["verified"], "program": {"format": "method-program@1", "entrypoint": "<file>", "files": {"<file>": "<its code>"}, "profile": "' + profiles.join('" | "') + '", "inputs": ["dataset.jsonl", ...], "parameters": {...}, "seed": <n>, "output_format": "weight-edit-set@1", "cites": ["src:..."]}}   '
+  + 'the program reads inputs/dataset.jsonl (the dataset\'s rows) and inputs/job.json, the start\'s weights read-only, and writes out/result.json ({"format", "products"}) and its products (out/modules.json and the safetensors of a set of edits). It runs only where an isolated backend is proved, without network; what it makes is imported as an edit LEARNED FROM DATA, and the evaluator - never the program - says what it is worth. ';
+
+function juniorInterface(tolerance: number, weights = false, searches = true, profiles: readonly string[] = []): WorldInterface {
   return {
     tools: ['view', 'inspect', 'act', 'measure', 'table'],
     features: ['check'],
@@ -1098,6 +1183,7 @@ function juniorInterface(tolerance: number, weights = false, searches = true): W
         + 'Or {"act": {"train": {"from": "<version>", "dataset": "<dataset id>", "recipe": {"format": "junior-recipe@1", "method": "lora" | "qlora", "layers": [<Qwen layers, past the circuit\'s>], "modules": ["q_proj", ...], "rank", "alpha", "dropout", "learning_rate", "epochs", "batch", "max_length", "seed", "mask": "answer", "admits": ["verified"], "max_gpu_hours"}, "why": "...", "expect": "..." | "exploratory": true}}}   '
         + 'a child junior with a LoRA adapter trained on that dataset; its circuit is never trained. Its capacity is measured first; it costs its GPU hours; a dataset that shares groups with the selecting probes is refused. Before it is evaluated, its circuit must pass the validity suite. '
         + (weights ? WEIGHT_ACTS + (searches ? EVOLVE_ACT : '') + ' ' : '')
+        + (profiles.length ? programAct(profiles) : '')
         + 'Or {"act": {"confirmations": {}}}   the confirmations the operator made of your juniors, out of this machine, on cases you never see: for each, the verdict against the reference and which components improve or regress - nothing more. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at an observation, part by part, and what was measured there'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
@@ -1198,6 +1284,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     { name: 'edits', default: '0', help: 'edited versions of the junior the run may make in all (0: none; the manifest needs weight_edits)' },
     { name: 'searches', default: '', help: 'searches of juniors (evolve) the run may open in all (empty: no limit; 0: none)' },
     { name: 'weight-branches', default: '', help: 'where the weight-search branches of the operator leave their findings: their elites delivered to the researcher as versions (read-only)' },
+    { name: 'program-profiles', default: '', help: 'a file of execution profiles the operator enables for the researcher\'s own methods as programs (SPEC-INVESTIGACION-EXTERNA §8); none: no program recipes' },
     { name: 'lab-python', default: 'python3', help: 'the interpreter of the isolated backend for free programs (its self-test decides whether they run)' },
     { name: 'teacher-url', default: '', help: 'the teacher\'s endpoint (or TEACHER_LLM_URL; its key from TEACHER_LLM_KEY)' },
     { name: 'teacher-model', default: '', help: 'the teacher\'s model (or TEACHER_LLM_MODEL)' }
@@ -1214,7 +1301,8 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       distillations: count(o.distillations, 20), gpuHours: Math.max(0, Number(o['gpu-hours']) || 0),
       ...(o['train-python'] ? { training: { python: [o['train-python']], backend: (o['train-backend'] === 'fake' ? 'fake' : 'qwenputer') as 'fake' | 'qwenputer' } } : {}), ...(store ? { store } : {}),
       labQueries: Math.max(0, Math.floor(Number(o['lab-queries']) || 0)), labTokens: Math.max(0, Math.floor(Number(o['lab-tokens']) || 0)), edits: Math.max(0, Math.floor(Number(o.edits) || 0)),
-      labPython: [o['lab-python'] || 'python3'], ...(o.searches !== undefined && o.searches !== '' ? { searches: Math.max(0, Math.floor(Number(o.searches) || 0)) } : {}), ...(o['weight-branches'] ? { weightBranches: path.resolve(o['weight-branches']) } : {}) });
+      labPython: [o['lab-python'] || 'python3'], ...(o.searches !== undefined && o.searches !== '' ? { searches: Math.max(0, Math.floor(Number(o.searches) || 0)) } : {}), ...(o['weight-branches'] ? { weightBranches: path.resolve(o['weight-branches']) } : {}),
+      ...(o['program-profiles'] ? { programProfiles: programProfilesOf(path.resolve(o['program-profiles'])) } : {}) });
     const env = process.env;
     const judge = env.JEV_KEY ? { url: env.JEV_URL || 'https://openrouter.ai/api/v1/chat/completions', key: env.JEV_KEY, ...(env.JEV_MODEL ? { model: env.JEV_MODEL } : {}) } : undefined;
     /* The teacher, configured as any researcher: its endpoint and model given, its key from the environment (the proxy's
@@ -1235,7 +1323,8 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
   world: pointWorld,
   perceive: (p) => p,
   perceptDoc: PERCEPT_DOC,
-  interface: (options) => juniorInterface(Number(options.world?.tolerance) || 0.25, Number(options.world?.edits) > 0 || Number(options.world?.['lab-queries']) > 0, String(options.world?.searches ?? '') !== '0'),
+  interface: (options) => juniorInterface(Number(options.world?.tolerance) || 0.25, Number(options.world?.edits) > 0 || Number(options.world?.['lab-queries']) > 0, String(options.world?.searches ?? '') !== '0',
+    options.world?.['program-profiles'] ? programProfilesOf(String(options.world['program-profiles'])).map((p) => p.id) : []),
 
   episode: async (spec) => {
     const e = await spec.world.evaluate(spec.world.reference, spec.judge);
@@ -1469,7 +1558,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         const { from: _f, dataset: _d, recipe: _r, ...reason } = a.train;
         const t = await spec.world.trainFrom(a.train.from, a.train.dataset, a.train.recipe, reason);
         if (t.version) latest.set(spec.world, t.version);
-        return { kind: 'records', what: 'training', summary: { state: t.state, ...(t.version ? { version: t.version } : {}), ...(t.reason ? { reason: t.reason } : {}), steps: t.steps ?? null, gpu_hours: t.gpu_hours ?? null }, rows: [] };
+        return { kind: 'records', what: 'training', summary: { state: t.state, ...(t.version ? { version: t.version } : {}), ...(t.reason ? { reason: t.reason } : {}), steps: t.steps ?? null, gpu_hours: t.gpu_hours ?? null, ...(t.job ? { job: t.job } : {}) }, rows: [] };
       }
       if ('dataset' in a) {
         const r = await spec.world.dataset(a.dataset.examples, a.dataset.admits);

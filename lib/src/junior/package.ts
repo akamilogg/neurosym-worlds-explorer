@@ -61,6 +61,10 @@ export interface JuniorProvenance {
       researcher (SPEC-VALIDEZ-MEDIDA §5.2). Absent where it learned nothing; an empty list declares that nothing it
       learned came from a run. */
   readonly realizations?: readonly string[];
+  /** What it learned, as the host that imported it says - never its program, never deduced from its format
+      (SPEC-INVESTIGACION-EXTERNA §8.2): `trained` (from data, with its dataset or trajectories), `edited` (written or
+      constructed, without training). Absent in packages of before: read from their format, as always. */
+  readonly learned?: 'trained' | 'edited';
 }
 
 export interface JuniorPackage {
@@ -96,7 +100,7 @@ const KEYS = {
   memory: ['neural', 'twin'],
   decoding: ['temperature', 'max_tokens', 'max_circuit_tokens', 'forced_format'],
   execution: ['firmware', 'tokenizer', 'chat_template', 'driver', 'verifier', 'circuit', 'precision', 'quantization'],
-  provenance: ['parents', 'reason', 'sources', 'realizations']
+  provenance: ['parents', 'reason', 'sources', 'realizations', 'learned']
 } as const;
 
 const DEFAULTS = { decoding: { temperature: 0, max_tokens: 4000, max_circuit_tokens: 60000, forced_format: null }, quantization: null, adapter: null } as const;
@@ -152,7 +156,8 @@ export function normalizePackage(raw: unknown): JuniorPackage {
     execution: { firmware: e.firmware as BlobId, tokenizer: e.tokenizer as BlobId, chat_template: e.chat_template as BlobId, driver: e.driver as BlobId,
       verifier: e.verifier as BlobId, circuit: e.circuit as Record<string, unknown>, precision: e.precision, quantization: quantization as string | null },
     provenance: { parents: strings(pr.parents, 'provenance.parents'), reason: typeof pr.reason === 'string' ? pr.reason : '', sources: strings(pr.sources, 'provenance.sources'),
-      ...(pr.realizations !== undefined ? { realizations: [...new Set(strings(pr.realizations, 'provenance.realizations'))].sort() } : {}) }
+      ...(pr.realizations !== undefined ? { realizations: [...new Set(strings(pr.realizations, 'provenance.realizations'))].sort() } : {}),
+      ...(pr.learned !== undefined ? { learned: (() => { if (pr.learned !== 'trained' && pr.learned !== 'edited') throw new Error('provenance.learned must be "trained" or "edited"'); return pr.learned; })() } : {}) }
   };
 }
 

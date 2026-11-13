@@ -2,6 +2,7 @@ import { UserParts, type ChatClient } from '../system2.ts';
 import { parseJsonLoose } from '../../core/net.ts';
 import { LawSession, type LawSessionHost } from '../law-session.ts';
 import { Sources, type LineSelector } from './sources.ts';
+import { EXTERNAL_SOURCES_SECTION } from './external-sources.ts';
 import { JournalMemory } from './memory.ts';
 import { Experience } from './experience.ts';
 import { ownLaw } from '../law-explorer.ts';
@@ -54,6 +55,10 @@ export interface OperatorMessage {
   readonly result_spent?: number | null;
   /** Held until this round begins: a message scheduled in advance. */
   readonly round?: number;
+  /** Its author's exposure to external sources (SPEC-INVESTIGACION-EXTERNA §4.1.1), as the run received it. */
+  readonly external_exposure?: import('./exposure.ts').ExternalExposure;
+  /** The research contribution it delivers (SPEC-INVESTIGACION-EXTERNA §7). */
+  readonly contribution?: Readonly<Record<string, unknown>>;
 }
 
 /** What it is told once a directive has reached it: what an order of its senior is, how it reports it, how it disagrees. */
@@ -227,6 +232,8 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       if (advice) { log('operator_message', { question, messages: [advice] }); fresh.push(advice); }
       const task = channel.task?.() ?? null;
       const origins = channel.sources?.origins() ?? [];
+      /* Its external sources (SPEC-INVESTIGACION-EXTERNA): announced, with its inventory, where configured and admitted. */
+      const external = channel.sources?.external ?? null;
       const ch = channel.messages?.() ?? null;
       if (ch) {
         /* Everything goes through the channel: messages, task, origins, instructions; then it delivers. */
@@ -237,10 +244,10 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
           else ch.publish(author, { kind: 'notice', body: m });
         }
         if (task !== pinnedTask) { ch.publish('operator', task ? { kind: 'pinned', key: 'task', body: task } : { kind: 'pinned', key: 'task', unpin: true }); pinnedTask = task; }
-        const originsNow = origins.join('|');
-        if (originsNow !== pinnedOrigins) { ch.publish('harness', { kind: 'pinned', key: 'sources', body: { origins } }); pinnedOrigins = originsNow; }
+        const originsNow = origins.join('|') + (external ? '|external' : '');
+        if (originsNow !== pinnedOrigins) { ch.publish('harness', { kind: 'pinned', key: 'sources', body: { origins, ...(external ? { external_sources: external.inventory(false) } : {}) } }); pinnedOrigins = originsNow; }
         const base = channel.system ? channel.system() : request.system;
-        const wanted = base + (directed ? '\n\n' + DIRECTIVES_SECTION_CHANNEL : '') + (origins.length ? '\n\n' + SOURCES_SECTION_CHANNEL : '');
+        const wanted = base + (directed ? '\n\n' + DIRECTIVES_SECTION_CHANNEL : '') + (origins.length ? '\n\n' + SOURCES_SECTION_CHANNEL : '') + (external ? '\n\n' + EXTERNAL_SOURCES_SECTION : '');
         if (fixedPrompt === null) fixedPrompt = lastPrompt = wanted;
         else if (wanted !== lastPrompt) {
           /* What changed of its instructions: what was added at the end, or (a focus rewrites the interface) all of it now - pinned. */
@@ -268,7 +275,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
         report(answer.content);
         return answer;
       }
-      const standing = { ...(task ? { operator_task: task } : {}), ...(origins.length ? { sources: { origins } } : {}) };
+      const standing = { ...(task ? { operator_task: task } : {}), ...(origins.length ? { sources: { origins } } : {}), ...(external ? { external_sources: external.inventory(false) } : {}) };
       let user: unknown;
       if (request.user instanceof UserParts) {
         const parts = request.user.parts as Record<string, unknown>[];
@@ -285,7 +292,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       earlier.push(...fresh);
       for (const m of fresh) if (m.directive) { open.set(m.id, { ...m, ...(channel.round ? { round: channel.round() } : {}) }); directed = true; }
       const base = channel.system ? channel.system() : request.system;
-      let system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '');
+      let system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '') + (external ? '\n\n' + EXTERNAL_SOURCES_SECTION : '');
       if (channel.fixedSystem?.()) {
         if (fixedPrompt === null) fixedPrompt = lastPrompt = system;
         else if (system !== lastPrompt) {
@@ -332,7 +339,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
 export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorChannel): LawSession<A> {
   const sources = channel.sources;
   const memory = channel.memory;
-  const reads = (q: Record<string, unknown>): boolean => sources !== undefined && sources.origins().length > 0 && Sources.accepts(q);
+  const reads = (q: Record<string, unknown>): boolean => sources !== undefined && sources.handles(q);
   const recalls = (q: Record<string, unknown>): boolean => memory !== undefined && JournalMemory.accepts(q);
   const experience = channel.experience;
   const remembers = (q: Record<string, unknown>): boolean => experience !== undefined && Experience.accepts(q);
@@ -366,7 +373,7 @@ export function assistedSession<A>(host: LawSessionHost<A>, channel: OperatorCha
       runRequest: (r, budget, round) => ('extra' in r ? (recalls(r.extra) ? session!.memory!.run(r.extra) : remembers(r.extra) ? experience!.run(r.extra)
         : delegates(r.extra) ? delegations!.run(r.extra, round)
         : posts(r.extra) ? board!.run(r.extra, round) : registers(r.extra) ? tests!.run(r.extra, round, budget) : measures(r.extra) ? instruments!.run(r.extra, round)
-        : reads(r.extra) ? sources!.run(r.extra) : host.runRequest(r, budget, round))
+        : reads(r.extra) ? sources!.answer(r.extra) : host.runRequest(r, budget, round))
         : host.runRequest(r, budget, round))
     } : {}),
     /* Its episodes and models are kept by the host and the session, not in the notebook. */

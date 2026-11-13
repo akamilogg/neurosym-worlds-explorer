@@ -1,0 +1,6 @@
+{
+  "profiles": [
+    { "id": "cpu-small", "dependencies": { "python": "3.11" },
+      "limits": { "timeout_ms": 600000, "memory_bytes": 4294967296, "cpu_seconds": 600, "output_bytes": 104857600 }, "gpu": false }
+  ]
+}

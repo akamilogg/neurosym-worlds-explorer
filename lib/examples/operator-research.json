@@ -1,0 +1,13 @@
+{
+  "format": "operator-research@1",
+  "id": "scout",
+  "task": "The runs below seem stuck. Look for methods other problems use that could fit what their data show, and tell them what you find, what you infer and what you have not tested.",
+  "targets": ["runs/run-a.json"],
+  "external_research": "examples/external-research.json",
+  "wake": { "stuck": true, "every_rounds": 3, "interval_ms": 1800000 },
+  "budget": { "tokens": 200000, "calls": 60, "minutes": 240, "activations": 8 },
+  "max_messages": 3,
+  "concurrency": 1,
+  "lifetime": "targets",
+  "steps": 6
+}

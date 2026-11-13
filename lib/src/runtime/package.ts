@@ -91,7 +91,7 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
      that had them would not be rebuilt). */
   /* A living world of its own: its session's journal, the record of everything the world did (SPEC-ACONTECIMIENTOS-DEL-MUNDO §14). */
   const own = fs.readdirSync(folder).filter((f) => f === name + '.replay.jsonl' || f === name + '.anomalies.jsonl' || f === name + '.world.jsonl'
-    || (f.startsWith(name + '.') && /^\.(finding|finding\.researcher|method|agent-[^.]+)\.json$/.test(f.slice(name.length))));
+    || (f.startsWith(name + '.') && /^\.(finding|finding\.researcher|method|agent-[^.]+|research-[^.]+)\.json$/.test(f.slice(name.length))));
   for (const f of own) fs.copyFileSync(path.join(folder, f), path.join(dir, f));
   fs.writeFileSync(path.join(dir, name + '.json'), journalText);
   /* Its branches (SPEC-DELEGACION-INVESTIGACIONES §7, §10.3): every one its record names - and its agents' records - wherever it lives (a run resumed may name the branches
@@ -109,7 +109,11 @@ export function packRun(journalFile: string, outDir?: string): { dir: string; ma
   /* The fund's ledger of its lineage (it may be named after the run that began it): without it, what was spent is not known. */
   const ledger = journal.config?.delegation?.ledger;
   if (typeof ledger === 'string' && fs.existsSync(path.resolve(folder, ledger))) fs.copyFileSync(path.resolve(folder, ledger), path.join(dir, path.basename(ledger)));
-  const { dir: blobs, cited } = blobsOf(journalFile, journalText);
+  /* The blobs the snapshot cites, and those its agents' and operators' records cite (what a senior or a researching operator
+     read of external sources, its contributions' reports: SPEC-INVESTIGACION-EXTERNA §9.2). */
+  const records = own.filter((f) => /\.(agent|research)-[^.]+\.json$/.test(f)).map((f) => fs.readFileSync(path.join(folder, f), 'utf8'));
+  const { dir: blobs } = blobsOf(journalFile, journalText);
+  const cited = [...new Set([journalText, ...records].flatMap((t) => blobsOf(journalFile, t).cited))];
   const missing: string[] = [], corrupt: string[] = [];
   for (const b of cited) {
     const from = path.join(blobs, b);

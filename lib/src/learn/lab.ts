@@ -245,6 +245,10 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       normalized as it reads them - never a budget of the researcher. Two cases with the same seed and the same identity are
       one world. Undeclared: the seed alone, which may join worlds that differ but never parts one. */
   readonly realization?: (options: Readonly<Record<string, string>>) => unknown;
+  /** Whether its world admits external sources (SPEC-INVESTIGACION-EXTERNA §4.1): declared `admitted: false` with its
+      reason where what is investigated in it is documented outside, and reading it would contaminate the measure. Neither
+      the operator's allowlist nor the public web reach whoever investigates it; meta-investigation stays open. */
+  readonly externalSources?: { readonly admitted: false; readonly why: string };
 
   /* --- The actions (optional) ----------------------------------------------------------- */
   readonly act?: {
@@ -439,7 +443,9 @@ export interface LabServices {
       messages; `memory`, whether it has a selective memory (§13), and the Judge as the selector of its `find`. */
   readonly assisted?: { readonly memory: boolean; readonly selector?: import('./assisted/sources.ts').LineSelector;
     /** The records of earlier runs it may read (SPEC-INVESTIGADOR-ASISTIDO §12), and in which mode the operator gave them. */
-    readonly experience?: { readonly reader: import('./assisted/experience.ts').Experience; readonly mode: import('./assisted/experience.ts').ExperienceMode; readonly scope: import('./assisted/experience.ts').ExperienceScope } };
+    readonly experience?: { readonly reader: import('./assisted/experience.ts').Experience; readonly mode: import('./assisted/experience.ts').ExperienceMode; readonly scope: import('./assisted/experience.ts').ExperienceScope };
+    /** Its sources (SPEC-INVESTIGACION-EXTERNA, IE2): the web as the configuration allows, or the world's refusal. */
+    readonly sources?: import('./assisted/sources.ts').Sources };
   /** The assisted researcher's opening (SPEC-ORQUESTADOR §3.3.4): waits, after the first episodes, for its senior's first
       hypothesis (when the run was told to); it goes with the first question. */
   awaitOpening?(): Promise<void>;
@@ -466,6 +472,10 @@ export interface GameLab {
       normalized as it reads them - never a budget of the researcher. Two cases with the same seed and the same identity are
       one world. Undeclared: the seed alone, which may join worlds that differ but never parts one. */
   readonly realization?: (options: Readonly<Record<string, string>>) => unknown;
+  /** Whether its world admits external sources (SPEC-INVESTIGACION-EXTERNA §4.1): declared `admitted: false` with its
+      reason where what is investigated in it is documented outside, and reading it would contaminate the measure. Neither
+      the operator's allowlist nor the public web reach whoever investigates it; meta-investigation stays open. */
+  readonly externalSources?: { readonly admitted: false; readonly why: string };
   /** The metrics of its progress (SPEC-VISTA-ESCALADA §3). */
   readonly progress?: import('./progress.ts').LabProgress;
   readonly about: string;

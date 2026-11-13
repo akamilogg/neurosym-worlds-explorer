@@ -15,6 +15,16 @@ import { worldOptionsIn } from './reader.ts';
 import { LABS } from '../worlds/labs.ts';
 import { startRunAt, startEvolveAt, labNameOf } from '../runtime/control.ts';
 import { evolveCapability, evolveConfigOf, worldFromJournal } from '../runtime/evolve-branch.ts';
+import { createHash } from 'node:crypto';
+import { Sources } from '../learn/assisted/sources.ts';
+import { ExternalSources, EXTERNAL_SOURCES_SECTION } from '../learn/assisted/external-sources.ts';
+import { environmentPdfExtractor, type ExternalResearchConfig, type PdfExtractor, type WebTransport } from '../learn/assisted/external.ts';
+import { braveProvider, type SearchProvider } from '../learn/assisted/source-search.ts';
+import { exposed, exposureOf, type ExternalExposure } from '../learn/assisted/exposure.ts';
+
+/** The senior's external sources (SPEC-INVESTIGACION-EXTERNA §6.1): the junior's instruments, read by the senior itself. */
+export const SENIOR_EXTERNAL_SECTION = 'YOUR EXTERNAL SOURCES. Besides the junior\'s record, you may search the web and read what you find - the same instruments the junior has, with bags of your own - in your "investigate" requests. Use them to look for mechanisms and methods from other problems that the junior\'s data may fit, and say in your messages what you took from where (cite "src:<snapshot>#L<from>-<to>"): what a source says is a reference for the junior to test, never a fact of its environment.\n'
+  + EXTERNAL_SOURCES_SECTION.replace(/^EXTERNAL SOURCES\. [^\n]*\n/, '');
 
 /* ============================================================================
  * The AGENT OPERATOR (SPEC-ORQUESTADOR §3, R1): an agent that follows an assisted run and does
@@ -176,6 +186,9 @@ export interface AgentOperatorOptions {
       its junior may call it - an instrument's reading, another member's message -, at most `max` times. Absent: never woken by
       them; only by its signs, as always. */
   readonly activation?: { readonly on_observation?: boolean; readonly on_message?: boolean; readonly max: number };
+  /** The senior's external sources (SPEC-INVESTIGACION-EXTERNA, IE2): the junior's instruments, its own bags. Its provider,
+      transport and PDF extractor may be injected (tests); by default Brave with WEB_SEARCH_KEY and the network. */
+  readonly external?: { readonly config: ExternalResearchConfig; readonly provider?: SearchProvider | null; readonly transport?: WebTransport; readonly pdf?: PdfExtractor };
 }
 
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
@@ -217,7 +230,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
     llm_config?: Readonly<Record<string, unknown>>; llm_provider?: string; settings?: Record<string, unknown>;
     continued_from?: string; earlier?: { decisions: AgentDecision[] }; senior?: SeniorState;
     /** Its branches (SPEC-DELEGACION-INVESTIGACIONES): every request and answer, kept as it goes. */
-    delegation_log?: Record<string, unknown>[]; delegation?: Record<string, unknown> } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
+    delegation_log?: Record<string, unknown>[]; delegation?: Record<string, unknown>;
+    /** Its external sources (SPEC-INVESTIGACION-EXTERNA): every search and acquisition, as it went. */
+    sources_log?: Record<string, any>[] } = { format: 'agent@1', agent: 'agent:' + o.id, role, run: o.journal, started: new Date().toISOString(), decisions: [] as AgentDecision[] };
   if (o.llm.configuration) record.llm_config = o.llm.configuration;
   /* The settings of its role, as given: they make it the agent it is (a characterization tells one from another). */
   record.settings = Object.fromEntries(Object.entries({ maxOrders: o.maxOrders, patience: o.patience, stuckVocabulary: o.stuckVocabulary, looking: o.looking, readSteps: o.readSteps, cooldown: o.cooldown,
@@ -242,6 +257,36 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
   /* Its branches (SPEC-DELEGACION-INVESTIGACIONES): a senior's, where the junior's run gives a fund and its code the capability -
      its own (one at a time), under the run's fund and limits, kept in its record as it goes. */
   let branchesOf: Delegations | null | undefined;
+  /* Its external sources (SPEC-INVESTIGACION-EXTERNA, IE2): the senior's, from its own bags, refused by a world that admits
+     none; what it read kept in its record and its texts beside the run, made again when it goes on in a new process. */
+  let sourcesOf: Sources | null | undefined;
+  const seniorSources = (journal: Record<string, any>): Sources | null => {
+    if (sourcesOf !== undefined) return sourcesOf;
+    if (role !== 'senior' || !o.external) return (sourcesOf = null);
+    const lab = Object.values(LABS).find((l) => l.id === journal?.experiment);
+    const refusedBy = lab?.externalSources?.admitted === false ? lab.externalSources.why : undefined;
+    const blobs = path.join(path.dirname(o.journal), 'blobs');
+    const keep = (text: string): string => {
+      const sha = createHash('sha256').update(text).digest('hex');
+      if (!fs.existsSync(path.join(blobs, sha))) { fs.mkdirSync(blobs, { recursive: true }); fs.writeFileSync(path.join(blobs, sha), text); }
+      return sha;
+    };
+    const external = refusedBy ? undefined : new ExternalSources({ config: o.external.config, actor: o.id, keep,
+      log: (type, data) => { (record.sources_log ??= []).push({ at: new Date().toISOString(), type, ...data }); save(); },
+      provider: o.external.provider !== undefined ? o.external.provider : o.external.config.search?.provider === 'brave' ? braveProvider({ fetch: globalThis.fetch as never, key: process.env.WEB_SEARCH_KEY }) : null,
+      ...(o.external.transport ? { transport: o.external.transport } : {}), ...((o.external.pdf ?? environmentPdfExtractor()) ? { pdf: (o.external.pdf ?? environmentPdfExtractor())! } : {}) });
+    external?.restore(record.sources_log ?? [], (sha) => { try { return fs.readFileSync(path.join(blobs, sha), 'utf8'); } catch { return null; } });
+    (record.sources_log ??= []).push({ at: new Date().toISOString(), type: refusedBy ? 'external_research_refused' : 'external_research_inventory', ...(refusedBy ? { why: refusedBy } : external!.inventory()) });
+    save();
+    return (sourcesOf = new Sources({ allow: [], fetch: async () => { throw new Error('the senior reads no allowlist of A6'); }, ...(external ? { external } : {}), ...(refusedBy ? { refusedBy } : {}) }));
+  };
+  /* Its exposure (§4.1.1): what it read itself, and what reached the junior it reads - carried by each of its messages. */
+  const seniorExposure = (journal: Record<string, any>): ExternalExposure | null => {
+    const own = (record.sources_log ?? []).some((e) => (e.type === 'source_search' && e.state === 'answered') || (e.type === 'source_acquired' && e.state === 'acquired'));
+    const junior = exposureOf(journal);
+    if (!own && !exposed(junior)) return null;
+    return { direct: own, via: exposed(junior) ? [...new Set(['run:' + path.basename(o.journal), ...junior.via])].sort() : [], since: null };
+  };
   const seniorBranches = (journal: Record<string, any>): Delegations | null => {
     if (branchesOf !== undefined) return branchesOf;
     const cfg = (journal?.config ?? {}) as Record<string, any>;
@@ -285,6 +330,8 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
           /* Its branches too: their requests, reservations, spending and results given - the same branches, never new ones. */
           /* Its delegations as its earlier record has them, their paths made relative to this record's folder. */
           if (Array.isArray(earlier.delegation_log)) { record.delegation_log = earlier.delegation_log.map((e: Record<string, any>) => rebaseDelegationEvent(e, path.dirname(from!), path.dirname(file))); branchesOf = undefined; }
+          /* What it read of external sources: its snapshots read again offline, its bags as it left them. */
+          if (Array.isArray(earlier.sources_log)) { record.sources_log = earlier.sources_log; sourcesOf = undefined; }
           for (const k of record.senior.followed_up ?? []) followedUp.add(k);
           for (const r of record.senior.called_in_round ?? []) calledInRound.add(r);
           /* What it had pinned, pinned again in its channel (which lives as long as this process). */
@@ -339,7 +386,7 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       let d: AgentDecision | null;
       if (role === 'senior') {
         d = await seniorDecides(o, journal, rounds, [...(record.earlier?.decisions ?? []), ...record.decisions], maxOrders - orders, !completed && duringRound ? now!.current_round : null, followUp, record.senior!, Boolean(opening), seniorChannel,
-          seniorBranches(journal), branchDue, wake);
+          seniorBranches(journal), branchDue, wake, seniorSources(journal));
         record.senior!.followed_up = [...followedUp];
         record.senior!.called_in_round = [...calledInRound];
       }
@@ -356,7 +403,9 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       for (const r of d?.instrument_reports ?? []) send(o.journal, { kind: 'instrument_report', what: r.what, evidence: r.evidence, report_kind: r.kind, by: 'agent:' + o.id });
       if (d && (d.decision === 'message' || d.decision === 'stop')) {
         /* A senior's message is a directive: an order the junior carries out and reports (SPEC-ORQUESTADOR §3.3.3). */
-        const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id, ...(role === 'senior' ? { directive: true } : {}), ...(role === 'senior' && d.test ? { test: d.test } : {}) } : { kind: 'stop', by: 'agent:' + o.id });
+        const exposure = d.decision === 'message' && role === 'senior' ? seniorExposure(journal) : null;
+        const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id, ...(role === 'senior' ? { directive: true } : {}), ...(role === 'senior' && d.test ? { test: d.test } : {}),
+          ...(exposure ? { external_exposure: exposure } : {}) } : { kind: 'stop', by: 'agent:' + o.id });
         (d as { order?: string }).order = id;
         orders++;
         say('agent:' + o.id + ' after ' + rounds + ' rounds: ' + d.decision + (d.text ? ' - ' + d.text.slice(0, 120) : ''));
@@ -396,7 +445,7 @@ function noteOf(state: SeniorState, id: string): { text: string; versions: numbe
 
 async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, any>, rounds: number, decisions: readonly AgentDecision[], ordersLeft: number,
   duringRound: number | null, followUp: ReturnType<typeof followUpDue>, state: SeniorState, isOpening = false, channel: Channel = new Channel(),
-  branches: Delegations | null = null, branchDue = false, woken: string[] | null = null): Promise<AgentDecision | null> {
+  branches: Delegations | null = null, branchDue = false, woken: string[] | null = null, sources: Sources | null = null): Promise<AgentDecision | null> {
   const signals: StuckSignals = stuckSignals(journal, o.patience ?? 3, o.looking ?? 3, 2, o.stuckVocabulary ?? 1);
   /* A follow-up is called for by the junior's experiment, not by a sign; a wake by what reached the junior, as declared;
      anything else waits for a sign and for the junior to have had time with its last message. */
@@ -405,7 +454,9 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const memory = seniorMemory(journalReader(journal, { openLimit: o.openLimit ?? 4000 }), nb, () => decisions);
   const delegation = (journal.config?.delegation ?? null) as { fund: number; tokens: number; rounds: number; max_rounds: number } | null;
   const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal))
-    + (branches && delegation ? '\n\n' + SENIOR_DELEGATION_SECTION({ fund: delegation.fund, tokens: delegation.tokens, rounds: delegation.rounds, maxRounds: delegation.max_rounds }) : '');
+    + (branches && delegation ? '\n\n' + SENIOR_DELEGATION_SECTION({ fund: delegation.fund, tokens: delegation.tokens, rounds: delegation.rounds, maxRounds: delegation.max_rounds }) : '')
+    /* Its external sources (SPEC-INVESTIGACION-EXTERNA, IE2): the junior's instruments, with its own bags. */
+    + (sources?.external ? '\n\n' + SENIOR_EXTERNAL_SECTION + '\nYour inventory: ' + JSON.stringify(sources.external.inventory(false)) : '');
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
   const call = decisions.length + 1;
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
@@ -506,9 +557,9 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       const stepsLeft = Math.max(0, limit - read.length);
       if (Array.isArray(parsed.investigate) && stepsLeft > 0) {
         const requests = parsed.investigate.filter((q: unknown): q is Record<string, unknown> => Boolean(q) && typeof q === 'object'
-          && (typeof (q as Record<string, unknown>).memory === 'string' || (branches !== null && Delegations.accepts(q as Record<string, unknown>)))).slice(0, 8);
+          && (typeof (q as Record<string, unknown>).memory === 'string' || (branches !== null && Delegations.accepts(q as Record<string, unknown>)) || (sources !== null && sources.handles(q as Record<string, unknown>)))).slice(0, 8);
         const results: unknown[] = [];
-        for (const q of requests) results.push(branches && Delegations.accepts(q) ? await branches.run(q, rounds) : await memory.run(q));
+        for (const q of requests) results.push(branches && Delegations.accepts(q) ? await branches.run(q, rounds) : sources && sources.handles(q) ? await sources.answer(q) : await memory.run(q));
         read.push({ step: 'd' + call + '.' + (read.length + 1), requests, results });
         state.conversation.push({ investigation_step: read[read.length - 1], steps_left: Math.max(0, limit - read.length), ...written });
         continue;

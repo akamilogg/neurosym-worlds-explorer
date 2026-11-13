@@ -667,6 +667,13 @@ export async function verifyPrograms(store: BlobStore, pkg: JuniorPackage, backe
 async function runProgramEdit(backend: IsolatedBackend, code: string, inputs: Record<string, Buffer>, baseDir: string, limits: ProgramLimits): Promise<{ modules: EditDraft['modules'] } | { problems: string[] }> {
   const r = await backend.run({ code, inputs, base: baseDir, limits });
   if (r.state !== 'finished') return { problems: ['the program ' + r.state + ': ' + (r.reason ?? '')] };
+  return modulesOfOutputs(r.outputs);
+}
+
+/** A program's outputs read as an edit's modules (weight-edit-set@1 as a program writes it): out/modules.json lists them
+    ({module, encoding, shape, file}), each file a safetensors with B and A, or indices and values. */
+export function modulesOfOutputs(outputs: Readonly<Record<string, Buffer>>): { modules: EditDraft['modules'] } | { problems: string[] } {
+  const r = { outputs };
   let list: { module: string; encoding: 'lowrank' | 'sparse'; shape: [number, number]; file: string }[];
   try { list = JSON.parse(r.outputs['modules.json'].toString('utf8')); } catch { return { problems: ['the program wrote no readable out/modules.json'] }; }
   if (!Array.isArray(list) || !list.length) return { problems: ['out/modules.json lists no module'] };

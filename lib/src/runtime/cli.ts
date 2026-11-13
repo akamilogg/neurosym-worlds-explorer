@@ -63,6 +63,8 @@ export const CLI_USAGE = [
   'The orchestra (SPEC-ORQUESTADOR):',
   'lab agent <run> [--id coach] [--max-orders N]             an agent operator follows the run (it needs --agents coach=message on the run)',
   '          [--role senior] [--patience N] [--stuck-vocabulary 2] a senior: when the run is stuck, it reviews the junior record and proposes a hypothesis',
+  '          [--external-research <file>]                    the senior searches and reads external sources itself, with its own bags (SPEC-INVESTIGACION-EXTERNA)',
+  'lab agent <run> --research <operator-research.json>       a researching operator: woken as its file says, it investigates and delivers contributions (SPEC-INVESTIGACION-EXTERNA)',
   'lab grade <run> [--senior [id]]                          grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*); --senior: its senior\'s own notebook',
   'lab audit <run> [--flat] [--extract]                      audit its method (operator only): links, citations, controls; J1-J6 by the Judge (JEV_*), or code only with --flat;',
   '                                                           --extract: each text\'s claims structured by AUDIT_LLM_* (default LLM_*), the facts among them checked',
@@ -918,14 +920,34 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
       }
       case 'agent': {
         const journal = resolveRun(ctx.root, args.shift());
+        /* A researching operator (SPEC-INVESTIGACION-EXTERNA §6.3, IE4): its file says its task, targets, wakes and budget;
+           without targets of its own it accompanies this run. */
+        const researchFile = take(args, 'research');
+        if (researchFile) {
+          const { readResearchSpec, runResearchOperator } = await import('../orchestra/research-operator.ts');
+          let spec;
+          try { spec = readResearchSpec(path.resolve(ctx.root, researchFile)); } catch (e) { out(String((e as Error).message ?? e)); return 2; }
+          const { chatFromEnv } = await import('../orchestra/launch.ts');
+          out('agent:' + spec.id + ' researches for ' + spec.targets.join(', ') + ' (each run must allow it: --agents ' + spec.id + '=message)');
+          const r = await runResearchOperator({ spec: { ...spec, targets: spec.targets.length ? spec.targets : [journal] }, root: ctx.root, llm: chatFromEnv(ctx.env ?? process.env, 'AGENT_LLM'), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
+          out('it ended (' + String(r.ended_by) + '): ' + r.activations.length + ' activations, ' + r.contributions.length + ' contributions');
+          return 0;
+        }
         const role = take(args, 'role') === 'senior' ? 'senior' as const : 'coach' as const;
         const id = take(args, 'id') ?? role, max = take(args, 'max-orders'), patience = take(args, 'patience'), vocabulary = take(args, 'stuck-vocabulary');
         if (vocabulary !== undefined && vocabulary !== '1' && vocabulary !== '2') { out('--stuck-vocabulary: 1 (as the senior always read requests) or 2 (the table every reader shares)'); return 2; }
+        /* Its external sources (SPEC-INVESTIGACION-EXTERNA, IE2): the senior's own configuration and bags. */
+        const externalFile = take(args, 'external-research');
+        let external: import('../learn/assisted/external.ts').ExternalResearchConfig | undefined;
+        if (externalFile) {
+          if (role !== 'senior') { out('--external-research: the senior reads external sources (--role senior)'); return 2; }
+          try { external = (await import('../learn/assisted/external.ts')).readExternalConfig(path.resolve(ctx.root, externalFile)); } catch (e) { out(String((e as Error).message ?? e)); return 2; }
+        }
         const env = ctx.env ?? process.env;
         const { chatFromEnv } = await import('../orchestra/launch.ts');
         const { runAgentOperator } = await import('../orchestra/agent-operator.ts');
         out('agent:' + id + ' follows ' + path.basename(journal, '.json') + ' (the run must allow it: --agents ' + id + '=message)');
-        const r = await runAgentOperator({ id, journal, role, root: ctx.root, llm: chatFromEnv(env, 'SENIOR_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(patience ? { patience: Number(patience) } : {}), ...(vocabulary ? { stuckVocabulary: Number(vocabulary) as 1 | 2 } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
+        const r = await runAgentOperator({ id, journal, role, root: ctx.root, llm: chatFromEnv(env, 'SENIOR_LLM'), ...(max ? { maxOrders: Number(max) } : {}), ...(patience ? { patience: Number(patience) } : {}), ...(vocabulary ? { stuckVocabulary: Number(vocabulary) as 1 | 2 } : {}), ...(external ? { external: { config: external } } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}), say: out });
         out('the run ended; the agent\'s decisions: ' + r.file);
         return 0;
       }

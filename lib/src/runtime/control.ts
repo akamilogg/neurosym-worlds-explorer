@@ -43,7 +43,9 @@ export type RunOrder =
   | { readonly kind: 'message'; readonly text: string; readonly by?: string; /** A senior's: an order, not a suggestion (SPEC-ORQUESTADOR §3.3.3). */ readonly directive?: boolean;
       /** Pinned in the researcher's channel under this key (SPEC-CANAL-MENSAJES): reaches it every round, not once. */ readonly pin?: string;
       /** Held until this round begins (a message scheduled in advance, e.g. by a batch): delivered with its first question. */ readonly round?: number;
-      /** A senior's order to register a test of the junior's own, with its message (SPEC-PRUEBAS-PROPIAS §8). */ readonly test?: Readonly<Record<string, unknown>> }
+      /** A senior's order to register a test of the junior's own, with its message (SPEC-PRUEBAS-PROPIAS §8). */ readonly test?: Readonly<Record<string, unknown>>;
+      /** Its author's exposure to external sources (SPEC-INVESTIGACION-EXTERNA §4.1.1), written by the host from its record. */ readonly external_exposure?: import('../learn/assisted/exposure.ts').ExternalExposure;
+      /** The research contribution it delivers (SPEC-INVESTIGACION-EXTERNA §7): its id, its report by content, its state. */ readonly contribution?: { readonly id: string; readonly report: string; readonly state: string } }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string }
   /** The operator's change to a living world's programs (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10): never help. */

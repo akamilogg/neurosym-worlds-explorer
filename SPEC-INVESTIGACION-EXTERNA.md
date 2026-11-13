@@ -1,6 +1,7 @@
 # SPEC · Investigación con fuentes externas y adquisición de métodos
 
-Estado (13/11/2026): **propuesta para implementar; ninguna de las entregas IE1–IE6 se declara hecha**. Revisada el
+Estado (13/11/2026): **IE1, IE2, IE4, IE5 e IE6 implementadas en código, con sus pruebas; IE3 espera a CC3** (§11,
+«Estado de las entregas»). Sin piloto real: falta una clave del buscador y una ejecución de extremo a extremo. Revisada el
 13/11/2026 contra el código y las reglas del proyecto (§13): la lista blanca es el acceso por defecto, la web pública
 se activa explícitamente, un mundo puede negarse a las fuentes externas, y las piezas que chocaban con lo construido
 (clases de petición, identidad de los ensayos, procedencia de lo aprendido) quedan resueltas. Una segunda revisión del
@@ -528,6 +529,20 @@ que se añade (IE2 a IE4). IE6 integra todas.
 Cada entrega actualiza esta cabecera y declara qué funciona realmente. IE1–IE4 ya aportan búsqueda e inspiración con
 las herramientas actuales; **el objetivo completo incluye IE5**, para no conservar como cuello de botella la necesidad
 de que el humano implemente cada método encontrado. No se exige que todos los entornos dispongan de GPU o PDF.
+
+**Estado de las entregas (13/11/2026).**
+
+| Entrega | Qué funciona | Qué falta |
+|---|---|---|
+| IE1 | `external-research@1` (lista blanca por defecto, `public` sólo escrito, `deny`), permisos por salto y direcciones privadas negadas, adquisición con reintentos, `Retry-After` y cota de bytes, snapshots `source-document@1` con cuerpo, texto y enlaces guardados por contenido, `search`/`open`/`links`/`find`, Brave por HTTP y proveedor simulado, extractor de PDF del entorno (`PDF_EXTRACTOR`), canales `web` y `search` del replay, inventario en el registro, finding con acceso, uso, gasto y exposición, la configuración en la identidad del run y de un ensayo del metalaboratorio, la negativa de `c302nav` y `c302closed` (`learn/assisted/external.ts`, `source-search.ts`, `external-sources.ts`, `exposure.ts`) | Comprobación DNS de las direcciones públicas (hoy se juzga el nombre) |
+| IE2 | Las mismas herramientas en el bucle de leyes, en el del grid y en el senior (`lab agent --role senior --external-research`), con bolsas propias y su registro (`sources_log`) rehecho sin red al continuar; los mensajes del senior llevan su exposición y un mundo que niega fuentes no los recibe | — |
+| IE3 | — | Ramas documentales: tras CC3 |
+| IE4 | `operator-research@1`, `lab agent <run> --research`, despertadores (apertura, atasco, mensaje, resultado de rama, rondas, reloj) agrupados en una activación, presupuesto finito, cupo por destinatario, `research-contribution@1` guardada por contenido y entregada una vez por destinatario, un destinatario terminado no se reabre (`orchestra/research-operator.ts`) | El planificador (`targets` en un proyecto); `lifetime: "project"` sólo por presupuesto |
+| IE5 | `method-program@1`, perfiles del operador (`--program-profiles`), ABI (`inputs/job.json`, `out/result.json`), identidad del trabajo, importación de un conjunto de cambios comprobado como cualquier edición, `learned` escrito por el host y leído por `owes`, receta `method: "program"` en el mundo del junior con las realizaciones de sus ejemplos (`junior/method-program.ts`) | Importar LoRA y `mask@1` (WE7a); `checkpoint/` en el backend aislado; la prueba de aislamiento de la GPU. En Windows responde `unavailable` |
+| IE6 | El paquete lleva los snapshots, los registros del senior y de los operadores y sus informes; `lab verify` lo reconstruye sin red; el finding cuenta las contribuciones recibidas y las citadas (`because`); ejemplos y guía | Ampliar la consola; el piloto real |
+
+La exposición indirecta se registra hoy por mensajes y contribuciones; la de la experiencia de otros runs, los
+resultados de ramas y los tablones queda para cuando esos canales la escriban (§4.1.1).
 
 Archivos de ejemplo a entregar: `lib/examples/external-research.json`, `operator-research.json` y
 `external-research.md`, con configuración, lanzamiento, continuación, exportación y lectura del recorrido. Secretos

@@ -30,6 +30,7 @@
  * until it is added here.
  * ========================================================================== */
 
+import { exposureOf } from './assisted/exposure.ts';
 import { evaluationSummary } from './objective.ts';
 
 type J = Record<string, any>;
@@ -66,6 +67,9 @@ export interface Finding {
     /** Assisted researcher: where its evidence comes from - the world (points of episodes), the operator's messages, sources. */
     readonly grounded?: readonly ('world' | 'operator' | 'sources' | 'experience' | 'peers')[] }[];
   /** Assisted researcher (SPEC-INVESTIGADOR-ASISTIDO §7): what help it had. It is provenance, so both views keep it. */
+  /** External research (SPEC-INVESTIGACION-EXTERNA §10) and the exposure the record shows (§4.1.1). */
+  readonly external_research?: Record<string, unknown>;
+  readonly external_exposure?: import('./assisted/exposure.ts').ExternalExposure;
   readonly assistance?: {
     readonly messages: readonly { readonly id: string; readonly question: number; readonly text: string; readonly by?: string; readonly at?: string;
       /** Whether a person or an agent (SPEC-ORQUESTADOR R1) wrote it. */
@@ -288,6 +292,21 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
     claims,
     ...(assistance ? { assistance } : {}),
     ...(parallel ? { parallel } : {}),
+    /* External research (SPEC-INVESTIGACION-EXTERNA §10): enabled (allowlist or public), used, refused by the world; and the
+       exposure its record shows (§4.1.1) - a run exposed is never a measure of investigating without external sources. */
+    ...(journal.config?.external_research || events.some((e) => e.type === 'source_search' || e.type === 'source_acquired' || (e.type === 'operator_message' && (e.messages ?? []).some((m: J) => m.contribution))) ? { external_research: {
+      enabled: journal.config?.external_research && !journal.config.external_research.refused_by_the_world ? { access: String(journal.config.external_research.access), search: journal.config.external_research.search ?? null } : null,
+      ...(journal.config?.external_research?.refused_by_the_world ? { refused_by_the_world: String(journal.config.external_research.refused_by_the_world) } : {}),
+      used: { searches: events.filter((e) => e.type === 'source_search').length, searches_answered: events.filter((e) => e.type === 'source_search' && e.state === 'answered').length,
+        snapshots: events.filter((e) => e.type === 'source_acquired' && e.state === 'acquired').map((e) => ({ id: String(e.snapshot), url: String(e.final) })),
+        failed_reads: events.filter((e) => e.type === 'source_acquired' && e.state !== 'acquired').length },
+      /* The contributions it received (§7), and what of them it cited where it acted - never a cause read from an order of events. */
+      contributions_received: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).filter((m: J) => m.contribution).map((m: J) => ({ id: String(m.contribution.id), from: String(m.by ?? ''), question: e.question }))),
+      cited_contributions: [...new Set(JSON.stringify(events.filter((e) => e.type === 'proposal' || e.type === 'investigation')).match(/"because":\s*"([^"]+)"/g) ?? [])].map((x) => x.replace(/^"because":\s*"|"$/g, '')),
+      spent: (() => { const last = [...events].reverse().find((e) => (e.type === 'source_search' || e.type === 'source_acquired') && e.left); const b = journal.config?.external_research ? events.find((e) => e.type === 'external_research_inventory')?.budget : null;
+        return last && b ? { search_calls: b.search_calls - last.left.search_calls, fetch_calls: b.fetch_calls - last.left.fetch_calls, download_bytes: b.download_bytes - last.left.download_bytes } : null; })()
+    } } : {}),
+    external_exposure: exposureOf(journal),
     tested: { places: places.map((p) => ({ ...p })), at_acceptance: atAcceptance, validations: summary.validations ?? [] },
     counterexamples,
     limitations: {

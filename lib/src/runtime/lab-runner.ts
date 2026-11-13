@@ -41,6 +41,10 @@ import { EVOLVE_ENGINE, type SearchManifest } from '../learn/evolve/engine.ts';
 import { evolveConfigOf } from './evolve-branch.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { Sources, isUrl, judgeSelector, originProblem, sourceFetch } from '../learn/assisted/sources.ts';
+import { environmentPdfExtractor, externalConfigHash, normalizeExternalConfig, readExternalConfig, type PdfExtractor, type WebTransport } from '../learn/assisted/external.ts';
+import { ExternalSources } from '../learn/assisted/external-sources.ts';
+import { exposed, type ExternalExposure } from '../learn/assisted/exposure.ts';
+import { braveProvider, type SearchProvider } from '../learn/assisted/source-search.ts';
 import { PEERS_SECTION, PeerChannel, TeamBoard, parsePublication, type BoardEntry } from '../learn/assisted/board.ts';
 import { mulberry32 } from '../worlds/grid/gen.ts';
 import { WorldJournal, type LivingSession } from '../living/world.ts';
@@ -91,6 +95,7 @@ const COMMON: readonly { name: string; default: string; help: string }[] = [
   { name: 'focus', default: '', help: 'a facet of the task: what of the answer counts (the laboratory\'s facets; either researcher)' },
   { name: 'task', default: '', help: 'what the operator wants understood, in words (the assisted researcher only)' },
   { name: 'sources-allow', default: '', help: 'origins the assisted researcher may read sources from: directories, URL prefixes or domains, a,b,...' },
+  { name: 'external-research', default: '', help: 'an external-research@1 file: searching the web and reading it as snapshots, within its access (allowlist by default) and its bags (SPEC-INVESTIGACION-EXTERNA)' },
   { name: 'experience', default: '', help: 'journals of earlier runs the assisted researcher may read (list/open/find over what each researcher saw): a,b,...' },
   { name: 'experience-mode', default: '', help: '"transfer" (the default: runs of other worlds only) or "meta" (runs of this same world too: a researcher of researchers)' },
   { name: 'experience-scope', default: '', help: '"all" (the default: everything each researcher saw and wrote, its observations and models too) or "methods" (only the methods it wrote in its notebook)' },
@@ -280,6 +285,9 @@ export interface LabRunOptions {
       the run stops as that record stopped - a budget (its closing then served from the record), a cancellation - where it
       would otherwise go on asking. Only from code: a run on the command line resumes to go on. */
   readonly stopAsRecorded?: string;
+  /** External research's services, injected (tests, or another provider): its search provider (null: none), its transport
+      of the web, an extractor of PDFs. By default Brave with WEB_SEARCH_KEY, the network, no PDFs. */
+  readonly external?: { readonly provider?: SearchProvider | null; readonly transport?: WebTransport; readonly pdf?: PdfExtractor };
 }
 
 /** What a re-evaluation takes: the run's model as its journal keeps it, its artifact's version, the record its products are
@@ -464,6 +472,13 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     if (unknown.length) throw new LabError('--tools: unknown ' + unknown.join(', ') + ' (tools: ' + ALL.join(', ') + ', or all / none)');
     return ALL.filter((t) => asked.includes(t));
   };
+  /* External research (SPEC-INVESTIGACION-EXTERNA, IE1): its configuration read now - its hash part of the run's identity. */
+  let externalConfig: import('../learn/assisted/external.ts').ExternalResearchConfig | null = null;
+  /* A run resumed (or verified elsewhere) keeps the configuration its journal recorded: its identity, whatever the file says now. */
+  if (previous?.config?.external_research?.config) externalConfig = normalizeExternalConfig(previous.config.external_research.config);
+  else if (arg('external-research')) {
+    try { externalConfig = readExternalConfig(path.resolve(options.root, arg('external-research'))); } catch (e) { throw new LabError(String((e as Error).message ?? e)); }
+  }
   const cfg = {
     seed: Number(arg('seed')),
     ...Object.fromEntries(Object.entries(worldOptions).map(([k, v]) => [camel(k), v === 'true' ? true : v === 'false' ? false : Number.isFinite(Number(v)) ? Number(v) : v])),
@@ -513,6 +528,8 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     ...(arg('focus') ? { focus: arg('focus') } : {}),
     ...(arg('task') ? { task: arg('task') } : {}),
     ...(arg('sources-allow') ? { sources_allow: arg('sources-allow') } : {}),
+    ...(externalConfig ? { external_research: { format: externalConfig.format, hash: externalConfigHash(externalConfig), access: externalConfig.web.access, search: externalConfig.search?.provider ?? null, config: externalConfig,
+      ...(lab.externalSources?.admitted === false ? { refused_by_the_world: lab.externalSources.why } : {}) } } : {}),
     ...(arg('memory') ? { memory: arg('memory') } : {}),
     ...(arg('team') ? { team: arg('team'), member: arg('member') } : {}),
     ...(arg('experience') ? { experience: arg('experience'), experience_mode: arg('experience-mode') || 'transfer', experience_scope: arg('experience-scope') || 'all', ...(flag('experience-guidance') ? { experience_guidance: true } : {}) } : {}),
@@ -522,6 +539,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
   Object.defineProperty(worldOptions, '__focus', { value: arg('focus') || '', enumerable: false });
   Object.defineProperty(worldOptions, '__task', { value: arg('task') || '', enumerable: false });
   Object.defineProperty(worldOptions, '__sources_allow', { value: originsOf(arg('sources-allow'), options.root), enumerable: false });
+  Object.defineProperty(worldOptions, '__external', { value: externalConfig, enumerable: false });
   /* The researcher: as the run it resumes had it, or as asked; then the operator's policy decides. */
   /* A continuation may hand the run to the ASSISTED researcher (`--researcher assisted` with `--attempts`): its history stays
      the unknown-world researcher's, word for word, ending included; from its new rounds on the operator may help. Never
@@ -544,6 +562,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     throw new LabError('--focus: ' + focus + ' is not a facet of ' + lab.id + (!isGameLab(lab) && lab.facets ? ' (facets: ' + lab.facets.map((f) => f.id).join(', ') + ')' : ' (it has none)'));
   if (arg('task') && researcher !== 'assisted') throw new LabError('--task: a statement of what to understand is help: only the assisted researcher takes it');
   if (arg('sources-allow') && researcher !== 'assisted') throw new LabError('--sources-allow: sources are help: only the assisted researcher reads them');
+  if (externalConfig && researcher !== 'assisted') throw new LabError('--external-research: external sources are help: only the assisted researcher reads them (the unknown-world researcher keeps its condition)');
   for (const o of originsOf(arg('sources-allow'), options.root)) { const problem = originProblem(o); if (problem) throw new LabError('--sources-allow: ' + problem); }
   /* The assisted researcher of a laboratory with a loop of its own (the grid) takes the operator's messages and may have a
      selective memory; focus, a task and sources are not built for it yet (A7). */
@@ -628,7 +647,13 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
         ...(gridChannel ? { messages: () => gridChannel } : {}),
         /* Its research policy's advice (SPEC-METAPOLITICA-INVESTIGACION), as in a world of laws; never while its history replays. */
         ...(run.policy ? { advise: (question: number, recorded?: OperatorMessage) => run.policy!.advise(question, run.replay.pending() === 0, recorded) } : {}) }, run.log),
-      assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}) },
+      assisted: { memory: arg('memory') === 'selective', ...(cfg.flat ? {} : { selector: judgeSelector(run.judge) }), ...(experience ? { experience } : {}),
+        /* Its external sources (SPEC-INVESTIGACION-EXTERNA, IE2): the same instruments as in a world of laws. */
+        ...(() => {
+          const { external, refusedBy } = externalSourcesOf(lab, worldOptions, run, keeperOf(run.outFile), options.external);
+          announceExternal(run.log, external, refusedBy);
+          return external || refusedBy ? { sources: new Sources({ allow: [], fetch: run.sourceFetch, ...(external ? { external } : {}), ...(refusedBy ? { refusedBy } : {}) }) } : {};
+        })() },
       awaitOpening: () => run.awaitOpening() }
     : run.services), ...(endings.length ? { endings } : {}), ...(team ? { team } : {}) };
   const body = isGameLab(lab)
@@ -639,7 +664,7 @@ export async function runLaboratory(lab: AnyLab, options: LabRunOptions): Promis
     })
     : runLawLab(lab, run, { cfg, worldOptions, ctx: { seed: cfg.seed, options: worldOptions, family: cfg.family, every: cfg.every, checkEpisodes: cfg.checkEpisodes,
       confirmPlaces: cfg.confirmPlaces, explore: cfg.explore }, previous, resumeFrom: resumeFrom ?? null, endings, assistedAfter, team, reevaluate: options.reevaluate ?? null,
-      ...(options.delegate ? { delegate: options.delegate } : {}), living: options.living ?? null,
+      ...(options.delegate ? { delegate: options.delegate } : {}), living: options.living ?? null, ...(options.external ? { external: options.external } : {}),
       connection: { root: options.root, llm: options.llm, ...(options.judge ? { judge: options.judge } : {}), ...(options.fetch ? { fetch: options.fetch } : {}), ...(options.print ? { print: options.print } : {}) } });
   body.catch(() => { /* after a divergence, the loop left behind may fail: nothing of it is kept */ });
   return Promise.race([body, run.diverged]).finally(() => { if (team) team.board.end(team.member); });
@@ -763,6 +788,9 @@ interface OpenRun {
   /** Sources (on the web or on the disk), read through the run's log (channel "source"): a resumed run is answered what the
       first read, and reads live from there. */
   readonly sourceFetch: FetchLike;
+  /** What external research acquired and searched, through the run's log (channels "web" and "search"). */
+  readonly recordedExternal: <T>(channel: 'web' | 'search', key: { readonly url: string; readonly body: string }, compute: () => Promise<T>) => Promise<T>;
+  readonly network: FetchLike;
   log(type: string, data?: Record<string, unknown>): void;
   say(text: string): void;
   halt(): string | null;
@@ -939,13 +967,20 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
         state = 'stopping';
         log('operator_command', { ...who, accepted: true });
         say('the operator asks to stop: stopping before the next question to System 2');
+      } else if (researcher === 'assisted' && order.kind === 'message' && lab.externalSources?.admitted === false && exposed((order as { external_exposure?: ExternalExposure }).external_exposure)) {
+        /* Pushed by an actor exposed to external sources (SPEC-INVESTIGACION-EXTERNA §4.1.1): never delivered here, whatever it cites. */
+        log('operator_command_refused', { ...who, reason: 'this world admits no external sources, and the message comes from an actor exposed to them: ' + lab.externalSources.why });
       } else if (researcher === 'assisted' && order.kind === 'message' && typeof (order as { text?: unknown }).text === 'string' && (order as { text: string }).text.trim()) {
         /* Delivered with the next question to System 2, and logged then (operator_message), with that question's number. */
         waiting.push({ id: String(order.id ?? 'message-' + consumed), text: (order as { text: string }).text, ...(order.by ? { by: order.by } : {}),
           ...((order as { directive?: unknown }).directive === true ? { directive: true } : {}),
           ...(typeof (order as { round?: unknown }).round === 'number' && (order as { round: number }).round > 0 ? { round: Math.floor((order as { round: number }).round) } : {}),
           ...(typeof (order as { pin?: unknown }).pin === 'string' && /^[a-z][a-z0-9_]*$/.test((order as { pin: string }).pin) ? { pin: (order as { pin: string }).pin } : {}),
-          ...((order as { test?: unknown }).test && typeof (order as { test?: unknown }).test === 'object' ? { test: (order as { test: Record<string, unknown> }).test } : {}), at: new Date().toISOString() });
+          ...((order as { test?: unknown }).test && typeof (order as { test?: unknown }).test === 'object' ? { test: (order as { test: Record<string, unknown> }).test } : {}),
+          /* The research contribution it delivers (SPEC-INVESTIGACION-EXTERNA §7): never a directive, never a verdict. */
+          ...((order as { contribution?: unknown }).contribution && typeof (order as { contribution?: unknown }).contribution === 'object' ? { contribution: (order as { contribution: Record<string, unknown> }).contribution } : {}),
+          /* Its author's exposure to external sources, kept with it: the run that receives it is exposed through it. */
+          ...(exposed((order as { external_exposure?: ExternalExposure }).external_exposure) ? { external_exposure: (order as { external_exposure: ExternalExposure }).external_exposure } : {}), at: new Date().toISOString() });
         log('operator_command', { ...who, accepted: true }); helpUsed++;
       } else if (researcher === 'assisted' && order.kind === 'focus') {
         const facet = String((order as { facet?: unknown }).facet ?? '');
@@ -1120,6 +1155,12 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
     log(came ? 'opening_received' : 'opening_missing', { agent: opening.agent });
     if (!came) say('no first hypothesis from ' + by + ': the researcher starts on its own');
   }
+  /* What came from outside for external research (channels "web" and "search"): acquired once, given again. */
+  const recordedExternal = async <T>(channel: 'web' | 'search', key: { readonly url: string; readonly body: string }, compute: () => Promise<T>): Promise<T> => {
+    const f = replay.wrap(channel, async () => { const text = JSON.stringify(await compute()); return { ok: true, status: 200, text: async () => text, headers: { get: () => null } }; });
+    const r = await f(key.url, { method: 'GET', headers: {}, body: key.body, signal: new AbortController().signal });
+    return JSON.parse(await r.text()) as T;
+  };
   /* A laboratory's own computation, logged as the environment's answer (channel "env"): computed once, given again. */
   const recorded = async <T>(route: string, body: unknown, compute: () => Promise<T>): Promise<T> => {
     const local = replay.wrap('env', async () => { const text = JSON.stringify(await compute()); return { ok: true, status: 200, text: async () => text, headers: { get: () => null } }; });
@@ -1137,7 +1178,37 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
       return due;
     }, world: () => worldOrders.splice(0) },
     opening, awaitOpening,
-    sourceFetch: replay.wrap('source', sourceFetch(network)) };
+    sourceFetch: replay.wrap('source', sourceFetch(network)), recordedExternal, network };
+}
+
+/** The external sources of a run's researcher (SPEC-INVESTIGACION-EXTERNA, IE1-IE2), where configured: refused, with its
+    reason, by a world that admits none (§4.1) - and then neither the allowlist nor the web reach it. Both loops (laws and
+    the grid's) take them from here. */
+function externalSourcesOf(lab: AnyLab, worldOptions: LabOptions, run: OpenRun, keep: (text: string) => string, injected?: LabRunOptions['external']): { external?: ExternalSources; refusedBy?: string } {
+  const config = (worldOptions.__external as unknown as import('../learn/assisted/external.ts').ExternalResearchConfig | null | undefined) ?? null;
+  const allowed = ((worldOptions.__sources_allow as unknown as string[] | undefined) ?? []).length > 0;
+  const refusedBy = (config || allowed) && lab.externalSources?.admitted === false ? lab.externalSources.why : undefined;
+  if (!config || refusedBy) return refusedBy ? { refusedBy } : {};
+  const pdf = injected?.pdf ?? environmentPdfExtractor();
+  return { external: new ExternalSources({ config, actor: 'researcher', recorded: run.recordedExternal, keep, log: run.log,
+    provider: injected?.provider !== undefined ? injected.provider : config.search?.provider === 'brave' ? braveProvider({ fetch: run.network, key: process.env.WEB_SEARCH_KEY }) : null,
+    ...(injected?.transport ? { transport: injected.transport } : {}), ...(pdf ? { pdf } : {}) }) };
+}
+
+/** Its inventory in the record, or the world's refusal. */
+function announceExternal(log: (type: string, data?: Record<string, unknown>) => void, external: ExternalSources | undefined, refusedBy: string | undefined): void {
+  if (external) log('external_research_inventory', external.inventory());
+  else if (refusedBy) log('external_research_refused', { why: refusedBy });
+}
+
+/** Texts kept whole by their content beside a journal (shared by the runs of its folder: the same content, one file). */
+function keeperOf(outFile: string): (text: string) => string {
+  return (text) => {
+    const sha = createHash('sha256').update(text).digest('hex');
+    const file = path.join(path.dirname(outFile), 'blobs', sha);
+    if (!fs.existsSync(file)) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); }
+    return sha;
+  };
 }
 
 /** The world's options, kept on the configuration under their own names (see runLab). */
@@ -1151,7 +1222,8 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   team: { board: TeamBoard; member: string; channel: PeerChannel } | null; reevaluate?: Reevaluation | null; delegate?: Launcher;
   living?: { readonly session: LivingSession<unknown, unknown>; readonly actor: string } | null;
   /** How this run reached System 2 and the Judge: what a shared branch, run in this process, reaches them with. */
-  connection?: { readonly root: string; readonly llm: LabConnection; readonly judge?: LabConnection; readonly fetch?: FetchLike; readonly print?: (line: string) => void } }): Promise<LabResult> {
+  connection?: { readonly root: string; readonly llm: LabConnection; readonly judge?: LabConnection; readonly fetch?: FetchLike; readonly print?: (line: string) => void };
+  external?: LabRunOptions['external'] }): Promise<LabResult> {
   const { cfg, worldOptions, previous, resumeFrom, endings, assistedAfter } = o;
   /* Handed to the assisted researcher after some rounds: until then it is the unknown-world researcher, as it was. */
   let helping = assistedAfter === null;
@@ -1173,12 +1245,7 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   const pinning = (): boolean => channelOn && helping && (cfg as { pins?: boolean }).pins !== false;
   const applyPinsNow = (ops: readonly PinOp[]): string[] => applyPins(channel, ops, (id) => session.notebook.documents.get(id));
   /* Texts kept whole by their content, beside the journal (shared by the runs of its folder: the same content, one file). */
-  const keep = (text: string): string => {
-    const sha = createHash('sha256').update(text).digest('hex');
-    const file = path.join(path.dirname(run.outFile), 'blobs', sha);
-    if (!fs.existsSync(file)) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); }
-    return sha;
-  };
+  const keep = keeperOf(run.outFile);
   const ctx: LabContext = { ...o.ctx, ...(run.effects ? { effects: run.effects } : {}), recorded: run.recorded, keep, episodeOf: (id: string) => episodes.get(id)?.data,
     ...(channelOn ? { publish: (m: ChannelPublication) => { channelNow()?.publish('world', m); } } : {}) };
   const { judge, llm, llmUse, replay, journal, outFile, log, say, halt } = run;
@@ -1742,8 +1809,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
   /* The sources the assisted researcher may read (SPEC-INVESTIGADOR-ASISTIDO §6.3): the origins the operator allows, at the
      start and during the run. It reads them itself; the Judge picks lines for it only when it asks (`find` with `select`),
      and a --flat run has no Judge. What the Judge scored is the operator's (source_select). */
+  const { external, refusedBy } = externalSourcesOf(lab, worldOptions, run, keep, o.external);
   const sources = new Sources({ allow: (worldOptions.__sources_allow as unknown as string[] | undefined) ?? [], fetch: run.sourceFetch,
-    ...(cfg.flat ? {} : { selector: judgeSelector(judge) }), onSelect: (record) => log('source_select', { round: session.currentRound, ...record }) });
+    ...(cfg.flat ? {} : { selector: judgeSelector(judge) }), onSelect: (record) => log('source_select', { round: session.currentRound, ...record }),
+    ...(external ? { external } : {}), ...(refusedBy ? { refusedBy } : {}) });
+  announceExternal(run.log, external, refusedBy);
 
   /* The researcher that runs: the unknown-world one's session as it is, or the assisted one's (its own prompt, and the
      operator's messages with its questions; resuming, delivered again at the same questions). */

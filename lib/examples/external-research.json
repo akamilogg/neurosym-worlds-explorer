@@ -1,0 +1,11 @@
+{
+  "format": "external-research@1",
+  "search": { "provider": "brave", "max_results": 10 },
+  "web": { "access": "allowlist", "allow": ["arxiv.org", "https://github.com/"], "deny": [], "max_document_bytes": 10485760 },
+  "budget": { "search_calls": 30, "fetch_calls": 90, "download_bytes": 104857600 },
+  "branches": {
+    "inherit_sources": true,
+    "budget": { "search_calls": 8, "fetch_calls": 24, "download_bytes": 20971520 }
+  },
+  "execution": { "profiles": [] }
+}

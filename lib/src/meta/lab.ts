@@ -1,3 +1,4 @@
+import { externalConfigHash, normalizeExternalConfig } from '../learn/assisted/external.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -287,7 +288,10 @@ export class Trials {
   /** A trial's identity: the manifest, the case, the repetition, the policy with its configuration, and the configuration its
       children really run with - the same trial is never run twice, another is never taken for it. */
   trialId(config: string, c: MetaCase, rep: number): string {
-    return 't-' + short(stableStringify([manifestHash(this.manifest), c.id, rep, config, this.launcher.identity]));
+    /* A case with external research is another trial for each configuration in force (SPEC-INVESTIGACION-EXTERNA §4.2): its
+       content by hash, not its file's name. Cases without it keep the ids they always had. */
+    const external = externalIdentityOf(c.args, this.dir);
+    return 't-' + short(stableStringify([manifestHash(this.manifest), c.id, rep, config, this.launcher.identity, ...(external ? [external] : [])]));
   }
   /** The same trial's id in ledgers written before SHA-256. */
   private legacyTrialId(config: string, c: MetaCase, rep: number): string {
@@ -639,4 +643,16 @@ export async function verifyTrials(dir: string, manifest: MetaManifest, runner: 
     }
   }
   return { holds: !problems.length, trials: count, decisions, searches: manifests.length, problems };
+}
+
+/** The identity of a case's external research (SPEC-INVESTIGACION-EXTERNA §4.2): the configuration its file holds, by hash;
+    null where the case has none. A file that cannot be read is named as such - never taken for no configuration. */
+export function externalIdentityOf(args: readonly string[], dir: string): string | null {
+  const i = args.indexOf('--external-research');
+  if (i < 0) return null;
+  const f = String(args[i + 1] ?? '');
+  for (const candidate of [f, path.resolve(dir, f), path.resolve(process.cwd(), f)]) {
+    try { return 'external-research:' + externalConfigHash(normalizeExternalConfig(JSON.parse(fs.readFileSync(candidate, 'utf8')))); } catch { /* the next */ }
+  }
+  return 'external-research-unreadable:' + f;
 }

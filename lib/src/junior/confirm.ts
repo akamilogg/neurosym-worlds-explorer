@@ -70,9 +70,13 @@ export function importPackage(exportDir: string, store: BlobStore): JuniorPackag
 /** What a package owes to others, read from its provenance and its parts. */
 export function owes(pkg: JuniorPackage): ConfirmationSummary['provenance'] {
   const src = pkg.provenance.sources.join(' ');
+  /* What it learned, as the host that imported it wrote it (SPEC-INVESTIGACION-EXTERNA §8.2): a program that learned from
+     data and emitted a set of edits is a training, whatever its format. Packages of before: read from their format. */
+  const learned = pkg.provenance.learned;
   /* Weight edits sit in the adapter slot (SPEC-EDICION-PESOS §3.2): an adapter that is a set of edits is not a training. */
-  const edited = /(^|\s)edit-set:/.test(src);
-  return { distilled: /(^|\s)dataset:/.test(src), trained: pkg.adapter !== null && !edited, edited, initial_memory: pkg.memory.twin !== null, forced_format: pkg.decoding.forced_format !== null };
+  const edited = learned ? learned === 'edited' : /(^|\s)edit-set:/.test(src);
+  const trained = learned ? learned === 'trained' : pkg.adapter !== null && !edited;
+  return { distilled: /(^|\s)dataset:/.test(src), trained, edited, initial_memory: pkg.memory.twin !== null, forced_format: pkg.decoding.forced_format !== null };
 }
 
 export class ConfirmationService {

@@ -23,6 +23,8 @@ export const COMMON_REQUESTS: Readonly<Record<string, RequestClass>> = {
   /* The assisted researcher's: a test of its own runs an act; its own instrument reads what was recorded. */
   register_test: 'experiment', use: 'observation',
   memory: 'recall', experience: 'recall', list: 'recall', open: 'recall', find: 'recall',
+  /* External sources (SPEC-INVESTIGACION-EXTERNA §5.3): they read sources, not the world. */
+  search: 'recall', links: 'recall',
   peers: 'exchange', publish: 'exchange', delegate: 'exchange', delegation: 'exchange'
 };
 

@@ -7,6 +7,7 @@ import { stableStringify } from '../core/hash.ts';
 import type { CompetenceManifest } from './competence.ts';
 import { selectionOverlap, type Dataset, type Example } from './distill.ts';
 import { datasetRealizations } from './groups.ts';
+import { methodProgramProblems } from './method-program.ts';
 import { executionHash, normalizePackage, type BlobStore, type JuniorPackage } from './package.ts';
 import { materialize } from './worker.ts';
 
@@ -52,11 +53,31 @@ export interface Recipe {
 
 const MODULES = new Set(['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'in_proj_qkvz', 'in_proj_ba', 'out_proj']);
 
+/** A recipe by program (SPEC-INVESTIGACION-EXTERNA §8.2): the method is the researcher's program, run under a profile the
+    operator enabled; the host decides what data it reads (the dataset's rows, of examples the recipe admits) and imports
+    what it makes, learned from data. No native recipe is registered for it. */
+export interface ProgramRecipe {
+  readonly format: 'junior-recipe@1';
+  readonly method: 'program';
+  readonly program: import('./method-program.ts').MethodProgram;
+  readonly admits: readonly ('verified' | 'demonstration')[];
+}
+
+export const isProgramRecipe = (r: unknown): r is ProgramRecipe => !!r && (r as { method?: unknown }).method === 'program';
+
 /** Everything wrong with a recipe for a package; empty: it may train. */
 export function recipeProblems(raw: unknown, pkg: JuniorPackage): string[] {
   const r = raw as Recipe;
   const e: string[] = [];
   if (!r || r.format !== 'junior-recipe@1') return ['"format": "junior-recipe@1"'];
+  if (isProgramRecipe(r)) {
+    const p = r as unknown as ProgramRecipe;
+    const out = methodProgramProblems(p.program).map((x) => '"program": ' + x);
+    if (!Array.isArray(p.admits) || !p.admits.length || p.admits.some((a) => a !== 'verified' && a !== 'demonstration')) out.push('"admits": verified, and demonstration only when said');
+    if (p.program && Array.isArray(p.program.inputs) && !p.program.inputs.includes('dataset.jsonl')) out.push('"program.inputs": it learns from data: dataset.jsonl, the rows the host mounts');
+    if (pkg.adapter !== null) out.push('the parent already has an adapter: train from a package without one');
+    return out;
+  }
   if (r.method !== 'lora' && r.method !== 'qlora') e.push('"method": lora or qlora');
   const chip = Number((pkg.execution.circuit as Record<string, unknown>).chip_layers);
   if (!Number.isInteger(chip) || chip < 0) e.push('the package\'s circuit does not say its chip_layers: what may be trained cannot be told from what may not');
@@ -83,7 +104,7 @@ export interface TrainingRow {
 
 /** A dataset's rows as the trainer reads them: the effective sequence of decisions and observations, never the answer
     alone - an answer that read its memory is trained with what it read in its context. */
-export function trainingRows(examplesDir: string, ds: Dataset, recipe: Recipe): TrainingRow[] | { error: string } {
+export function trainingRows(examplesDir: string, ds: Dataset, recipe: Pick<Recipe, 'admits'>): TrainingRow[] | { error: string } {
   const byId = new Map<string, Example>();
   for (const f of fs.existsSync(examplesDir) ? fs.readdirSync(examplesDir) : []) {
     try { const e = JSON.parse(fs.readFileSync(path.join(examplesDir, f), 'utf8')) as Example; byId.set(e.id, e); } catch { /* not an example */ }

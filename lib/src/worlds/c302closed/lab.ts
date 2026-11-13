@@ -418,6 +418,8 @@ export const closedLab: Lab<ClosedSpec, SignalsPoint, ClosedEpisode, C302NavCase
   defaults: { every: '20', explore: '2', 'check-episodes': '2', family: '2', 'confirm-places': '1' },
   external: { url: (o) => o.service, timeoutMs: 60 * 60_000 },
 
+  /* Its circuit is the published connectome of C. elegans (SPEC-INVESTIGACION-EXTERNA §4.1). */
+  externalSources: { admitted: false, why: 'its circuit is the published connectome of C. elegans, whose mechanism the literature describes: reading it would answer what is to be found' },
   realization: (o) => ({ names: namesOf(o), duration_ms: Math.max(1000, Math.min(60000, Number(o.duration) || 20000)), dt_ms: Math.max(0.01, Math.min(0.1, Number(o.dt) || 0.05)) }),
   generate: (seed, options) => ({ seed, place: 'exp-5', field: { source: [0, 0], peak: 1, length: 5, shape: 'exp', arena: ARENA }, names: namesOf(options), namesSeed: seed,
     durationMs: Math.max(1000, Math.min(60000, Number(options.duration) || 20000)), dtMs: Math.max(0.01, Math.min(0.1, Number(options.dt) || 0.05)) }),

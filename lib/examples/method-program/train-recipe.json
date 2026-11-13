@@ -1,0 +1,18 @@
+{
+  "format": "junior-recipe@1",
+  "method": "program",
+  "admits": ["verified"],
+  "program": {
+    "format": "method-program@1",
+    "entrypoint": "main.py",
+    "files": {
+      "main.py": "import json, struct\nrows = [json.loads(l) for l in open('inputs/dataset.jsonl') if l.strip()]\njob = json.load(open('inputs/job.json'))\nv = -float(job['parameters']['scale']) * len(rows)\nhdr = {'indices': {'dtype': 'I64', 'shape': [1], 'data_offsets': [0, 8]}, 'values': {'dtype': 'F32', 'shape': [1], 'data_offsets': [8, 12]}}\nh = json.dumps(hdr).encode(); h += b' ' * ((8 - len(h) % 8) % 8)\nopen('out/m.safetensors', 'wb').write(struct.pack('<Q', len(h)) + h + struct.pack('<q', 0) + struct.pack('<f', v))\njson.dump([{'module': job['parameters']['module'], 'encoding': 'sparse', 'shape': job['parameters']['shape'], 'file': 'm.safetensors'}], open('out/modules.json', 'w'))\njson.dump({'format': 'weight-edit-set@1', 'products': ['modules.json', 'm.safetensors']}, open('out/result.json', 'w'))\n"
+    },
+    "profile": "cpu-small",
+    "inputs": ["dataset.jsonl"],
+    "parameters": { "scale": 0.01, "module": "model.layers.20.mlp.down_proj", "shape": [2560, 9728] },
+    "seed": 1,
+    "output_format": "weight-edit-set@1",
+    "cites": []
+  }
+}

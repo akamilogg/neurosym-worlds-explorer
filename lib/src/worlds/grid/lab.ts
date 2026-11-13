@@ -52,6 +52,7 @@ import { RoundConversation, TRANSIENT_RETRIES, requestFailure, transientFailure 
 /** How many times a round a researcher may consolidate its round's conversation. */
 const MAX_CONSOLIDATIONS = 2;
 import { FREE_MEMORY_ANSWERS, JournalMemory, MEMORY_SECTION } from '../../learn/assisted/memory.ts';
+import { EXTERNAL_SOURCES_SECTION } from '../../learn/assisted/external-sources.ts';
 import { Experience, experienceSection } from '../../learn/assisted/experience.ts';
 import { recordTurn, surprises, type TurnRecord } from '../../learn/exploration.ts';
 import { codeOnlyFormula, codeOnlyJudge, fitCodeOnly } from '../../learn/ablation.ts';
@@ -171,7 +172,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   const instrumenting = (): boolean => s.cfg.instruments !== false && capabilityAt(s.cfg, 'instruments', attemptNow);
   /* The assisted researcher's task as the world and the operator state it (in a run that starts so), and its channel described. */
   const statedTask = Boolean(assisted) && (s.cfg as { stated_task?: boolean }).stated_task !== false && (s.cfg as { capabilities_from?: Record<string, number> }).capabilities_from?.stated_task === 0;
-  const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools, statedTask), statedTask && Boolean(s.channel)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '')
+  const SYSTEM_PROMPT = assisted ? assistedSystem(explorerSystem(tools, statedTask), statedTask && Boolean(s.channel)) + (assisted.memory ? '\n\n' + MEMORY_SECTION : '') + (assisted.sources?.external ? '\n\n' + EXTERNAL_SOURCES_SECTION : '')
     + (assisted.experience ? '\n\n' + experienceSection(assisted.experience.mode, assisted.experience.scope) : '')
     + (cfg.explorePlaces ? '\n\n' + PLACES_SECTION : '') + (exchange ? '\n\n' + PEERS_SECTION(team!.board.spec.window) : '') : explorerSystem(tools);
   /* Its own documents and its task question by question (§14.1-14.2), the assisted researcher's, in the rounds this code reviews. */
@@ -378,7 +379,9 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
   const recalls = (q: Record<string, unknown>): boolean => memory !== null && JournalMemory.accepts(q);
   /* Its team's board (§5.2): what it publishes and reads there is answered by the board, never by the world. */
   const peers = exchange ? team!.channel : null;
-  const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q))
+  /* Its sources (SPEC-INVESTIGACION-EXTERNA, IE2): answered by them, never by the world. */
+  const sources = assisted?.sources ?? null;
+  const ownRequest = (q: Record<string, unknown>): boolean => recalls(q) || (experience !== null && Experience.accepts(q)) || (sources !== null && sources.handles(q))
     || (peers !== null && (PeerChannel.acceptsRead(q) || PeerChannel.acceptsPublish(q))) || (ownTests !== null && reviewing && OwnTests.accepts(q))
     || (assisted !== null && reviewing && instrumenting() && Instruments.accepts(q));
   /* --- Its own instruments (SPEC-INSTRUMENTOS-PROPIOS; the grid's): its games - never a validation's - point by point, with
@@ -794,6 +797,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
       const budget = { get acts() { return plays.left; }, set acts(n: number) { plays.left = n; } };
       return ownTests.register(req.extra, currentRound, budget);
     }
+    if ('extra' in req && sources && sources.handles(req.extra)) return sources.answer(req.extra);
     if ('extra' in req) return recalls(req.extra) ? memory!.run(req.extra) : experience && Experience.accepts(req.extra) ? experience.run(req.extra)
       : peers && PeerChannel.acceptsRead(req.extra) ? readPeers(req.extra) : peers && PeerChannel.acceptsPublish(req.extra) ? publish(req.extra.publish) : { error: 'no such instrument' };
     /* An instrument withheld by the experiment is refused, never run. */
@@ -1066,7 +1070,7 @@ async function runGrid(s: LabServices): Promise<LabRunEnd> {
         log('proposal_failed', { round, ...requestFailure(error, asked, { system: systemPrompt(), user: payload }) });
         continue;
       }
-      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience || peers || (ownTests && reviewing) ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
+      const turn = parseExplorerTurn(content, { world: world.id, senses: SENSES, round, ...(memory || experience || peers || sources || (ownTests && reviewing) ? { extraRequest: ownRequest } : {}), ...(memory ? { archive: true } : {}) });
       const noteWarnings = [...notebook.applyNotes(round, turn.notes, (ref) => games.has(ref.trim()) || resolve(ref) !== null), ...notebook.applyMethods(round, turn.methods)];
       /* Its own documents, in any answer (§14.1): every version to the journal. */
       const docs = assisted && reviewing ? parseDocuments(obj(parseJsonLoose(content))?.documents, noteWarnings) : [];

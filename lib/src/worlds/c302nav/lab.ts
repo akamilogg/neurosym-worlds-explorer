@@ -234,6 +234,9 @@ export const c302NavLab: Lab<C302NavSpec, C302NavPoint, C302NavEpisode, C302NavC
 
   generate: (seed, options) => ({ seed, place: 'steps', family: 'steps', names: namesOf(options), namesSeed: seed }),
   realization: (o) => ({ names: namesOf(o) }),
+  /* Its circuit is the published connectome of C. elegans, its mechanism described in the literature: reading it would
+     answer what is to be found (SPEC-INVESTIGACION-EXTERNA §4.1). */
+  externalSources: { admitted: false, why: 'its circuit is the published connectome of C. elegans, whose mechanism the literature describes: reading it would answer what is to be found' },
   /* The family's places draw from the drive never seen; the blind ones from either, by turns. The names stay the run's. */
   placeOf: (spec, index) => {
     const family: Family = index >= 1000 ? (index % 2 ? 'rotating' : 'steps') : 'rotating';

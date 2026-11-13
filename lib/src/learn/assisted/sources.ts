@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import type { FetchLike } from '../../core/net.ts';
 import type { Judge } from '../../core/types.ts';
+import type { ExternalSources } from './external-sources.ts';
 
 /* ============================================================================
  * SOURCES for the assisted researcher (SPEC-INVESTIGADOR-ASISTIDO §6.3, A6): documents it reads
@@ -105,6 +106,10 @@ export interface SourcesOptions {
   /** The selector of `find` (the Judge); none in a run without one. */
   readonly selector?: LineSelector;
   readonly onSelect?: (record: SelectionRecord) => void;
+  /** External research (SPEC-INVESTIGACION-EXTERNA, IE1): search, snapshots, links - the web as its configuration allows. */
+  readonly external?: ExternalSources;
+  /** Why the world admits no external sources (§4.1): the allowlist and the web refused with it, nothing announced. */
+  readonly refusedBy?: string;
 }
 
 type Place = { readonly url: string; readonly name: string; readonly local: string | null };
@@ -120,7 +125,27 @@ export class Sources {
 
   /** One origin more (the operator's). */
   allow(origin: string): void { if (!this.allowed.includes(origin)) this.allowed.push(origin); }
-  origins(): string[] { return [...this.allowed]; }
+  /** The origins it may read - none where the world admits no external sources. */
+  origins(): string[] { return this.options.refusedBy ? [] : [...this.allowed]; }
+  /** Its external sources, where configured and the world admits them. */
+  get external(): ExternalSources | null { return this.options.refusedBy ? null : this.options.external ?? null; }
+  /** Why the world refuses them, if it does. */
+  get refusedBy(): string | null { return this.options.refusedBy ?? null; }
+
+  /** Whether a request is one of its instruments: the allowlist's (once an origin is allowed) or the web's. Where the world
+      refuses external sources, any of them - answered not_allowed, with its reason. */
+  handles(q: Record<string, unknown>): boolean {
+    if (this.options.refusedBy) return Sources.accepts(q) || q.search !== undefined || typeof q.links === 'string';
+    if (this.external?.accepts(q)) return true;
+    return this.allowed.length > 0 && Sources.accepts(q);
+  }
+
+  /** A request of its instruments, answered: the world's refusal, the web's, or the allowlist's. */
+  answer(q: Record<string, unknown>): Promise<unknown> {
+    if (this.options.refusedBy) return Promise.resolve({ ...q, state: 'not_allowed', why: 'this world admits no external sources: ' + this.options.refusedBy });
+    if (this.external?.accepts(q)) return this.external.run(q);
+    return this.run(q);
+  }
 
   /** Whether the origins allow a path or a URL: a path inside an allowed directory (or that file), a URL under an allowed
       prefix or on an allowed domain (or one of its subdomains). */
