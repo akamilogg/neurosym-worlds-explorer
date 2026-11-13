@@ -241,3 +241,14 @@ export function deletionsOfOutputs(outputs: Readonly<Record<string, Buffer>>): {
   }
   return { deletions };
 }
+
+/** Wanda's scores of a module (SPEC-EDICION-PESOS §15.5): |W_ij| * ||X_j||, the norm of input channel j the square root of
+    its sum of squares (input_norms). Row-major, as the weight. */
+export function wandaScores(W: { readonly shape: readonly [number, number]; readonly bits: Uint16Array }, sumsq: ArrayLike<number>): Float64Array {
+  const [dout, din] = W.shape;
+  if (sumsq.length !== din) throw new Error('the input norms have ' + sumsq.length + ' channels; the weight takes ' + din);
+  const norms = Array.from({ length: din }, (_, j) => Math.sqrt(sumsq[j]));
+  const out = new Float64Array(dout * din);
+  for (let i = 0; i < dout; i++) for (let j = 0; j < din; j++) out[i * din + j] = Math.abs(bf16ToNumber(W.bits[i * din + j])) * norms[j];
+  return out;
+}

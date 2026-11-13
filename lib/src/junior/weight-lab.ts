@@ -80,7 +80,7 @@ export function weightLabProblems(raw: unknown, m: Pick<CompetenceManifest, 'cas
 export type LabCase = { readonly cut: { readonly run: string; readonly question: number } } | { readonly text: { readonly system?: string; readonly user: string } };
 
 export interface LabQuery {
-  readonly query: 'modules' | 'weights.stats' | 'weights.slice' | 'forward' | 'activations' | 'attention' | 'try';
+  readonly query: 'modules' | 'weights.stats' | 'weights.slice' | 'forward' | 'activations' | 'attention' | 'input_norms' | 'try';
   readonly args?: Readonly<Record<string, unknown>>;
   readonly cases?: readonly LabCase[];
   /** For try: the candidate version whose set of edits runs on a copy. */
@@ -111,7 +111,7 @@ export interface LabService { lab(o: Parameters<import('./sessions.ts').SessionS
 export type Cutter = (run: string, question: number) => Promise<{ content: { system: string; user: { parts: readonly string[] } }; hash: string; capture?: RunCapture | null }>;
 
 const sha = (v: unknown): string => createHash('sha256').update(typeof v === 'string' ? v : stableStringify(v)).digest('hex');
-const RUNS_JUNIOR = new Set(['forward', 'activations', 'attention', 'try']);
+const RUNS_JUNIOR = new Set(['forward', 'activations', 'attention', 'input_norms', 'try']);
 
 /** Everything wrong with a query against the limits, before it is sent. */
 export function queryProblems(q: LabQuery, l: LabLimits): string[] {
@@ -152,6 +152,12 @@ export function queryProblems(q: LabQuery, l: LabLimits): string[] {
       break;
     }
     case 'forward': case 'activations': inner(q.query, a); break;
+    /* SPEC-EDICION-PESOS §15.5: per module and input channel, the sum of squares of its inputs over the model's positions. */
+    case 'input_norms':
+      casesOk();
+      if (!Array.isArray(a.modules) || !a.modules.length || a.modules.length > l.max_modules || a.modules.some((m: unknown) => typeof m !== 'string')) p.push('"modules": 1 to ' + l.max_modules + ' names');
+      if (a.max_new_tokens !== undefined && !int(a.max_new_tokens, 1, l.max_new_tokens)) p.push('"max_new_tokens": 1 to ' + l.max_new_tokens);
+      break;
     case 'attention':
       casesOk();
       if ((q.cases?.length ?? 0) > 1) p.push('attention reads one case');
@@ -164,7 +170,7 @@ export function queryProblems(q: LabQuery, l: LabLimits): string[] {
       if (a.inner !== 'forward' && a.inner !== 'activations') p.push('"inner": forward or activations');
       else inner(a.inner, (a.args ?? {}) as Record<string, any>);
       break;
-    default: p.push('no query ' + String((q as { query: unknown }).query) + ': modules, weights.stats, weights.slice, forward, activations, attention or try');
+    default: p.push('no query ' + String((q as { query: unknown }).query) + ': modules, weights.stats, weights.slice, forward, activations, attention, input_norms or try');
   }
   return p;
 }

@@ -4,10 +4,11 @@ Estado (12/11/2026): **WE1 a WE6 implementadas en código** (edición y composic
 cerrados y backend aislado; la palanca en el mundo del junior; la búsqueda; el atasco y la rama del operador; la
 comparación A–F con su plan, sus pasos C y E y su informe; §12). **Sin ejecuciones reales:** la comparación se lanza en la
 máquina 2×3090 después de la línea base de la fase A. Dos revisiones externas del mismo día conciliadas (§14).
-**§15 (borrar pesos con gradiente): WE7a implementada en código el 13/11/2026** (el adaptador `mask@1`,
-`lib/src/junior/mask.ts`, con sus pruebas; §15.8); **WE7 a WE9, propuesta sin implementar**. WE7 ya tiene el ejecutor
-general de programas (IE5 de [SPEC-INVESTIGACION-EXTERNA](SPEC-INVESTIGACION-EXTERNA.md)) y `mask@1`; su ejecución real en
-GPU espera a la prueba de aislamiento de la GPU (§15.8, revisión externa del 13/11/2026). Amplía
+**§15 (borrar pesos con gradiente): WE7a y WE7 implementadas en código el 13/11/2026**: el adaptador `mask@1`
+(`lib/src/junior/mask.ts`), y `deletion@1` con SFT como programa del host sobre el ejecutor general de IE5
+([SPEC-INVESTIGACION-EXTERNA](SPEC-INVESTIGACION-EXTERNA.md)), con la consulta `input_norms`; todo con sus pruebas (§15.8).
+**WE8 y WE9, propuesta sin implementar.** La ejecución real de WE7 en la GPU espera a la prueba de aislamiento de la GPU
+(revisión externa del 13/11/2026). Amplía
 [SPEC-METAPOLITICA-APRENDIZAJE](SPEC-METAPOLITICA-APRENDIZAJE.md) con una palanca nueva de la fase A, entre la
 decodificación y la destilación, y con una búsqueda evolutiva sobre ella. Reutiliza el
 [motor evolutivo](SPEC-DELEGACION-EVOLUTIVA.md), las ramas de [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), la
@@ -934,7 +935,33 @@ campo `masks` del manifiesto; una cota declarada sólo puede ser más estricta.
   una versión sin adaptador.
 - **Pruebas:** `lib/test/mask.test.ts`, criterios de aceptación 1 a 4.
 
-Orden: WE7a está hecha; WE7 tras IE5 (hecha) y WE7a; WE8 y WE9 tras WE7. Nada de WE7 a WE9 se ejecuta de verdad antes de la
+**Estado de WE7 (13/11/2026).**
+
+- **`input_norms`:** el laboratorio de pesos la responde por módulo y canal de entrada. Da la suma de cuadrados en fp64,
+  antes de promediar nada, y los tokens que cuenta. Sólo cuenta las posiciones del modelo: el prompt y los tokens que
+  emitió, alineados en el flujo; nunca lo que imprimió el circuito. Para eso el trabajador dice dónde empieza la
+  respuesta (`stream_start`). La guarda en `input_norms.safetensors` y `wandaScores` calcula `|W_ij|·‖X_j‖`. No se anuncia
+  al investigador: el prompt del mundo no cambia.
+- **La receta `deletion@1`:** `signal: "sft"`, el perfil de entrenamiento, las capas (nunca las del circuito), su cota
+  (nunca más laxa que `masks`), `init_fraction` dentro de ella, épocas, lote, longitud, tasa, `beta` {start, end},
+  semilla, `mask: "answer"`, `admits` y `max_gpu_hours`.
+- **Cómo se ejecuta:** el host la convierte en dos `method-program@1` con su propio código
+  (`lib/src/junior/programs/deletion_sft.py`). La fase `capacity` (formato `capacity@1`) se ejecuta primera, y una receta
+  que no cabe se rechaza. La fase `train` emite `mask@1`, que se importa con la cota de la receta, `learned: "trained"` y
+  las realizaciones. Se paga en horas de GPU y se registra la receta tal como se pidió. Pedida otra vez, es el mismo
+  trabajo.
+- **El programa:** un logit por peso de `gate_proj`, que arranca de Wanda sobre los propios datos con `init_fraction`
+  por debajo de cero. La máscara es `sigmoid(β·s)`, con `β` lineal, y al final se umbraliza en cero. Guarda su estado en
+  `checkpoint/`.
+- **Imitación:** en Python puro y determinista: la pérdida es cuánto cambia la salida del módulo al borrar. Con
+  aprendizaje nulo, la máscara es exactamente el cuartil más bajo de Wanda.
+- **Real:** torch con transformers, la pérdida SFT sobre la respuesta y su capacidad medida con un paso. **Sin ejecutar
+  en la máquina real.**
+- **Anuncio:** se dice al investigador sólo donde la condición autoriza máscaras, hay entrenador y perfiles.
+- **Pruebas:** `lib/test/deletion.test.ts` (aceptación 9 y la receta de punta a punta), con un backend que ejecuta Python
+  sin aislar, como en IE5. Con el backend aislado, sólo en Linux.
+
+Orden: WE7a y WE7 están hechas; WE8 y WE9 tras WE7. Nada de WE7 a WE9 se ejecuta de verdad antes de la
 línea base de la fase A ni, en la GPU, antes de su prueba de aislamiento.
 
 Aceptación:

@@ -5,7 +5,10 @@ One query is one job of the worker: {"op": "lab", "lab": {"query": name, "args":
 execution, backend, out}. It answers {"result", "usage": {tokens_in, tokens_out, circuit_steps, wall_ms, peak_bytes},
 "files": {name: path}} - files (activations) written to `out`, stored by the server by their hash.
 
-Queries: modules, weights.stats, weights.slice, forward, activations, attention, try (with forward or activations).
+Queries: modules, weights.stats, weights.slice, forward, activations, attention, input_norms, try (with forward or
+activations). input_norms (SPEC-EDICION-PESOS 15.5): per module and input channel, the sum of squares of its inputs over
+the model's positions (never the circuit's), summed before anything is averaged, with the number of tokens it counts -
+what Wanda's |W_ij| * ||X_j|| needs.
 The harness checks every argument against the manifest's limits before the query is sent; here the generation is
 bounded by them too, and on the GPU the memory is capped for the query.
 
@@ -162,6 +165,59 @@ def fake_activations(model, cases, args, out_dir):
     return result, {"tokens_in": tin, "tokens_out": 0, "circuit_steps": 0}, files
 
 
+def input_norms_pure(vectors):
+    """The sum of squares of each input channel over token vectors (a list of lists), and how many tokens: in fp64."""
+    if not vectors:
+        return [], 0
+    sumsq = [0.0] * len(vectors[0])
+    for x in vectors:
+        for j, v in enumerate(x):
+            sumsq[j] += float(v) * float(v)
+    return sumsq, len(vectors)
+
+
+def _fake_tokens(c, limits):
+    """The toy's model positions of a case: its words, at most max_positions."""
+    system, user = _text_of(c)
+    return (system + "\n" + user).split()[: limits["max_positions"]]
+
+
+def fake_input_norms(model, cases, args, limits, out_dir):
+    """The toy's inputs to a module: one vector per model position of each case, drawn from the case and its position."""
+    result, sums, tin = {}, {}, 0
+    for name in args["modules"]:
+        (_, din), _W = model.values(name)
+        vectors = []
+        for c in cases:
+            system, user = _text_of(c)
+            for t, _tok in enumerate(_fake_tokens(c, limits)):
+                vectors.append(_fake_vector(system + "\n" + user + "#" + str(t), din))
+        sumsq, tokens = input_norms_pure(vectors)
+        sums[name] = sumsq
+        result[name] = {"tokens": tokens, "channels": din, "positions": "model"}
+    for c in cases:
+        system, user = _text_of(c)
+        tin += len(system) + len(user)
+    return result, {"tokens_in": tin, "tokens_out": 0, "circuit_steps": 0}, {"input_norms.safetensors": _write_norms(sums, out_dir)}
+
+
+def _write_norms(sums, out_dir):
+    """Sums of squares as safetensors: one F32 tensor [d_in] per module, names sorted."""
+    header, blobs, offset = {}, [], 0
+    for name in sorted(sums):
+        data = array("f", sums[name]).tobytes()
+        header[name] = {"dtype": "F32", "shape": [len(sums[name])], "data_offsets": [offset, offset + len(data)]}
+        blobs.append(data)
+        offset += len(data)
+    h = json.dumps(header, separators=(",", ":"))
+    while (8 + len(h.encode("utf8"))) % 8:
+        h += " "
+    path = os.path.join(out_dir, "input_norms.safetensors")
+    with open(path, "wb") as f:
+        f.write(struct.pack("<Q", len(h.encode("utf8"))) + h.encode("utf8") + b"".join(blobs))
+    return path
+
+
 def _write_acts(acts, out_dir):
     """Activations as safetensors: one F32 tensor [cases, d_out] per module, names sorted (as the harness writes)."""
     header, blobs, offset = {}, [], 0
@@ -208,6 +264,8 @@ def fake_lab(job, q, args, limits, out_dir):
         return r, u, files
     if q == "activations":
         return fake_activations(model, cases, args, out_dir)
+    if q == "input_norms":
+        return fake_input_norms(model, cases, args, limits, out_dir)
     if q == "attention":
         n = max(1, len(_text_of(cases[0])[1]))
         return {"heads": {str(h): {"entropy": math.log(n), "top": []} for h in args["heads"]}, "note": "the fake model has no attention: uniform"}, {"tokens_in": 0, "tokens_out": 0, "circuit_steps": 0}, files
@@ -276,13 +334,14 @@ def _qwen_cases(q, args, limits, out_dir, chat, run_case, params, files):
     import torch
     cases = args.get("_cases") or []
     usage = {"tokens_in": 0, "tokens_out": 0, "circuit_steps": 0}
-    runs = []
+    runs, usages = [], []
     for c in cases:
         stream, gen, stop, u = run_case(c, min(int(args.get("max_new_tokens", limits["max_new_tokens"])), limits["max_new_tokens"]))
         usage["tokens_in"] += u["prompt_tokens"]
         usage["tokens_out"] += u["text_tokens"]
         usage["circuit_steps"] += u["circuit_tokens"]
         runs.append((stream, gen, stop))
+        usages.append(u)
     if q == "forward":
         k = int(args.get("top_logits", 0))
         answers = []
@@ -324,6 +383,31 @@ def _qwen_cases(q, args, limits, out_dir, chat, run_case, params, files):
             result[m] = {"norms": M.norm(dim=1).tolist(), "singular": sv}
         files["activations.safetensors"] = _write_acts(acts, out_dir)
         return result, usage, files
+    if q == "input_norms":
+        # Each module's input, captured before it is used, summed as squares over the model's positions only: the prompt,
+        # and the tokens the model emitted (aligned in the stream, which also holds what the circuit printed).
+        sums = {m: None for m in args["modules"]}
+        counted = {m: 0 for m in args["modules"]}
+        current = {"idx": None}
+        hooks = []
+        for m in args["modules"]:
+            def pre(_mod, inp, m=m):
+                x = inp[0][0].detach()
+                sel = x[current["idx"]].double()
+                s = (sel * sel).sum(dim=0)
+                sums[m] = s if sums[m] is None else sums[m] + s
+                counted[m] += int(sel.shape[0])
+            hooks.append(chat.model.get_submodule(m).register_forward_pre_hook(pre))
+        try:
+            for (stream, gen, _), u in zip(runs, usages):
+                current["idx"] = torch.tensor(_model_positions(stream, gen, u.get("stream_start")), device=chat.model.device)
+                with torch.no_grad():
+                    chat.model(input_ids=torch.tensor([stream], device=chat.model.device))
+        finally:
+            for h in hooks:
+                h.remove()
+        files["input_norms.safetensors"] = _write_norms({m: s.float().cpu().tolist() for m, s in sums.items()}, out_dir)
+        return {m: {"tokens": counted[m], "channels": int(sums[m].shape[0]), "positions": "model"} for m in sums}, usage, files
     if q == "attention":
         layer, heads = int(args["layer"]), [int(h) for h in args["heads"]]
         out = {}
@@ -341,6 +425,21 @@ def _qwen_cases(q, args, limits, out_dir, chat, run_case, params, files):
                 out[str(h)] = {"positions": idx.tolist() if hasattr(idx, "tolist") else list(idx), "entropy": ent, "top": [list(zip(a, b)) for a, b in zip(ti.tolist(), tv.tolist())]}
         return {"heads": out}, usage, files
     raise RuntimeError("no query " + q)
+
+
+def _model_positions(stream, gen, start):
+    """The model's positions in a stream: before the answer, and each token it emitted, matched in order after it - never
+    the circuit's printed tokens between them."""
+    if start is None:
+        raise RuntimeError("the worker did not say where the answer starts in the stream: the model's positions cannot be told")
+    out, k = list(range(start)), 0
+    for p in range(start, len(stream)):
+        if k < len(gen) and stream[p] == gen[k]:
+            out.append(p)
+            k += 1
+    if k < len(gen):
+        raise RuntimeError("the emitted tokens are not in the stream in order: the model's positions cannot be told")
+    return out
 
 
 def _positions(spec, total, generated, cap):

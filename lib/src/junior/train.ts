@@ -8,6 +8,7 @@ import type { CompetenceManifest } from './competence.ts';
 import { selectionOverlap, type Dataset, type Example } from './distill.ts';
 import { datasetRealizations } from './groups.ts';
 import { LORA_MODULES, methodProgramProblems } from './method-program.ts';
+import { maskBoundsProblems } from './mask.ts';
 import { executionHash, normalizePackage, type BlobStore, type JuniorPackage } from './package.ts';
 import { materialize } from './worker.ts';
 
@@ -65,11 +66,77 @@ export interface ProgramRecipe {
 
 export const isProgramRecipe = (r: unknown): r is ProgramRecipe => !!r && (r as { method?: unknown }).method === 'program';
 
+/** deletion@1 with SFT (SPEC-EDICION-PESOS §15.3, WE7): a training that learns which weights of gate_proj to delete - a mask
+    - in the layers it names, past the circuit's. The host runs it as a method program (its code, programs/deletion_sft.py,
+    on the general executor under the training profile named), its capacity measured first; what it makes is imported as
+    mask@1, learned from data. Its bounds: never laxer than the condition's "masks". */
+export interface DeletionRecipe {
+  readonly format: 'junior-recipe@1';
+  readonly method: 'deletion@1';
+  readonly signal: 'sft';
+  /** The execution profile it runs under (the operator's training profile). */
+  readonly profile: string;
+  readonly layers: readonly number[];
+  readonly bounds: import('./mask.ts').MaskBounds;
+  /** The fraction of each module's weights whose logit starts below zero (Wanda's lowest): within its bound per module. */
+  readonly init_fraction: number;
+  readonly epochs: number;
+  readonly batch: number;
+  readonly max_length: number;
+  readonly learning_rate: number;
+  /** The mask's slope, rising linearly over the steps. */
+  readonly beta: { readonly start: number; readonly end: number };
+  readonly seed: number;
+  readonly mask: 'answer';
+  readonly admits: readonly ('verified' | 'demonstration')[];
+  readonly max_gpu_hours: number;
+}
+
+export const isDeletionRecipe = (r: unknown): r is DeletionRecipe => !!r && (r as { method?: unknown }).method === 'deletion@1';
+
+/** Everything wrong with a deletion@1 recipe for a package (and the condition's bounds, when given). */
+export function deletionRecipeProblems(raw: unknown, pkg: JuniorPackage, authorized?: import('./mask.ts').MaskBounds | null): string[] {
+  const r = raw as DeletionRecipe;
+  const e: string[] = [];
+  const known = ['format', 'method', 'signal', 'profile', 'layers', 'bounds', 'init_fraction', 'epochs', 'batch', 'max_length', 'learning_rate', 'beta', 'seed', 'mask', 'admits', 'max_gpu_hours'];
+  for (const k of Object.keys(r ?? {})) if (!known.includes(k)) e.push('"' + k + '": unknown');
+  if (r?.signal !== 'sft') e.push('"signal": "sft" (GRPO with probe rewards is another stage, not built yet)');
+  if (typeof r?.profile !== 'string' || !r.profile) e.push('"profile": the training profile it runs under');
+  const chip = Number((pkg.execution.circuit as Record<string, unknown>).chip_layers);
+  if (!Number.isInteger(chip) || chip < 0) e.push('the package\'s circuit does not say its chip_layers: what may be deleted cannot be told');
+  if (!Array.isArray(r?.layers) || !r.layers.length || r.layers.some((l) => !Number.isInteger(l) || l < 0) || new Set(r.layers).size !== r.layers.length) e.push('"layers": the indices of the layers whose gate_proj it masks, once each');
+  else if (Number.isInteger(chip) && r.layers.some((l) => l < chip)) e.push('"layers": ' + r.layers.filter((l) => l < chip).join(', ') + ' belong to the circuit (its first ' + chip + '): the computer is never touched');
+  const bp = maskBoundsProblems(r?.bounds, '"bounds"');
+  e.push(...bp);
+  if (!bp.length && authorized && (r.bounds.per_module.max_fraction > authorized.per_module.max_fraction || r.bounds.total.max_fraction > authorized.total.max_fraction)) e.push('"bounds": laxer than the condition\'s "masks"');
+  if (!(typeof r?.init_fraction === 'number' && r.init_fraction >= 0 && r.init_fraction <= 1)) e.push('"init_fraction": a fraction in [0, 1]');
+  else if (!bp.length && r.init_fraction > r.bounds.per_module.max_fraction) e.push('"init_fraction": within its bound per module (' + r.bounds.per_module.max_fraction + ')');
+  for (const k of ['epochs', 'batch', 'max_length'] as const) if (!Number.isInteger(r?.[k]) || r[k] <= 0) e.push('"' + k + '": a whole number above 0');
+  if (!(r?.learning_rate > 0)) e.push('"learning_rate": above 0');
+  if (!r?.beta || !(r.beta.start > 0) || !(r.beta.end >= r.beta.start)) e.push('"beta": {"start" > 0, "end" >= start}');
+  if (!Number.isInteger(r?.seed)) e.push('"seed": an integer');
+  if (r?.mask !== 'answer') e.push('"mask": "answer" (the loss on the answer only)');
+  if (!Array.isArray(r?.admits) || !r.admits.length || r.admits.some((a) => a !== 'verified' && a !== 'demonstration')) e.push('"admits": verified, and demonstration only when said');
+  if (!(r?.max_gpu_hours > 0)) e.push('"max_gpu_hours": what is reserved for it');
+  if (pkg.adapter !== null) e.push('the parent already has an adapter: a mask is trained from a package without one');
+  return e;
+}
+
+/** The program a deletion@1 recipe runs, for its phase: the host's code, its parameters the recipe's - by content, so the
+    same recipe is the same job. */
+export const DELETION_PY = path.join(path.dirname(fileURLToPath(import.meta.url)), 'programs', 'deletion_sft.py');
+export function deletionProgram(r: DeletionRecipe, phase: 'capacity' | 'train', backend: 'fake' | 'qwenputer'): import('./method-program.ts').MethodProgram {
+  return { format: 'method-program@1', entrypoint: 'main.py', files: { 'main.py': fs.readFileSync(DELETION_PY, 'utf8') }, profile: r.profile, inputs: ['dataset.jsonl'],
+    parameters: { phase, backend, layers: r.layers, bounds: r.bounds, init_fraction: r.init_fraction, epochs: r.epochs, batch: r.batch, max_length: r.max_length, learning_rate: r.learning_rate, beta: r.beta },
+    seed: r.seed, output_format: phase === 'capacity' ? 'capacity@1' : 'mask@1' };
+}
+
 /** Everything wrong with a recipe for a package; empty: it may train. */
 export function recipeProblems(raw: unknown, pkg: JuniorPackage): string[] {
   const r = raw as Recipe;
   const e: string[] = [];
   if (!r || r.format !== 'junior-recipe@1') return ['"format": "junior-recipe@1"'];
+  if (isDeletionRecipe(r)) return deletionRecipeProblems(r, pkg);
   if (isProgramRecipe(r)) {
     const p = r as unknown as ProgramRecipe;
     const out = methodProgramProblems(p.program).map((x) => '"program": ' + x);
@@ -78,7 +145,7 @@ export function recipeProblems(raw: unknown, pkg: JuniorPackage): string[] {
     if (pkg.adapter !== null) out.push('the parent already has an adapter: train from a package without one');
     return out;
   }
-  if (r.method !== 'lora' && r.method !== 'qlora') e.push('"method": lora or qlora');
+  if (r.method !== 'lora' && r.method !== 'qlora') e.push('"method": lora, qlora, deletion@1 or program');
   const chip = Number((pkg.execution.circuit as Record<string, unknown>).chip_layers);
   if (!Number.isInteger(chip) || chip < 0) e.push('the package\'s circuit does not say its chip_layers: what may be trained cannot be told from what may not');
   if (!Array.isArray(r.layers) || !r.layers.length || r.layers.some((l) => !Number.isInteger(l) || l < 0)) e.push('"layers": the indices of the layers trained');

@@ -439,6 +439,7 @@ export class JuniorWorld {
   async trainFrom(from: string, datasetId: string, recipe: unknown, reason: unknown): Promise<{ version?: string; state: string; reason: string | null; steps?: number | null; gpu_hours?: number | null; job?: string }> {
     const T = await import('../../junior/train.ts');
     if (T.isProgramRecipe(recipe)) return this.trainByProgram(from, datasetId, recipe, reason);
+    if (T.isDeletionRecipe(recipe)) return this.trainByDeletion(from, datasetId, recipe, reason);
     if (!this.training) return { state: 'refused', reason: 'no trainer is configured for this run (--train-python)' };
     const parent = await this.packageOf(from);
     if (typeof parent === 'string') return { state: 'refused', reason: parent };
@@ -507,7 +508,25 @@ export class JuniorWorld {
       enabled, where an isolated backend is proved; it reads the dataset's rows (mounted as dataset.jsonl) and whatever else
       it declares; what it makes is imported as an edit of the start, LEARNED FROM DATA (`learned: "trained"`), with the
       realizations of the runs its examples came from. A job of the world's ledger: asked again, the same job. */
-  async trainByProgram(from: string, datasetId: string, recipe: import('../../junior/train.ts').ProgramRecipe, reason: unknown): Promise<{ version?: string; state: string; reason: string | null; job?: string }> {
+  /** deletion@1 with SFT (SPEC-EDICION-PESOS §15.3, WE7): the host's program that learns a mask, run on the general executor
+      under the training profile the recipe names - its capacity measured first, a recipe that does not fit refused - and
+      its mask imported within the recipe's bounds (never laxer than the condition's), learned from data. */
+  async trainByDeletion(from: string, datasetId: string, recipe: import('../../junior/train.ts').DeletionRecipe, reason: unknown): Promise<{ version?: string; state: string; reason: string | null; job?: string }> {
+    const parent = await this.packageOf(from);
+    if (typeof parent === 'string') return { state: 'refused', reason: parent };
+    if (!this.manifest.masks) return { state: 'refused', reason: 'the condition authorizes no masks: its manifest fixes no "masks" bounds' };
+    const T = await import('../../junior/train.ts');
+    const problems = T.deletionRecipeProblems(recipe, parent, this.manifest.masks);
+    if (problems.length) return { state: 'refused', reason: 'the recipe: ' + problems.join('; ') };
+    if (!this.training) return { state: 'refused', reason: 'no trainer is configured for this run (--train-python): deletion@1 runs on the training backend' };
+    if (!this.programProfiles.some((p) => p.id === recipe.profile)) return { state: 'refused', reason: 'no profile ' + recipe.profile + ' enabled here (' + (this.programProfiles.map((p) => p.id).join(', ') || 'none') + ')' };
+    return this.trainByProgram(from, datasetId, { format: 'junior-recipe@1', method: 'program', program: T.deletionProgram(recipe, 'train', this.training.backend), admits: recipe.admits }, reason,
+      { capacity: T.deletionProgram(recipe, 'capacity', this.training.backend), declared: recipe.bounds, recipe, reserve: { gpu_hours: recipe.max_gpu_hours } });
+  }
+
+  async trainByProgram(from: string, datasetId: string, recipe: import('../../junior/train.ts').ProgramRecipe, reason: unknown,
+    extra: { readonly capacity?: import('../../junior/method-program.ts').MethodProgram; readonly declared?: import('../../junior/mask.ts').MaskBounds; readonly recipe?: unknown;
+      readonly reserve?: { readonly gpu_hours: number } } = {}): Promise<{ version?: string; state: string; reason: string | null; job?: string }> {
     const parent = await this.packageOf(from);
     if (typeof parent === 'string') return { state: 'refused', reason: parent };
     const T = await import('../../junior/train.ts');
@@ -533,16 +552,31 @@ export class JuniorWorld {
     const authorized = this.manifest.weight_edits;
     try {
       const operation = 'program-' + M.jobIdentity(recipe.program, inputs, executionHash(parent), this.programProfiles.find((p) => p.id === recipe.program.profile) ?? { id: recipe.program.profile, dependencies: {}, limits: { timeout_ms: 1, memory_bytes: 1, cpu_seconds: 1, output_bytes: 1 }, gpu: false }).slice(0, 24);
-      const { done } = this.jobs.start({ operation_id: operation, op: 'train', inputs: { parent: executionHash(parent), dataset: datasetId, program: M.programId(recipe.program) }, reserve: { edits: 1 },
+      /* A training of the host's (deletion@1) is paid in GPU hours, as one of LoRA: the time its programs took; a program of
+         the researcher's, one of `edits`. */
+      const gpu = extra.reserve;
+      let wall = 0;
+      const spent = (n: number): Record<string, number> => (gpu ? { gpu_hours: wall / 3_600_000 } : { edits: n });
+      const { done } = this.jobs.start({ operation_id: operation, op: 'train', inputs: { parent: executionHash(parent), dataset: datasetId, program: M.programId(recipe.program) }, reserve: gpu ? { gpu_hours: gpu.gpu_hours } : { edits: 1 },
         run: async () => {
+          /* Its capacity first: what a run would need, measured by its own step; one that does not fit is refused. */
+          if (extra.capacity) {
+            const cap = await M.runMethodProgram({ program: extra.capacity, profiles: this.programProfiles, inputs, start: executionHash(parent), startDir: this.baseDir(parent.base), availability });
+            wall += cap.wall_ms ?? 0;
+            if (cap.state !== 'finished') return { spent: spent(0), products: { ...cap, products: undefined }, failed: 'its capacity: ' + cap.state + ': ' + (cap.reason ?? '') };
+            let c: { state?: string; reason?: string; peak_bytes?: number } = {};
+            try { c = JSON.parse((cap.products?.['capacity.json'] ?? Buffer.from('{}')).toString('utf8')); } catch { /* read below */ }
+            if (c.state !== 'fits') return { spent: spent(0), products: { state: 'refused', reason: 'it does not fit: ' + (c.reason ?? JSON.stringify(c)), capacity: c }, failed: 'does_not_fit' };
+          }
           const job = await M.runMethodProgram({ program: recipe.program, profiles: this.programProfiles, inputs, start: executionHash(parent), startDir: this.baseDir(parent.base), availability,
             checkpoints: path.join(this.dir, 'program-checkpoints') });
-          if (job.state !== 'finished') return { spent: { edits: 0 }, products: job, failed: job.state + ': ' + (job.reason ?? '') };
+          wall += job.wall_ms ?? 0;
+          if (job.state !== 'finished') return { spent: spent(0), products: job, failed: job.state + ': ' + (job.reason ?? '') };
           /* A mask (SPEC-EDICION-PESOS §15.3): its deletions within the condition's bounds, the adapter of a child of the start. */
           if (job.format === 'mask@1') {
-            const a = await M.importMask(this.blobs, parent, job, this.manifest.masks);
-            if ('problems' in a) return { spent: { edits: 0 }, products: { ...job, products: undefined }, failed: 'its product: ' + a.problems.join('; ') };
-            return { spent: { edits: 1 }, products: { job: job.job, adapter: a.adapter, format: 'mask@1' } };
+            const a = await M.importMask(this.blobs, parent, job, this.manifest.masks, extra.declared);
+            if ('problems' in a) return { spent: spent(0), products: { ...job, products: undefined }, failed: 'its product: ' + a.problems.join('; ') };
+            return { spent: spent(1), products: { job: job.job, adapter: a.adapter, format: 'mask@1' } };
           }
           /* A LoRA adapter: checked from its config and its tensors' header, the adapter of a child of the start. */
           if (job.format === 'lora-adapter') {
@@ -562,11 +596,13 @@ export class JuniorWorld {
       if (j.state !== 'completed' || !out?.adapter) return { state: out?.state === 'unavailable' ? 'unavailable' : out?.state === 'refused' ? 'refused' : 'failed', reason: j.reason ?? out?.reason ?? j.state, ...(out?.job ? { job: out.job } : {}) };
       const realizations = [...new Set(captures.map((c) => realizationOfCapture(c)))].sort();
       if (out.format === 'lora-adapter' || out.format === 'mask@1') {
-        /* Its adapter (a LoRA or a mask), as a training's is kept - learned from data, as the host says, with what it learned from. */
-        const record = { adapter: out.adapter, dataset: datasetId, recipe: { method: 'program', program: M.programId(recipe.program) }, parent: executionHash(parent), job: out.job, learned: 'trained', program: M.programId(recipe.program), realizations, captures };
+        /* Its adapter (a LoRA or a mask), as a training's is kept - learned from data, as the host says, with what it learned
+           from; a recipe of the host's (deletion@1) recorded as it was asked. */
+        const asked = extra.recipe ?? { method: 'program', program: M.programId(recipe.program) };
+        const record = { adapter: out.adapter, dataset: datasetId, recipe: asked, parent: executionHash(parent), job: out.job, learned: 'trained', program: M.programId(recipe.program), realizations, captures };
         const made = this.store.apply(from, { files: { [ADAPTER]: JSON.stringify(record, null, 2) + '\n' } }, reason);
         if (typeof made === 'string') return { state: 'failed', reason: made };
-        appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe: { method: 'program', program: M.programId(recipe.program) }, record, version: made.hash }, { sync: true });
+        appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe: asked, record, version: made.hash }, { sync: true });
         return { version: made.hash, state: 'finished', reason: null, job: out.job };
       }
       /* Learned from data, as the host says: a training whatever its format (§8.2); with what it learned from. */
@@ -1187,7 +1223,12 @@ const EVOLVE_ACT = 'Or {"act": {"evolve": {"from": "<version without an adapter>
 const programAct = (profiles: readonly string[]): string => 'Or, as the recipe of a train, YOUR OWN METHOD as a program: {"format": "junior-recipe@1", "method": "program", "admits": ["verified"], "program": {"format": "method-program@1", "entrypoint": "<file>", "files": {"<file>": "<its code>"}, "profile": "' + profiles.join('" | "') + '", "inputs": ["dataset.jsonl", ...], "parameters": {...}, "seed": <n>, "output_format": "weight-edit-set@1", "cites": ["src:..."]}}   '
   + 'the program reads inputs/dataset.jsonl (the dataset\'s rows) and inputs/job.json, the start\'s weights read-only, and writes out/result.json ({"format", "products"}) and its products (out/modules.json and the safetensors of a set of edits). It runs only where an isolated backend is proved, without network; what it makes is imported as an edit LEARNED FROM DATA, and the evaluator - never the program - says what it is worth. ';
 
-function juniorInterface(tolerance: number, weights = false, searches = true, profiles: readonly string[] = []): WorldInterface {
+/** deletion@1 (SPEC-EDICION-PESOS §15.3, WE7): told only where the condition authorizes masks, a trainer is configured and
+    the operator enabled profiles to run it under. */
+const deletionAct = (profiles: readonly string[], masks: { per_module: { max_fraction: number }; total: { max_fraction: number } }): string => 'Or, as the recipe of a train, DELETING WEIGHTS: {"format": "junior-recipe@1", "method": "deletion@1", "signal": "sft", "profile": "' + profiles.join('" | "') + '", "layers": [<Qwen layers, past the circuit\'s>], "bounds": {"per_module": {"max_fraction": <at most ' + masks.per_module.max_fraction + '>}, "total": {"max_fraction": <at most ' + masks.total.max_fraction + '>}}, "init_fraction": <a fraction within its bound per module>, "epochs", "batch", "max_length", "learning_rate", "beta": {"start", "end"}, "seed", "mask": "answer", "admits": ["verified"], "max_gpu_hours"}   '
+  + 'a child junior whose gate_proj weights in those layers the training learns to DELETE (a mask): one logit per weight, starting from Wanda (|weight| times the norm of its input) on the dataset itself, init_fraction of each module below zero; the mask sigmoid(beta * logit) with beta rising from start to end; the loss on the answer only; at the end every weight whose logit is below zero is deleted. No sparsity target: a mask past its bounds is no version. Its capacity is measured first; it costs its GPU hours; the circuit is never touched. A version with a mask receives no edits nor another training. ';
+
+function juniorInterface(tolerance: number, weights = false, searches = true, profiles: readonly string[] = [], masks: { per_module: { max_fraction: number }; total: { max_fraction: number } } | null = null): WorldInterface {
   return {
     tools: ['view', 'inspect', 'act', 'measure', 'table'],
     features: ['check'],
@@ -1209,6 +1250,7 @@ function juniorInterface(tolerance: number, weights = false, searches = true, pr
         + 'a child junior with a LoRA adapter trained on that dataset; its circuit is never trained. Its capacity is measured first; it costs its GPU hours; a dataset that shares groups with the selecting probes is refused. Before it is evaluated, its circuit must pass the validity suite. '
         + (weights ? WEIGHT_ACTS + (searches ? EVOLVE_ACT : '') + ' ' : '')
         + (profiles.length ? programAct(profiles) : '')
+        + (profiles.length && masks ? deletionAct(profiles, masks) : '')
         + 'Or {"act": {"confirmations": {}}}   the confirmations the operator made of your juniors, out of this machine, on cases you never see: for each, the verdict against the reference and which components improve or regress - nothing more. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at an observation, part by part, and what was measured there'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
@@ -1349,7 +1391,9 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
   perceive: (p) => p,
   perceptDoc: PERCEPT_DOC,
   interface: (options) => juniorInterface(Number(options.world?.tolerance) || 0.25, Number(options.world?.edits) > 0 || Number(options.world?.['lab-queries']) > 0, String(options.world?.searches ?? '') !== '0',
-    options.world?.['program-profiles'] ? programProfilesOf(String(options.world['program-profiles'])).map((p) => p.id) : []),
+    options.world?.['program-profiles'] ? programProfilesOf(String(options.world['program-profiles'])).map((p) => p.id) : [],
+    /* Masks where the condition authorizes them and a trainer runs them (its manifest read for its bounds). */
+    options.world?.['train-python'] && options.world?.manifest ? (() => { try { return (JSON.parse(fs.readFileSync(path.resolve(String(options.world!.manifest)), 'utf8')) as CompetenceManifest).masks ?? null; } catch { return null; } })() : null),
 
   episode: async (spec) => {
     const e = await spec.world.evaluate(spec.world.reference, spec.judge);

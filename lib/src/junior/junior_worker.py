@@ -323,7 +323,7 @@ def run_qwenputer(job):
         # and what the circuit printed (qwen_text keeps both as text), the circuit's records apart.
         emitted = [int(t) for t in lock.qwen_text()[text_start:]]
         stream = [int(t) for t in lock.toks[stream_start:]]
-        trace = json.dumps({"prompt_ids": [int(i) for i in ids], "tokens": emitted, "fed": fed, "stream": [int(t) for t in lock.toks], "lock_error": None, "timeout": True})
+        trace = json.dumps({"prompt_ids": [int(i) for i in ids], "tokens": emitted, "fed": fed, "stream": [int(t) for t in lock.toks], "stream_start": stream_start, "lock_error": None, "timeout": True})
         return {"terminal": "limit_reached", "text": chat.text_of(emitted), "trace": trace, "ops": [list(a) if isinstance(a, tuple) else a for a in lock.answers],
                 "after": None, "reason": "timeout",
                 "usage": {"prompt_tokens": len(ids), "text_tokens": len(emitted), "circuit_tokens": max(0, len(stream) - len(emitted)), "gpu_ms": int((time.time() - started) * 1000)}}
@@ -332,7 +332,7 @@ def run_qwenputer(job):
     text = chat.text_of(tokens)
     eos = bool(tokens) and tokens[-1] in chat.eos
     trace = json.dumps({"prompt_ids": [int(i) for i in ids], "tokens": tokens, "fed": fed,
-                        "stream": [int(t) for t in lock.toks], "lock_error": r.get("lock_error")})
+                        "stream": [int(t) for t in lock.toks], "stream_start": stream_start, "lock_error": r.get("lock_error")})
     usage = {"prompt_tokens": len(ids), "text_tokens": int(r["text_tokens"]), "circuit_tokens": int(r["chip_tokens"]), "gpu_ms": gpu_ms}
     ops = [list(a) if isinstance(a, tuple) else a for a in lock.answers]
     if not eos:
@@ -365,7 +365,7 @@ def lab_job(job):
                     "limits": {"max_tokens": max_new, "max_circuit_tokens": job["limits"]["max_circuit_tokens"], "timeout_ms": job["limits"]["timeout_ms"]}})
         r = run_qwenputer(sub)
         trace = json.loads(r["trace"])
-        return trace["stream"], trace["tokens"], r["terminal"] if r["terminal"] != "limit_reached" else (r.get("reason") or "limit_reached"), r["usage"]
+        return trace["stream"], trace["tokens"], r["terminal"] if r["terminal"] != "limit_reached" else (r.get("reason") or "limit_reached"), {**r["usage"], "stream_start": trace.get("stream_start")}
 
     # The start of every module the package's own set changed: a try composes its candidate from there, never on top.
     return JL.lab(job, chat, run_case, _resident["bases"])

@@ -24,8 +24,9 @@ import { normalizePackage, type BlobStore, type JuniorPackage } from './package.
  * ========================================================================== */
 
 export const METHOD_PROGRAM = 'method-program@1';
-export type OutputFormat = 'weight-edit-set@1' | 'lora-adapter' | 'mask@1';
-const FORMATS: readonly OutputFormat[] = ['weight-edit-set@1', 'lora-adapter', 'mask@1'];
+/** What a program makes: a product to import, or - capacity@1 - what a run of it would need, read by the host before it. */
+export type OutputFormat = 'weight-edit-set@1' | 'lora-adapter' | 'mask@1' | 'capacity@1';
+const FORMATS: readonly OutputFormat[] = ['weight-edit-set@1', 'lora-adapter', 'mask@1', 'capacity@1'];
 /** The formats this host imports: a set of edits, a LoRA adapter (importAdapter) and a mask (importMask, mask.ts,
     SPEC-EDICION-PESOS WE7a) - each with its own checks. */
 export const IMPORTABLE: ReadonlySet<OutputFormat> = new Set(['weight-edit-set@1', 'lora-adapter', 'mask@1']);
