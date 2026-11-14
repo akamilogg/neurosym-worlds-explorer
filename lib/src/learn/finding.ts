@@ -31,6 +31,7 @@
  * ========================================================================== */
 
 import { exposureOf } from './assisted/exposure.ts';
+import { hypothesesOf, provenanceCounts } from './assisted/provenance.ts';
 import { evaluationSummary } from './objective.ts';
 
 type J = Record<string, any>;
@@ -303,6 +304,13 @@ export function findingOf(journal: J, meta: { journal?: string; commit?: string;
       /* The contributions it received (§7), and what of them it cited where it acted - never a cause read from an order of events. */
       contributions_received: events.filter((e) => e.type === 'operator_message').flatMap((e) => (e.messages ?? []).filter((m: J) => m.contribution).map((m: J) => ({ id: String(m.contribution.id), from: String(m.by ?? ''), question: e.question }))),
       cited_contributions: [...new Set(JSON.stringify(events.filter((e) => e.type === 'proposal' || e.type === 'investigation')).match(/"because":\s*"([^"]+)"/g) ?? [])].map((x) => x.replace(/^"because":\s*"|"$/g, '')),
+      /* Where each hypothesis comes from (§4.1.2): what it had read before it, against what it declared. */
+      ...((() => { const hs = hypothesesOf(journal); return hs.length ? { hypotheses: { counts: provenanceCounts(hs), each: hs } } : {}; })()),
+      /* What it ADOPTED of them (§7.1): each act made from an artifact of a contribution, with what its world answered - a
+         product that descends from it is not of its own method. */
+      adopted: events.filter((e) => e.type === 'investigation').flatMap((e) => (e.requests ?? []).map((q: J, k: number) => ({ q, r: (e.results ?? [])[k], round: e.round })))
+        .flatMap(({ q, r, round }) => { const act = q?.act && typeof q.act === 'object' ? q.act as J : null; const kind = act ? Object.keys(act)[0] : null; const c = kind ? act![kind]?.contributed : null;
+          return c ? [{ contribution: String(c.contribution), artifact: String(c.artifact), act: kind, round, accepted: r?.accepted ?? null, ...(typeof r?.version === 'string' ? { version: r.version } : {}) }] : []; }),
       spent: (() => { const last = [...events].reverse().find((e) => (e.type === 'source_search' || e.type === 'source_acquired') && e.left); const b = journal.config?.external_research ? events.find((e) => e.type === 'external_research_inventory')?.budget : null;
         return last && b ? { search_calls: b.search_calls - last.left.search_calls, fetch_calls: b.fetch_calls - last.left.fetch_calls, download_bytes: b.download_bytes - last.left.download_bytes } : null; })()
     } } : {}),

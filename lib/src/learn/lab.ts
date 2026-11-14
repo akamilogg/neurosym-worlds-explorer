@@ -249,6 +249,9 @@ export interface Lab<S, P, E, K extends LabCase<P>, A = never> {
       reason where what is investigated in it is documented outside, and reading it would contaminate the measure. Neither
       the operator's allowlist nor the public web reach whoever investigates it; meta-investigation stays open. */
   readonly externalSources?: { readonly admitted: false; readonly why: string };
+  /** The formats it takes as a contribution (SPEC-INVESTIGACION-EXTERNA §7.1): checked with no world at hand, and adopted
+      as the world's own act. None: a contribution reaches its researcher as something to read. */
+  readonly contributions?: { readonly formats: readonly import('./contributions.ts').ContributionFormat<A>[] };
   /** An evolutionary branch's needs of its world (SPEC-DELEGACION-EVOLUTIVA): where a search starts when none is named. */
   readonly evolution?: { readonly latestVersionOf: (world: never) => string };
 

@@ -2,7 +2,7 @@ import { UserParts, type ChatClient } from '../system2.ts';
 import { parseJsonLoose } from '../../core/net.ts';
 import { LawSession, type LawSessionHost } from '../law-session.ts';
 import { Sources, type LineSelector } from './sources.ts';
-import { EXTERNAL_SOURCES_SECTION } from './external-sources.ts';
+import { externalSourcesSection } from './external-sources.ts';
 import { JournalMemory } from './memory.ts';
 import { Experience } from './experience.ts';
 import { ownLaw } from '../law-explorer.ts';
@@ -247,7 +247,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
         const originsNow = origins.join('|') + (external ? '|external' : '');
         if (originsNow !== pinnedOrigins) { ch.publish('harness', { kind: 'pinned', key: 'sources', body: { origins, ...(external ? { external_sources: external.inventory(false) } : {}) } }); pinnedOrigins = originsNow; }
         const base = channel.system ? channel.system() : request.system;
-        const wanted = base + (directed ? '\n\n' + DIRECTIVES_SECTION_CHANNEL : '') + (origins.length ? '\n\n' + SOURCES_SECTION_CHANNEL : '') + (external ? '\n\n' + EXTERNAL_SOURCES_SECTION : '');
+        const wanted = base + (directed ? '\n\n' + DIRECTIVES_SECTION_CHANNEL : '') + (origins.length ? '\n\n' + SOURCES_SECTION_CHANNEL : '') + (external ? '\n\n' + externalSourcesSection(external.searchable) : '');
         if (fixedPrompt === null) fixedPrompt = lastPrompt = wanted;
         else if (wanted !== lastPrompt) {
           /* What changed of its instructions: what was added at the end, or (a focus rewrites the interface) all of it now - pinned. */
@@ -292,7 +292,7 @@ export function operatorClient(llm: ChatClient, channel: OperatorChannel, log: (
       earlier.push(...fresh);
       for (const m of fresh) if (m.directive) { open.set(m.id, { ...m, ...(channel.round ? { round: channel.round() } : {}) }); directed = true; }
       const base = channel.system ? channel.system() : request.system;
-      let system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '') + (external ? '\n\n' + EXTERNAL_SOURCES_SECTION : '');
+      let system = base + (directed ? '\n\n' + DIRECTIVES_SECTION : '') + (origins.length ? '\n\n' + SOURCES_SECTION : '') + (external ? '\n\n' + externalSourcesSection(external.searchable) : '');
       if (channel.fixedSystem?.()) {
         if (fixedPrompt === null) fixedPrompt = lastPrompt = system;
         else if (system !== lastPrompt) {

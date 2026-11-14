@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { JEV_DEFAULT_URL } from '../core/jev.ts';
 import { openAiChatClient, type ChatClient } from '../learn/system2.ts';
+import { seatFetch } from '../core/seat.ts';
 import { ReplayLog } from '../runtime/replay.ts';
 import { LabError, llmTuning, type LabRunOptions } from '../runtime/lab-runner.ts';
 import { projectFiles, type Autonomy, type ProjectGoal } from './project.ts';
@@ -68,7 +69,8 @@ export function chatFromEnv(env: NodeJS.ProcessEnv, role: ChatRole, replay?: { f
   /* Connection/model may fall back to the junior. Tuning never does: its effort and Qwen extras are independent. */
   const tuning = senior ? llmTuning(env, 'SENIOR_LLM') : {};
   return openAiChatClient({ url: e.url, apiKey: e.key, model: e.model, jsonMode: true, temperature: 0.3, timeoutMs: 180000, retries: 1,
-    ...tuning, ...(log ? { fetch: log.wrap(replay!.channel) } : {}) });
+    /* An external seat (LLM_URL=seat:<folder>, SPEC-INVESTIGACION-EXTERNA §6.4) served beneath its replay, as a run's is. */
+    ...tuning, fetch: log ? log.wrap(replay!.channel, seatFetch(undefined)) : seatFetch(undefined) });
 }
 
 /** The planner's replay logs of a project, oldest first: the next one to write, and the latest to replay. */

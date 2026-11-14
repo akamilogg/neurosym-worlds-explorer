@@ -65,6 +65,8 @@ export const CLI_USAGE = [
   '          [--role senior] [--patience N] [--stuck-vocabulary 2] a senior: when the run is stuck, it reviews the junior record and proposes a hypothesis',
   '          [--external-research <file>]                    the senior searches and reads external sources itself, with its own bags (SPEC-INVESTIGACION-EXTERNA)',
   'lab agent <run> --research <operator-research.json>       a researching operator: woken as its file says, it investigates and delivers contributions (SPEC-INVESTIGACION-EXTERNA)',
+  'lab external guide|open|read|formats|check|contribute|status|close ...  an external agent (Claude Code, Codex, a script) joins a research and contributes (SPEC-INVESTIGACION-EXTERNA §6.4); guide says how',
+  'lab external turn|answer <folder> ...                    it serves a seat of the harness started with LLM_URL=seat:<folder>',
   'lab grade <run> [--senior [id]]                          grade a finished run again (operator only), with GRADER_LLM_* (default LLM_*); --senior: its senior\'s own notebook',
   'lab audit <run> [--flat] [--extract]                      audit its method (operator only): links, citations, controls; J1-J6 by the Judge (JEV_*), or code only with --flat;',
   '                                                           --extract: each text\'s claims structured by AUDIT_LLM_* (default LLM_*), the facts among them checked',
@@ -927,6 +929,63 @@ export async function labCli(argv: readonly string[], ctx: CliContext): Promise<
         out('outcome, beside it: ' + JSON.stringify(a.outcome.checks.map((c: { scored_1?: number; of?: number; holds: boolean }) => c.scored_1 !== undefined ? c.scored_1 + '/' + c.of : c.holds ? 'holds' : 'fails')) + (a.outcome.rule_recovery !== undefined ? ', rule recovery ' + a.outcome.rule_recovery : ''));
         out('written to ' + path.basename(auditFile(journal)) + '; the operator\'s finding links it');
         return 0;
+      }
+      case 'external': {
+        /* An external agent (SPEC-INVESTIGACION-EXTERNA §6.4, §7.1, IE7 and IE9): every answer JSON on its output. */
+        const sub = args.shift();
+        const X = await import('../orchestra/external-agent.ts');
+        const json = (v: unknown) => out(JSON.stringify(v, null, 2));
+        try {
+          if (sub === 'guide' || sub === undefined) { out(X.EXTERNAL_GUIDE); return 0; }
+          if (sub === 'open') { json(X.openExternal(args[0] ?? '', { root: ctx.root })); return 0; }
+          if (sub === 'read') {
+            const since = take(args, 'since'), rounds = take(args, 'rounds');
+            json(X.readExternal(args[0] ?? '', args[1] ?? '', { ...(since !== undefined ? { since: Number(since) } : {}), ...(rounds !== undefined ? { rounds: Number(rounds) } : {}) }));
+            return 0;
+          }
+          if (sub === 'formats') { json(X.formatsExternal(args[0] ?? '', args[1] ?? '')); return 0; }
+          if (sub === 'check') {
+            const as = take(args, 'as');
+            if (!as) { out('lab external check <session> <run> <file> --as <format>'); return 2; }
+            const r = X.checkExternal(args[0] ?? '', args[1] ?? '', args[2] ?? '', as);
+            json(r);
+            return r.ok ? 0 : 1;
+          }
+          if (sub === 'contribute') {
+            const session = args.shift() ?? '';
+            const to = take(args, 'to'), report = take(args, 'report'), summary = take(args, 'summary'), refs = take(args, 'refs'), tested = take(args, 'tested'), state = take(args, 'state');
+            const artifacts: { format: string; file: string }[] = [];
+            for (let a = take(args, 'artifact'); a !== undefined; a = take(args, 'artifact')) {
+              const i = a.indexOf('=');
+              if (i < 1) { out('--artifact <format>=<file>'); return 2; }
+              artifacts.push({ format: a.slice(0, i), file: a.slice(i + 1) });
+            }
+            if (!to || !report) { out('lab external contribute <session> --to <run>[,<run>] --report <file> [--artifact <format>=<file>]...'); return 2; }
+            if (state !== undefined && state !== 'complete' && state !== 'partial' && state !== 'no_result') { out('--state complete|partial|no_result'); return 2; }
+            json(X.contributeExternal(session, { to: to.split(','), report: fs.readFileSync(path.resolve(report), 'utf8'), artifacts, ...(summary ? { summary } : {}), ...(refs ? { refs: refs.split(',') } : {}),
+              ...(tested ? { tested } : {}), ...(state ? { state: state as 'complete' } : {}) }));
+            return 0;
+          }
+          if (sub === 'status') { json(X.statusExternal(args[0] ?? '')); return 0; }
+          if (sub === 'close') { json(X.closeExternal(args[0] ?? '')); return 0; }
+          if (sub === 'turn') {
+            const { pendingTurns } = await import('../core/seat.ts');
+            json({ turns: pendingTurns(path.resolve(args[0] ?? '')) });
+            return 0;
+          }
+          if (sub === 'answer') {
+            const { answerTurn } = await import('../core/seat.ts');
+            if (!args[2]) { out('lab external answer <folder> <turn> <file>'); return 2; }
+            const r = answerTurn(path.resolve(args[0] ?? ''), args[1] ?? '', fs.readFileSync(path.resolve(args[2]), 'utf8'));
+            json(r);
+            return 'ok' in r ? 0 : 1;
+          }
+        } catch (e) {
+          if (e instanceof X.ExternalError) { json({ error: e.message }); return 1; }
+          throw e;
+        }
+        out('lab external guide|open|read|formats|check|contribute|status|close|turn|answer (lab external guide)');
+        return 2;
       }
       case 'agent': {
         const journal = resolveRun(ctx.root, args.shift());

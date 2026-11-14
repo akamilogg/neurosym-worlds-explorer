@@ -17,14 +17,22 @@ import { startRunAt, startEvolveAt, labNameOf } from '../runtime/control.ts';
 import { evolveCapability, evolveConfigOf, worldFromJournal } from '../runtime/evolve-branch.ts';
 import { createHash } from 'node:crypto';
 import { Sources } from '../learn/assisted/sources.ts';
-import { ExternalSources, EXTERNAL_SOURCES_SECTION } from '../learn/assisted/external-sources.ts';
+import { ExternalSources, EXTERNAL_SOURCES_SECTION, EXTERNAL_PAGES_SECTION } from '../learn/assisted/external-sources.ts';
 import { environmentPdfExtractor, type ExternalResearchConfig, type PdfExtractor, type WebTransport } from '../learn/assisted/external.ts';
 import { braveProvider, type SearchProvider } from '../learn/assisted/source-search.ts';
 import { exposed, exposureOf, type ExternalExposure } from '../learn/assisted/exposure.ts';
+import { classify, originOf, readingOf } from '../learn/assisted/provenance.ts';
+
+/** Where the senior's hypothesis comes from (SPEC-INVESTIGACION-EXTERNA §4.1.2): apart from its evidence, which stays what
+    supports it in the junior's record. */
+export const SENIOR_ORIGIN_LINE = 'WHERE YOUR HYPOTHESIS COMES FROM. When you write to the junior, add "origin": ["src:<snapshot>#L<from>-<to>", ...] for what you took from a source, or "origin": "own" when the idea is yours. "evidence" stays what in the junior\'s record supports it.';
 
 /** The senior's external sources (SPEC-INVESTIGACION-EXTERNA §6.1): the junior's instruments, read by the senior itself. */
 export const SENIOR_EXTERNAL_SECTION = 'YOUR EXTERNAL SOURCES. Besides the junior\'s record, you may search the web and read what you find - the same instruments the junior has, with bags of your own - in your "investigate" requests. Use them to look for mechanisms and methods from other problems that the junior\'s data may fit, and say in your messages what you took from where (cite "src:<snapshot>#L<from>-<to>"): what a source says is a reference for the junior to test, never a fact of its environment.\n'
-  + EXTERNAL_SOURCES_SECTION.replace(/^EXTERNAL SOURCES\. [^\n]*\n/, '');
+  + EXTERNAL_SOURCES_SECTION.replace(/^EXTERNAL SOURCES\. [^\n]*\n/, '').replace(/\nWHERE AN IDEA COMES FROM[^\n]*$/, '') + '\n' + SENIOR_ORIGIN_LINE;
+/** The same, where the operator gave no search engine: pages of its allowlist only. */
+export const SENIOR_PAGES_SECTION = SENIOR_EXTERNAL_SECTION.split('\n')[0].replace('you may search the web and read what you find', 'you may read web pages the operator allows (there is no search engine: open a URL you know, or one a page links to)') + '\n'
+  + EXTERNAL_PAGES_SECTION.replace(/^EXTERNAL SOURCES\. [^\n]*\n/, '').replace(/\nWHERE AN IDEA COMES FROM[^\n]*$/, '') + '\n' + SENIOR_ORIGIN_LINE;
 
 /* ============================================================================
  * The AGENT OPERATOR (SPEC-ORQUESTADOR §3, R1): an agent that follows an assisted run and does
@@ -108,6 +116,13 @@ export interface AgentDecision {
   readonly signals?: readonly string[];
   readonly read?: readonly unknown[];
   readonly evidence?: readonly string[];
+  /** Its readings of external sources in this call, and where it says its hypothesis comes from (SPEC-INVESTIGACION-EXTERNA
+      §4.1.2); for a message, what it had read since its last one (`read_before`) and their contrast, written by the host. */
+  readonly external_read?: readonly string[];
+  readonly origin?: import('../learn/assisted/provenance.ts').Origin;
+  read_before?: readonly string[];
+  fresh?: readonly string[];
+  provenance?: import('../learn/assisted/provenance.ts').ProvenanceClass;
   /** The round in course when the senior was called during it (not at its end). */
   readonly during_round?: number;
   /** How many times it was reminded to decide after asking to read with no readings left. */
@@ -409,8 +424,18 @@ export async function runAgentOperator(o: AgentOperatorOptions): Promise<{ decis
       if (d && (d.decision === 'message' || d.decision === 'stop')) {
         /* A senior's message is a directive: an order the junior carries out and reports (SPEC-ORQUESTADOR §3.3.3). */
         const exposure = d.decision === 'message' && role === 'senior' ? seniorExposure(journal) : null;
+        /* What it had read since its last message, and the contrast with what it declared (§4.1.2), written by the host. */
+        if (d.decision === 'message' && role === 'senior') {
+          const all = [...(record.earlier?.decisions ?? []), ...record.decisions] as AgentDecision[];
+          let i = all.length - 1;
+          while (i >= 0 && all[i].decision !== 'message') i--;
+          /* All it had read up to now - what it read stays in its conversation - and, apart, what it read since its last message. */
+          const fresh = [...new Set([...all.slice(i + 1).flatMap((x) => x.external_read ?? []), ...(d.external_read ?? [])])];
+          const readBefore = [...new Set([...all.flatMap((x) => x.external_read ?? []), ...(d.external_read ?? [])])];
+          if (readBefore.length || d.origin !== undefined) { d.read_before = readBefore; d.fresh = fresh; d.provenance = classify(d.origin ?? null, readBefore, new Set(readBefore)); }
+        }
         const { id } = send(o.journal, d.decision === 'message' ? { kind: 'message', text: d.text!, by: 'agent:' + o.id, ...(role === 'senior' ? { directive: true } : {}), ...(role === 'senior' && d.test ? { test: d.test } : {}),
-          ...(exposure ? { external_exposure: exposure } : {}) } : { kind: 'stop', by: 'agent:' + o.id });
+          ...(exposure ? { external_exposure: exposure } : {}), ...(d.read_before ? { read_before: d.read_before, fresh: d.fresh ?? [], provenance: d.provenance } : {}), ...(d.origin !== undefined ? { origin: d.origin } : {}) } : { kind: 'stop', by: 'agent:' + o.id });
         (d as { order?: string }).order = id;
         orders++;
         say('agent:' + o.id + ' after ' + rounds + ' rounds: ' + d.decision + (d.text ? ' - ' + d.text.slice(0, 120) : ''));
@@ -461,7 +486,7 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
   const system = seniorSystem(juniorBrief(journal), juniorPercept(journal), juniorTests(journal), juniorInstruments(journal))
     + (branches && delegation ? '\n\n' + SENIOR_DELEGATION_SECTION({ fund: delegation.fund, tokens: delegation.tokens, rounds: delegation.rounds, maxRounds: delegation.max_rounds }, Boolean(sources?.external)) : '')
     /* Its external sources (SPEC-INVESTIGACION-EXTERNA, IE2): the junior's instruments, with its own bags. */
-    + (sources?.external ? '\n\n' + SENIOR_EXTERNAL_SECTION + '\nYour inventory: ' + JSON.stringify(sources.external.inventory(false)) : '');
+    + (sources?.external ? '\n\n' + (sources.external.searchable ? SENIOR_EXTERNAL_SECTION : SENIOR_PAGES_SECTION) + '\nYour inventory: ' + JSON.stringify(sources.external.inventory(false)) : '');
   const usage: Usage = { calls: 0, tokens_in: 0, cached_in: 0, tokens_out: 0, cost: 0 };
   const call = decisions.length + 1;
   /* A follow-up brings the experiment it is about, as the junior's record keeps it: it is decided in one call, as a rule. */
@@ -590,6 +615,9 @@ async function seniorDecides(o: AgentOperatorOptions, journal: Record<string, an
       const d: AgentDecision = { at: at(), rounds, ...(isOpening ? { opening: true } : {}), ...(duringRound !== null ? { during_round: duringRound } : {}), ...(followUp ? { follow_up: followUp.experiment } : {}), decision, ...(decision === 'message' ? { text: String(parsed.text).trim() } : {}),
         why: String(parsed.why ?? (Array.isArray(parsed.investigate) ? 'it kept asking to read after being reminded to decide' : '')), signals: signals.signs,
         read: asked(), ...(Array.isArray(parsed.evidence) ? { evidence: parsed.evidence.map(String) } : {}), ...(reminded ? { reminded } : {}),
+        /* Its external readings in this call, and where it says its idea comes from (SPEC-INVESTIGACION-EXTERNA §4.1.2). */
+        ...((() => { const x = read.flatMap((r) => r.requests.map((q, k) => readingOf(q as Record<string, any>, (r.results[k] ?? null) as Record<string, any> | null))).filter((s): s is string => s !== null); return x.length ? { external_read: [...new Set(x)] } : {}; })()),
+        ...(originOf((parsed as { origin?: unknown }).origin) !== null ? { origin: originOf((parsed as { origin?: unknown }).origin)! } : {}),
         ...(decision === 'message' && parsed.test && typeof parsed.test === 'object' && !Array.isArray(parsed.test) ? { test: parsed.test } : {}),
         ...(consolidated ? { consolidated } : {}), ...(Object.keys(wrote).length ? { wrote } : {}), ...(suspicions.length ? { instrument_reports: suspicions } : {}), usage };
       /* What it decided stays in its conversation, as it was. */

@@ -18,6 +18,9 @@ export interface ExternalExposure {
   readonly via: readonly string[];
   /** Where it began: the index of the first event that exposed it, and its type. */
   readonly since: { readonly event: number; readonly type: string } | null;
+  /** What exposed it cannot be read from any record (an external agent, SPEC-INVESTIGACION-EXTERNA §6.4): it is exposed by
+      definition, and nothing about what it read is known. */
+  readonly unobserved?: true;
 }
 
 export const NO_EXPOSURE: ExternalExposure = { direct: false, via: [], since: null };
@@ -58,7 +61,10 @@ export function exposureOf(journal: J | null | undefined): ExternalExposure {
       }
     }
   });
-  return { direct: direct !== null, via: [...via].sort(), since: first };
+  /* A run whose researcher was an external seat (SPEC-INVESTIGACION-EXTERNA §6.4): exposed from its start, unobserved. */
+  if (journal?.config?.llm_provider === 'external-seat') return { direct: true, via: [...new Set([...via, 'seat'])].sort(), since: { event: 0, type: 'external_seat' }, unobserved: true };
+  const unobserved = events.some((e) => [e, ...(e.type === 'operator_message' && Array.isArray(e.messages) ? e.messages : [])].some((c: J) => c?.external_exposure?.unobserved === true));
+  return { direct: direct !== null, via: [...via].sort(), since: first, ...(unobserved ? { unobserved: true as const } : {}) };
 }
 
 /** Whether an exposure is any at all. */

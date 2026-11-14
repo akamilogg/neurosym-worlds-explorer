@@ -47,7 +47,9 @@ export interface ArtifactCase { readonly point: string; readonly state: Artifact
 
 /** Why a change was made, written before anything of it is measured (SPEC-MUNDO-ARTEFACTOS §3): the hypothesis, and what it
     expects - or that it is exploratory, its expectation declared uncertain. */
-export type Reason = { readonly why: string; readonly because?: readonly string[] } & ({ readonly expect: string } | { readonly exploratory: true });
+export type Reason = { readonly why: string; readonly because?: readonly string[];
+  /** Adopted from a contribution (SPEC-INVESTIGACION-EXTERNA §7.1): what it came from, kept with the version. */
+  readonly contributed?: import('../../learn/contributions.ts').Contributed } & ({ readonly expect: string } | { readonly exploratory: true });
 
 export type ArtifactAct =
   | { readonly change: { readonly from: string; readonly files: Readonly<Record<string, string | null>> } & Reason }
@@ -182,6 +184,34 @@ export const ARTIFACTS_PROGRESS: LabProgress = {
     if (metric === 'growth_exponent') return worst(ps.map((p) => p.growth?.slope).filter((x): x is number => Number.isFinite(x)));
     if (metric === 'cost_ratio') return worst(ps.map((p) => p.ratio).filter((x): x is number => Number.isFinite(x) && x > 0));
     return null;
+  }
+};
+
+/** Files of a candidate version: {"files": {"<path>": "<the file's whole text>" | null}}. */
+const ARTIFACT_FILES: import('../../learn/contributions.ts').ContributionFormat<ArtifactAct> = {
+  id: 'artifact-files@1',
+  about: 'files of a candidate version; adopted, a change of yours from the version you name, its files replaced (or removed, with null)',
+  form: '"from": "<version>", "why": "<the hypothesis it tests>", "expect": "<what you expect of it>" | "exploratory": true',
+  max_bytes: 1 << 20,
+  check: (bytes) => {
+    let raw: unknown;
+    try { raw = JSON.parse(bytes.toString('utf8')); } catch { return ['not JSON: {"files": {"<path>": "<text>" | null}}']; }
+    const files = (raw as { files?: unknown } | null)?.files;
+    if (!files || typeof files !== 'object' || Array.isArray(files)) return ['{"files": {"<path>": "<text>" | null}}'];
+    const p: string[] = [];
+    if (!Object.keys(files).length) p.push('no file');
+    for (const [f, t] of Object.entries(files as Record<string, unknown>)) {
+      if (!f || f.startsWith('/') || /^[A-Za-z]:/.test(f) || f.split(/[\\/]/).includes('..')) p.push(f + ': a path relative to the artifact, never outside it');
+      if (t !== null && typeof t !== 'string') p.push(f + ': its whole text, or null to remove it');
+    }
+    return p;
+  },
+  adopt: (bytes, raw, contributed) => {
+    const files = JSON.parse(bytes.toString('utf8')).files as Record<string, string | null>;
+    const parsed = artifactsLab.act!.parse({ change: { ...raw, files } });
+    if (typeof parsed === 'string') return parsed;
+    if (!('change' in parsed)) return 'an adoption is a change';
+    return { change: { ...parsed.change, contributed } };
   }
 };
 
@@ -354,6 +384,9 @@ export const artifactsLab: Lab<ArtifactSpec, ArtifactPoint, ArtifactEpisode, Art
     examples: (spec) => [{ run: { version: spec.world.reference, workloads: 2 } }, { change: { from: spec.world.reference, files: { 'NOTE.md': 'an example file' }, why: 'a note changes nothing it runs', expect: 'the same time' } }]
   },
   episodeIdentity: (_spec, e) => (e.kind === 'runs' ? e.version + '|' + e.family : null),
+  /* What a contribution may carry here (SPEC-INVESTIGACION-EXTERNA §7.1): files of a version, adopted as a change of the
+     researcher's own from the version it names - judged against the reference like any. */
+  contributions: { formats: [ARTIFACT_FILES] },
 
   objective: (host, options) => artifactObjective(host as never, Number(options.tolerance) || 0.25),
   answerIssue: (a) => (typeof a === 'number' && Number.isFinite(a) && a > 0 ? null : 'the answer must be a positive number (it was ' + JSON.stringify(a)?.slice(0, 60) + ')'),

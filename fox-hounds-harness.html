@@ -2960,11 +2960,12 @@ var Neurosym = (() => {
         o.onRequest?.();
         if (!o.url) throw new ApiError("network", "No LLM endpoint configured.");
         const started = clock4();
+        const seat = o.url.startsWith("seat:");
         const response = await fetchJson(o.url, {
           body: chatRequestBody(o, system, user),
           headers: o.apiKey ? { Authorization: "Bearer " + o.apiKey } : {},
-          timeoutMs: o.timeoutMs ?? 3e4,
-          retries: o.retries ?? 1,
+          timeoutMs: seat ? 2147e6 : o.timeoutMs ?? 3e4,
+          retries: seat ? 0 : o.retries ?? 1,
           signal: signal ?? null,
           fetch: o.fetch,
           sleep: o.sleep

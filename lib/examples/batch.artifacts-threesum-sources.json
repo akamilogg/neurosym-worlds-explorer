@@ -1,0 +1,61 @@
+{
+  "format": "batch@1",
+  "id": "artifacts-threesum-sources",
+  "concurrency": 1,
+  "budget": {
+    "tokens_per_run": 4000000
+  },
+  "runs": [
+    {
+      "id": "threesum-sources-A",
+      "lab": "artifacts",
+      "condition": "A with external sources - the same as threesum-stall-A-delegation (threesum-subquadratic@1 from its quadratic base, the records of runs 6 and 7 as experience, normal investigation and delegation, the same message at round 2) but junior, senior and branches may read web pages of an allowlist (en.wikipedia.org, arxiv.org, cp-algorithms.com, docs.python.org), with no search engine; each with its own bags. What is compared is the method: whether they find, understand, adapt and validate what the literature says.",
+      "researcher": "assisted",
+      "args": [
+        "--artifact",
+        "threesum-subquadratic",
+        "--seed",
+        "1",
+        "--attempts",
+        "16",
+        "--validations",
+        "5",
+        "--memory",
+        "selective",
+        "--max-minutes",
+        "600",
+        "--help-budget",
+        "8",
+        "--experience",
+        "D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-6/threesum-subquadratic.json,D:/OctaneDoc/OctLocalServer/Gato y RAton/runs/batches/artifacts-threesum-subquadratic-7/threesum-subquadratic.json",
+        "--experience-mode",
+        "meta",
+        "--delegation-fund",
+        "1200000",
+        "--delegation-tokens",
+        "600000",
+        "--delegation-rounds",
+        "3",
+        "--delegation-max-rounds",
+        "6",
+        "--external-research",
+        "D:/OctaneDoc/OctLocalServer/Gato y RAton/lib/examples/external-research.threesum.json",
+        "--task",
+        "Make this artifact decide in time that grows more slowly than n^2, without changing what it answers. Show with your own runs where and why your version grows more slowly than the quadratic one, put forward each version you can defend, and record the evidence of each change and the failed alternatives."
+      ],
+      "messages": [
+        {
+          "round": 2,
+          "text": "Earlier investigations of this task (your experience exp1 and exp2, judged then against another base, by speed rather than growth) stalled at quadratic solutions; their programs for bounded ranges did not solve the wide range directly - whether one of them can be adapted is open. Delegate now an investigation to find a direction that gets past that stall: {\"delegate\": {\"question\": \"...\", \"refs\": [\"exp:exp1#artifact:cbdcdfec79540eab\", \"exp:exp2#artifact:37269ec87e0eda7a\"], ...}} - two programs of those runs, of different mechanisms, readable by the branch in those records. What it returns is a contribution to test, not a result: judge it with your own runs and checks, and adopt, change or discard it with evidence."
+        }
+      ],
+      "agent": {
+        "id": "senior",
+        "role": "senior",
+        "max_orders": 8,
+        "patience": 2,
+        "external_research": "D:/OctaneDoc/OctLocalServer/Gato y RAton/lib/examples/external-research.threesum.json"
+      }
+    }
+  ]
+}

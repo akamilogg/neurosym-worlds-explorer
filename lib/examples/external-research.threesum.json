@@ -1,0 +1,14 @@
+{
+  "format": "external-research@1",
+  "web": {
+    "access": "allowlist",
+    "allow": ["en.wikipedia.org", "arxiv.org", "cp-algorithms.com", "docs.python.org"],
+    "deny": [],
+    "max_document_bytes": 20971520
+  },
+  "budget": { "search_calls": 0, "fetch_calls": 60, "download_bytes": 104857600 },
+  "branches": {
+    "inherit_sources": true,
+    "budget": { "search_calls": 0, "fetch_calls": 20, "download_bytes": 41943040 }
+  }
+}

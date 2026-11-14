@@ -9,7 +9,10 @@ aislamiento de la GPU y el piloto real: falta una clave del buscador y una ejecu
 se activa explícitamente, un mundo puede negarse a las fuentes externas, y las piezas que chocaban con lo construido
 (clases de petición, identidad de los ensayos, procedencia de lo aprendido) quedan resueltas. Una segunda revisión del
 mismo día deriva la exposición externa del registro en vez de las citas (§4.1.1) y separa el ejecutor de programas (IE5)
-de `deletion@1` (WE7 de SPEC-EDICION-PESOS).
+de `deletion@1` (WE7 de SPEC-EDICION-PESOS). **Agentes externos (§6.4, §7.1; IE7 a IE9): implementados en código
+el 13/11/2026, con sus pruebas** (§11): un agente con herramientas propias, del tipo de Claude Code o Codex, se une a una
+investigación por la línea de comandos, aporta artefactos que el investigador puede adoptar y probar, u ocupa un asiento
+del arnés. Sin ejecutar todavía con un agente real.
 
 Se apoya en [fuentes y experiencia](SPEC-INVESTIGADOR-ASISTIDO.md),
 [delegación](SPEC-DELEGACION-INVESTIGACIONES.md), [operadores y senior](SPEC-ORQUESTADOR.md),
@@ -172,6 +175,40 @@ lo que el actor declara.
   mundo las niegue.
 - **Fuera de esos mundos** la exposición también se registra, porque dice qué resultados se obtuvieron con ayuda externa
   (§10) aunque nada se bloquee.
+
+#### 4.1.2 La procedencia de cada hipótesis
+
+La exposición dice si algo de fuera llegó a un actor; no dice de dónde sale cada idea. El run de 3SUM con fuentes del
+14/11/2026 lo mostró: el senior leyó el artículo «3SUM» de Wikipedia y siete minutos después propuso, por primera vez en
+todos los runs de ese mundo, la técnica de módulos grandes con conjuntos de bits empaquetados que la literatura describe.
+No lo citó, y no podía: su decisión sólo tenía `evidence`, definida como lo que apoya la hipótesis en el registro del
+junior. El origen no es la medida (la medida es entender el mundo y pasar la validación), pero sin él no se sabe si el
+investigador trabaja como se espera: si lee, reconoce, adapta y valida, o si la idea le surge sola.
+
+El principio es el de §4.1.1: **la procedencia se deriva del registro y lo declarado se contrasta con ella**, nunca al revés.
+
+- **Hipótesis.** Lo que propone algo que probar: un mensaje del senior, un acto del junior que dice por qué (`why`), una
+  delegación y un modelo propuesto. Cada uno cierra un tramo del registro de su actor.
+- **Lo que tenía delante (`read_before`).** Lo escribe el host: las lecturas de fuentes externas (snapshots abiertos,
+  buscados o cuyos enlaces se listaron), las contribuciones recibidas y los mensajes de actores expuestos que el actor
+  recibió **hasta entonces**. Lo leído sigue en su conversación, que sólo crece, así que sigue a su alcance. En el run de
+  3SUM la lectura fue en la misma llamada del mensaje anterior, y la idea de los residuos llegó en el siguiente: contar
+  sólo el último tramo la habría dado por propia. Aparte va lo leído en el tramo (`fresh`). No afirma causalidad: dice qué
+  estaba a su alcance cuando la formuló.
+- **Lo que declara (`origin`).** El actor puede decir de dónde sale la idea, aparte de la evidencia que la apoya:
+  `"origin": "own"`, o una lista de referencias (`"src:S1#L40-60"`, `"exp:exp1#…"`, el id de una contribución). El junior
+  lo escribe junto a la petición (`{"act": {...}, "origin": [...]}`, `{"delegate": {...}, "origin": [...]}`) o en su
+  propuesta; el senior, en su decisión, junto a `evidence`. Se pide sólo a quien tiene fuentes externas: el prompt de
+  quien no las tiene no cambia.
+- **El contraste.** El hallazgo clasifica cada hipótesis:
+  - `declared`: declaró un origen externo y lo había leído;
+  - `unacknowledged`: tenía lecturas en `read_before` y declaró `own` o nada. Un uso posible no reconocido, nunca una
+    acusación: leer y tener una idea propia pueden coincidir;
+  - `own`: no tenía lecturas;
+  - `declared_unread`: declaró una fuente que no consta en su registro. Una cita sin lectura.
+- **Dónde queda.** En la decisión del senior y en la orden que entrega (y por ella, en el mensaje que registra el run del
+  junior), en las hipótesis del hallazgo de cada run y de cada rama, y en el recuento del hallazgo. La auditoría puede
+  después juzgar con Jev si el texto de una hipótesis se apoya en lo que leyó; el host no lo juzga.
 
 ### 4.2 La configuración forma parte de la identidad
 
@@ -347,6 +384,100 @@ Al cerrar todos los destinatarios, `lifetime: "targets"` cancela trabajo pendien
 registro y la bandeja del proyecto; no reabre un run terminado. Se conservan heartbeat, cancelación y reconciliación
 del orquestador. Un fallo de búsqueda no detiene la investigación principal.
 
+### 6.4 Agente externo
+
+Los actores de §6.1 a §6.3 son modelos a los que el arnés llama: él les escribe el turno, les sirve las herramientas y
+registra cada paso. Un **agente externo** es lo contrario: un proceso con herramientas propias (un agente de código
+como Claude Code o Codex, un script, una persona con una terminal) que decide por sí mismo cuándo mira y qué hace, y
+que llama al arnés. Esta sección fija cómo se une a una investigación sin que el arnés dependa de quién es.
+
+**Principios.**
+
+- **Neutral.** La interfaz es la línea de comandos de `lab`, con JSON por la salida estándar y códigos de salida. No
+  hay SDK, protocolo de un proveedor ni servicio que arrancar: cada orden lee y escribe ficheros bajo el cierre del
+  journal y termina. Cualquier agente capaz de ejecutar una orden puede conectarse. `lab external guide` imprime el
+  contrato completo, para que el agente lo descubra sin documentación aparte.
+- **Sin autoridad nueva.** Lo autoriza el operador con un fichero, como al operador investigador. No lee ficheros de
+  operador, particiones reservadas ni métricas ocultas; no escribe en el journal de nadie; no detiene, enfoca ni
+  dicta. Lo que entrega es una contribución (§7), que el destinatario puede ignorar.
+- **No observado.** El arnés registra lo que el agente le pide y le entrega, no lo que hace fuera. Su registro lo dice
+  (`unobserved: true`) y no se presenta como reproducible: se reproduce la entrega, no cómo se llegó a ella.
+- **Expuesto por definición.** La exposición de los demás actores se deriva de su registro (§4.1.1). La de un agente
+  externo no se puede derivar, así que es siempre `external_exposure: {direct: true, unobserved: true,
+  via: ["agent:<id>"]}`. De ahí se sigue lo demás sin reglas nuevas: un mundo que no admite fuentes externas (§4.1) no
+  recibe nada suyo, y lo que un run adopte de él se cuenta aparte.
+- **El mundo decide.** El agente puede experimentar en su propia máquina; eso es lo que él afirma, nunca evidencia
+  del mundo. Un artefacto suyo vale lo que diga el evaluador fijo cuando el investigador lo pruebe.
+
+**El encargo: `external-agent@1`.** Lo escribe el operador:
+
+- `id`, `task` (texto libre; puede estar vacío: el agente decide en qué ayudar) y `targets` (ids de runs o `"*"` en un
+  proyecto, como en `operator-research@1`);
+- `mode`: `"contribute"` (aporta desde fuera, abajo) o `"seat"` (ocupa un asiento del arnés, más abajo);
+- `artifacts`: los formatos que puede entregar, entre los que admita el mundo de cada destinatario (§7.1), y una cota
+  de bytes por artefacto y en total;
+- `budget`: `max_contributions` por destinatario, `max_reads` y un plazo; ninguno es infinito por defecto;
+- `declares` (opcional): lo que el operador sabe de su acceso (`repository`, `web`, `evaluator_code`...). Es una nota
+  para quien lea el finding; no relaja nada.
+
+Se da con `lab external open <fichero>`, que responde la sesión: la ruta de su registro, que reciben las demás órdenes. En un proyecto, el mismo objeto en
+`goal.json`, junto a `research`.
+
+**Órdenes del modo `contribute`.**
+
+| Orden | Qué hace |
+|---|---|
+| `lab external read <sesión> <destinatario> [--since <corte>]` | Las rondas del destinatario como las vivió su investigador, sus versiones y sus artefactos visibles; fija y registra el corte. Gasta una lectura |
+| `lab external formats <sesión> <destinatario>` | Qué formatos de artefacto admite su mundo como aportación, con sus cotas y la identidad de la base sobre la que deben valer (§7.1) |
+| `lab external check <sesión> <destinatario> <fichero> --as <formato>` | Pasa el artefacto por el comprobador del importador de ese mundo y devuelve sus problemas. No evalúa, no ejecuta y no gasta nada del investigador |
+| `lab external contribute <sesión> --to <destinatarios> --report <fichero> [--artifact <formato>=<fichero>]... [--refs ...] [--tested <fichero>]` | Guarda informe y artefactos por contenido, escribe el sobre `research-contribution@1` y lo publica por el canal, una vez por destinatario |
+| `lab external status <sesión>` | Sus entregas, dónde se recibieron y qué versiones o experimentos las citan o adoptan, con lo que el mundo respondió al investigador |
+| `lab external close <sesión>` | Cierra la sesión; lo no entregado se descarta |
+
+`contribute` rechaza un artefacto que no pase `check`: nada mal formado llega a un investigador. `--tested` adjunta
+lo que el agente dice haber experimentado fuera; se guarda por contenido y el sobre lo marca `tested_by: "sender"`.
+`status` devuelve sólo lo que el investigador vio: el agente aprende del resultado de lo suyo igual que aprendería
+leyendo el run, nunca más.
+
+Su registro es el de un operador investigador (`<destinatario>.research-<id>.json`, o la carpeta del proyecto), con
+`actor: "external"`: apertura, lecturas con su corte, comprobaciones, contribuciones y entregas. La consola, los
+paquetes y `lab verify` lo tratan como aquél. Un destinatario que terminó no se reabre: la contribución queda en el
+registro y en la bandeja del proyecto.
+
+**El modo `seat`: ocupar un asiento.** Un agente externo puede también hacer el trabajo de un actor del arnés: ser el
+investigador de una rama delegada, el senior o un operador investigador. No se escribe un bucle nuevo para ello. El
+arnés ya habla con todo actor por un cliente de conversación; el **asiento externo** es otro cliente, que en vez de
+llamar a un modelo deja el turno en un fichero y espera la respuesta:
+
+- el operador arranca el actor con `LLM_URL=seat:<carpeta>`; el arnés deja cada turno en esa carpeta
+  (`lib/src/core/seat.ts`) y lo espera. Lo sirve la capa de red, bajo la reproducción: la respuesta se registra como la
+  de un modelo y una reproducción no vuelve a preguntar al asiento;
+- `lab external turn <carpeta>` devuelve los turnos pendientes, cada uno con su id y la petición entera tal como la
+  recibiría un modelo (sistema y mensajes). Varios actores pueden compartir carpeta (un run y sus ramas): cada turno
+  tiene su id;
+- `lab external answer <carpeta> <turno> <fichero>` entrega su respuesta, un objeto JSON de los que el papel admite.
+  Responder dos veces el mismo turno, o uno que ya no espera, se rechaza.
+
+Todo lo demás es lo que ya existe: las peticiones al mundo, las bolsas, las comprobaciones, el journal, la
+reanudación. El journal de un asiento externo es un journal como cualquier otro, así que sirve de experiencia a otros
+runs, su resultado de rama llega al solicitante como cualquier resultado, y el paquete lo exporta. Las diferencias:
+
+- el run lleva `actor: "external"` y la exposición de arriba; el corpus y el metalaboratorio lo cuentan aparte;
+- no hay tokens que medir: su coste se anota como no medido, y sus cotas son rondas, peticiones y tiempo;
+- un turno no tiene plazo: el run espera, como esperaría a un modelo lento. Parado o interrumpido, se reanuda desde su
+  punto de control (`--resume`) y pregunta de nuevo, en un turno nuevo;
+- el journal registra `llm_provider: "external-seat"` y nunca la carpeta;
+- la conversación sigue creciendo sólo por el final: el agente recibe mensajes nuevos, nunca un historial reescrito.
+
+Qué asientos son externos lo decide el operador (en el encargo de la rama, `agents.json` o `goal.json`). El prompt
+del investigador que delega no cambia: no necesita saber quién sirve su rama; sí lo dice la exposición del resultado
+que recibe.
+
+**Seguridad.** El agente corre con los permisos de quien lo lanzó; el arnés no lo aísla ni lo intenta. Lo que protege
+a la investigación es lo que el arnés le sirve (vistas de investigador) y lo que acepta de él (artefactos comprobados,
+nunca escritura directa). Lo que el agente lee de un run son datos, no instrucciones para él; `guide` se lo dice. Lo
+que él escribe llega al investigador como texto de un colega, igual que cualquier mensaje.
+
 ## 7. Entrega: una contribución que se puede seguir hasta su origen
 
 El resultado documental es un informe libre en un artefacto versionado. Su sobre de transporte `research-contribution@1`
@@ -376,6 +507,48 @@ Las selecciones, cambios o experimentos que el destinatario atribuya a una contr
 No se obliga a rellenar una evaluación del consejo ni a probarlo. El seguimiento puede observar esas referencias y
 volver a investigar cuando haya resultados. Las fuentes pasan a ser parte del acceso documental del destinatario como
 snapshots autorizados; eso no le concede navegación web adicional.
+
+### 7.1 Artefactos adoptables
+
+Hasta aquí un artefacto de una contribución es algo que se lee. Para que una aportación se pueda **probar**, el
+destinatario tiene que poder usarla en su mundo sin copiarla a mano ni que nadie la aplique por él.
+
+**Qué admite cada mundo.** Cada laboratorio declara, como sus demás capacidades, qué formatos acepta como aportación y
+con qué importador. Un mundo que no declara ninguno sólo recibe informes.
+
+| Mundo | Formato | Al adoptarlo |
+|---|---|---|
+| Junior | `method-program@1` | Es la receta `method: "program"` de un `train`: se ejecuta bajo los perfiles del operador y se importa su producto (§8) |
+| Junior | `mask@1`, `weight-edit-set@1` | Un hijo de la versión que el investigador elija, por el mismo importador y las cotas de la condición (`importMask`; las de edición) |
+| Junior | conjunto de ejemplos | Un dataset suyo, con las comprobaciones de particiones de siempre |
+| Artefactos | programa candidato | Un candidato suyo, que somete al evaluador como cualquier otro |
+| Artefactos | casos de prueba | Pruebas propias suyas |
+
+Los mundos de leyes no declaran formatos: un modelo candidato llega en el informe, y el investigador decide si lo escribe
+como propuesta suya. En el mundo de artefactos el formato es `artifact-files@1` (`{"files": {"<ruta>": "<texto>" |
+null}}`); en el del junior, `method-program@1` y `mask@1` (`{"format": "mask@1", "deletions": [{"module", "indices"}]}`).
+Una máscara vale sólo para la base cuyas formas tiene: la adopción la comprueba contra la versión que se nombra. Por eso
+un programa es la aportación preferible a su producto: vale para cualquier partida y se ejecuta donde están los pesos.
+
+**El acto.** `{"act": {"adopt": {"contribution": "<id>", "artifact": "<id o nombre>", "from": "<versión>", "why": ...,
+"expect": ...}}}`, uno de sus actos. El arnés lo traduce al acto propio del mundo antes de registrarlo, así que el
+registro, la reconstrucción y la reproducción ven ese acto (un `change` con sus ficheros, un `train` con su programa);
+una máscara se registra por su tamaño, no por sus índices. Sólo se adopta un artefacto de una contribución que el run
+recibió, leído de sus blobs y comprobado contra su id. No es un
+acto privilegiado: equivale a que el investigador hubiera escrito ese artefacto y pedido el acto de siempre (`train`,
+`edit`, un candidato). Gasta sus bolsas, pasa sus comprobaciones y lo evalúa su evaluador. No se anuncia en el prompt
+del mundo: lo explica el mensaje que entrega una contribución con artefactos adoptables, y sólo ése.
+
+**Procedencia.** Lo que sale de una adopción lleva `contributed: {contribution, artifact, by}` y el run, la exposición del
+emisor. En el mundo del junior, una máscara adoptada lleva `learned: "contributed"` y debe su contribución en
+`provenance.sources`: el host no sabe de qué datos salió, así que no declara realizaciones y la confirmación la rechaza
+(un origen desconocido nunca se toma por limpio). Se puede evaluar en el mundo como cualquier versión. El producto de un programa adoptado lleva lo que el host observe al ejecutarlo
+(`trained` con sus realizaciones), más `contributed`.
+
+**Lectura.** El finding separa: contribuciones recibidas, adoptadas, y versiones o candidatos que descienden de una
+adopción. Una mejora que desciende de una aportación no es del método del investigador, y la auditoría lo ve. Un
+ensayo del metalaboratorio no admite agentes externos salvo que su configuración los declare, y entonces entran en su
+identidad (§4.2).
 
 ## 8. Convertir un método encontrado en un procedimiento ejecutable
 
@@ -535,6 +708,24 @@ capacidad, pero sí para decidir usarla por defecto en una campaña.
 | **IE5 · El ejecutor de programas y su contrato** | Artefactos; `weights.ts`, `isolation.ts`, `train.ts` y trabajadores; `method-program@1`, perfiles, ABI, importador (LoRA, `weight-edit-set@1` y, con WE7a, `mask@1`) y procedencia (`learned`). Sin ningún método concreto: `deletion@1` es WE7 de SPEC-EDICION-PESOS y se entrega después, sobre este ejecutor. Sólo Linux; GPU pendiente de su prueba de aislamiento | Un algoritmo escrito como programa produce un candidato sin registrar una técnica nativa; mismo evaluador; aislamiento y límites comprobados; `learned` escrito por el host y leído por `owes` |
 | **IE6 · Recorrido completo** | `runtime/package.ts`, replay, consola, findings, ejemplos y piloto | Del bloqueo a fuente, contribución y experimento; paquete reproducible offline; gasto y limitaciones visibles |
 
+**Agentes externos (propuesta, 13/11/2026).**
+
+| Entrega | Trabajo y módulos | Aceptación |
+|---|---|---|
+| **IE7 · Contribución externa** | `external-agent@1`; `lab external open\|read\|formats\|check\|contribute\|status\|close\|guide` sobre `orchestra/research-operator.ts` (registro, entrega única, bandeja) y el canal; exposición `unobserved`; `goal.json` | Un proceso sin modelo detrás lee un run, entrega una contribución con artefactos y la sigue; nada mal formado se entrega; un mundo restringido no la recibe |
+| **IE8 · Adopción** | Declaración de formatos por laboratorio; acto `adopt` en la sesión común y en `grid`; `learned: "contributed"` en `owes`; `contributed` en la procedencia; finding y consola | Una máscara, un programa y un candidato aportados se adoptan, se evalúan con el evaluador fijo y quedan marcados; la confirmación no los toma por propios |
+| **IE9 · Asiento externo** | `LLM_URL=seat:<carpeta>` servido por la capa de red (`core/seat.ts`), `lab external turn\|answer`, `llm_provider: "external-seat"`, exposición directa y `unobserved` | Un run servido desde fuera produce un journal igual en forma al de un modelo; un turno se responde una vez; la carpeta no se registra |
+
+Orden: IE7 → IE8; IE9 no depende de ellas. Guía: `lib/examples/external-agent.md`.
+
+**Estado de IE7 a IE9 (13/11/2026): implementadas, con sus pruebas** (`lib/test/external-agent.test.ts`).
+
+| Entrega | Qué funciona | Qué falta |
+|---|---|---|
+| IE7 | `lib/src/orchestra/external-agent.ts`: el encargo y su comprobación, la sesión como registro de operador con `actor: "external"`, lecturas con su corte y su cupo, formatos por mundo, `check` sin gasto, entrega por la bandeja del run con la exposición `{direct, via: ["agent:<id>"], unobserved}`, artefactos guardados por contenido junto al run, ninguna entrega a un mundo que no admite fuentes externas, `status` con lo que vio el investigador; la orden `lab external` | `goal.json` del proyecto (hoy, sólo journals fijos); ejecutarlo con un agente real |
+| IE8 | `Lab.contributions` (`learn/contributions.ts`); `artifact-files@1` en artefactos, `method-program@1` y `mask@1` en el junior; `adopt` traducido al acto del mundo; `adoptMask`, `learned: "contributed"` rechazado por la confirmación; `adopted` en el finding | La consola no distingue aún lo adoptado; los mundos de leyes no declaran formatos |
+| IE9 | `core/seat.ts` en la capa de red bajo la reproducción, `lab external turn\|answer`, `llm_provider: "external-seat"` sin la carpeta, la exposición del run | Probado con el investigador de un run; senior y operador investigador usan el mismo cliente, sin prueba propia |
+
 Orden: IE1 → IE2 → IE4; IE3 tras CC3. IE5 no depende de las fuentes: puede desarrollarse en paralelo, y usa IE1 para
 sus entradas cuando exista. WE7 (`deletion@1`, SPEC-EDICION-PESOS §15.8) va después de IE5 y de WE7a. La exposición
 externa (§4.1.1) se registra desde IE1, que es la primera entrega que lee fuentes externas, y se propaga con cada canal
@@ -606,6 +797,36 @@ con el laboratorio del junior; declarar las dependencias de este último antes d
 18. Una rama que un investigador de ese mundo encarga con `world: "none"` no tiene herramientas externas.
 19. Ese investigador lee por `--experience` un run expuesto: la lectura se sirve, y su run termina con exposición
     indirecta que el corpus y el metalaboratorio cuentan aparte.
+
+**Agentes externos (IE7 a IE9).**
+
+20. Un script sin modelo abre una sesión, lee un run, entrega una contribución con un artefacto y consulta su estado.
+    El destinatario la recibe una vez, también tras reanudar. El registro del agente dice `unobserved`.
+21. Un artefacto con el formato roto, fuera de cota o para otra base se rechaza en `check` y en `contribute`; al
+    investigador no le llega nada.
+22. A un investigador de un mundo que no admite fuentes externas no se le entrega una contribución externa, y una rama
+    suya no puede servirse desde un asiento externo.
+23. En el mundo del junior, una `mask@1` aportada se adopta como hijo de una versión, dentro de las cotas de la
+    condición, con `learned: "contributed"`; la confirmación no la promueve por realizaciones. La misma máscara que
+    excede la cota no produce versión.
+24. Un `method-program@1` aportado se adopta, se ejecuta bajo un perfil del operador y gasta las bolsas del
+    investigador; su producto lleva `trained` y `contributed`.
+25. En el mundo de artefactos, un candidato aportado y adoptado lo evalúa el evaluador fijo; uno malo se rechaza como
+    cualquiera. El finding cuenta aparte lo que desciende de una adopción.
+26. `status` devuelve lo que el mundo respondió al investigador sobre lo adoptado y nada que éste no viera.
+27. Un asiento externo sirve un run: su journal es igual en forma al de un modelo y su exposición es directa y
+    `unobserved`. Un turno respondido dos veces se rechaza; la carpeta no se registra.
+28. El prompt de un investigador sin contribuciones adoptables es idéntico al de antes; la conversación de quien
+    recibe una sólo crece por el final.
+
+**Procedencia de las hipótesis (§4.1.2).**
+
+29. Un senior lee un snapshot y después escribe al junior sin citarlo: su decisión y la orden que entrega llevan
+    `read_before` con ese snapshot, y el hallazgo del run la clasifica `unacknowledged`. Su mensaje siguiente, sin leer
+    nada entre medias, también la lleva (`fresh` vacío). Si declara `origin` con él, la clasifica `declared`.
+30. Un junior abre una página y después pide un cambio con `"origin": ["src:S1#L1-20"]`: el hallazgo lo clasifica
+    `declared`. Un cambio sin lecturas en su tramo es `own`; uno que cita un snapshot que no leyó, `declared_unread`.
+31. Sin fuentes externas, el prompt del junior y del senior es idéntico al de antes y el hallazgo no añade nada.
 
 ## 13. Revisión (13/11/2026)
 

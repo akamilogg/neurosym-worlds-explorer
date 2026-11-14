@@ -13,6 +13,7 @@ import { LabError, runLaboratory, type LabRunOptions } from '../runtime/lab-runn
 import { finding as findingOfRun, runStatus, send } from '../runtime/control.ts';
 import { LABS } from '../worlds/labs.ts';
 import { agentFile, agentUsage, runAgentOperator } from './agent-operator.ts';
+import { readExternalConfig } from '../learn/assisted/external.ts';
 
 /* ============================================================================
  * The ORCHESTRATOR (SPEC-ORQUESTADOR §4, R2): a BATCH of runs declared beforehand - each with
@@ -40,7 +41,10 @@ export interface BatchRun {
   readonly agent?: { readonly id: string; readonly max_orders?: number; readonly role?: 'coach' | 'senior'; readonly patience?: number;
     /** A senior gives the junior its first hypothesis before it asks anything (SPEC-ORQUESTADOR §3.3.4): the default; false,
         the junior starts on its own. */
-    readonly opening?: boolean };
+    readonly opening?: boolean;
+    /** A senior's own external sources (SPEC-INVESTIGACION-EXTERNA, IE2): an external-research@1 file, read from the root,
+        with its own bags - as `lab agent --external-research` gives it. */
+    readonly external_research?: string };
   /** A BRANCH (SPEC-ORQUESTADOR §5.5): another run's history, continued with more rounds and handed to the assisted
       researcher, with a first message that states the alternative to explore. */
   readonly fork?: { readonly journal: string; readonly attempts: number; readonly message?: string;
@@ -302,6 +306,11 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
       if (m.lab !== r.lab) throw new LabError('batch ' + def.id + ', run ' + r.id + ': its manifest is of ' + m.lab + ', not ' + r.lab);
       if (r.args?.length || r.fork || r.agent || r.messages) throw new LabError('batch ' + def.id + ', run ' + r.id + ': a session is declared by its manifest alone');
     }
+    /* Its senior's external sources, checked whole before anything is spent. */
+    if (r.agent?.external_research) {
+      try { readExternalConfig(path.resolve(options.root, r.agent.external_research)); }
+      catch (e) { throw new LabError('batch ' + def.id + ', run ' + r.id + ': agent:' + r.agent.id + ': ' + String((e as Error).message ?? e)); }
+    }
   }
   const wrong = [...criteriaProblems(def.criteria), ...comparisonProblems(options.root, def.compare),
     ...conditionComparisonProblems([...new Set(def.runs.map((r) => r.condition))], def.compare_conditions)];
@@ -422,8 +431,10 @@ export async function runBatch(declared: BatchDefinition, options: BatchOptions)
     say('batch ' + def.id + ': ' + r.id + ' [' + r.condition + '] ' + (known ? 'resumed' : 'started'));
     const controller = new AbortController();
     /* An agent that fails is said and the run goes on without it: its failure never takes the batch down. */
+    /* Its senior's external sources (checked when the batch began). */
+    const agentExternal = r.agent?.external_research ? { config: readExternalConfig(path.resolve(options.root, r.agent.external_research)) } : null;
     const agent = r.agent && options.agentLlm
-      ? runAgentOperator({ id: r.agent.id, journal: out, root: options.root, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, ...(r.agent.role ? { role: r.agent.role } : {}), ...(r.agent.patience ? { patience: r.agent.patience } : {}), signal: controller.signal, say })
+      ? runAgentOperator({ id: r.agent.id, journal: out, root: options.root, llm: options.agentLlm(r.agent.id), maxOrders: r.agent.max_orders, ...(agentExternal ? { external: agentExternal } : {}), ...(r.agent.role ? { role: r.agent.role } : {}), ...(r.agent.patience ? { patience: r.agent.patience } : {}), signal: controller.signal, say })
         .catch((e) => { say('batch ' + def.id + ': ' + r.id + ': agent:' + r.agent!.id + ' failed and stopped following the run: ' + traceOf(e)); }) : null;
     try {
       const result = await runLaboratory(LABS[r.lab], { args, root: options.root, llm: options.llm, ...(options.judge ? { judge: options.judge } : {}),

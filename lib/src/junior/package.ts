@@ -64,7 +64,7 @@ export interface JuniorProvenance {
   /** What it learned, as the host that imported it says - never its program, never deduced from its format
       (SPEC-INVESTIGACION-EXTERNA §8.2): `trained` (from data, with its dataset or trajectories), `edited` (written or
       constructed, without training). Absent in packages of before: read from their format, as always. */
-  readonly learned?: 'trained' | 'edited';
+  readonly learned?: 'trained' | 'edited' | 'contributed';
 }
 
 export interface JuniorPackage {
@@ -157,7 +157,7 @@ export function normalizePackage(raw: unknown): JuniorPackage {
       verifier: e.verifier as BlobId, circuit: e.circuit as Record<string, unknown>, precision: e.precision, quantization: quantization as string | null },
     provenance: { parents: strings(pr.parents, 'provenance.parents'), reason: typeof pr.reason === 'string' ? pr.reason : '', sources: strings(pr.sources, 'provenance.sources'),
       ...(pr.realizations !== undefined ? { realizations: [...new Set(strings(pr.realizations, 'provenance.realizations'))].sort() } : {}),
-      ...(pr.learned !== undefined ? { learned: (() => { if (pr.learned !== 'trained' && pr.learned !== 'edited') throw new Error('provenance.learned must be "trained" or "edited"'); return pr.learned; })() } : {}) }
+      ...(pr.learned !== undefined ? { learned: (() => { if (pr.learned !== 'trained' && pr.learned !== 'edited' && pr.learned !== 'contributed') throw new Error('provenance.learned must be "trained", "edited" or "contributed"'); return pr.learned; })() } : {}) }
   };
 }
 

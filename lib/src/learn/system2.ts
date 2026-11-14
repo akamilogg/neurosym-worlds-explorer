@@ -141,11 +141,15 @@ export function openAiChatClient(options: ChatClientOptions | (() => ChatClientO
       o.onRequest?.();
       if (!o.url) throw new ApiError('network', 'No LLM endpoint configured.');
       const started = clock();
+      /* An external seat (core/seat.ts, SPEC-INVESTIGACION-EXTERNA §6.4): a folder an agent answers from, with no deadline
+         and never asked twice - the run waits for it as for a slow model. The folder is served by the fetch the client is
+         given (seatFetch, beneath a run's replay): this module also runs in a browser, where there is no seat. */
+      const seat = o.url.startsWith('seat:');
       const response = await fetchJson(o.url, {
         body: chatRequestBody(o, system, user),
         headers: o.apiKey ? { Authorization: 'Bearer ' + o.apiKey } : {},
-        timeoutMs: o.timeoutMs ?? 30000,
-        retries: o.retries ?? 1,
+        timeoutMs: seat ? 2_147_000_000 : o.timeoutMs ?? 30000,
+        retries: seat ? 0 : o.retries ?? 1,
         signal: signal ?? null,
         fetch: o.fetch,
         sleep: o.sleep

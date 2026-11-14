@@ -119,6 +119,9 @@ export class ConfirmationService {
       be one of the reserved cases'. The reserved cases never leave the service: the refusal says there is an overlap,
       never with which. */
   refusalOf(pkg: JuniorPackage): string | null {
+    /* Adopted from a contribution (SPEC-INVESTIGACION-EXTERNA §7.1): what it was learned from is not known, and an unknown
+       origin is never taken for a clean one. */
+    if (pkg.provenance.learned === 'contributed') return 'the candidate was adopted from a contribution: what it was learned from is not known, so it cannot be confirmed on reserved cases';
     const o = owes(pkg);
     const declared = pkg.provenance.realizations;
     if (declared === undefined) return o.distilled || o.trained || o.edited

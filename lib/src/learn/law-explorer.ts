@@ -150,7 +150,7 @@ export function parseLawProposal(content: string, context: { world: string; lang
 export type LawRequest<A> =
   | { readonly view: string; readonly from: number; readonly to: number }
   | { readonly inspect: string; readonly law: number | Law | null }
-  | { readonly act: A }
+  | { readonly act: A; /** Where the idea comes from, as it wrote it (SPEC-INVESTIGACION-EXTERNA §4.1.2). */ readonly origin?: unknown }
   | { readonly measure: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: readonly string[] }
   | { readonly simulate: string; readonly law: number | Law | null; readonly rows: number }
   | { readonly table: { readonly source: string; readonly range: readonly [number, number] | null }; readonly on: 'episodes' | 'checks' }
@@ -212,7 +212,7 @@ export function parseLawTurn<A>(content: string, context: { world: string; lang?
       } else if (obj(q.act ?? q.launch)) {
         const act = parseAct(obj(q.act ?? q.launch)!);
         if (typeof act === 'string') { warnings.push('request #' + i + ': ' + act); continue; }
-        requests.push({ act });
+        requests.push({ act, ...(q.origin !== undefined ? { origin: q.origin } : {}) });
       } else if (typeof q.inspect === 'string') {
         const law = lawOf(q.model !== undefined ? q.model : q.law, i, 'inspect');
         if (law === undefined) continue;

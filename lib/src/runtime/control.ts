@@ -45,7 +45,10 @@ export type RunOrder =
       /** Held until this round begins (a message scheduled in advance, e.g. by a batch): delivered with its first question. */ readonly round?: number;
       /** A senior's order to register a test of the junior's own, with its message (SPEC-PRUEBAS-PROPIAS §8). */ readonly test?: Readonly<Record<string, unknown>>;
       /** Its author's exposure to external sources (SPEC-INVESTIGACION-EXTERNA §4.1.1), written by the host from its record. */ readonly external_exposure?: import('../learn/assisted/exposure.ts').ExternalExposure;
-      /** The research contribution it delivers (SPEC-INVESTIGACION-EXTERNA §7): its id, its report by content, its state. */ readonly contribution?: { readonly id: string; readonly report: string; readonly state: string } }
+      /** Where its hypothesis comes from (§4.1.2): what its author declared, what it had read since its last message and their contrast. */
+      readonly origin?: import('../learn/assisted/provenance.ts').Origin; readonly read_before?: readonly string[]; readonly fresh?: readonly string[]; readonly provenance?: string;
+      /** The research contribution it delivers (SPEC-INVESTIGACION-EXTERNA §7): its id, its report by content, its state. */ readonly contribution?: { readonly id: string; readonly report: string; readonly state: string;
+        /** What it carries that its recipient may adopt (§7.1), kept beside the run by content. */ readonly artifacts?: readonly import('../learn/contributions.ts').ContributedArtifact[] } }
   | { readonly kind: 'focus'; readonly facet: string; readonly task?: string; readonly by?: string }
   | { readonly kind: 'source'; readonly source: string; readonly by?: string }
   /** The operator's change to a living world's programs (SPEC-ACONTECIMIENTOS-DEL-MUNDO §10): never help. */

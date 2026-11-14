@@ -371,7 +371,7 @@ export class LawSession<A> {
         const modelOf = (l: number | Law | null) => (l !== null && typeof l === 'object' ? ownLaw(l) : l);
         const asWritten = requests.map((r) => 'simulate' in r ? { simulate: r.simulate, model: modelOf(r.law), steps: r.rows }
           : 'inspect' in r ? { inspect: r.inspect, model: modelOf(r.law) }
-          : 'act' in r ? { act: h.actAsWritten ? h.actAsWritten(r.act) : r.act } : 'extra' in r ? r.extra : r);
+          : 'act' in r ? { act: h.actAsWritten ? h.actAsWritten(r.act) : r.act, ...(r.origin !== undefined ? { origin: r.origin } : {}) } : 'extra' in r ? r.extra : r);
         const entry = { step: investigation.length + 1, requests: asWritten, results, ...(warnings.length || noteWarnings.length ? { warnings: [...warnings, ...noteWarnings] } : {}) };
         investigation.push(entry);
         talk.add({ investigation_step: entry, ...written, ...counters() });
@@ -451,7 +451,9 @@ export class LawSession<A> {
       const record: LawRecord = { round, law: p.law, fingerprint: h.fingerprint ? h.fingerprint(p.law) : lawFingerprint(p.law), test: null, accepted: false, validate: p.validate, ...(p.artifact ? { artifact: p.artifact, validateArtifact: Boolean(p.validateArtifact) } : {}), lessons: p.lessons, nextExperiment: p.nextExperiment };
       this.laws.push(record);
       h.log('proposal', { round, investigation_steps: investigation.length, rationale: p.rationale, beliefs: p.beliefs, notes: turn.notes, law: ownLaw(p.law),
-        fingerprint: record.fingerprint, ...(p.artifact ? { artifact: p.artifact, validate_artifact: Boolean(p.validateArtifact) } : {}), lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings] });
+        fingerprint: record.fingerprint, ...(p.artifact ? { artifact: p.artifact, validate_artifact: Boolean(p.validateArtifact) } : {}), lessons: p.lessons, next_experiment: p.nextExperiment, warnings: [...p.warnings, ...stances.warnings, ...noteWarnings],
+        /* Where it says its model comes from (SPEC-INVESTIGACION-EXTERNA §4.1.2), as it wrote it. */
+        ...(obj(parseJsonLoose(content))?.origin !== undefined ? { origin: obj(parseJsonLoose(content))!.origin } : {}) });
       this.roundEnd = { kind: 'proposal', round };
       h.say('  proposes: ' + Object.keys(p.law.observations).length + ' observations, ' + Object.keys(p.law.rules).length + ' rules' + (p.law.output ? ', output in code' : '') +
         '; beliefs ' + p.beliefs.map((x) => x.id + ':' + x.stance).join(' ') + (p.validate ? '; asks to validate' : ''));

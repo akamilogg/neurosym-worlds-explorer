@@ -6,6 +6,8 @@ import { Observer } from '../core/observer.ts';
 import { Evaluator } from '../core/evaluate.ts';
 import { JevJudge, JEV_DEFAULT_URL } from '../core/jev.ts';
 import { fetchJson, parseJsonLoose, type FetchLike } from '../core/net.ts';
+import { seatFetch } from '../core/seat.ts';
+import { resolveAdoption } from '../learn/contributions.ts';
 import { Predictor, type Law } from '../core/predict.ts';
 import type { MeasureDecl } from '../core/types.ts';
 import { nodeVmRunner } from './node-vm.ts';
@@ -823,7 +825,9 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
   cfg: LabRunConfig & Record<string, unknown>; arg: (name: string, fallback?: string) => string; config: Record<string, unknown>;
   researcher: Researcher; asked: Researcher; policy: ResearcherPolicy | null }): OpenRun {
   const { argv, previous, resumeFrom, cfg, arg, researcher } = o;
-  const network: FetchLike = options.fetch ?? (globalThis.fetch as unknown as FetchLike);
+  /* An external seat (LLM_URL=seat:<folder>, SPEC-INVESTIGACION-EXTERNA §6.4) is served beneath the replay: its answers are
+     recorded as a model's, and a replay never asks the seat again. */
+  const network: FetchLike = seatFetch(options.fetch ?? (globalThis.fetch as unknown as FetchLike));
   const maxMinutes = Number(arg('max-minutes', '0')) || null;
   const maxTokens = Number(arg('max-tokens', '0')) || null;
   const maxJudgeCalls = Number(arg('max-judge-calls', '0')) || null;
@@ -887,7 +891,7 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
        comparison needs to know whether two runs had the same budget (SPEC-CONTROL-ARNES §6.2.1). */
     limits: { max_tokens: maxTokens, max_minutes: maxMinutes, ...(maxJudgeCalls !== null ? { max_judge_calls: maxJudgeCalls } : {}) },
     ...(previous ? { resumed: { from: path.basename(resumeFrom!), from_started: previous.started, from_commit: previous.commit ?? null } } : {}),
-    config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), llm_provider: options.llm.provider ?? providerOf(options.llm.url), ...llmTuningRecord(options.llm),
+    config: { ...cfg, ...o.config, llm_model: options.llm.model, ...llmPathRecord(options.llm.url), llm_provider: options.llm.url?.startsWith('seat:') ? providerOf(options.llm.url) : options.llm.provider ?? providerOf(options.llm.url), ...llmTuningRecord(options.llm),
       jev_model: cfg.flat ? null : options.judge?.model ?? null, ...(cfg.flat ? {} : { jev_provider: options.judge?.provider ?? providerOf(options.judge?.url), ...jevPathRecord(options.judge?.url || JEV_DEFAULT_URL) }) },
     /* Filled by the laboratory: what the learner is never told. */
     hidden_from_the_learner: {},
@@ -996,6 +1000,9 @@ function openRun(lab: AnyLab, options: LabRunOptions, o: { argv: readonly string
           ...((order as { test?: unknown }).test && typeof (order as { test?: unknown }).test === 'object' ? { test: (order as { test: Record<string, unknown> }).test } : {}),
           /* The research contribution it delivers (SPEC-INVESTIGACION-EXTERNA §7): never a directive, never a verdict. */
           ...((order as { contribution?: unknown }).contribution && typeof (order as { contribution?: unknown }).contribution === 'object' ? { contribution: (order as { contribution: Record<string, unknown> }).contribution } : {}),
+          /* Where its author's hypothesis comes from (SPEC-INVESTIGACION-EXTERNA §4.1.2), kept with it. */
+          ...(Array.isArray((order as { read_before?: unknown }).read_before) ? { read_before: (order as { read_before: string[] }).read_before, fresh: (order as { fresh?: string[] }).fresh ?? [], provenance: (order as { provenance?: string }).provenance } : {}),
+          ...((order as { origin?: unknown }).origin !== undefined ? { origin: (order as { origin: unknown }).origin } : {}),
           /* Its author's exposure to external sources, kept with it: the run that receives it is exposed through it. */
           ...(exposed((order as { external_exposure?: ExternalExposure }).external_exposure) ? { external_exposure: (order as { external_exposure: ExternalExposure }).external_exposure } : {}), at: new Date().toISOString() });
         log('operator_command', { ...who, accepted: true }); helpUsed++;
@@ -1625,7 +1632,11 @@ async function runLawLab(lab: LawLab, run: OpenRun, o: { cfg: LabRunConfig & Rec
     /* Its own instruments (SPEC-INSTRUMENTOS-PROPIOS), likewise. */
     instruments: () => (journal.researcher === 'assisted' && helping && reviewing && instrumenting() ? instruments : null),
     ...(lab.act && tools.has('act') && acts !== undefined ? { acts } : {}),
-    parseAct: lab.act ? (raw) => lab.act!.parse(raw) : () => 'act is not available in this experiment',
+    /* An adoption (SPEC-INVESTIGACION-EXTERNA §7.1): the world's own act, made from an artifact of a contribution this run
+       received, read from its blobs - so what is recorded, rebuilt and replayed is that act. */
+    parseAct: lab.act ? (raw) => (raw.adopt !== undefined && Object.keys(raw).length === 1
+      ? resolveAdoption(raw.adopt, { formats: lab.contributions?.formats ?? [], events: journal.events as Record<string, any>[], blobs: path.join(path.dirname(outFile), 'blobs') })
+      : lab.act!.parse(raw)) : () => 'act is not available in this experiment',
     ...(lab.act?.asWritten ? { actAsWritten: (a: unknown) => lab.act!.asWritten!(a) } : {}),
     runRequest: (r, budget) => runRequest(r, budget),
     /* A living world's requests of its own, and the end of each step: its batch applied (SPEC-ACONTECIMIENTOS-DEL-MUNDO §5.3). */
@@ -2209,6 +2220,8 @@ export function llmTuning(env: NodeJS.ProcessEnv, prefix = 'LLM'): Pick<LabConne
 /** The path of System 2's endpoint - part of what makes a request that request (replay.ts), so a run can be rebuilt from its
     record with no network (lab verify) - never its host or its parameters, where an address or a key may travel. */
 function llmPathRecord(url: string | undefined): Record<string, unknown> {
+  /* An external seat's folder is a place on a machine, never recorded (its provider says it was a seat). */
+  if (url?.startsWith('seat:')) return {};
   try { return url ? { llm_path: new URL(url).pathname } : {}; } catch { return {}; }
 }
 

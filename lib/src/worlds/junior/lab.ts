@@ -21,7 +21,8 @@ import { WeightLab, type LabCase, type LabQuery, type LabReceipt } from '../../j
 import type { Availability } from '../../junior/isolation.ts';
 import type { RawTensor, WeightBounds } from '../../junior/weights.ts';
 import { currentRealizations, datasetCaptures, realizationOfCapture } from '../../junior/groups.ts';
-import { profileProblems as profileProblemsOf } from '../../junior/method-program.ts';
+import { methodProgramProblems, profileProblems as profileProblemsOf } from '../../junior/method-program.ts';
+import type { ContributionFormat } from '../../learn/contributions.ts';
 
 /* ============================================================================
  * The world of a junior's COMPETENCE (SPEC-METAPOLITICA-APRENDIZAJE §6, §7.1): an artifact world whose artifact is the
@@ -136,7 +137,7 @@ export class JuniorWorld {
   }
 
   /** A version's parts as they are written: its prompt, its decoding, the memory files it asks for, the memory it published. */
-  private parts(version: string): { prompt: string; decoding: unknown; files: Record<string, string>; published: Published | null; adapter: string | null; trainedOn: string[]; realizations?: readonly string[]; learned?: 'trained' } | string {
+  private parts(version: string): { prompt: string; decoding: unknown; files: Record<string, string>; published: Published | null; adapter: string | null; trainedOn: string[]; realizations?: readonly string[]; learned?: 'trained' | 'contributed' } | string {
     const v = this.store.get(version);
     if (!v) return 'no version ' + version;
     let decoding: unknown, published: Published | null = null;
@@ -146,15 +147,21 @@ export class JuniorWorld {
     /* The realizations of what it learned from (SPEC-VALIDEZ-MEDIDA §5.2): a training's, as it recorded them; a set of edits',
        from its genome. Undefined where they cannot be told: the confirmation refuses it. */
     let realizations: readonly string[] | undefined;
-    let learned: 'trained' | undefined;
+    let learned: 'trained' | 'contributed' | undefined;
     if (v.files.has(ADAPTER)) {
       try {
-        const a = JSON.parse(v.files.get(ADAPTER)!); adapter = String(a.adapter); trainedOn = ['dataset:' + a.dataset, 'training:' + a.job];
+        const a = JSON.parse(v.files.get(ADAPTER)!); adapter = String(a.adapter);
+        trainedOn = ['dataset:' + a.dataset, 'training:' + a.job];
+        /* Adopted from a contribution: its program, run here on this run's data - and the contribution it came from. */
+        if (a.contributed) trainedOn = [...trainedOn, 'contribution:' + a.contributed.contribution];
         /* An adapter a program made from data (SPEC-INVESTIGACION-EXTERNA §8.2): learned, as the host wrote it, with its program. */
         if (a.learned === 'trained') { learned = 'trained'; trainedOn = [...trainedOn, 'program:' + a.program]; }
         /* Of the current identity, or made again from the captures of the runs it learned from, recorded when it was
            trained - never from the dataset's paths read again; else unknown. */
         realizations = currentRealizations(Array.isArray(a.realizations) ? a.realizations : undefined, a.captures);
+        /* A mask adopted from a contribution (SPEC-INVESTIGACION-EXTERNA §7.1): what it was learned from is not known here, so
+           no realizations - the confirmation refuses an unknown origin - and what it owes is the contribution. */
+        if (a.learned === 'contributed') { learned = 'contributed'; trainedOn = ['contribution:' + a.contributed?.contribution, 'artifact:' + a.contributed?.artifact]; realizations = undefined; }
       } catch { return ADAPTER + ' is not JSON'; }
     }
     if (v.files.has(EDITS)) {
@@ -164,7 +171,7 @@ export class JuniorWorld {
         const e = JSON.parse(v.files.get(EDITS)!); adapter = String(e.adapter); trainedOn = ['edit-set:' + e.adapter, ...((e.genome ?? []) as string[]).map((id) => 'edit:' + id)];
         /* A set a program learned from data (SPEC-INVESTIGACION-EXTERNA §8.2): a training, with its dataset and the realizations
            of what it learned from - never read from its format. */
-        if (e.learned === 'trained') { learned = 'trained'; trainedOn = [...trainedOn, 'dataset:' + e.dataset, 'program:' + e.program]; realizations = currentRealizations(e.realizations, e.captures); }
+        if (e.learned === 'trained') { learned = 'trained'; trainedOn = [...trainedOn, 'dataset:' + e.dataset, 'program:' + e.program, ...(e.contributed ? ['contribution:' + e.contributed.contribution] : [])]; realizations = currentRealizations(e.realizations, e.captures); }
         else realizations = this.genomeRealizations((e.genome ?? []) as string[]);
       } catch { return EDITS + ' is not JSON'; }
     }
@@ -226,7 +233,7 @@ export class JuniorWorld {
     return genome.every(walk) ? [...out].sort() : undefined;
   }
 
-  private shell(version: string, prompt: string, decoding: unknown, memory: { neural: string | null; twin: string | null }, adapter: string | null = null, owes: readonly string[] = [], realizations?: readonly string[], learned?: 'trained'): JuniorPackage {
+  private shell(version: string, prompt: string, decoding: unknown, memory: { neural: string | null; twin: string | null }, adapter: string | null = null, owes: readonly string[] = [], realizations?: readonly string[], learned?: 'trained' | 'contributed'): JuniorPackage {
     /* Its provenance: its line in this world, and what it owes to others - the dataset and training of its adapter (P3) -
        with the realizations of what it learned from, where it learned anything (SPEC-VALIDEZ-MEDIDA §5.2). */
     return normalizePackage({ ...this.base, prompt, decoding, memory, adapter,
@@ -508,6 +515,23 @@ export class JuniorWorld {
       enabled, where an isolated backend is proved; it reads the dataset's rows (mounted as dataset.jsonl) and whatever else
       it declares; what it makes is imported as an edit of the start, LEARNED FROM DATA (`learned: "trained"`), with the
       realizations of the runs its examples came from. A job of the world's ledger: asked again, the same job. */
+  /** A mask adopted from a contribution (SPEC-INVESTIGACION-EXTERNA §7.1, IE8): its deletions checked as any mask's - a
+      version without an adapter, the condition's bounds, the base's shapes - and kept as the adapter of a child of the
+      version named, LEARNED FROM WHAT IS NOT KNOWN (`learned: "contributed"`): it may be evaluated like any version, and
+      the confirmation refuses it (an unknown origin is never taken for a clean one). */
+  async adoptMask(from: string, deletions: readonly { module: string; indices: number[] }[], contributed: import('../../learn/contributions.ts').Contributed, reason: unknown): Promise<{ version?: string; state: string; reason: string | null }> {
+    const parent = await this.packageOf(from);
+    if (typeof parent === 'string') return { state: 'refused', reason: parent };
+    const K = await import('../../junior/mask.ts');
+    const made = K.putMask(this.blobs, parent, deletions, { authorized: this.manifest.masks });
+    if ('problems' in made) return { state: 'refused', reason: 'the mask: ' + made.problems.join('; ') };
+    const record = { adapter: made.adapter, learned: 'contributed', contributed, parent: executionHash(parent) };
+    const v = this.store.apply(from, { files: { [ADAPTER]: JSON.stringify(record, null, 2) + '\n' } }, reason);
+    if (typeof v === 'string') return { state: 'failed', reason: v };
+    appendRecord(path.join(this.dir, 'adoptions.jsonl'), { from, record, version: v.hash }, { sync: true });
+    return { version: v.hash, state: 'finished', reason: null };
+  }
+
   /** deletion@1 with SFT (SPEC-EDICION-PESOS §15.3, WE7): the host's program that learns a mask, run on the general executor
       under the training profile the recipe names - its capacity measured first, a recipe that does not fit refused - and
       its mask imported within the recipe's bounds (never laxer than the condition's), learned from data. */
@@ -599,14 +623,14 @@ export class JuniorWorld {
         /* Its adapter (a LoRA or a mask), as a training's is kept - learned from data, as the host says, with what it learned
            from; a recipe of the host's (deletion@1) recorded as it was asked. */
         const asked = extra.recipe ?? { method: 'program', program: M.programId(recipe.program) };
-        const record = { adapter: out.adapter, dataset: datasetId, recipe: asked, parent: executionHash(parent), job: out.job, learned: 'trained', program: M.programId(recipe.program), realizations, captures };
+        const record = { adapter: out.adapter, dataset: datasetId, recipe: asked, parent: executionHash(parent), job: out.job, learned: 'trained', program: M.programId(recipe.program), realizations, captures, ...contributedOf(reason) };
         const made = this.store.apply(from, { files: { [ADAPTER]: JSON.stringify(record, null, 2) + '\n' } }, reason);
         if (typeof made === 'string') return { state: 'failed', reason: made };
         appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe: asked, record, version: made.hash }, { sync: true });
         return { version: made.hash, state: 'finished', reason: null, job: out.job };
       }
       /* Learned from data, as the host says: a training whatever its format (§8.2); with what it learned from. */
-      const record = { adapter: out.adapter, start: out.start, genome: out.genome, totals: out.totals, learned: 'trained', dataset: datasetId, program: M.programId(recipe.program), job: out.job, realizations, captures };
+      const record = { adapter: out.adapter, start: out.start, genome: out.genome, totals: out.totals, learned: 'trained', dataset: datasetId, program: M.programId(recipe.program), job: out.job, realizations, captures, ...contributedOf(reason) };
       const made = this.store.apply(from, { files: { [EDITS]: JSON.stringify(record, null, 2) + '\n' } }, reason);
       if (typeof made === 'string') return { state: 'failed', reason: made };
       appendRecord(path.join(this.dir, 'trainings.jsonl'), { from, dataset: datasetId, recipe: { method: 'program', program: M.programId(recipe.program) }, record, version: made.hash }, { sync: true });
@@ -1074,11 +1098,16 @@ export type JuniorEpisode =
       /** Its development investigations' sessions, case to session: what publish_memory may take. */
       readonly sessions: Readonly<Record<string, string>> }
   /** What a distillation or a dataset produced: rows to read and what they add up to. */
-  | { readonly kind: 'records'; readonly what: 'examples' | 'dataset' | 'training' | 'confirmations' | 'weights' | 'edit' | 'evolution'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
+  | { readonly kind: 'records'; readonly what: 'examples' | 'dataset' | 'training' | 'confirmations' | 'weights' | 'edit' | 'evolution' | 'adoption'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
 
 export interface JuniorCase { readonly point: string; readonly state: JuniorPoint; readonly came: { readonly value: number | null } }
 
-type Reason = { readonly why: string; readonly because?: readonly string[] } & ({ readonly expect: string } | { readonly exploratory: true });
+type Reason = { readonly why: string; readonly because?: readonly string[]; readonly contributed?: import('../../learn/contributions.ts').Contributed } & ({ readonly expect: string } | { readonly exploratory: true });
+/** What a reason says it was adopted from (SPEC-INVESTIGACION-EXTERNA §7.1), for the records that keep it. */
+const contributedOf = (reason: unknown): { contributed?: unknown } => {
+  const c = (reason as { contributed?: unknown } | null)?.contributed;
+  return c && typeof c === 'object' ? { contributed: c } : {};
+};
 export type JuniorAct =
   | { readonly change: { readonly from: string; readonly files: Readonly<Record<string, string>> } & Reason }
   | { readonly run: { readonly version: string } }
@@ -1089,7 +1118,10 @@ export type JuniorAct =
   | { readonly confirmations: Readonly<Record<string, never>> }
   | { readonly inspect_weights: { readonly version: string; readonly query: LabQuery['query']; readonly args?: Record<string, unknown>; readonly cases?: readonly LabCase[]; readonly candidate?: string } }
   | { readonly edit: { readonly from: string; readonly edit: EditAsked; readonly competence: string; readonly bounds?: WeightBounds } & Reason }
-  | { readonly evolve: { readonly from: string; readonly seeds: readonly Record<string, unknown>[]; readonly control_seeds: number; readonly max_candidates: number; readonly operators?: Readonly<Record<string, number>>; readonly seed?: number } & Reason };
+  | { readonly evolve: { readonly from: string; readonly seeds: readonly Record<string, unknown>[]; readonly control_seeds: number; readonly max_candidates: number; readonly operators?: Readonly<Record<string, number>>; readonly seed?: number } & Reason }
+  /** A mask adopted from a contribution (§7.1): made only by an adoption, never written by the researcher - its deletions are
+      held here, and the record keeps the artifact that carried them (asWritten), not the indices. */
+  | { readonly adopt_mask: { readonly from: string; readonly deletions: readonly { module: string; indices: number[] }[]; readonly contributed: import('../../learn/contributions.ts').Contributed } & Reason };
 
 const latest = new WeakMap<JuniorWorld, string>();
 
@@ -1282,7 +1314,78 @@ export const JUNIOR_PROGRESS: LabProgress = {
   }
 };
 
+/* --- What a contribution may carry here (SPEC-INVESTIGACION-EXTERNA §7.1, IE8) ------------------------------------- */
+
+/** Why an adoption's reason cannot be read: it says why, and what it expects or that it is exploratory. */
+const adoptionReason = (raw: Readonly<Record<string, unknown>>, form: string): Reason | string => {
+  if (typeof raw.why !== 'string' || !raw.why.trim()) return 'an adoption says why: ' + form;
+  const expect = typeof raw.expect === 'string' && raw.expect.trim() ? raw.expect : null;
+  if (!expect && raw.exploratory !== true) return 'an adoption says what it expects, or that it is exploratory: ' + form;
+  return { why: raw.why, ...(expect ? { expect } : { exploratory: true as const }) };
+};
+
+const PROGRAM_FORM = '"from": "<version>", "dataset": "<dataset id>", "admits": ["verified"], "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true';
+/** A method program (method-program@1): adopted, the program recipe of a training of yours on a dataset of yours - run under
+    the operator's profiles, its product imported as any training's, learned from data. */
+const JUNIOR_PROGRAM: ContributionFormat<JuniorAct> = {
+  id: 'method-program@1',
+  about: 'a method program; adopted, the recipe of a training of yours ({"method": "program"}) from the version and on the dataset you name, run under the operator\'s profiles, its product evaluated as any training\'s',
+  form: PROGRAM_FORM,
+  max_bytes: 1 << 20,
+  check: (bytes) => {
+    let raw: unknown;
+    try { raw = JSON.parse(bytes.toString('utf8')); } catch { return ['not JSON: a method-program@1']; }
+    const p = methodProgramProblems(raw);
+    const inputs = (raw as { inputs?: unknown } | null)?.inputs;
+    if (!p.length && !(Array.isArray(inputs) && inputs.includes('dataset.jsonl'))) p.push('"inputs": a program adopted as a training learns from data: dataset.jsonl');
+    return p;
+  },
+  adopt: (bytes, raw, contributed) => {
+    const reason = adoptionReason(raw, PROGRAM_FORM);
+    if (typeof reason === 'string') return reason;
+    const admits = Array.isArray(raw.admits) && raw.admits.length ? raw.admits : ['verified'];
+    const parsed = juniorLab.act!.parse({ train: { from: raw.from, dataset: raw.dataset, recipe: { format: 'junior-recipe@1', method: 'program', program: JSON.parse(bytes.toString('utf8')), admits }, ...reason } });
+    if (typeof parsed === 'string') return parsed;
+    if (!('train' in parsed)) return 'an adoption of a program is a training';
+    return { train: { ...parsed.train, contributed } };
+  }
+};
+
+const MASK_FORM = '"from": "<version without an adapter>", "why": "<the hypothesis>", "expect": "<what you expect>" | "exploratory": true';
+/** A mask (mask@1): {"format": "mask@1", "deletions": [{"module": "<name>", "indices": [<flat indices>]}]}; adopted, the
+    adapter of a child of the version named, within the condition's bounds - a version that cannot be confirmed (what it
+    was learned from is not known). */
+const JUNIOR_MASK: ContributionFormat<JuniorAct> = {
+  id: 'mask@1',
+  about: 'a mask of weights to delete; adopted, a child of the version you name (one without an adapter) within the condition\'s bounds - you may evaluate it as any version, and it cannot be confirmed: what it was learned from is not known',
+  form: MASK_FORM,
+  max_bytes: 64 << 20,
+  check: (bytes) => {
+    let raw: { format?: unknown; deletions?: unknown } | null;
+    try { raw = JSON.parse(bytes.toString('utf8')); } catch { return ['not JSON: {"format": "mask@1", "deletions": [{"module", "indices"}]}']; }
+    if (raw?.format !== 'mask@1') return ['"format": "mask@1"'];
+    if (!Array.isArray(raw.deletions) || !raw.deletions.length) return ['"deletions": [{"module": "<name>", "indices": [<flat indices>]}], at least one'];
+    const p: string[] = [];
+    const seen = new Set<string>();
+    for (const d of raw.deletions as { module?: unknown; indices?: unknown }[]) {
+      if (typeof d?.module !== 'string' || !d.module) { p.push('a deletion names its module'); continue; }
+      if (seen.has(d.module)) p.push(d.module + ': named twice');
+      seen.add(d.module);
+      if (!Array.isArray(d.indices) || !d.indices.length || !d.indices.every((i) => Number.isInteger(i) && i >= 0)) p.push(d.module + ': its indices are non-negative integers, at least one');
+    }
+    return p;
+  },
+  adopt: (bytes, raw, contributed) => {
+    const reason = adoptionReason(raw, MASK_FORM);
+    if (typeof reason === 'string') return reason;
+    if (typeof raw.from !== 'string') return MASK_FORM;
+    const deletions = (JSON.parse(bytes.toString('utf8')).deletions as { module: string; indices: number[] }[]).map((d) => ({ module: d.module, indices: [...new Set(d.indices)].sort((x, y) => x - y) }));
+    return { adopt_mask: { from: raw.from, deletions, contributed, ...reason } };
+  }
+};
+
 export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, JuniorAct> = {
+  contributions: { formats: [JUNIOR_PROGRAM, JUNIOR_MASK] },
   id: 'junior-competence@1',
   progress: JUNIOR_PROGRESS,
   goesOnAfterAcceptance: true,
@@ -1623,6 +1726,13 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
         return { kind: 'records', what: 'edit', summary: { state: t.state, ...(t.version ? { version: t.version } : {}), ...(t.reason ? { reason: t.reason } : {}), ...(t.edit ? { edit: t.edit } : {}),
           ...(t.genome !== undefined ? { genome: t.genome } : {}), ...(t.totals ? { totals: t.totals } : {}) }, rows: [] };
       }
+      if ('adopt_mask' in a) {
+        const { from, deletions: _d, ...reason } = a.adopt_mask;
+        const t = await spec.world.adoptMask(from, a.adopt_mask.deletions, a.adopt_mask.contributed, reason);
+        if (t.version) latest.set(spec.world, t.version);
+        return { kind: 'records', what: 'adoption', summary: { state: t.state, ...(t.version ? { version: t.version } : {}), ...(t.reason ? { reason: t.reason } : {}), format: 'mask@1',
+          contribution: a.adopt_mask.contributed.contribution }, rows: [] };
+      }
       if ('train' in a) {
         const { from: _f, dataset: _d, recipe: _r, ...reason } = a.train;
         const t = await spec.world.trainFrom(a.train.from, a.train.dataset, a.train.recipe, reason);
@@ -1653,7 +1763,8 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
       return episode;
     },
     shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length } : e.kind === 'records' ? { what: e.what, ...e.summary } : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions }),
-    asWritten: (a) => a,
+    /* An adopted mask is written by the artifact that carried it, never by its indices (a mask of a layer is millions). */
+    asWritten: (a) => ('adopt_mask' in a ? { adopt_mask: { ...a.adopt_mask, deletions: { modules: a.adopt_mask.deletions.length, indices: a.adopt_mask.deletions.reduce((n, d) => n + d.indices.length, 0) } } } : a),
     identity: (_spec, a) => ('run' in a ? a.run.version : null),
     examples: (spec) => [{ run: { version: spec.world.reference } }, { change: { from: spec.world.reference, files: { 'prompt.md': 'Answer only with the JSON the protocol asks for.' }, why: 'the protocol stated first', expect: 'more answers accepted at once' } }]
   },

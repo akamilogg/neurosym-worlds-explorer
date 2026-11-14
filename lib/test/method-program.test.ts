@@ -106,7 +106,7 @@ test('IE5: what a package learned is the host\'s word - a set of edits learned f
   assert.deepEqual([owes(edited).trained, owes(edited).edited], [false, true], 'a package of before: read from its format');
   const learnedFromData = normalizePackage({ ...edited, provenance: { ...edited.provenance, learned: 'trained' } });
   assert.deepEqual([owes(learnedFromData).trained, owes(learnedFromData).edited], [true, false]);
-  assert.throws(() => normalizePackage({ ...edited, provenance: { ...edited.provenance, learned: 'magic' } }), /trained" or "edited/);
+  assert.throws(() => normalizePackage({ ...edited, provenance: { ...edited.provenance, learned: 'magic' } }), /"trained", "edited" or "contributed"/);
 });
 
 test('IE5: in the junior\'s world, a recipe by program - the researcher\'s own method - makes a version learned from data, with the realizations of its examples; refused without an isolated backend', { skip: !python && 'no Python' }, async () => {
