@@ -26,6 +26,6 @@
   "investigation_repetitions": 1,
   "execution": { "harness": "<commit>", "checkers": { "protocol": 1, "request": 1, "proposal": 1 }, "snapshots": ["qwenputer-npz+twin@1"], "judge": "<the Judge's model>", "teacher": null },
   "sampling": { "seed": 20261029 },
-  "promotion": { "procedure": "paired-cases@1", "alpha": 0.05, "permutations": 10000, "seed": 1 },
+  "promotion": { "procedure": "paired-cases@2", "alpha": 0.05, "permutations": 10000, "seed": 1 },
   "limits": { "junior_args": ["--attempts", "6", "--max-tokens", "400000", "--max-judge-calls", "2000"], "probe_max_tokens": 2000, "timeout_ms": 600000 }
 }
