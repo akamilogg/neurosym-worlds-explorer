@@ -163,7 +163,8 @@ test('junior-competence@1: distill at a cut of a development investigation the w
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(m));
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(f.pkg));
     const made = juniorLab.generate(1, { manifest: path.join(dir, 'manifest.json'), package: path.join(dir, 'package.json'), blobs: path.join(dir, 'blobs'), server: f.h.url, work: path.join(dir, 'work'), evaluations: '3', distillations: '2' } as never);
-    assert.equal(await juniorLab.act!.start(made, { distill: { version: made.world.reference, case: 'i1', question: 1, mode: 'cut', checker: 'proposal' } }, 'a0', {} as never), null, 'no teacher configured: nothing is distilled');
+    const noTeacher = await juniorLab.act!.start(made, { distill: { version: made.world.reference, case: 'i1', question: 1, mode: 'cut', checker: 'proposal' } }, 'a0', {} as never);
+    assert.ok(noTeacher && noTeacher.kind === 'records' && noTeacher.what === 'refused' && /no teacher is configured/.test(String(noTeacher.summary.reason)), 'no teacher configured: nothing is distilled, and the refusal says so');
     const spec = { ...made, teacher: { client: teacher(PROPOSE(1)), identity: { model: 'strong' } } };
     await juniorLab.explore!([{ id: 'development', spec }], Math.random, 1, {} as never);
     const parsed = juniorLab.act!.parse({ distill: { version: spec.world.reference, case: 'i1', question: 1, mode: 'cut', checker: 'proposal', instruction: 'distill-me: propose your model now.' } });
@@ -176,6 +177,7 @@ test('junior-competence@1: distill at a cut of a development investigation the w
     assert.ok(ds && ds.kind === 'records' && ds.what === 'dataset');
     /* VM4: distilled at a case that selects - its dataset is never trained on (a training case is: junior-train.test.ts). */
     assert.deepEqual(ds.summary.shares_selection_groups, ['g-i1']);
-    assert.equal(await juniorLab.act!.start(spec, { distill: { version: spec.world.reference, case: 'nope', question: 0, mode: 'start', checker: 'protocol' } }, 'a3', {} as never), null);
+    const nope = await juniorLab.act!.start(spec, { distill: { version: spec.world.reference, case: 'nope', question: 0, mode: 'start', checker: 'protocol' } }, 'a3', {} as never);
+    assert.ok(nope && nope.kind === 'records' && nope.what === 'refused' && /not an investigation/.test(String(nope.summary.reason)));
   } finally { f.server.stop(); await f.h.close(); }
 });

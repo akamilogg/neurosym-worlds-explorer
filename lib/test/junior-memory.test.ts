@@ -121,9 +121,11 @@ test('junior-competence@1: a memory file is a lever; a memory not written as ask
     assert.equal((await juniorLab.artifact!.check(spec, v!.version, { round: 1, purpose: 'check', index: 0 }, {} as never)).holds, true);
     const bad = await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'memory/bad': 'x' }, why: 'w', expect: 'e' } }, 'a3', {} as never);
     assert.ok(bad && bad.kind === 'version');
-    assert.equal(await juniorLab.act!.start(spec, { run: { version: bad.version } }, 'a4', {} as never), null);
+    const refusedRun = await juniorLab.act!.start(spec, { run: { version: bad.version } }, 'a4', {} as never);
+    assert.ok(refusedRun && refusedRun.kind === 'records' && refusedRun.what === 'refused' && /its memory was not written/.test(String(refusedRun.summary.reason)));
     assert.match(String(await spec.world.evaluate(bad.version)), /its memory was not written/);
-    assert.equal(await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'memory.state.json': '{}' }, why: 'w', expect: 'e' } }, 'a5', {} as never), null, 'a published memory is never a change');
+    const published = await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'memory.state.json': '{}' }, why: 'w', expect: 'e' } }, 'a5', {} as never);
+    assert.ok(published && published.kind === 'records' && published.what === 'refused' && /prompt\.md/.test(String(published.summary.reason)), 'a published memory is never a change');
   } finally { server.stop(); await h.close(); }
 });
 
@@ -136,7 +138,8 @@ test('publish_memory: what the junior kept from a development investigation beco
     assert.ok(baseline.kind === 'evaluation');
     const session = baseline.sessions.i1;
     assert.ok(session, 'the investigation\'s session is shown');
-    assert.equal(await juniorLab.act!.start(spec, { publish_memory: { from: spec.world.reference, session: 'not-ours', why: 'w', expect: 'e' } }, 'a0', {} as never), null);
+    const notOurs = await juniorLab.act!.start(spec, { publish_memory: { from: spec.world.reference, session: 'not-ours', why: 'w', expect: 'e' } }, 'a0', {} as never);
+    assert.ok(notOurs && notOurs.kind === 'records' && notOurs.what === 'refused' && /not one of the development investigations/.test(String(notOurs.summary.reason)));
     const parsed = juniorLab.act!.parse({ publish_memory: { from: spec.world.reference, session, why: 'what it learned helps', expect: 'the protocol kept' } });
     assert.ok(typeof parsed !== 'string');
     const v = await juniorLab.act!.start(spec, parsed, 'a1', {} as never);

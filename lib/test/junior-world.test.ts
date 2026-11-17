@@ -70,7 +70,8 @@ test('junior-competence@1: the baseline explored first, a change makes a junior,
     const v = await juniorLab.act!.start(spec, act, 'a1', {} as never);
     assert.ok(v && v.kind === 'version');
     assert.equal(typeof juniorLab.act!.parse({ change: { from: spec.world.reference, files: { 'secret.txt': 'x' }, why: 'w', expect: 'e' } }), 'object');
-    assert.equal(await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'secret.txt': 'x' }, why: 'w', expect: 'e' } }, 'a2', {} as never), null, 'only the junior\'s editable parts change');
+    const secret = await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'secret.txt': 'x' }, why: 'w', expect: 'e' } }, 'a2', {} as never);
+    assert.ok(secret && secret.kind === 'records' && secret.what === 'refused' && /prompt\.md/.test(String(secret.summary.reason)), 'only the junior\'s editable parts change, and the refusal says so');
     const run = await juniorLab.act!.start(spec, { run: { version: v!.version } }, 'a3', {} as never);
     assert.ok(run && run.kind === 'evaluation' && run.components[0].deficit === 0);
     const before = asked.length;
