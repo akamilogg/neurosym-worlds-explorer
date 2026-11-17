@@ -124,7 +124,10 @@ const ANSWER_SHAPE = 'When you propose, answer with ONE JSON object and nothing 
 
 /** A run's world options, from its journal's configuration (kept there under camel-cased names). */
 export const worldOptionsIn = (options: readonly { name: string; default: string }[], config: J): Record<string, string> =>
-  Object.fromEntries(options.map((o) => { const v = config[o.name.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase())]; return [o.name, v === undefined ? o.default : String(v)]; }));
+  Object.fromEntries(options.map((o) => { const v = config[o.name.replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase())];
+    /* The runner keeps a number-like option as a number, and Number('') is 0: an option left at its empty default comes back as
+       0. That 0 is the default, not the value '0' (for program-profiles, a file named '0' the senior's brief then fails to read). */
+    return [o.name, v === undefined || (o.default === '' && v === 0) ? o.default : String(v)]; }));
 
 /** The brief the junior works under, word for word: the common prompt (persona, method, instruments, protocol) and its
     world's interface, as its run built them - without the shape of a proposal, which is the junior's to answer, not a
