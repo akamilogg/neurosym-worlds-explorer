@@ -23,7 +23,7 @@ import type { RawTensor, WeightBounds } from '../../junior/weights.ts';
 import { currentRealizations, datasetCaptures, realizationOfCapture } from '../../junior/groups.ts';
 import { methodProgramProblems, profileProblems as profileProblemsOf } from '../../junior/method-program.ts';
 import type { ContributionFormat } from '../../learn/contributions.ts';
-import { ANSWERS_ON_DEMAND, ANSWERS_WITH_RUN, behaviorTally, caseBehavior, journalAnswers, llmAnswers, pairTrial, probeSessionId, readingOfReaction, type CaseBehavior, type RawAnswer } from './behavior.ts';
+import { answerOf, llmAnswers, probeSessionId, type JuniorAnswer } from './behavior.ts';
 
 /* ============================================================================
  * The world of a junior's COMPETENCE (SPEC-METAPOLITICA-APRENDIZAJE §6, §7.1): an artifact world whose artifact is the
@@ -33,8 +33,9 @@ import { ANSWERS_ON_DEMAND, ANSWERS_WITH_RUN, behaviorTally, caseBehavior, journ
  *   the artifact   the package's editable parts, versioned by content: prompt.md (its starting prompt) and decoding.json
  *   change         a patch on a version: a new junior, its reason written before anything of it is measured
  *   run            a version evaluated on the development cases (investigations as M2 trials, probes at their cuts): a
- *                  job of the world's ledger, reserved before it starts; an episode of observations, and how the
- *                  junior behaved on each question (its text cut short) — never the holdout, never a point of the model
+ *                  job of the world's ledger, reserved before it starts; an episode of observations, and the junior's
+ *                  answers raw (text, terminal, tokens, circuit tokens, time, memory ops) — never the holdout, never
+ *                  in the percept the model is graded on. Counting them is the investigator's instrument (§7.2)
  *   exploration    the base and its BASELINE: no change is measured before it (§6.2)
  *   the model      at a point - one observation of a version at a case - the value it will measure, from what is known
  *                  before it (the version, the files it changed, the case, its component, its rung)
@@ -1037,14 +1038,14 @@ export class JuniorWorld {
   }
 
   /** A probe's recorded answer (probes.jsonl), the last line of this manifest and junior. Null when it was not run. */
-  private probeLine(execution: string, caseId: string, rep: number): { answer: string; terminal: string | null; receipt: string | null; outcome: { state?: string; detail?: string; events?: Record<string, unknown>[] } } | null {
+  private probeLine(execution: string, caseId: string, rep: number): { answer: string; terminal: string | null; receipt: string | null } | null {
     const file = path.join(this.dir, 'probes.jsonl');
     if (!fs.existsSync(file)) return null;
-    let found: ReturnType<JuniorWorld['probeLine']> = null;
+    let found: { answer: string; terminal: string | null; receipt: string | null } | null = null;
     for (const l of fs.readFileSync(file, 'utf8').split('\n')) {
-      let r: { manifest?: string; execution?: string; case?: string; rep?: number; answer?: string; terminal?: string | null; receipt?: string | null; outcome?: { state?: string; detail?: string; events?: Record<string, unknown>[] } };
+      let r: { manifest?: string; execution?: string; case?: string; rep?: number; answer?: string; terminal?: string | null; receipt?: string | null };
       try { r = JSON.parse(l); } catch { continue; }
-      if (r.manifest === this.manifestHash && r.execution === execution && r.case === caseId && r.rep === rep) found = { answer: String(r.answer ?? ''), terminal: r.terminal ?? null, receipt: r.receipt ?? null, outcome: r.outcome ?? {} };
+      if (r.manifest === this.manifestHash && r.execution === execution && r.case === caseId && r.rep === rep) found = { answer: String(r.answer ?? ''), terminal: r.terminal ?? null, receipt: r.receipt ?? null };
     }
     return found;
   }
@@ -1065,63 +1066,63 @@ export class JuniorWorld {
     return { record, session: (trial + '#' + (launches - 1)).replace(/[^\w.-]/g, '.').replace(/\.(\d+)$/, '.L$1'), launches };
   }
 
-  /** Times, memory operations and a terminal from the session's receipts, for the answers a single launch holds (`chat:0`…).
-      A receipt that cannot be read leaves the replay's text as it was. At most 48 are opened. */
-  private async overlayReceipts(session: string, answers: RawAnswer[]): Promise<RawAnswer[]> {
+  /** The receipts of one session, `chat:0` onward, or null when the session cannot be read. */
+  private async chatReceipts(session: string): Promise<{ text: string; terminal: string; reason: string | null; tokens: number | null; circuit_tokens: number | null; ms: number; ops: readonly unknown[] }[] | null> {
     let n = 0;
-    try { n = (await this.client.info(session)).receipts; } catch { return answers; }
-    const out = answers.map((a) => ({ ...a }));
-    for (let i = 0; i < Math.min(n, out.length, 48); i++) {
+    try { n = (await this.client.info(session)).receipts; } catch { return null; }
+    const out: { text: string; terminal: string; reason: string | null; tokens: number | null; circuit_tokens: number | null; ms: number; ops: readonly unknown[] }[] = [];
+    for (let i = 0; i < n; i++) {
       try {
         const r = await this.client.receipt(session, 'chat:' + i);
-        if (r.state !== 'published') continue;
+        if (r.state !== 'published') break;
         const u = r.receipt.usage;
-        out[i] = { ...out[i], tokens: out[i].tokens ?? (u ? u.prompt_tokens + u.text_tokens : null), circuit_tokens: out[i].circuit_tokens ?? (u ? u.circuit_tokens : null),
-          ms: r.receipt.run_ms, memory_ops: r.receipt.ops.length, terminal: r.receipt.terminal };
-      } catch { /* the text from the replay stands */ }
+        out.push({ text: r.receipt.text, terminal: r.receipt.terminal, reason: r.receipt.reason, ms: r.receipt.run_ms, ops: r.receipt.ops,
+          tokens: u ? u.prompt_tokens + u.text_tokens : null, circuit_tokens: u ? u.circuit_tokens : null });
+      } catch { break; }
     }
     return out;
   }
 
-  private async probeBehavior(execution: string, caseId: string, rep: number, limit: number): Promise<CaseBehavior> {
+  private async probeAnswers(execution: string, caseId: string, rep: number): Promise<JuniorAnswer[]> {
     const rec = this.probeLine(execution, caseId, rep);
-    if (!rec) return caseBehavior({ case: caseId, kind: 'probe', rep, answers: [], aligned: true, limit, note: 'no record of the junior\'s answer' });
-    let ms: number | null = null, memory_ops: number | null = null, terminal = rec.terminal, tokens: number | null = null, circuit: number | null = null;
+    if (!rec) return [];
+    let terminal = rec.terminal, reason: string | null = null, tokens: number | null = null, circuit: number | null = null, ms: number | null = null, ops: readonly unknown[] | null = null, text = rec.answer;
     try {
       const r = await this.client.receipt(probeSessionId(this.manifestHash, execution, caseId, rep), rec.receipt ?? 'probe');
       if (r.state === 'published') {
         const u = r.receipt.usage;
-        ms = r.receipt.run_ms; memory_ops = r.receipt.ops.length; terminal = r.receipt.terminal;
+        text = r.receipt.text || text; terminal = r.receipt.terminal; reason = r.receipt.reason; ms = r.receipt.run_ms; ops = r.receipt.ops;
         if (u) { tokens = u.prompt_tokens + u.text_tokens; circuit = u.circuit_tokens; }
       }
     } catch { /* the probe's line still has the text */ }
-    const note = rec.outcome.state === 'infra' ? String(rec.outcome.detail ?? 'the probe measured nothing').slice(0, 200) : undefined;
-    return caseBehavior({ case: caseId, kind: 'probe', rep, aligned: true, limit, ...(note ? { note } : {}), answers: [{
-      reading: readingOfReaction(rec.outcome.events ?? []), text: rec.answer, tokens, circuit_tokens: circuit, ms, memory_ops, terminal }] });
+    return [answerOf({ case: caseId, rep, question: 0, text, terminal, reason, tokens, circuit_tokens: circuit, ms, memory_ops: ops })];
   }
 
-  private async investigationBehavior(execution: string, caseId: string, rep: number, limit: number): Promise<CaseBehavior> {
+  private async investigationAnswers(execution: string, caseId: string, rep: number): Promise<JuniorAnswer[]> {
     const rec = this.trialOf(execution, caseId, rep);
-    if (!rec) return caseBehavior({ case: caseId, kind: 'investigation', rep, answers: [], aligned: true, limit, note: 'no record of the junior\'s answers' });
-    const texts = llmAnswers(rec.record.replace(/\.json$/, '.replay.jsonl'));
-    const paired = pairTrial(journalAnswers(rec.record), texts);
-    const answers = rec.launches === 1 ? await this.overlayReceipts(rec.session, paired.answers) : paired.answers;
-    const note = rec.launches > 1 ? 'the investigation was resumed: times are not read from a session that holds only its last launch'
-      : answers.length === 0 ? 'the trial left no answer to read' : undefined;
-    return caseBehavior({ case: caseId, kind: 'investigation', rep, answers, aligned: paired.aligned, limit, ...(note ? { note } : {}) });
+    if (!rec) return [];
+    const replay = llmAnswers(rec.record.replace(/\.json$/, '.replay.jsonl'));
+    const receipts = rec.launches === 1 ? await this.chatReceipts(rec.session) : null;
+    const n = Math.max(replay.length, receipts?.length ?? 0);
+    const out: JuniorAnswer[] = [];
+    for (let i = 0; i < n; i++) {
+      const t = replay[i], r = receipts?.[i];
+      out.push(answerOf({ case: caseId, rep, question: i, text: r?.text || t?.text || '', terminal: r?.terminal ?? null, reason: r?.reason ?? null,
+        tokens: r?.tokens ?? t?.tokens ?? null, circuit_tokens: r?.circuit_tokens ?? t?.circuit_tokens ?? null, ms: r?.ms ?? null, memory_ops: r ? r.ops : null }));
+    }
+    return out;
   }
 
-  /** The cases named, from the records of one junior. */
-  async readBehavior(execution: string, wanted: readonly { case: string; kind: 'investigation' | 'probe'; rep: number }[], limit: number): Promise<CaseBehavior[]> {
-    const rows: CaseBehavior[] = [];
-    for (const w of wanted) rows.push(w.kind === 'probe' ? await this.probeBehavior(execution, w.case, w.rep, limit) : await this.investigationBehavior(execution, w.case, w.rep, limit));
-    return rows;
+  /** The answers of the cases named, from the records of one junior. */
+  async readAnswers(execution: string, wanted: readonly { case: string; kind: 'investigation' | 'probe'; rep: number }[]): Promise<JuniorAnswer[]> {
+    const out: JuniorAnswer[] = [];
+    for (const w of wanted) out.push(...(w.kind === 'probe' ? await this.probeAnswers(execution, w.case, w.rep) : await this.investigationAnswers(execution, w.case, w.rep)));
+    return out;
   }
 
-  /** How the junior behaved on development cases already run here. Reads the records; never reserves an evaluation.
+  /** The junior's answers on development cases already run here. Reads the records; never reserves an evaluation.
       A holdout or a confirmation case is refused without its text (§9, SPEC-VALIDEZ-MEDIDA §4.3). */
-  async behaviorOf(version: string, o: { case?: string; rep?: number; limit?: number } = {}): Promise<CaseBehavior[] | string> {
-    const limit = o.limit ?? ANSWERS_ON_DEMAND;
+  async answersOf(version: string, o: { case?: string; rep?: number } = {}): Promise<JuniorAnswer[] | string> {
     const parts = this.parts(version);
     if (typeof parts === 'string') return parts;
     /* The package as it was evaluated, already written: a reading never builds a memory or reserves an evaluation. */
@@ -1141,9 +1142,9 @@ export class JuniorWorld {
     if (o.case !== undefined) {
       const w = one(o.case);
       if (typeof w === 'string') return w;
-      const row = w.kind === 'probe' ? await this.probeBehavior(execution, w.case, w.rep, limit) : await this.investigationBehavior(execution, w.case, w.rep, limit);
-      if (row.questions === 0 && row.note) return 'version ' + version + ' has not run case ' + o.case + ' here';
-      return [row];
+      const rows = await this.readAnswers(execution, [w]);
+      if (!rows.length) return 'version ' + version + ' has not run case ' + o.case + ' here';
+      return rows;
     }
     const cases = this.manifest.cases.filter((c) => c.partition === 'development' && !held.has(c.id));
     const wanted: { case: string; kind: 'investigation' | 'probe'; rep: number }[] = [];
@@ -1151,9 +1152,9 @@ export class JuniorWorld {
       const reps = c.kind === 'investigation' ? this.manifest.investigation_repetitions : probeRepetitions(pkg.decoding.temperature);
       for (let rep = 0; rep < reps; rep++) wanted.push({ case: c.id, kind: c.kind, rep });
     }
-    const rows = await this.readBehavior(execution, wanted, limit);
-    if (!rows.some((r) => r.questions > 0)) return 'version ' + version + ' has not been evaluated here';
-    return rows.filter((r) => r.questions > 0 || r.note);
+    const rows = await this.readAnswers(execution, wanted);
+    if (!rows.length) return 'version ' + version + ' has not been evaluated here';
+    return rows;
   }
 }
 
@@ -1219,12 +1220,12 @@ export type JuniorEpisode =
       readonly components: readonly { readonly id: string; readonly deficit: number | null }[];
       /** Its development investigations' sessions, case to session: what publish_memory may take. */
       readonly sessions: Readonly<Record<string, string>>;
-      /** How the junior behaved, development cases only: not a point of the model, and never the holdout (§7.2). */
-      readonly behavior: readonly CaseBehavior[] }
+      /** The junior's answers, raw, development cases only. Not the percept, and never the holdout (§7.2). */
+      readonly answers: readonly JuniorAnswer[] }
   /** What a distillation or a dataset produced: rows to read and what they add up to. A refusal says why. */
   | { readonly kind: 'records'; readonly what: 'examples' | 'dataset' | 'training' | 'confirmations' | 'weights' | 'edit' | 'evolution' | 'adoption' | 'refused' | 'trial'; readonly summary: Readonly<Record<string, unknown>>; readonly rows: readonly Readonly<Record<string, unknown>>[] };
 
-export interface JuniorCase { readonly point: string; readonly state: JuniorPoint; readonly came: { readonly value: number | null } }
+export interface JuniorCase { readonly point: string; readonly state: JuniorPoint; readonly came: { readonly value: number | null; readonly answers: readonly JuniorAnswer[] } }
 
 type Reason = { readonly why: string; readonly because?: readonly string[]; readonly contributed?: import('../../learn/contributions.ts').Contributed } & ({ readonly expect: string } | { readonly exploratory: true });
 /** What a reason says it was adopted from (SPEC-INVESTIGACION-EXTERNA §7.1), for the records that keep it. */
@@ -1303,9 +1304,9 @@ async function evaluationEpisode(w: JuniorWorld, version: string, e: Evaluation)
     if (!c || c.partition !== 'development') continue;
     wanted.push({ case: o.case, kind: c.kind, rep: o.rep });
   }
-  const behavior = await w.readBehavior(e.execution, wanted, ANSWERS_WITH_RUN);
+  const answers = await w.readAnswers(e.execution, wanted);
   return { kind: 'evaluation', version, execution: e.execution, complete: e.measure.complete, points, observations: e.observations,
-    components: e.measure.components.map((c) => ({ id: c.id, deficit: c.quality })), sessions, behavior };
+    components: e.measure.components.map((c) => ({ id: c.id, deficit: c.quality })), sessions, answers };
 }
 
 const ANSWER: AnswerForm = { form: ['YOUR ANSWER, at a point (one observation of a version of the junior at a case): the value it will measure there, in its component\'s unit (a share or solved: 0 to 1), predicted from what is known before.'], use: 'predict' };
@@ -1421,11 +1422,11 @@ function juniorInterface(tolerance: number, weights = false, searches = true, pr
       ...objectiveLines({ answer: ANSWER, verdictForm: verdictForm(tolerance) }),
       'THE JUNIOR\'S OWN VERDICT, apart from your model\'s: with your answer you may put forward a version - "artifact": "<version>" - and it is compared with the reference case by case (paired-cases@1): promoted when a component improves beyond chance and no protected one gets worse beyond its tolerance. You are told the verdict and which components improve or regress - never by how much. The last version promoted is your product.',
       [INVESTIGATION, 'Requests:'],
-      [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   a stretch of one of your episodes (at most 60 rows): of a VERSION, its files\' lines; of an EVALUATION, each observation - the case, its component, its rung, what was measured - and how the junior behaved on the development cases (never the holdout)'],
+      [['view'], '  {"view": "<episode>", "from": <step>, "to": <step>}   a stretch of one of your episodes (at most 60 rows): of a VERSION, its files\' lines; of an EVALUATION, each observation - the case, its component, its rung, what was measured - and `answers`, the junior\'s answers on those cases as it emitted them (never the holdout)'],
       [['act'], '  {"act": {"change": {"from": "<version>", "files": {"prompt.md" | "decoding.json": "<the file\'s whole new text>"}, "why": "<the hypothesis it tests>", "expect": "<what you expect of it>" | "exploratory": true}}}   a new junior; its reason is written with it, before anything of it is measured. '
         + 'A file "memory/<name>" asks for a file the junior holds in its own memory from the start (null removes the request): the junior writes it itself, in a session of its own, before the version is evaluated; if what it wrote is not exactly what was asked, the version cannot be evaluated and you are told so. Each memory written costs one of `memory_builds`. '
         + 'That file is the circuit\'s store, not text in the prompt: the junior sees it only if it reads it with its memory tools. "prompt.md" is the text added to its system message. A memory it never reads leaves its answers as they were. '
-        + 'Or {"act": {"run": {"version": "<version>"}}}   that version evaluated on every development case: an episode of observations, with the session of each investigation, and how the junior behaved on each question - whether the protocol accepted it, whether its requests were well formed, whether an investigation or a proposal was logged, whether native tool-call syntax appeared, the tokens, circuit tokens and time, and a short excerpt of its text (the first and last stretch, and only the first and last answers when there were more). The holdout is not shown, and none of that text is a point your model is graded on. An evaluation costs one of `evaluations`; asked again for the same version it is the same. If none are free you are told, including that this work directory\'s ledger is not emptied between runs. '
+        + 'Or {"act": {"run": {"version": "<version>"}}}   that version evaluated on every development case: an episode of observations, with the session of each investigation, and the junior\'s answers raw - each with its case, question, text (the whole of it, or its first 4000 characters when it is longer, and `chars` the full length), terminal, reason, tokens, circuit_tokens, ms and memory_ops as the receipt listed them. Nothing here counts well-formed requests, tool calls or proposals: that count is an instrument of yours, over `came.answers` of `env.points`. The holdout is not shown, and the text is not in `p`, the percept your model is graded on. An evaluation costs one of `evaluations`; asked again for the same version it is the same. If none are free you are told, including that this work directory\'s ledger is not emptied between runs. '
         + 'Or {"act": {"publish_memory": {"from": "<version>", "session": "<a session of an evaluation>", "why": "...", "expect": "..." | "exploratory": true}}}   a new version whose memory is the one the junior ended that investigation with: you read it as files in the version. '
         + 'Or {"act": {"distill": {"version": "<version evaluated>", "case": "<an investigation of development or training>", "question": <n, from 0>, "mode": "start" | "cut", "checker": "protocol" | "request" | "rules" | "proposal", "request": "<kind>", "instruction": "<a visible task>"}}}   '
         + 'the junior and the teacher answer from the same point of that investigation (cut: with the junior\'s memory there; start: with its initial memory), each in a copy; the checker, fixed before the teacher answers, judges both: an EXAMPLE, verified when the teacher passes where the junior fails, unverified when both pass, rejected when the teacher fails. Each costs one of `distillations`. '
@@ -1435,7 +1436,7 @@ function juniorInterface(tolerance: number, weights = false, searches = true, pr
         + (weights ? WEIGHT_ACTS + (searches ? EVOLVE_ACT : '') + ' ' : '')
         + (profiles.length ? programAct(profiles) : '')
         + (profiles.length && masks ? deletionAct(profiles, masks) : '')
-        + 'Or {"act": {"view_trial": {"version": "<a version already evaluated>", "case": "<a development case, optional>", "rep": <n, optional>}}}   the same reading again, of one case if you name it, with a few more answers: what was already recorded, never a new evaluation. A reserved case is refused and its text is not shown. '
+        + 'Or {"act": {"view_trial": {"version": "<a version already evaluated>", "case": "<a development case, optional>", "rep": <n, optional>}}}   those answers again, raw, of one case if you name it: what was already recorded, never a new evaluation. A reserved case is refused and its text is not shown. '
         + 'Or {"act": {"confirmations": {}}}   the confirmations the operator made of your juniors, out of this machine, on cases you never see: for each, the verdict against the reference and which components improve or regress - nothing more. An act that cannot be done is refused and you are told why. At most `acts_left` this round.'],
       [['inspect'], '  {"inspect": "<episode>@<step>", "model": <round> | <draft> }   what a model answered at an observation, part by part, and what was measured there'],
       [['measure'], '  {"measure": {"source": "(p) => ...", "range": [min, max]}, "on": ["<episode>@<step>", ...]}'],
@@ -1444,7 +1445,7 @@ function juniorInterface(tolerance: number, weights = false, searches = true, pr
   };
 }
 
-export const PERCEPT_DOC = 'At a point - one observation of a version of the junior at a case - your code receives p = { version, changed, case, component, rung, lab, kind, rep }: what is known BEFORE it is measured. `p.changed` the files of the junior that differ from the base; `p.kind` investigation or probe.';
+export const PERCEPT_DOC = 'At a point - one observation of a version of the junior at a case - your code receives p = { version, changed, case, component, rung, lab, kind, rep }: what is known BEFORE it is measured. `p.changed` the files of the junior that differ from the base; `p.kind` investigation or probe. The junior\'s answers are not in p.';
 
 const pointWorld = (): World<JuniorPoint, never> => ({
   id: 'junior-competence@1', actors: ['nature'],
@@ -1695,12 +1696,13 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     }
   },
   steps: (e) => (e.kind === 'version' ? e.lines.length - 1 : e.kind === 'records' ? e.rows.length - 1 : e.observations.length - 1),
-  /* Counts only. The excerpts stay in `view` and in the act's answer, not in the index the investigator carries every round, and not in a point. */
-  indexInfo: (e) => (e.kind === 'version' ? { version: e.version, lines: e.lines.length } : e.kind === 'records' ? { what: e.what, rows: e.rows.length, ...e.summary } : { version: e.version, observations: e.observations.length, complete: e.complete, behavior: behaviorTally(e.behavior) }),
-  explored: (e) => (e.kind === 'version' ? { version: e.version } : e.kind === 'records' ? { what: e.what, ...e.summary } : { version: e.version, execution: e.execution, components: e.components, behavior: behaviorTally(e.behavior) }),
+  /* The index names the episode. The answers themselves are on each point's `came`, where an instrument reads them, not repeated here. */
+  indexInfo: (e) => (e.kind === 'version' ? { version: e.version, lines: e.lines.length } : e.kind === 'records' ? { what: e.what, rows: e.rows.length, ...e.summary } : { version: e.version, observations: e.observations.length, complete: e.complete }),
+  explored: (e) => (e.kind === 'version' ? { version: e.version } : e.kind === 'records' ? { what: e.what, ...e.summary } : { version: e.version, execution: e.execution, components: e.components }),
+  /* The check reads the percept and the measured value. The junior's text stays off this view. */
   at: (e, step) => (e.kind === 'evaluation' && step >= 0 && step < e.observations.length
     ? { state: e.points[step], shown: { measured: e.observations[step].value, state: e.observations[step].state } } : null),
-  cases: (_spec, id, e, every) => (e.kind !== 'evaluation' ? [] : e.observations.map((o, i) => ({ point: id + '@' + i, state: e.points[i], came: { value: o.value } })).filter((_, i) => i % every === 0)),
+  cases: (_spec, id, e, every) => (e.kind !== 'evaluation' ? [] : e.observations.map((o, i) => ({ point: id + '@' + i, state: e.points[i], came: { value: o.value, answers: e.answers.filter((a) => a.case === o.case && a.rep === o.rep) } })).filter((_, i) => i % every === 0)),
   ownEvery: 1,
   view: (e, from, to) => (e.kind === 'records' ? { what: e.what, ...e.summary, steps: e.rows.length - 1, rows: e.rows.slice(from, Math.min(to, from + 59) + 1).map((r, i) => ({ step: from + i, ...r })) }
     : e.kind === 'version'
@@ -1708,10 +1710,11 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     : (() => {
       const slice = e.observations.slice(from, Math.min(to, from + 59) + 1);
       const ids = new Set(slice.map((o) => o.case + '#' + o.rep));
-      return { version: e.version, complete: e.complete, components: e.components, behavior: e.behavior.filter((b) => ids.has(b.case + '#' + b.rep)), steps: e.observations.length - 1,
+      return { version: e.version, complete: e.complete, components: e.components, answers: e.answers.filter((a) => ids.has(a.case + '#' + a.rep)), steps: e.observations.length - 1,
         rows: slice.map((o, i) => ({ step: from + i, case: o.case, component: o.component, rung: e.points[from + i].rung, rep: o.rep, measured: o.value, state: o.state, ...(o.why ? { why: o.why } : {}) })) };
     })()),
-  shown: (c) => ({ measured: c.came.value }),
+  /* What an instrument reads as `came` (env.points): the measured value, and the junior's answers raw. */
+  shown: (c) => ({ measured: c.came.value, answers: c.came.answers }),
 
   /* Its acts' kinds (SPEC-VALIDEZ-MEDIDA §6.1): each makes a version, an evaluation, a dataset or a search - an experiment -
      but a query of the weight laboratory reads the weights, view_trial reads answers already recorded, and the confirmations are summaries it reads. */
@@ -1912,11 +1915,10 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
           shares_selection_groups: r.overlap }, rows: r.dataset.examples.map((id) => ({ example: id })) };
       }
       if ('view_trial' in a) {
-        const b = await spec.world.behaviorOf(a.view_trial.version, { ...(a.view_trial.case !== undefined ? { case: a.view_trial.case } : {}), ...(a.view_trial.rep !== undefined ? { rep: a.view_trial.rep } : {}), limit: ANSWERS_ON_DEMAND });
-        if (typeof b === 'string') return refusedEpisode('view_trial', b);
-        const tally = behaviorTally(b);
-        return { kind: 'records', what: 'trial', summary: { version: a.view_trial.version, ...(a.view_trial.case !== undefined ? { case: a.view_trial.case } : {}), ...tally },
-          rows: b.map((c) => ({ ...c })) };
+        const rows = await spec.world.answersOf(a.view_trial.version, { ...(a.view_trial.case !== undefined ? { case: a.view_trial.case } : {}), ...(a.view_trial.rep !== undefined ? { rep: a.view_trial.rep } : {}) });
+        if (typeof rows === 'string') return refusedEpisode('view_trial', rows);
+        return { kind: 'records', what: 'trial', summary: { version: a.view_trial.version, ...(a.view_trial.case !== undefined ? { case: a.view_trial.case } : {}) },
+          rows: rows.map((a) => ({ ...a })) };
       }
       const run = (a as { run: { version: string } }).run;
       const e = await spec.world.evaluate(run.version, spec.judge);
@@ -1937,7 +1939,7 @@ export const juniorLab: Lab<JuniorSpec, JuniorPoint, JuniorEpisode, JuniorCase, 
     },
     shown: (e) => (e.kind === 'version' ? { version: e.version, parent: e.parent, lines: e.lines.length }
       : e.kind === 'records' ? { what: e.what, ...e.summary, ...(e.what === 'trial' ? { cases: e.rows } : {}) }
-      : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions, behavior: e.behavior }),
+      : { version: e.version, observations: e.observations.length, complete: e.complete, components: e.components, sessions: e.sessions, answers: e.answers }),
     /* An adopted mask is written by the artifact that carried it, never by its indices (a mask of a layer is millions). */
     asWritten: (a) => ('adopt_mask' in a ? { adopt_mask: { ...a.adopt_mask, deletions: { modules: a.adopt_mask.deletions.length, indices: a.adopt_mask.deletions.reduce((n, d) => n + d.indices.length, 0) } } } : a),
     identity: (_spec, a) => ('run' in a ? a.run.version : null),

@@ -38,8 +38,8 @@ test('the unknown-world researcher is frozen: what System 2 is told in every wor
     artifacts: ['ba29707e3ee08ebd', '8aaa432f3610a8ee', 'd2d45f19e85d6bc9'],
     /* The world of a junior's competence (SPEC-METAPOLITICA-APRENDIZAJE MA2, 29/10/2026): its prompt, frozen from its first version; its memory files and publish_memory added (MA3), distill and dataset (MA4), train (MA5), confirmations (MA6), 29/10/2026. */
     /* 11/11/2026: distill takes a case of development or training (SPEC-VALIDEZ-MEDIDA §5.1, VM4): the text of its case changed. */
-    /* 17/11/2026: a run shows how the junior answered, view_trial reads it again, and a refusal says why (§7.2). The percept is unchanged. */
-    junior: ['fa83c03e378ec393', 'fa83c03e378ec393', 'a8847ad2436a04c0'],
+    /* 17/11/2026: the answers are raw on came.answers; the world does not count them, and they are not in the percept (§7.2). */
+    junior: ['a5163dc55f1b7e94', 'a5163dc55f1b7e94', '43f8521242d38591'],
     grid: ['655eb619829d609f']
   };
   for (const [name, lab] of Object.entries(LABS)) {

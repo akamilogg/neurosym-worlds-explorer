@@ -12,10 +12,10 @@ import { SessionServer, type JuniorWorker, type WorkerResult } from '../src/juni
 import { serveJunior } from '../src/junior/http.ts';
 import type { CompetenceManifest } from '../src/junior/competence.ts';
 import { juniorLab } from '../src/worlds/junior/lab.ts';
-import { excerptOf, nativeToolCall } from '../src/worlds/junior/behavior.ts';
+import { ANSWER_TEXT_CAP, capText } from '../src/worlds/junior/behavior.ts';
 
-/* SPEC-METAPOLITICA-APRENDIZAJE §7.2: the investigator sees how the junior answered, not only the value, and a refused
-   act says why. The text stays out of the point the model is graded on, and out of a reserved case. */
+/* SPEC-METAPOLITICA-APRENDIZAJE §7.2: each answer is raw episode data (came.answers). The world does not count tool calls
+   or well-formed requests. The text stays out of the percept the model is graded on, and out of a reserved case. */
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'junior-behavior-'));
 const LOOK = { investigate: [{ view: 'ep1', from: 0, to: 1 }] };
@@ -27,17 +27,14 @@ const standIn: FetchLike = async () => {
   return { ok: true, status: 200, text: async () => text, headers: { get: () => null } };
 };
 
-test('an excerpt keeps both ends, and native tool-call syntax is the harness\'s, not JSON', () => {
-  const short = excerptOf('{"investigate":[]}', 20);
-  assert.equal(short.tail, null);
-  assert.equal(short.head, '{"investigate":[]}');
-  const long = excerptOf(TOOL, 160);
-  assert.equal(long.head.length, 160);
-  assert.equal(long.tail?.length, 160);
-  assert.ok(long.head.startsWith('<tool_call>'));
-  assert.ok(long.tail?.endsWith('X'));
-  assert.equal(nativeToolCall(TOOL), true);
-  assert.equal(nativeToolCall(JSON.stringify(LOOK)), false);
+test('an answer keeps its text up to the cap, and the full length', () => {
+  const short = capText('{"investigate":[]}');
+  assert.equal(short.text, '{"investigate":[]}');
+  assert.equal(short.chars, short.text.length);
+  const long = capText('x'.repeat(ANSWER_TEXT_CAP + 25));
+  assert.equal(long.text.length, ANSWER_TEXT_CAP);
+  assert.equal(long.chars, ANSWER_TEXT_CAP + 25);
+  assert.equal(long.text.startsWith('x'), true);
 });
 
 test('junior-competence@1: a run shows how the junior answered; a refusal says why; the grade and the holdout do not see the text', async () => {
@@ -90,6 +87,8 @@ test('junior-competence@1: a run shows how the junior answered; a refusal says w
     assert.match(lines, /any version you already have/);
     assert.match(lines, /view_trial/);
     assert.match(lines, /not emptied between runs/);
+    assert.match(lines, /came\.answers/);
+    assert.match(lines, /Nothing here counts/);
 
     const noTeacher = await juniorLab.act!.start(spec, { distill: { version: spec.world.reference, case: 'i1', question: 0, mode: 'start', checker: 'protocol' } }, 'd0', {} as never);
     assert.ok(noTeacher && noTeacher.kind === 'records' && noTeacher.what === 'refused' && /no teacher/.test(String(noTeacher.summary.reason)));
@@ -101,14 +100,18 @@ test('junior-competence@1: a run shows how the junior answered; a refusal says w
     const shown0 = juniorLab.act!.shown(baseline);
     assert.ok(!JSON.stringify(shown0).includes('SECRET_HOLD_OUT'));
     const at = juniorLab.at!(baseline, 0)!;
-    assert.ok(!JSON.stringify(at).includes('tool_call'), 'a point of the model does not carry the junior\'s text');
-    assert.ok(!('behavior' in (at.state as object)));
+    assert.ok(!JSON.stringify(at).includes('tool_call'), 'the check\'s point does not carry the junior\'s text');
+    assert.ok(!JSON.stringify(at.state).includes('answers'));
     const graded = juniorLab.cases!(spec, 'ep', baseline, 1);
-    assert.ok(!JSON.stringify(graded).includes('<tool_call>'));
-    assert.ok(!JSON.stringify(graded).includes('head'));
-    const index = juniorLab.indexInfo!(baseline) as { behavior: { native_tool_call: number } };
-    assert.ok(index.behavior.native_tool_call >= 1);
-    assert.ok(!JSON.stringify(index).includes('<tool_call>'), 'the index carries the counts, not the text');
+    assert.ok(graded.length > 0);
+    assert.ok(!JSON.stringify(graded[0].state).includes('<tool_call>'), 'the percept is what is known before the answer');
+    const came = juniorLab.shown!(graded[0]);
+    assert.ok(Array.isArray(came.answers) && (came.answers as { text: string }[]).some((a) => a.text.includes('<tool_call>')), 'an instrument reads the raw answers on came');
+    assert.ok(!JSON.stringify(came).includes('native_tool_call'));
+    assert.ok(!JSON.stringify(came).includes('protocol_ok'));
+    const index = JSON.stringify(juniorLab.indexInfo!(baseline));
+    assert.ok(!index.includes('<tool_call>'));
+    assert.ok(!index.includes('native_tool_call'));
 
     const v = await juniorLab.act!.start(spec, { change: { from: spec.world.reference, files: { 'prompt.md': 'Answer with JSON.' }, why: 'the protocol, with an example', expect: 'a request' } }, 'a1', {} as never);
     assert.ok(v && v.kind === 'version');
@@ -121,22 +124,27 @@ test('junior-competence@1: a run shows how the junior answered; a refusal says w
     const body = JSON.stringify(juniorLab.act!.shown(run));
     assert.match(body, /<tool_call>/);
     assert.ok(!body.includes('SECRET_HOLD_OUT'));
-    const inv = run.behavior.find((c) => c.case === 'i1')!;
-    assert.ok(inv.questions >= 2, JSON.stringify(inv));
-    assert.ok(inv.native_tool_call >= 1, JSON.stringify(inv));
-    assert.ok(inv.investigations >= 1);
-    assert.ok(inv.protocol_ok >= 1);
-    assert.ok(inv.tokens !== null && inv.tokens > 0);
-    assert.ok(inv.circuit_tokens !== null && inv.circuit_tokens > 0);
-    assert.ok(inv.ms !== null && inv.ms >= 0);
-    const first = inv.answers.find((a) => a.native_tool_call)!;
-    assert.equal(first.head.length, 160);
-    assert.ok(first.tail && first.tail.endsWith('X'));
-    assert.equal(first.memory_ops, 1);
-    const p0 = run.behavior.find((c) => c.case === 'p0')!;
-    assert.equal(p0.native_tool_call, 1);
-    assert.equal(p0.protocol_ok, 0);
-    assert.equal(run.behavior.some((c) => c.case === 'pHold'), false);
+    const inv = run.answers.filter((a) => a.case === 'i1');
+    assert.ok(inv.length >= 2, JSON.stringify(inv));
+    const first = inv.find((a) => a.text.includes('<tool_call>'))!;
+    assert.ok(first, JSON.stringify(inv.map((a) => a.text.slice(0, 40))));
+    assert.equal(first.question, 0);
+    assert.equal(first.chars, first.text.length);
+    assert.ok(first.text.endsWith('X'));
+    assert.equal(first.terminal, 'answered');
+    assert.deepEqual(first.memory_ops, [{ op: 'get', name: 'protocol' }]);
+    assert.ok(first.tokens !== null && first.tokens > 0);
+    assert.ok(first.circuit_tokens !== null && first.circuit_tokens > 0);
+    assert.ok(first.ms !== null && first.ms >= 0);
+    assert.ok(!('native_tool_call' in first));
+    assert.ok(!('protocol_ok' in first));
+    const p0 = run.answers.filter((a) => a.case === 'p0');
+    assert.equal(p0.length, 1);
+    assert.ok(p0[0].text.includes('<tool_call>'));
+    assert.equal(run.answers.some((a) => a.case === 'pHold'), false);
+    const point = juniorLab.cases!(spec, 'ep', run, 1).find((c) => c.state.case === 'i1')!;
+    assert.ok(point.came.answers.some((a) => a.text.includes('<tool_call>')));
+    assert.ok(!JSON.stringify(point.state).includes('<tool_call>'));
     const viewed = JSON.stringify(juniorLab.view!(run, 0, 0));
     assert.match(viewed, /tool_call/);
     assert.equal(spec.world.jobs.bags().evaluations.spent, spent + 1);

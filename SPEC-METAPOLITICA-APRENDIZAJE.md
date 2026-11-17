@@ -502,35 +502,49 @@ operación desde su primera entrega.
 
 ### 7.2 Lo que el investigador ve de cada evaluación
 
-El valor y el déficit no distinguen dos juniors que fallan por razones distintas: uno que no habla el protocolo y uno
-que lo habla y luego se queda en bucle devuelven los dos «valor 0, déficit 1». Con el `run`, y otra vez al pedir
-`view` del episodio, el investigador recibe la conducta en los casos de desarrollo — nunca el `holdout`, nunca un caso
-de confirmación (§9; [SPEC-VALIDEZ-MEDIDA](SPEC-VALIDEZ-MEDIDA.md) §4.3). Se lee de lo que la evaluación ya dejó: el
-diario del ensayo y su replay, los recibos de la sesión, y para una sonda la línea de `probes.jsonl`. No se vuelve a
-preguntar al junior.
+El valor y el déficit no distinguen dos juniors que fallan por razones distintas. El mundo no lo resume: no cuenta
+peticiones bien formadas, ni llamadas nativas, ni propuestas. Esa cuenta es del investigador, con un instrumento propio
+([SPEC-INSTRUMENTOS-PROPIOS](SPEC-INSTRUMENTOS-PROPIOS.md)): el diario guarda el instrumento y cada uso. El mundo sólo
+deja los datos crudos de cada respuesta, en los casos de desarrollo — nunca el `holdout`, nunca un caso de confirmación
+(§9; [SPEC-VALIDEZ-MEDIDA](SPEC-VALIDEZ-MEDIDA.md) §4.3). Se leen de lo que la evaluación ya dejó (el replay del ensayo
+y los recibos de la sesión; una sonda, de `probes.jsonl` y de su recibo). No se vuelve a preguntar al junior.
 
-Por caso y pregunta, acotado (los primeros y los últimos caracteres de cada respuesta, y sólo las primeras y las
-últimas si hubo más):
+Cada respuesta, tal como salió:
 
-- si el protocolo aceptó la respuesta, si las peticiones salieron bien formadas y sin error, si se registró una
-  investigación y si se registró una propuesta;
-- si apareció la sintaxis nativa de llamada (`<tool_call>`, `<function=`), que el arnés no parsea;
-- tokens, tokens de circuito y tiempo, cuando el replay o el recibo los traen, y cuántas operaciones de memoria hubo;
-- el extracto del texto.
+| Campo | Qué es |
+| --- | --- |
+| `case`, `rep`, `question` | el caso, la repetición y la pregunta (desde 0) |
+| `text`, `chars` | el texto entero, o sus primeros 4000 caracteres si es más largo; `chars` es la longitud real |
+| `terminal`, `reason` | cómo terminó el recibo, y el motivo que trajo |
+| `tokens`, `circuit_tokens`, `ms` | lo que el recibo o el replay dijeron de consumo y tiempo |
+| `memory_ops` | las operaciones de memoria del recibo, en el orden en que salieron, o null si el recibo no se leyó |
 
-El punto que el modelo predice sigue siendo lo que se sabe antes de medir (`version`, `changed`, `case`, `component`,
-`rung`, `lab`, `kind`, `rep`). Ese texto no entra en el punto, ni en el `at` del check, ni en los casos con los que se
-califica. El índice del episodio lleva sólo las cuentas.
+Están en `came.answers` de cada punto (`env.points` de un instrumento, y `shown` del caso). El `run` y el `view` del
+episodio las llevan también, sin agregarlas. `view_trial` las vuelve a leer, de un caso si se nombra. No reserva una
+evaluación.
+
+El percepto `p` sigue siendo lo que se sabe antes de medir (`version`, `changed`, `case`, `component`, `rung`, `lab`,
+`kind`, `rep`). El texto no entra en `p`, ni en el `at` del check. Un instrumento de ejemplo, que el mundo no ejecuta:
+
+```javascript
+(args, env) => {
+  let n = 0, tool = 0, json = 0;
+  for (const pt of env.points(args.episode) || []) for (const a of pt.came.answers || []) {
+    n++;
+    if (String(a.text).includes('<tool_call>')) tool++;
+    try { JSON.parse(a.text); json++; } catch (e) { /* no es JSON */ }
+  }
+  return { answers: n, with_tool_call: tool, json: json };
+}
+```
 
 Un `change` parte de la versión nombrada en `from`, que puede ser cualquiera ya hecha y no sólo la base. La
 implementación ya lo permitía; el texto que el mundo enseña ahora lo dice, para que una ronda no vuelva a empezar
 siempre desde la base.
 
-`view_trial` repite la lectura de una versión ya evaluada, de un caso si se nombra, con una ventana algo mayor. No
-reserva una evaluación. Un caso reservado se niega y su texto no se muestra. Gasta un acto: el corredor cuenta como
-aceptado cualquier episodio que el mundo devuelve, y un `null` no puede decir por qué. Por eso un acto que no se puede
-hacer — un `distill` sin maestro, un `run` sin evaluaciones libres, un fichero que no es del junior — vuelve como
-episodio `refused` con el motivo.
+`view_trial` gasta un acto: el corredor cuenta como aceptado cualquier episodio que el mundo devuelve, y un `null` no
+puede decir por qué. Por eso un acto que no se puede hacer — un `distill` sin maestro, un `run` sin evaluaciones
+libres, un fichero que no es del junior — vuelve como episodio `refused` con el motivo.
 
 **Límites del lanzador, observados y no cambiados aquí** (están fuera de este mundo). El libro de `--work` no se vacía
 entre runs: una evaluación ya gastada sigue gastada, y el siguiente `run` se niega con `evaluations needs 1, 0 free`.
