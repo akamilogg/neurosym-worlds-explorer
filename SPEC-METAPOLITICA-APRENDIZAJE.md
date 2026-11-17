@@ -455,7 +455,10 @@ De más barata a más cara. El investigador elige cuáles usar, y cada uso queda
 
 1. **Prompt de arranque:** un cambio de texto, sin entrenar nada.
 2. **Memoria inicial:** archivos escritos en la memoria del junior antes de empezar (métodos, recordatorios del
-   protocolo). Se cargan como estado, no como prompt.
+   protocolo). Se cargan como estado, no como prompt. `prompt.md` se antepone al mensaje de sistema. Un
+   `memory/<nombre>` lo escribe el propio junior en una sesión y entra como snapshot del circuito (neural y gemelo),
+   nunca como texto del chat: sólo lo ve si lo lee con sus herramientas. Un cambio de memoria que no lee puede dejar
+   el texto de las respuestas igual que sin él (§7.2).
 3. **Decodificación:** ajustes, y formato forzado si el servidor lo admite. Un formato forzado es una ayuda del arnés y
    se declara como tal: mide lo que el modelo hace con esa ayuda, no sin ella.
 4. **Destilación desde un corte** (§8): datos de entrenamiento construidos donde el junior se equivoca.
@@ -472,7 +475,8 @@ sandbox de scripts de `artifacts@1`. Los actos conservan el porqué del cambio y
 | Operación | Entradas y resultado |
 | --- | --- |
 | `change` | Padre y parche del paquete; produce otra versión y valida sus referencias |
-| `run` | Paquete y casos de desarrollo del manifiesto; produce recibos y medidas, parciales o completos |
+| `run` | Paquete y casos de desarrollo del manifiesto; produce recibos, medidas y la conducta del junior por pregunta (§7.2) |
+| `view_trial` | Una versión ya evaluada, y un caso si se nombra; lee lo ya registrado, sin reservar otra evaluación |
 | `distill` | Corte de desarrollo, paquete, maestro y criterio de aceptación; produce ejemplos de §8.1 y sus evidencias |
 | `train` | Paquete padre, dataset y receta; produce adaptador y un paquete hijo, sin promoverlo |
 | `publish_memory` | Paquete padre y recibo de una sesión de desarrollo; copia su memoria final a otro paquete, con procedencia |
@@ -495,6 +499,58 @@ conciliarse conservan su reserva incierta y quedan visibles al operador. No cont
 el libro de trabajos y sus productos; no aparece otra autoridad que decida resultados o promociones. MA2 entrega
 `change` y `run`, MA3 `publish_memory`, MA4 `distill` y MA5 `train`; consulta, cancelación y recuperación acompañan a cada
 operación desde su primera entrega.
+
+### 7.2 Lo que el investigador ve de cada evaluación
+
+El valor y el déficit no distinguen dos juniors que fallan por razones distintas. El mundo no lo resume: no cuenta
+peticiones bien formadas, ni llamadas nativas, ni propuestas. Esa cuenta es del investigador, con un instrumento propio
+([SPEC-INSTRUMENTOS-PROPIOS](SPEC-INSTRUMENTOS-PROPIOS.md)): el diario guarda el instrumento y cada uso. El mundo sólo
+deja los datos crudos de cada respuesta, en los casos de desarrollo — nunca el `holdout`, nunca un caso de confirmación
+(§9; [SPEC-VALIDEZ-MEDIDA](SPEC-VALIDEZ-MEDIDA.md) §4.3). Se leen de lo que la evaluación ya dejó (el replay del ensayo
+y los recibos de la sesión; una sonda, de `probes.jsonl` y de su recibo). No se vuelve a preguntar al junior.
+
+Cada respuesta, tal como salió:
+
+| Campo | Qué es |
+| --- | --- |
+| `case`, `rep`, `question` | el caso, la repetición y la pregunta (desde 0) |
+| `text`, `chars` | el texto entero, o sus primeros 4000 caracteres si es más largo; `chars` es la longitud real |
+| `terminal`, `reason` | cómo terminó el recibo, y el motivo que trajo |
+| `tokens`, `circuit_tokens`, `ms` | lo que el recibo o el replay dijeron de consumo y tiempo |
+| `memory_ops` | las operaciones de memoria del recibo, en el orden en que salieron, o null si el recibo no se leyó |
+
+Están en `came.answers` de cada punto (`env.points` de un instrumento, y `shown` del caso). El `run` y el `view` del
+episodio las llevan también, sin agregarlas. `view_trial` las vuelve a leer, de un caso si se nombra. No reserva una
+evaluación.
+
+El percepto `p` sigue siendo lo que se sabe antes de medir (`version`, `changed`, `case`, `component`, `rung`, `lab`,
+`kind`, `rep`). El texto no entra en `p`, ni en el `at` del check. Un instrumento de ejemplo, que el mundo no ejecuta:
+
+```javascript
+(args, env) => {
+  let n = 0, tool = 0, json = 0;
+  for (const pt of env.points(args.episode) || []) for (const a of pt.came.answers || []) {
+    n++;
+    if (String(a.text).includes('<tool_call>')) tool++;
+    try { JSON.parse(a.text); json++; } catch (e) { /* no es JSON */ }
+  }
+  return { answers: n, with_tool_call: tool, json: json };
+}
+```
+
+Un `change` parte de la versión nombrada en `from`, que puede ser cualquiera ya hecha y no sólo la base. La
+implementación ya lo permitía; el texto que el mundo enseña ahora lo dice, para que una ronda no vuelva a empezar
+siempre desde la base.
+
+`view_trial` gasta un acto: el corredor cuenta como aceptado cualquier episodio que el mundo devuelve, y un `null` no
+puede decir por qué. Por eso un acto que no se puede hacer — un `distill` sin maestro, un `run` sin evaluaciones
+libres, un fichero que no es del junior — vuelve como episodio `refused` con el motivo.
+
+**Límites del lanzador, observados y no cambiados aquí** (están fuera de este mundo). El libro de `--work` no se vacía
+entre runs: una evaluación ya gastada sigue gastada, y el siguiente `run` se niega con `evaluations needs 1, 0 free`.
+El mundo añade, en ese motivo, que el libro no se reinicia. `--max-tokens` y `max_circuit_tokens` se comprueban entre
+llamadas, así que una respuesta puede pasarse del tope. `--max-judge-calls` corta antes de volver a preguntar a
+System 2, y una ronda puede quedarse a medias. Corregir el corredor o el driver es otra entrega.
 
 ## 8. Destilación desde un corte
 
